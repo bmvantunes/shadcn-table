@@ -12,6 +12,15 @@ Before editing files for a substantial task:
 
 <!-- intent-skills:end -->
 
+## Vendored Source Repositories
+
+Source repositories used for implementation research live under `.repos/` as Git submodules:
+
+- `.repos/ag-grid` contains the AG Grid source from `git@github.com:ag-grid/ag-grid.git`.
+- `.repos/table` contains the TanStack Table source from `git@github.com:TanStack/table.git`.
+
+TanStack Table is tracking v9, which is still in beta. Do not rely on remembered APIs or make assumptions based on earlier versions. Before designing or changing table behavior, verify the relevant implementation, types, tests, and recommended patterns in `.repos/table`, including its examples. Treat those examples as a primary implementation reference.
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web
