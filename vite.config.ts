@@ -11,10 +11,13 @@ export default defineConfig({
     exports: true,
   },
   lint: {
+    ignorePatterns: [".repos/**"],
     options: {
       typeAware: true,
       typeCheck: true,
     },
   },
-  fmt: {},
+  fmt: {
+    ignorePatterns: [".repos/**"],
+  },
 });

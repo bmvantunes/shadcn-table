@@ -1,0 +1,6 @@
+[submodule ".repos/ag-grid"]
+	path = .repos/ag-grid
+	url = git@github.com:ag-grid/ag-grid.git
+[submodule ".repos/table"]
+	path = .repos/table
+	url = git@github.com:TanStack/table.git
