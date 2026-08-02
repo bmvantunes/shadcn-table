@@ -34,6 +34,14 @@ Arrow-right from the final centre column enters the first pinned-end column.
 
 Hidden and non-navigable columns are skipped.
 
+For the canonical both-sides-pinned case:
+
+```text
+start: name, age -> centre: remaining data columns -> end: actions
+```
+
+Arrow Right from `age` enters the first centre column. Arrow Right from the final centre column enters `actions`. Arrow Left traverses the exact reverse path. Each key command moves exactly one adjacent navigable column regardless of how many columns a scroll operation could reveal.
+
 ## Navigation pipeline
 
 ```text
@@ -102,13 +110,17 @@ Maintain preferred-column memory when moving vertically.
 
 Navigation must always reveal the destination.
 
-For centre columns, scroll horizontally.
+For centre columns, scroll horizontally by the minimum delta required to reveal the destination inside the unobscured centre viewport. That viewport begins after the total pinned-start width and ends before the total pinned-end width.
 
 Pinned columns are already horizontally visible but still require vertical scrolling.
 
+Entering either pinned region must not change horizontal scroll position. Crossing from a pinned-start column into centre reveals the first centre destination only; crossing from centre into pinned-end focuses the pinned destination without block-scrolling the centre region.
+
+Do not delegate horizontal navigation reveal directly to native `Element.scrollIntoView()`. It does not understand the grid's logical pinned insets and can jump multiple columns. BrunoTable owns this geometry even when TanStack supplies private selection or movement primitives.
+
 For Page Up and Page Down, derive the target from viewport geometry, not a hard-coded row count.
 
-## Viewport Table
+## Server Table
 
 Navigation may target an unloaded row.
 
@@ -129,7 +141,8 @@ Keyboard behaviour changes by mode.
 ### Navigation mode
 
 - arrows move cells
-- Enter or F2 starts editing
+- one Enter or F2 starts a Cell Edit Session when the focused cell is editable for its current row
+- Enter on a non-editable cell does not fabricate an editor
 - Shift + arrows extends selection
 - Tab follows configured navigation policy
 
@@ -137,8 +150,11 @@ Keyboard behaviour changes by mode.
 
 - editors receive normal text-input behaviour
 - Escape cancels
-- Enter commits according to policy
-- Tab commits and moves to the next editable cell
+- Enter performs a Cell Edit Commit; post-commit movement is a separate explicit policy
+- Tab performs a Cell Edit Commit and moves to the next editable cell
+- Shift+Tab performs a Cell Edit Commit and moves to the previous editable cell
+- a pointer press outside the active editor attempts a Cell Edit Commit before transferring logical focus or running the clicked action
+- a rejected parse or validation keeps the Cell Edit Session active and does not silently discard the candidate value
 - arrow keys remain with the editor unless boundary-transfer policy applies
 
 Do not steal arrow keys from a text editor while the caret can still move normally.
@@ -198,20 +214,30 @@ Support:
 10. Editor cursor behaviour is preserved.
 11. Sorting/filtering clears or reconciles focus safely.
 12. Focus never falls to the document body because a cell unmounted.
+13. One horizontal navigation command moves to exactly one adjacent navigable column.
+14. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
+15. Enter starts an editable focused cell with one key press.
+16. Enter, Tab, Shift+Tab, and an accepted outside pointer action commit the active cell edit.
 
 ## Test matrix
 
 Must include:
 
-- pinned-left to centre
-- centre to pinned-right
-- pinned-right back to centre
+- two pinned-start columns (`name`, `age`) through centre navigation
+- final pinned-start column to first centre column, revealing only that destination
+- final centre column to pinned-end `actions` without changing horizontal scroll
+- pinned-end `actions` back to the final centre column with minimal reveal
+- first centre column back to pinned-start without changing horizontal scroll
 - header to body
 - body to header
 - group header to leaf header
 - visible to horizontally virtualized column
 - loaded to unloaded row
-- edit commit to next editable cell
+- one Enter starts an editable cell
+- Enter commits the active editor
+- Tab and Shift+Tab commit and move to the next or previous editable cell
+- outside-cell and outside-grid pointer commits before focus transfer
+- invalid outside-pointer commit retains the active editor
 - hidden columns
 - column reorder while focused
 - row removal while focused

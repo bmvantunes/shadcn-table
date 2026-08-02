@@ -281,7 +281,7 @@ type RowId = string;
 type RowIndex = number;
 ```
 
-A Viewport Table should conceptually maintain:
+A Server Table should conceptually maintain:
 
 ```text
 query + row index -> row ID

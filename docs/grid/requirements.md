@@ -273,7 +273,7 @@ Users must be able to resolve conflicts before attempting to save.
 
 ## Selection and server-side capability policies
 
-A Viewport Table cannot assume all selected rows are loaded.
+A Server Table cannot assume all selected rows are loaded.
 
 Represent selection logically, but distinguish selection from operations over the selection.
 
@@ -309,6 +309,8 @@ Do not silently perform partial operations.
 
 Keyboard navigation is mandatory.
 
+Pinned-start, centre, and pinned-end columns form one Logical Column Order. One horizontal key command moves exactly one navigable column, and centre scrolling reveals that destination with the minimum delta after accounting for both pinned-region widths.
+
 Support at minimum:
 
 - arrow keys
@@ -324,6 +326,8 @@ Support at minimum:
 - movement across pinned and unpinned columns
 - movement to virtualized cells
 - movement to unloaded server rows
+
+For editing, one Enter starts the focused cell when it is editable. Enter, Tab, Shift+Tab, and an accepted pointer action outside the editor perform a Cell Edit Commit; Tab then moves forward and Shift+Tab moves backward through editable cells. A Cell Edit Commit updates BrunoTable's draft/transaction state and is distinct from saving to the server.
 
 Logical focus must survive DOM unmounting caused by virtualization.
 

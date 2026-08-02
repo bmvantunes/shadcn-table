@@ -38,14 +38,32 @@ _Avoid_: Client mode, local flag
 The current complete row collection together with its loading, freshness, failure, row-count, and version state.
 _Avoid_: Row array, individual lifecycle props, Effect result
 
-**Viewport Table**:
-The BrunoTable variant that represents a sparse indexed row space while a server owns filtering, sorting, and row position.
-_Avoid_: Server mode, viewport flag, paginated table
+**Server Table**:
+The `BrunoTableServer` variant that represents a sparse indexed row space while a server owns filtering, sorting, and row position.
+_Avoid_: Viewport Table, server mode, viewport flag, paginated table
 
 **Viewport Source**:
-The long-lived server-viewport input passed to a Viewport Table. It represents typed query replacement, sparse row delivery, total-row state, and lifecycle for one logical indexed row space.
+The long-lived server-viewport input passed to a Server Table. It represents typed query replacement, sparse row delivery, total-row state, and lifecycle for one logical indexed row space.
 _Avoid_: Row array, page datasource, paginated result
 
 **View Server Translation**:
 The Adapter that resolves Column Identity to current Query Fields and compiles grid filters, sorts, and projections into effect-view-server queries.
 _Avoid_: Sending column IDs as fields, adopting the View Server query language as persisted grid state
+
+## Interaction
+
+**Logical Column Order**:
+The single navigable order formed by pinned-start columns, centre columns, and pinned-end columns. Pinning changes presentation regions, not keyboard adjacency.
+_Avoid_: DOM order, separate pinned navigation loops
+
+**Cell Edit Session**:
+The transient interaction in which one editable cell owns an active editor and candidate value.
+_Avoid_: Save workflow, server mutation
+
+**Cell Edit Commit**:
+Acceptance of the active editor's parsed and validated value into BrunoTable's sparse draft and edit transaction. It does not by itself mean that the value was saved to the server.
+_Avoid_: Submit, server save, blur side effect
+
+**Save Workflow**:
+The process that sends committed drafts to the server, applies optimistic-concurrency results, and enters conflict resolution when canonical server values diverge.
+_Avoid_: Cell Edit Commit, editor close

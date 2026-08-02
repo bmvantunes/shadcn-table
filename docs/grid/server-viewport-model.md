@@ -348,7 +348,7 @@ When a row reloads, overlay drafts on top of canonical server data.
 
 ## Sorting and dirty rows
 
-In a Viewport Table, a local edit may alter the active sort order.
+In a Server Table, a local edit may alter the active sort order.
 
 Recommended policy:
 

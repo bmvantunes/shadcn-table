@@ -11,6 +11,27 @@ type BrunoTableSaveMode =
 
 The primary design focus is batch mode.
 
+## Cell edit lifecycle
+
+A Cell Edit Session is distinct from the Save Workflow. The accepted default interaction is:
+
+```text
+focused editable cell
+    -> Enter or F2
+active editor
+    -> Enter, Tab, Shift+Tab, or accepted outside pointer action
+Cell Edit Commit
+    -> sparse draft + one cell-edit transaction
+```
+
+One Enter starts editing; a double key press or double click is not required. Escape cancels the active editor without committing its candidate value.
+
+A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: immediate, debounced, and batch Save Modes decide when committed drafts enter the Save Workflow.
+
+Tab commits and moves to the next editable cell; Shift+Tab commits and moves to the previous editable cell. Enter always commits, while any movement after Enter is a separate explicit navigation policy.
+
+A pointer press outside the editor attempts to commit before logical focus moves or the clicked action runs. If parsing or validation rejects the candidate, the editor remains active and the candidate is preserved rather than being discarded by blur.
+
 ## Sparse edit model
 
 Do not duplicate the complete dataset.
@@ -293,7 +314,7 @@ Do not conflate validation with conflict detection.
 
 ## Server viewport restrictions
 
-In a Viewport Table:
+In a Server Table:
 
 - cell editing requires a loaded row identity
 - drag fill requires a fully loaded target unless server-assisted
