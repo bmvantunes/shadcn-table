@@ -321,7 +321,7 @@ Never derive `columnId` from:
 - `valueGetter`
 - a generated counter
 
-Lowercase or unprefixed literals must fail compilation under `satisfies BrunoTableColumns<TRow>`. Dynamic or restored values must be validated at runtime. `columnId` must also be unique within a table; duplicate IDs are configuration errors and must fail during table construction. The public column shape should preserve literal IDs for downstream inference, while runtime validation remains authoritative for uniqueness.
+Lowercase or unprefixed literals must fail compilation under `satisfies BrunoTableColumns<TRow>`. Dynamic or restored values must be validated at runtime. `columnId` must also be unique within a table; duplicate IDs are configuration errors and must fail during the one-time compilation of a stable definition set, before TanStack Table construction or persistence restoration. The public column shape should preserve literal IDs for downstream inference, while runtime validation remains authoritative for uniqueness. Never rescan IDs from React render, cell render, row-update, or interaction paths; a genuinely replacement definition set receives one new compilation pass.
 
 All grid-owned and persisted state uses `columnId`:
 
@@ -333,6 +333,8 @@ All grid-owned and persisted state uses `columnId`:
 - diagnostics
 
 Persisted identity is scoped by `tableId + columnId`.
+
+Both parts of that durable identity are serializable strings, not Symbols. A Symbol would guarantee uniqueness only for one JavaScript runtime and could not reproduce the same layout key after reload, cross a worker or SSR boundary, or be stored in JSON or a database. BrunoTable instead creates a private Symbol-backed Table Instance Identity for each mounted runtime. Development diagnostics compare concurrently mounted uses of a `tableId` and report incompatible column schemas, while compatible instances may deliberately share preferences.
 
 ## Mandatory column name
 

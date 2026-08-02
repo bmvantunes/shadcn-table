@@ -5,12 +5,16 @@ BrunoTable is a strongly typed, desktop-class data grid whose user preferences a
 ## Identity and columns
 
 **Table Identity**:
-The required stable `tableId` that namespaces one table's persisted preferences and diagnostics.
-_Avoid_: Optional table name, display title
+The required stable, serializable `tableId` that identifies one logical table definition and namespaces its persisted preferences and diagnostics.
+_Avoid_: Table Instance Identity, optional table name, display title, Symbol
+
+**Table Instance Identity**:
+The private transient identity of one mounted table runtime. It distinguishes simultaneous instances without becoming persisted user intent.
+_Avoid_: Table Identity, persistence key
 
 **Column Identity**:
-The required stable `columnId` that identifies one grid column within a Table Identity. It uses the `COL_ID_${UPPERCASE_NAME}` namespace, is independent of headers and row fields, and is never inferred.
-_Avoid_: Field name as identity, header-derived ID, generated column ID
+The required stable, serializable `columnId` that identifies one grid column within a Table Identity. It uses the `COL_ID_${UPPERCASE_NAME}` namespace, is independent of headers and row fields, and is never inferred.
+_Avoid_: Field name as identity, header-derived ID, generated column ID, Symbol
 
 **Field Column**:
 A column whose value comes directly from a named row field. Its `field` is the default data and server-query mapping, while its Column Identity remains `columnId`.
@@ -59,7 +63,7 @@ _Avoid_: Column Identity, column ID
 ## Integration
 
 **Client Table**:
-The BrunoTable variant that receives a Client Source and owns filtering and sorting locally.
+The BrunoTable variant that receives a Client Source and owns filtering and sorting locally. A Client Table may be read-only or may install the Editable Table capability.
 _Avoid_: Client mode, local flag
 
 **Client Source**:
@@ -67,7 +71,7 @@ The current complete row collection together with its loading, freshness, failur
 _Avoid_: Row array, individual lifecycle props, Effect result
 
 **Server Table**:
-The `BrunoTableServer` variant that represents a sparse indexed row space while a server owns filtering, sorting, and row position.
+The read-only `BrunoTableServer` variant that represents a sparse indexed row space while a server owns filtering, sorting, grouping, and row position. It exposes one Active Cell rather than Cell Range Selection.
 _Avoid_: Viewport Table, server mode, viewport flag, paginated table
 
 **Viewport Source**:
@@ -100,6 +104,14 @@ _Avoid_: Sending column IDs as fields, adopting the View Server query language a
 The single navigable order formed by pinned-start columns, centre columns, and pinned-end columns. Pinning changes presentation regions, not keyboard adjacency.
 _Avoid_: DOM order, separate pinned navigation loops
 
+**Active Cell**:
+The single focused body cell that receives keyboard navigation and single-cell commands. An Active Cell does not imply Cell Range Selection or Row Selection.
+_Avoid_: Selected range, selected row
+
+**Cell Range Selection**:
+Spreadsheet-style rectangular cell intent used for multi-cell clipboard and editing operations in a Client Table. A Server Table never creates Cell Range Selection from its Active Cell.
+_Avoid_: Active Cell, Row Selection
+
 **Cell Edit Session**:
 The transient interaction in which one editable cell owns an active editor and candidate value.
 _Avoid_: Save workflow, server mutation
@@ -113,7 +125,7 @@ The process that sends committed drafts to the server, applies optimistic-concur
 _Avoid_: Cell Edit Commit, editor close
 
 **Editable Table**:
-A table whose grid-level editing capability is enabled and whose definitions include at least one potentially editable column. Individual cell eligibility remains subject to its column policy.
+A Client Table whose grid-level editing capability is enabled and whose definitions include at least one potentially editable column. Individual cell eligibility remains subject to its column policy; a Server Table is always read-only.
 _Avoid_: Editable column, always-editable table
 
 **Edit Mode**:
@@ -131,3 +143,7 @@ _Avoid_: Save-button click handler, Cell Edit Commit
 **Edit Safety Footer**:
 The persistent editing surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
 _Avoid_: Page toolbar, layout reset controls
+
+**Conflict Review**:
+The read-only comparison workflow where the user reviews Base, Server Now, and Yours for each genuine conflict and chooses a resolution.
+_Avoid_: Editable nested table, two-way overwrite prompt

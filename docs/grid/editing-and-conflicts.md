@@ -204,12 +204,20 @@ Pages do not reimplement this footer through toolbar children. The optional tool
 
 ## Conflict modal
 
-The conflict modal should show:
+The conflict modal renders a normal internal `BrunoTableClient` over the complete in-memory conflict collection. It omits the table-level `editable` capability, so every conflict cell remains read-only even when the source column declares `isEditable`. It has its own stable internal Table Identity, no editing footer or Edit Mode switch, and no durable preference persistence.
 
-| Row       | Column   | Base | Server now | Yours | Resolution |
-| --------- | -------- | ---: | ---------: | ----: | ---------- |
-| Order 481 | Price    |  100 |        102 |   105 | Mine       |
-| Order 912 | Quantity |   50 |         40 |    60 | Server     |
+Use one conflict row per conflicted source cell. Pin Row and Column to the start and Resolution to the end so identity and decisions remain visible while the comparison values scroll:
+
+| Region | Row       | Column   | Base | Server now | Yours | Resolution |
+| ------ | --------- | -------- | ---: | ---------: | ----: | ---------- |
+| Start  | Order 481 | Price    |  100 |        102 |   105 | Mine       |
+| Start  | Order 912 | Quantity |   50 |         40 |    60 | Server     |
+
+Base remains part of the three-way conflict record even when the primary comparison emphasizes Server now and Yours. It explains how both sides diverged and supports a detailed Git-diff-like inspector for complex values.
+
+The Base, Server now, and Yours columns are heterogeneous: adjacent conflict rows may represent a number, BigDecimal, bigint, boolean, select value, or custom domain value. Their cell renderer resolves the row's source `columnId` through the source table's stable compiled-column registry and delegates to that column's read-only Cell Presentation. This reuses its Value Type, `valueFormatter`, alignment, styling, select labels, and custom read-only renderer without invoking its editor. The dynamic dispatch is per conflict row, while the registry and compiled presentations remain stable.
+
+Server now renders against the latest authoritative source-row view. Yours renders against the projected row with drafts and applied resolutions. Base always retains and formats the exact stored base value; BrunoTable does not duplicate an entire historical dataset merely to recreate row-dependent decoration around that value. Heterogeneous value erasure, if required by the internal registry, stays private and never weakens the typed public column, edit, or conflict APIs.
 
 Actions:
 

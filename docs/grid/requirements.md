@@ -137,10 +137,15 @@ Every grid requires:
 
 ```ts
 type BrunoTableRowId = string;
+type BrunoTableId = string;
 
-tableId: string;
+tableId: BrunoTableId;
 getRowId: (row: TRow) => BrunoTableRowId;
 ```
+
+`tableId` and `columnId` are durable semantic identities and remain serializable strings. Do not use JavaScript Symbols for either: persisted preferences, diagnostics, SSR boundaries, workers, storage Adapters, and database records must be able to reproduce and inspect the same identity after a reload. Each mounted table runtime may create a private Symbol-backed Table Instance Identity for collision-free in-memory ownership, but that token is transient and never enters public state or persistence.
+
+Two compatible mounted instances may intentionally reuse one `tableId` and therefore share persisted preferences. Development diagnostics must reject or prominently diagnose simultaneous reuse of one `tableId` with incompatible column schemas; a private Table Instance Identity keeps their runtime resources distinct regardless.
 
 Every leaf column definition requires an explicit stable `columnId` with this type:
 
@@ -149,6 +154,8 @@ type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 ```
 
 Never infer column identity from a field, header, array position, or generated counter. Lowercase or unprefixed literals must fail compilation. External values must be validated at runtime. Duplicate `columnId` values are configuration errors.
+
+Compile and validate one stable column-definition set when constructing its table runtime. During this pass, reject every duplicate `columnId` before TanStack Table, persistence restoration, or rendering can observe the definitions. Do not rescan column identities on React renders, cell renders, or row updates. If the consumer supplies a genuinely replacement definition set, compile and validate that new set once before installing it.
 
 Every leaf column also requires an explicit non-empty `headerName`. It is the default visible text and accessible name for the semantic column header. It is descriptive metadata, not identity: never use it for persistence, grid state, row access, or server queries, and never infer it from `columnId` or `field`. A future custom header renderer may replace the visible content, but `headerName` remains the stable human-readable fallback for accessibility and grid-owned UI. Icon-only and action columns still provide a meaningful name such as `"Actions"`, even if the renderer visually hides it.
 
