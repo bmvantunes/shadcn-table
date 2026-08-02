@@ -111,6 +111,10 @@ The footer dispatches `edits.reset`, `save.request`, and `conflicts.review.open`
 
 The persistence Adapter receives one non-empty Save Change Set in both modes. Immediate mode forwards one whole committed transaction, including every cell changed by paste, fill, or clear. Batch mode derives one net change per dirty Cell Identity from sparse drafts. Do not loop over the array and invoke the consumer operation once per cell.
 
+The Save Workflow actor manages discrete atomic operation lifecycles. Immediate mode may spawn many concurrent operations with disjoint owned-cell sets; Batch mode admits at most one operation and derives a grid-wide edit mutation lock. Each operation receives one immutable Save Change Set and reaches one accepted or rejected terminal outcome. A sparse external-store reverse index maps only active Cell Identities to their Operation Identity so affected cells can select progress, success, or rejection without a table render or one actor per cell.
+
+The notification actor aggregates rejected operations into one table-scoped persistent toast and owns explicit dismissal. XState is the brain for legal transitions, operation ownership, aggregation, and dialog/toast lifecycles. The sparse external store is the memory for drafts, history, conflicts, operation references, and per-cell presentation deadlines. CSS owns the border-tracer and flash animation; neither actor nor store emits frame-by-frame events.
+
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;

@@ -432,6 +432,10 @@ Both modes call the same `onSaveEdits` operation with a non-empty Save Change Se
 
 Never split a multi-cell edit transaction into one persistence call per cell. Never expose raw undo history as the Batch Save payload.
 
+Each Save Change Set is atomic and has no partial-success outcome. Accepted means every change was persisted; rejected means none was persisted and returns typed diagnostic and latest-server evidence. Immediate mode may have many concurrent operations over disjoint cells, and each operation may own many cells from one gesture. Lock only the owned cells for each Immediate operation. Batch Save permits only one operation and locks all edit mutations until it settles.
+
+Successful operations flash every affected cell green for two seconds. Rejected operations restore every affected cell to its latest live server value immediately, retain a red non-color-accessible rejected treatment for five seconds, and enter one table-scoped persistent failure notification workflow. Aggregate concurrent failures into one manually dismissed toast with operation-level details; do not stack a persistent toast per cell or per failure.
+
 Editable tables also require an explicit Row Version capability. It must preserve the actual version type, including `bigint`, and the Server Table projection must include its source field even when it has no visible column. The Viewport Source's top-level `version` is a Query Version for the read result and must never become a row's `expectedVersion`.
 
 `onSaveEdits` must cross an application write or RPC seam that atomically checks the Row Version. Do not implement it by calling effect-view-server's current unconditional runtime `patch`. Successful and conflicting results return decoded canonical values and the next typed Row Version before reconciliation.
@@ -540,7 +544,7 @@ type BrunoTableEditTransaction = {
 };
 ```
 
-One paste or fill operation should be one undo step.
+Undo and redo exist only during an unsaved Batch session. One user gesture is one history command: one paste or fill operation is one undo step regardless of cell count. A successful Batch Save establishes a new baseline and clears both stacks; a rejected save preserves them. Immediate mode exposes no local undo or redo.
 
 Clipboard support must define:
 

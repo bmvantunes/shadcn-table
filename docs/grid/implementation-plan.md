@@ -315,7 +315,13 @@ Success criteria:
 - no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it
 - Immediate single-cell commit calls `onSaveEdits` with a one-element array
 - Immediate paste, drag fill, and multi-cell clear each call `onSaveEdits` once with the full transaction
+- every Save Change Set is atomic: the complete operation is accepted or rejected with no partial-success result
+- disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
+- Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles
+- accepted operations flash all affected cells green for two seconds without React or XState animation-frame events
+- rejected operations immediately restore all affected cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
+- undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - no-edit state keeps the footer mounted with Reset and Save disabled
 - Reset with pending work opens a read-only Reset Review table over every pending changed cell and performs no mutation until `Reset All Changes` is confirmed
 - Reset Review exposes only `Keep Editing` and `Reset All Changes`; confirmation clears edit-owned state and current-batch undo/redo history together while preserving grid preferences

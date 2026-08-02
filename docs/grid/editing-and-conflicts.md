@@ -31,6 +31,16 @@ Changing Edit Mode while an editor, drafts, validation, conflicts, or a save ope
 
 The handler never changes shape based on Edit Mode and is never called once per cell for a multi-cell transaction.
 
+Every Save Change Set is atomic. The complete immutable set succeeds or fails together; there is no public partial-success outcome. A rejection may carry per-cell or per-row diagnostic details, canonical latest server values, and conflicts for review, but it never reports that a valid prefix was persisted. Consumers that require several writes must provide a transactional application seam behind `onSaveEdits`.
+
+Immediate mode supports multiple concurrent save operations over disjoint Cell Identities. Each operation owns a unique Operation Identity and one immutable Save Change Set, which may itself contain many cells from one paste, fill, or clear gesture. Maintain an operation registry plus a reverse Cell Identity-to-operation index: a cell belongs to at most one active operation, while unrelated cells may commit new operations without waiting. Do not model Immediate persistence with one table-level `isSaving` boolean.
+
+While an Immediate operation is in flight, lock only its complete owned cell set. While a Batch Save is in flight, install one table-wide edit mutation lock so no cell can begin or commit another mutation. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner; the prototype should compare treatments. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
+
+An atomic success keeps all accepted canonical values and flashes every affected cell green for two seconds. An atomic failure immediately restores every affected cell to its latest live canonical server value, marks each one with the non-color server-rejected presentation and a red treatment for five seconds, and records one failed operation rather than one failure per cell.
+
+The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details. The toast never auto-dismisses; the user explicitly closes it. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
+
 ## Cell edit lifecycle
 
 A Cell Edit Session is distinct from the Save Workflow. The accepted default interaction is:
@@ -297,15 +307,12 @@ Do not silently force unconditional last-write-wins.
 
 ## Save results
 
-A batch result should distinguish:
+One operation has exactly one atomic outcome:
 
-- applied rows
-- conflicts
-- validation failures
-- permission failures
-- transient failures
+- accepted: every change was applied, with decoded canonical values and new typed Row Versions for the complete set;
+- rejected: no change was applied, with a typed conflict, validation, permission, or transient failure and the latest canonical server evidence needed for reconciliation.
 
-The server should return decoded canonical values and new typed Row Versions for applied rows. Semantic equivalence decides whether a canonical exact value clears the submitted draft.
+A rejected result may describe several affected rows or cells without becoming a partial-success result. Semantic equivalence decides whether canonical accepted values clear submitted drafts.
 
 ## XState actors
 
@@ -362,6 +369,10 @@ Avoid one actor per cell for all rows.
 
 Use sparse active edit state.
 
+### Save operation manager
+
+The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports one accepted or rejected terminal outcome. The manager maintains cell ownership, derives the Batch global mutation lock, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells.
+
 ## Transactions
 
 Normalize all changes:
@@ -378,6 +389,12 @@ type BrunoTableEditTransaction = {
 A 5,000-cell fill is one transaction and one undo step.
 
 Generate large fill/paste changes imperatively, then submit one meaningful actor event.
+
+## Batch-scoped undo and redo
+
+Undo and redo exist only in Batch mode. History begins empty at the current accepted server baseline. One user gesture creates one history command regardless of its cell count: five separate edits require five undo operations, while one 500-cell paste requires one. Undo may travel only to the beginning of the current unsaved batch, and redo may travel only within that batch.
+
+A successful Batch Save establishes a new baseline and clears both history stacks. A rejected save preserves the complete batch and its history. The first edit after a successful Save therefore creates exactly one available undo command. Immediate mode exposes no undo or redo because reversing an already-persisted mutation would require a new server operation rather than local history.
 
 ## Validation
 
