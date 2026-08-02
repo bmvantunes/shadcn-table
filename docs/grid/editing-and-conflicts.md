@@ -200,13 +200,26 @@ The left side contains status controls and the right side contains exactly two d
 
 Render the conflict control only when the count is greater than zero. Activating it opens the same conflict-resolution modal and actor used when Save finds unresolved conflicts. Save must remain activatable when conflicts exist so it can enter that workflow; it must not invoke `onSaveEdits` while unresolved conflicts remain.
 
-Reset discards the active edit candidate, sparse drafts, edit-owned validation, and conflict resolutions back to the latest canonical server snapshots. It does not reset filters, sorting, layout, selection, or other grid preferences.
+Reset is disabled when no edit-owned work exists. When work is pending, activating Reset opens the Reset Review dialog rather than discarding anything immediately. Confirming Reset discards the active edit candidate, sparse drafts, edit-owned validation, conflict resolutions, and current-batch undo/redo history back to the latest canonical server snapshots. It begins a new clean batch context and does not reset filters, sorting, layout, selection, or other grid preferences.
 
 The footer remains mounted when no edits exist, with Reset and Save disabled. In Immediate mode this is normally the clean state after successful persistence; pending failures or conflicts remain accessible through the same safety surface. During saving, prevent duplicate Save and Reset activation and expose progress accessibly.
 
 The footer shell never subscribes to rows or the complete edit store. Status controls subscribe independently to compact counts; buttons subscribe only to the booleans and progress state they render. Streaming row updates that do not change those projections must neither notify nor rerender the footer.
 
 Pages do not reimplement this footer through toolbar children. The optional toolbar augments it.
+
+## Reset Review dialog
+
+The Reset Review dialog shows the complete pending change set before destructive confirmation. It reuses a read-only internal `BrunoTableClient`, the source table's compiled-column registry, and the same heterogeneous value-presentation mechanism as the conflict modal so numbers, BigDecimals, bigints, booleans, select labels, and custom domain values appear exactly as they do in the source table.
+
+Render one row per pending changed cell. Pin Row and Column to the start, and compare the latest canonical server value with the user's current value. A compact Status presentation may distinguish an ordinary draft, invalid active candidate, or conflict without providing per-row resolution controls. There are no Mine, Server, per-column, or bulk-resolution buttons in this dialog.
+
+The dialog footer exposes exactly two actions:
+
+- `Keep Editing` closes the dialog without changing the active batch, its drafts, conflicts, validation, or history.
+- `Reset All Changes` is the destructive confirmation. It clears all edit-owned state and current-batch history together, restores the latest canonical server values, closes the dialog, and returns focus to the originating grid.
+
+The destructive action states the number of affected cells in its accessible description. Opening and closing the dialog must not copy the complete edit store into React state; the internal table reads the sparse pending-change projection while mounted.
 
 ## Conflict modal
 

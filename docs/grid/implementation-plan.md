@@ -317,7 +317,8 @@ Success criteria:
 - Immediate paste, drag fill, and multi-cell clear each call `onSaveEdits` once with the full transaction
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - no-edit state keeps the footer mounted with Reset and Save disabled
-- Reset clears edit-owned state only
+- Reset with pending work opens a read-only Reset Review table over every pending changed cell and performs no mutation until `Reset All Changes` is confirmed
+- Reset Review exposes only `Keep Editing` and `Reset All Changes`; confirmation clears edit-owned state and current-batch undo/redo history together while preserving grid preferences
 - stable row updates do not notify or rerender footer controls when their compact projections are unchanged
 - exact `bigint`, BigDecimal, and Row Version types survive editor, draft, transaction, handler, and result inference
 
