@@ -52,6 +52,10 @@ Tab commits and moves to the next editable cell; Shift+Tab commits and moves to 
 
 A pointer press outside the editor attempts to commit before logical focus moves or the clicked action runs. If parsing or validation rejects the candidate, the editor remains active and the candidate is preserved rather than being discarded by blur.
 
+An invalid candidate cannot leave the Cell Edit Session through Enter, Tab, Shift+Tab, or an outside pointer action. The editor keeps the raw candidate, retains logical focus, sets `aria-invalid`, and opens an accessible error popover anchored to the cell. The popover uses the invalid visual treatment and a text explanation; color alone is never the error signal. Escape is the explicit cancellation path: it discards the raw candidate, restores the latest accepted typed value, closes the error presentation, and exits edit mode.
+
+Failed parsing or local validation creates no draft, edit transaction, undo entry, or Save Change Set and never invokes `onSaveEdits`. For example, `"hello"` entered into a Number column remains editor text and can never enter the typed edit model. A multi-cell paste, fill, or clear gesture validates the complete candidate matrix before applying anything; one invalid target rejects the whole gesture and creates no partial transaction.
+
 ## Sparse edit model
 
 Do not duplicate the complete dataset.
@@ -170,6 +174,8 @@ When a conflict arrives:
 - expose a conflict tooltip or inspector
 
 Validation errors and conflicts should not use indistinguishable visuals.
+
+An invalid active editor uses an anchored error popover with an explicit message and accessible invalid state. It remains open while the invalid candidate blocks commit and closes only after the candidate becomes valid or the user cancels with Escape. The prototype should compare icons and treatments for invalid, dirty, saving, conflicted, accepted, and server-rejected states while preserving non-color cues for every state.
 
 Define a status priority model for combinations such as:
 

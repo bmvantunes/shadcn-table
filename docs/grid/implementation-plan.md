@@ -304,6 +304,9 @@ Success criteria:
 - row eviction cannot destroy edits
 - edit state is identity-keyed
 - editor arrows do not break text cursor behaviour
+- an invalid editor candidate cannot exit through Enter, Tab, Shift+Tab, or an outside pointer action; it remains active with an accessible anchored error until corrected or cancelled with Escape
+- failed parsing or local validation creates no draft, undo entry, Save Change Set, or `onSaveEdits` invocation
+- one invalid target rejects a complete multi-cell edit gesture without applying a valid prefix
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
 - `editable: true` mounts the same mode toggle and footer in both public variants without overriding cell policy
