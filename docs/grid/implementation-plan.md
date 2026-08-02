@@ -18,6 +18,8 @@ Before code:
 6. confirm TanStack Table v9 compatibility
 7. confirm virtualization library/compiler behaviour
 8. create an architecture decision record for any deviations
+9. enable and verify the repository's full strict TypeScript profile
+10. define source-level and emitted-package type-test harnesses
 
 Deliverables:
 
@@ -27,37 +29,53 @@ Deliverables:
 - benchmark harness plan
 - type-test plan
 
-## Phase 1: Typed grid definition
+## Phase 1: Typed public table and columns
 
 Build:
 
-- `defineGrid`
-- `createColumnHelper`
+- `BrunoTableColumns<TRow>` for plain object arrays used with `satisfies`
+- the shared table-props interface
+- explicit `BrunoTableClient` and `BrunoTableViewport` prop interfaces
 - mandatory `tableId`
 - mandatory `getRowId`
-- field columns
-- accessor columns
-- stable column IDs
+- mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
+- mutually exclusive field and computed columns
+- direct `field` value inference
+- computed `valueGetter` return inference
 - typed formatters
-- typed sorting capability
-- typed filtering capability
+- capability derivation for editing, sorting, and filtering
+- computed columns excluded from automatic filter and sort capabilities
 - type-level tests
+- emitted-package consumer type tests
 
 No rendering sophistication yet.
 
 Success criteria:
 
+- no `defineGrid`, public column helper, `definition`, or `rowModel` prop
+- no single public component with a client/viewport mode flag or source union
+- lowercase and unprefixed column identities fail compilation
 - invalid fields fail compilation
-- accessor values infer correctly
+- computed values infer correctly
+- simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
 - invalid editor types fail
 - no repeated generic annotation at JSX usage
+- no `any` in exported declarations or representative inference paths
+- no consumer casts for valid column, source, edit, filter, or sort usage
 
 ## Phase 2: Client read-only vertical slice
 
 Build:
 
+- `<BrunoTableClient tableId getRowId columns clientSource />`
+- structurally typed Client Source integration, including direct `useLiveQuery(...)` results
+- loading, stale, closed, and error lifecycle overlays without discarding retained rows
+- incomplete-source detection for ready/stale results
+- the shared Grid Runtime and `BrunoTableView`
+- the Client Row Pipeline Adapter
 - client row model
+- shared filter and sort commands with client row-model processing
 - fixed row height
 - vertical virtualization
 - horizontal centre-column virtualization
@@ -69,6 +87,9 @@ Build:
 
 Success criteria:
 
+- a complete effect-view-server `useLiveQuery` result passes directly as `clientSource` without an Adapter or Effect dependency in BrunoTable
+- loading/error lifecycle changes do not replace the Grid Runtime or rerender unrelated mounted cells
+- ready/stale sources with `rows.length !== totalRows` fail visibly
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
 - bounded mounted cells
@@ -132,6 +153,13 @@ Success criteria:
 
 Build:
 
+- `<BrunoTableViewport tableId getRowId columns viewportSource />`
+- `viewportSource` support compatible with effect-view-server's Live Query Viewport
+- the Viewport Row Pipeline Adapter behind the shared Grid Runtime
+- Column Identity to Query Field translation
+- typed recursive grid-filter compilation into View Server `where`
+- typed grid-sort compilation into View Server `orderBy`
+- explicit `select` projection from field columns plus infrastructure requirements
 - long-lived datasource session
 - sink
 - query generations
@@ -148,6 +176,12 @@ Build:
 
 Success criteria:
 
+- consumers render `BrunoTableViewport` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
+- client and viewport tables render the same header, filter, sort, cell, and navigation Modules
+- common UI contains no client-versus-viewport conditionals
+- persisted filters and sorts remain keyed by `columnId`
+- View Server queries contain validated fields resolved from current column definitions
+- `valueGetter`-only columns cannot silently enter server filters, sorts, or projections
 - scrolling does not route row batches through top-level React state
 - one row update rerenders only relevant subscribers
 - stale query responses are ignored

@@ -9,14 +9,14 @@ The renderer may have separate pinned and virtualized regions, but navigation se
 ## Coordinate model
 
 ```ts
-type GridRegion = "group-header" | "column-header" | "filter-header" | "body" | "footer";
+type BrunoTableRegion = "group-header" | "column-header" | "filter-header" | "body" | "footer";
 
-type GridCoordinate = {
-  region: GridRegion;
+type BrunoTableCoordinate = {
+  region: BrunoTableRegion;
   headerDepth?: number;
   rowIndex?: number;
-  rowId?: string;
-  columnId: string;
+  rowId?: BrunoTableRowId;
+  columnId: BrunoTableColumnId;
 };
 ```
 
@@ -108,7 +108,7 @@ Pinned columns are already horizontally visible but still require vertical scrol
 
 For Page Up and Page Down, derive the target from viewport geometry, not a hard-coded row count.
 
-## Server mode
+## Viewport Table
 
 Navigation may target an unloaded row.
 

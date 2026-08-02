@@ -3,19 +3,23 @@
 ## High-level structure
 
 ```text
+Public React Variants
+├── BrunoTableClient
+└── BrunoTableViewport
+
 Grid Core
-├── grid definition
+├── table configuration
 ├── column model
-├── row-model interface
+├── grid-runtime interface
 ├── command bus
 ├── capability and policy engine
 ├── persistence slices
 ├── plugin registry
 └── diagnostics
 
-Row Models
-├── ClientRowModel
-└── ServerViewportRowModel
+Row Pipelines
+├── ClientRowPipelineAdapter
+└── ViewportRowPipelineAdapter
 
 Interaction
 ├── navigation engine
@@ -36,6 +40,7 @@ Data Integrity
 └── server reconciliation
 
 Rendering
+├── shared BrunoTableView
 ├── vertical virtualization
 ├── horizontal virtualization
 ├── pinned regions
@@ -44,16 +49,39 @@ Rendering
 └── React Compiler adapter boundary
 ```
 
+## Explicit public variants
+
+Expose two public React composition roots:
+
+```tsx
+<BrunoTableClient tableId={...} getRowId={...} columns={...} clientSource={...} />
+<BrunoTableViewport tableId={...} getRowId={...} columns={...} viewportSource={...} />
+```
+
+Do not expose one component with a row-model flag or incompatible source union. The two variants have materially different data ownership and lifecycles, so the public seam should make that difference explicit.
+
+Both variants construct the same Grid Runtime and render the same `BrunoTableView`. Each supplies one row-pipeline Adapter:
+
+```text
+BrunoTableClient    -> Client Row Pipeline   --+
+                                                +-> Grid Runtime -> BrunoTableView
+BrunoTableViewport  -> Viewport Row Pipeline --+
+```
+
+`BrunoTableView` owns common rendering and interaction. It dispatches grid commands and consumes fine-grained runtime subscriptions; it does not import client or View Server implementations and does not branch on a mode flag.
+
+Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, and optional message. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store.
+
 ## Framework-independent core
 
 The grid engine should not depend directly on React.
 
 React should consume immutable snapshots and issue commands.
 
-Conceptual core API:
+Conceptual runtime interface:
 
 ```ts
-interface GridApi<TRow> {
+interface GridRuntime<TRow> {
   readonly tableId: string;
 
   dispatch(command: GridCommand): void;
@@ -70,12 +98,12 @@ Use commands for discrete user intent:
 
 ```ts
 type GridCommand =
-  | { type: "column.resize.commit"; columnId: ColumnId; width: number }
-  | { type: "column.move.commit"; columnId: ColumnId; targetIndex: number }
-  | { type: "selection.extend"; target: GridCoordinate }
+  | { type: "column.resize.commit"; columnId: BrunoTableColumnId; width: number }
+  | { type: "column.move.commit"; columnId: BrunoTableColumnId; targetIndex: number }
+  | { type: "selection.extend"; target: BrunoTableCoordinate }
   | { type: "editing.start"; cell: CellCoordinate }
   | { type: "editing.commit"; value: unknown }
-  | { type: "edit.transaction.apply"; transaction: GridEditTransaction }
+  | { type: "edit.transaction.apply"; transaction: BrunoTableEditTransaction }
   | { type: "preferences.reset"; scope: PreferenceResetScope };
 ```
 
@@ -125,13 +153,23 @@ Keep high-frequency geometry outside React and XState context:
 - drag transforms
 - hit-testing data
 
+## Row-pipeline Adapter seam
+
+The Grid Runtime owns one validated filter state and one validated sort state, both keyed by Column Identity. Filter and sort controls only dispatch `filters.replace` and `sorting.replace` commands.
+
+The Client Row Pipeline ingests a complete Client Source and responds to filter/sort commands by recomputing local TanStack row-model stages over its rows. Source lifecycle changes update shared overlays without placing the source envelope or full row collection in React context.
+
+The Viewport Row Pipeline responds by resolving Column Identity through current column definitions, replacing the View Server query, advancing the query generation, and treating delivered sparse rows as already filtered and sorted.
+
+This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, editing, or clipboard code.
+
 ## Technology split
 
 ### TanStack Table v9
 
 Use for:
 
-- column definitions
+- the internal column model adapted from `BrunoTableColumns`
 - header groups
 - column state
 - sorting and filtering configuration
@@ -141,6 +179,24 @@ Use for:
 - pinning
 
 Do not force the complete logical server dataset into a TanStack Table `data` array.
+
+Do not expose TanStack's inferred column identities through the public interface. Map every mandatory namespaced public `columnId` to TanStack's explicit `id`.
+
+The client variant installs client filtered and sorted row models. The viewport variant retains the same filter/sort state and header capabilities but enables manual processing, because its sparse rows are already positioned and processed by the server. Shared UI never calls the row-model implementations directly; it dispatches common grid commands.
+
+### View Server Translation Adapter
+
+The effect-view-server integration sits at a translation seam:
+
+```text
+BrunoTable state       current column definitions       View Server query
+columnId filters  ->   columnId -> field/capability  -> field conditions
+columnId sorts    ->   columnId -> field/capability  -> field ordering
+```
+
+The Adapter also derives the explicit projection required by the current table and binds viewport windows to the caller-owned `viewportSource`.
+
+Do not persist View Server fields as grid identity, send `columnId` as a query field by coincidence, or infer server semantics from `valueGetter`.
 
 ### Virtualization
 
@@ -155,6 +211,8 @@ Preferred initial approach:
 - fixed row height fast path
 
 If the React adapter is not React Compiler compatible, isolate it in a small `"use no memo"` component and pass immutable virtual-item snapshots into compiled descendants.
+
+The public variants must be separate unconditional hook compositions. Do not choose `useClientGridRuntime` versus `useViewportGridRuntime` behind a runtime flag. Provide `BrunoTableView` with a stable runtime reference, and let cells and headers subscribe to narrow external-store selectors instead of placing changing table snapshots in one React context value.
 
 Long-term option:
 
@@ -223,7 +281,7 @@ type RowId = string;
 type RowIndex = number;
 ```
 
-Server mode should conceptually maintain:
+A Viewport Table should conceptually maintain:
 
 ```text
 query + row index -> row ID

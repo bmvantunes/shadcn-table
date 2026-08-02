@@ -1,382 +1,600 @@
-# Public TypeScript API design
+# Public TypeScript interface
+
+## Status
+
+This document is the canonical public-interface direction. It replaces the earlier `defineGrid`, `createColumnHelper`, `definition`, `rowModel`, and single-mode `BrunoTable` shapes.
+
+The consumer interface should feel like AG Grid: declare one typed column array, obtain rows or a Viewport Source, and render the explicit table variant. BrunoTable hides TanStack Table, virtualization, stores, and query translation behind two small interfaces.
 
 ## Design goals
 
-The public API must preserve inference across:
+The public interface must preserve inference across:
 
-- row types
-- row identity
-- columns
-- field values
-- accessor values
-- filters
-- sort models
-- editors
-- parsers
-- validators
-- changes
-- conflicts
-- server requests
-- data-source responses
+- topic and row types
+- row and column identity
+- field and computed values
+- filters and sorts
+- editors, parsers, and validators
+- edits and conflicts
+- client and viewport row sources
 
-Consumers should not repeatedly specify the same generics.
+Consumers must not repeat generic parameters, construct an intermediate grid definition, or understand TanStack Table state to render a table.
 
-## Grid definition
+## TypeScript strictness contract
 
-Preferred shape:
+BrunoTable is strict by construction. Compiler configuration alone is insufficient; the public interface must make invalid table configurations unrepresentable wherever TypeScript can prove them.
 
-```ts
-type Order = {
-  id: string;
-  symbol: string;
-  price: number;
-  quantity: bigint;
-  status: "open" | "filled" | "cancelled";
-  createdAt: Date;
-};
+Required compiler checks include `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noPropertyAccessFromIndexSignature`, and declaration generation.
 
-const column = createColumnHelper<Order>();
+Public type rules:
 
-const columns = [
-  column.field("symbol", {
-    filterable: true,
-    editable: false,
-  }),
+- no `any` in exported types, generic defaults, callback parameters, or inference paths
+- no broad `string` where Column Identity, field names, operators, statuses, or capability IDs are known
+- do not erase heterogeneous column value types into `unknown`
+- preserve literal column tuples through `satisfies BrunoTableColumns<TRow>`
+- use discriminated unions and correlated mapped unions for edits, conflicts, commands, and capability-specific state
+- model mutually exclusive definitions and component sources as mutually exclusive types
+- use `unknown` only at real untrusted or plugin seams, then decode or narrow before values reach typed callbacks
+- never require consumer casts to make an ordinary valid table compile
 
-  column.field("price", {
-    filterable: true,
-    sortable: true,
-    editable: true,
-    editor: {
-      type: "number",
-      min: 0,
-    },
-    valueFormatter: ({ value }) => value.toFixed(2),
-  }),
+Type tests are part of the interface test surface. Every accepted inference guarantee needs a positive assertion, and every rejected configuration needs a negative assertion. Emitted declarations must also be tested from a consumer fixture so implementation-only inference does not hide a broken package interface.
 
-  column.field("status", {
-    filterable: true,
-    editable: true,
-    editor: {
-      type: "select",
-      options: ["open", "filled", "cancelled"],
-    },
-  }),
+## Public export naming
 
-  column.accessor("notional", {
-    accessor: (row) => row.price * Number(row.quantity),
-    sortable: true,
-    filterable: false,
-  }),
-] as const;
+Every package-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form.
 
-const ordersGrid = defineGrid({
-  tableId: "orders",
-  getRowId: (row: Order) => row.id,
-  columns,
-});
-```
+Examples:
 
-Then:
+- `BrunoTableColumnId`, never `BrunoColumnId` or `ColumnId`
+- `BrunoTableRegion`, never `GridRegion`
+- `BrunoTableSortBy`, never `GridSorting`
+- `BrunoTableCellChange`, never `CellChange`
+
+Concise names may be used inside deep internal modules, but they must remain internal. If an internal symbol becomes public, rename it before exporting it. Add an export-surface type test so an unprefixed package-owned symbol cannot slip into the published entry point.
+
+## Shared columns
 
 ```tsx
-<DataGrid
-  definition={ordersGrid}
-  rowModel={{
-    type: "server",
-    dataSource,
-  }}
-/>
+import type { TopicRow } from "effect-view-server/config";
+
+type Order = TopicRow<typeof viewServer.topics, "orders">;
+
+const columns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    isEditable: ({ row }) => row.status === "open",
+    valueFormatter: ({ value }) => value.toFixed(2),
+  },
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    headerName: "Quantity",
+    isEditable: ({ row }) => row.status === "open",
+  },
+  {
+    columnId: "COL_ID_STATUS",
+    field: "status",
+    headerName: "Status",
+    isEditable: ({ row }) => row.status === "open",
+  },
+  {
+    columnId: "COL_ID_NOTIONAL",
+    headerName: "Notional",
+    valueGetter: ({ row }) => row.price * Number(row.quantity),
+  },
+] satisfies BrunoTableColumns<Order>;
+
+const getOrderRowId = (row: Order) => row.id;
 ```
 
-The definition should carry all required generic information.
+The same `columns` and `getOrderRowId` are accepted by both public variants.
 
-## Mandatory fields
+Static columns should normally live at module scope. Consumers should not need `useMemo`, a column helper, or a `defineGrid` call.
+
+## Canonical client usage
+
+The caller can obtain the complete row collection with effect-view-server's `useLiveQuery` and pass the complete result to the client table. Filtering and sorting initiated by the grid remain local:
+
+```tsx
+export function OrdersClientTable() {
+  const orders = useLiveQuery("orders", {
+    select: ["id", "revision", "symbol", "price", "quantity", "status"],
+    where: [],
+    orderBy: [],
+  });
+
+  return (
+    <BrunoTableClient
+      tableId="orders"
+      getRowId={getOrderRowId}
+      columns={columns}
+      clientSource={orders}
+    />
+  );
+}
+```
+
+Do not add `limit` or `offset` to this query. A Client Source must contain the complete working set so local filtering, sorting, selection, and clipboard operations remain honest.
+
+`useLiveQuery` is an integration choice made outside BrunoTable. The grid accepts a structural Client Source rather than importing Effect or the concrete `LiveQueryResult` type. Other query libraries and static-data Adapters can provide the same small shape.
+
+## Canonical viewport usage
+
+The caller obtains the long-lived source with `useLiveQueryViewport`. The viewport table owns query replacement and sparse range delivery through that source:
+
+```tsx
+export function OrdersViewportTable() {
+  const viewportSource = useLiveQueryViewport("orders");
+
+  return (
+    <BrunoTableViewport
+      tableId="orders"
+      getRowId={getOrderRowId}
+      columns={columns}
+      viewportSource={viewportSource}
+    />
+  );
+}
+```
+
+Each component must infer `Order`, the exact column IDs, field value types, editable columns, filterable columns, and sortable columns from its `columns` and row source.
+
+## Explicit public variants
+
+The common properties have this conceptual shape:
 
 ```ts
-type GridDefinitionInput<TRow, TColumns> = {
+type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   getRowId: (row: TRow) => string;
   columns: TColumns;
 };
+
+type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = BrunoTableCommonProps<
+  TRow,
+  TColumns
+> & {
+  clientSource: BrunoTableClientSource<TRow>;
+};
+
+type BrunoTableViewportProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableCommonProps<TRow, TColumns> & {
+  viewportSource: BrunoTableViewportSource<TRow>;
+};
+
+type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
+
+type BrunoTableSourceChrome = {
+  readonly totalRows: number;
+  readonly version: number;
+  readonly status: BrunoTableSourceStatus;
+  readonly statusCode?: string | undefined;
+  readonly message?: string | undefined;
+};
+
+type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
+  readonly rows: readonly TRow[];
+};
 ```
 
-Potential future refinement:
+Expose `BrunoTableClient` and `BrunoTableViewport`. Do not expose one component with `mode`, `serverSide`, or a union containing both `clientSource` and `viewportSource`. The variants are explicit composition roots with no impossible source combinations.
 
-- branded row IDs
-- row-ID generic inferred from `getRowId`
+Rules:
 
-## Field columns
+- `tableId` is mandatory and namespaces persistence and diagnostics.
+- `getRowId` is mandatory; row indexes are never identities.
+- `columns` is a stable typed array.
+- `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
+- Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
+- A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
+- Preserve unchanged row references between source versions and replace only changed rows.
+- `loading` with no rows shows the loading overlay. `stale`, `closed`, or `error` with retained rows keeps those rows visible and adds the appropriate non-destructive status treatment.
+- `viewportSource` is a long-lived source, not a row array copied into React state.
 
-Field names must be real fields:
+## Mandatory column identity
+
+Every leaf column definition requires an explicit `columnId` from this namespace:
 
 ```ts
-column.field("price", {});
+type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 ```
+
+```ts
+{
+  columnId: "COL_ID_PRICE",
+  field: "price",
+}
+```
+
+The prefix deliberately distinguishes durable grid identity from a row field. The uppercase suffix keeps identifiers conspicuous and searchable in definitions, persisted fixtures, commands, and diagnostics.
+
+Never derive `columnId` from:
+
+- `field`
+- header text
+- array position
+- `valueGetter`
+- a generated counter
+
+Lowercase or unprefixed literals must fail compilation under `satisfies BrunoTableColumns<TRow>`. Dynamic or restored values must be validated at runtime. `columnId` must also be unique within a table; duplicate IDs are configuration errors and must fail during table construction. The public column shape should preserve literal IDs for downstream inference, while runtime validation remains authoritative for uniqueness.
+
+All grid-owned and persisted state uses `columnId`:
+
+- order, width, visibility, and pinning
+- filters and sorts
+- focus and selection
+- drafts, validation, and conflicts
+- clipboard and fill transactions
+- diagnostics
+
+Persisted identity is scoped by `tableId + columnId`.
+
+## Column kinds
+
+### Shared definition
+
+The minimal shared shape is conceptually:
+
+```ts
+type BrunoTableColumnBase<TRow, TValue, TColumnId extends BrunoTableColumnId> = {
+  columnId: TColumnId;
+  headerName?: string;
+  isEditable?: boolean | ((params: { row: TRow; value: TValue }) => boolean);
+  valueFormatter?: (params: { row: TRow; value: TValue }) => string;
+};
+```
+
+The implementation may normalize static and callback capabilities once, but it must not turn ordinary cell rendering into a broad state subscription.
+
+### Field columns
+
+A field column reads a real row field directly:
+
+```ts
+{
+  columnId: "COL_ID_PRICE",
+  field: "price",
+}
+```
+
+Requirements:
+
+- `field` must be a valid field for `TRow`.
+- The column value type is `TRow[typeof field]`.
+- Direct field access is the default cell-value fast path.
+- `field` is the default projection, filter, and sort mapping for a View Server Adapter.
+- `field` is not column identity and is never the key of persisted grid state.
 
 This must fail:
 
 ```ts
-column.field("prices", {});
+const columns = [
+  {
+    columnId: "COL_ID_PRICE",
+    field: "prices",
+  },
+] satisfies BrunoTableColumns<Order>;
 ```
 
-The value type is inferred:
+### Computed columns
 
-```ts
-price -> number
-status -> "open" | "filled" | "cancelled"
-```
-
-## Accessor columns
-
-Computed columns require an explicit stable ID:
-
-```ts
-column.accessor("notional", {
-  accessor: (row) => row.price * Number(row.quantity),
-});
-```
-
-The accessor return type becomes the column value type.
-
-## Column IDs and capabilities
-
-The columns tuple should derive unions:
-
-```ts
-type ColumnIdOf<TColumns> = ...
-type SortableColumnId<TColumns> = ...
-type FilterableColumnId<TColumns> = ...
-type EditableColumnId<TColumns> = ...
-type ColumnValue<TColumns, TColumnId> = ...
-```
-
-Capabilities must remove columns from the corresponding models.
-
-An action column with `sortable: false` must not appear in the sort model type.
-
-## Typed filters
-
-Filter operators should derive from the column value type.
-
-```ts
-type FilterFor<T> = T extends string
-  ? StringFilter
-  : T extends number
-    ? NumberFilter<number>
-    : T extends bigint
-      ? NumberFilter<bigint>
-      : T extends Date
-        ? DateFilter
-        : T extends boolean
-          ? BooleanFilter
-          : EqualityFilter<T>;
-```
-
-Examples:
-
-```ts
-type StringFilter =
-  | { operator: "equals"; value: string }
-  | { operator: "notEquals"; value: string }
-  | { operator: "contains"; value: string }
-  | { operator: "startsWith"; value: string }
-  | { operator: "endsWith"; value: string }
-  | { operator: "isEmpty" };
-
-type NumberFilter<T extends number | bigint> =
-  | { operator: "equals"; value: T }
-  | { operator: "notEquals"; value: T }
-  | { operator: "greaterThan"; value: T }
-  | { operator: "greaterThanOrEqual"; value: T }
-  | { operator: "lessThan"; value: T }
-  | { operator: "lessThanOrEqual"; value: T }
-  | { operator: "between"; min: T; max: T };
-```
-
-This must compile:
+A computed column has `valueGetter` instead of `field`:
 
 ```ts
 {
-  columnId: "price",
-  operator: "greaterThan",
-  value: 100,
+  columnId: "COL_ID_NOTIONAL",
+  valueGetter: ({ row }) => row.price * Number(row.quantity),
 }
 ```
 
-This must fail:
+The return type of `valueGetter` is the column value type.
+
+Accepted default rule: a `valueGetter`-only column has no automatic filtering or sorting. There is no field to send to the View Server, and BrunoTable must never execute, inspect, or reverse-engineer arbitrary JavaScript to manufacture query semantics.
+
+A computed column may later opt into:
+
+- an explicit client-side filter or comparator
+- an explicit server filter-field mapping
+- an explicit server sort-field mapping
+- explicit selected field dependencies
+
+Those are separate capabilities. They must be declared and type-checked explicitly; their final property names are not yet accepted.
+
+Until those capabilities exist, a computed column is excluded from `BrunoTableFilterableColumnId<TColumns>` and `BrunoTableSortableColumnId<TColumns>`.
+
+### Field and computed definitions are exclusive
+
+The initial definition should not accept both `field` and `valueGetter`. That combination makes the displayed value, edited value, filter value, sort value, and server field ambiguous. Use a field column plus `valueFormatter` when only presentation differs.
+
+## Capability derivation
+
+The exact column tuple should derive:
 
 ```ts
-{
-  columnId: "price",
-  operator: "contains",
-  value: "100",
-}
+type BrunoTableColumnIdOf<TColumns> = ...;
+type BrunoTableColumnValue<TColumns, TColumnId> = ...;
+type BrunoTableEditableColumnId<TColumns> = ...;
+type BrunoTableFilterableColumnId<TColumns> = ...;
+type BrunoTableSortableColumnId<TColumns> = ...;
 ```
 
-## Typed editors
+Having a `field` makes a column eligible for default field-based query semantics. Whether the filtering or sorting UI is enabled by default is a separate product-default decision and must not be confused with whether a valid mapping exists.
 
-Editor configuration must match the column value.
+Capabilities must remove invalid columns from their state models. A computed or action column without explicit filter semantics cannot appear in the filter model merely because a caller writes its `columnId`.
 
-```ts
-type EditorFor<T> = T extends string
-  ? TextEditorConfig<T> | SelectEditorConfig<T>
-  : T extends number
-    ? NumberEditorConfig
-    : T extends bigint
-      ? BigIntEditorConfig
-      : T extends Date
-        ? DateEditorConfig
-        : T extends boolean
-          ? CheckboxEditorConfig
-          : CustomEditorConfig<T>;
-```
+## Grid filter expressions
 
-A number column must reject a date editor.
+Persisted filters express user intent using `columnId`. They do not persist View Server fields or raw TanStack `unknown` values.
 
-A string-literal union select must reject options outside the union.
-
-## Typed callbacks
-
-For a price column:
+Leaf conditions should follow effect-view-server's operator vocabulary while replacing its `field` with `columnId`:
 
 ```ts
-column.field("price", {
-  valueFormatter: ({ value, row }) => {
-    // value: number
-    // row: Order
-    return value.toFixed(2);
+const filters = [
+  {
+    columnId: "COL_ID_PRICE",
+    type: "greaterThanOrEqual",
+    filter: 100,
   },
-
-  editable: ({ row, value }) => {
-    // value: number
-    return row.status === "open";
+  {
+    type: "OR",
+    conditions: [
+      { columnId: "COL_ID_STATUS", type: "equals", filter: "open" },
+      { columnId: "COL_ID_STATUS", type: "equals", filter: "filled" },
+    ],
   },
-});
+] satisfies BrunoTableFilterExpressions<typeof columns>;
 ```
 
-## Typed edit changes
+The filter model must support:
 
-Avoid this public shape:
+- typed field conditions
+- recursive `AND` and `OR` groups
+- unary `NOT`
+- an implicit-AND root array
+- operator and operand types derived from the column value
+
+For example, `contains` must be rejected for a numeric column and `greaterThan` must be rejected for a nonnumeric column.
+
+TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
+
+## Sort state
+
+Grid sort state also uses `columnId`:
 
 ```ts
-type CellChange = {
-  columnId: string;
-  before: unknown;
-  after: unknown;
+const sorting = [
+  { columnId: "COL_ID_PRICE", direction: "desc" },
+  { columnId: "COL_ID_SYMBOL", direction: "asc" },
+] satisfies BrunoTableSortBy<typeof columns>;
+```
+
+Array order is sort priority. A column without valid sort semantics cannot appear in this type.
+
+## View Server translation
+
+The View Server Translation Adapter compiles current grid state immediately before replacing the viewport query:
+
+```text
+grid filter leaf          current column definition       View Server condition
+columnId + type + value   columnId -> field               field + type + value
+
+grid sort                 current column definition       View Server order
+columnId + direction      columnId -> field               field + direction
+```
+
+Example:
+
+```ts
+const columns = [
+  {
+    columnId: "COL_ID_DISPLAY_PRICE",
+    field: "unitPrice",
+  },
+] satisfies BrunoTableColumns<Order>;
+
+// Grid-owned and persisted state
+const filter = {
+  columnId: "COL_ID_DISPLAY_PRICE",
+  type: "greaterThan",
+  filter: 100,
+};
+
+// View Server query generated through the current column definition
+const where = {
+  field: "unitPrice",
+  type: "greaterThan",
+  filter: 100,
 };
 ```
 
-Derive a discriminated union from the exact column tuple:
+Never send `columnId` directly as a View Server field merely because the strings happen to match.
+
+On restoration, sanitize every persisted filter and sort against:
+
+- the persisted format version
+- the current `columnId` registry
+- the column's current capability
+- the current operator and operand type
+- the current server-field mapping
+
+Drop invalid state conservatively. If a backend field is renamed without changing the column's meaning, keep `columnId` stable and update `field`. If the meaning or value domain changes, change `columnId` or migrate the persisted format deliberately.
+
+## View Server projection
+
+effect-view-server raw queries require an explicit non-empty `select`.
+
+- A field column contributes its `field` to the projected fields required for rendering.
+- The Adapter must include infrastructure fields required by `getRowId`, optimistic concurrency, and live reconciliation.
+- A computed column cannot reveal its dependencies automatically.
+- A computed column must eventually declare selected dependencies or map to a real server-projected field.
+
+Do not invoke `getRowId` or `valueGetter` against fabricated rows to guess projection dependencies.
+
+## Shared runtime and renderer
+
+`BrunoTableClient` and `BrunoTableViewport` are thin public composition roots. They construct different row-pipeline Adapters and then render the same internal grid experience:
+
+```text
+BrunoTableClient    -> Client Row Pipeline   --+
+                                                +-> Grid Runtime -> BrunoTable View
+BrunoTableViewport  -> Viewport Row Pipeline --+
+```
+
+The shared Grid Runtime and BrunoTable View own:
+
+- column normalization and preferences
+- header, filter, and sort controls
+- cell rendering and formatting
+- keyboard navigation and focus
+- selection, clipboard, and drag fill
+- editing, validation, drafts, and conflicts
+- row and column virtualization geometry
+- command dispatch and fine-grained subscriptions
+
+The Client Row Pipeline owns:
+
+- complete Client Source and lifecycle-state ingestion
+- local filtering and sorting
+- local grouping and aggregation when enabled
+- client transactions and the final processed row sequence
+
+The Viewport Row Pipeline owns:
+
+- the sparse indexed row store and loaded ranges
+- View Server filter, sort, and projection translation
+- query generations and stale-response rejection
+- total-row state, range requests, block caching, and eviction
+
+The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
+
+```text
+filter UI -> filters.replace command -> validated grid filter state
+                                      -> Client Adapter: recompute local row model
+                                      -> Viewport Adapter: compile and replace server query
+
+sort UI   -> sorting.replace command -> validated grid sort state
+                                      -> Client Adapter: recompute local row model
+                                      -> Viewport Adapter: compile and replace server query
+```
+
+Do not implement a public `BrunoTableBase` or a shared renderer with `if (mode === ...)` branches. An internal React wrapper may exist, but `BrunoTableView` is the more precise role: it consumes a stable runtime interface and does not know which Adapter produced it.
+
+## TanStack Table seam
+
+TanStack Table v9 is an implementation detail behind BrunoTable's interface:
+
+- `columnId` maps to TanStack's explicit column `id`.
+- `field` maps to its direct accessor semantics.
+- BrunoTable never accepts TanStack's header- or accessor-derived identity fallbacks.
+- The client variant installs client filtered and sorted row models.
+- The viewport variant keeps filtering and sorting state/UI features but uses manual processing; the Viewport Source supplies already processed sparse rows.
+- Filter and sort state may use external atoms for fine-grained ownership and query generation.
+
+Consumers should not need to register TanStack features or manipulate its table instance for the common grid path.
+
+## React Compiler and hot-path rules
+
+- Module-scope column arrays are the default stable input.
+- Do not require consumers to add defensive `useMemo` calls around static configuration.
+- Keep the public variants as separate unconditional hook compositions; do not select hooks with a row-model flag.
+- Provide the shared renderer a stable runtime reference, not a context value containing broad changing snapshots.
+- Ingest `clientSource` at the Client composition root. Do not pass the changing source envelope or complete rows through shared React context.
+- Direct field reads must stay on the cheapest cell path.
+- `valueGetter` runs in a cell hot path and must be treated as pure.
+- A cell must not subscribe to the complete table, row store, edit store, or selection store.
+- Add fine-grained subscriptions only for state the mounted cell actually renders.
+- Isolate any React Compiler-incompatible builder-method reads behind small subscription or adapter seams.
+
+## Typed edits and conflicts
+
+Edit and conflict models remain discriminated by exact `columnId`:
 
 ```ts
-type CellChange<TColumns> = {
-  [K in ColumnIdOf<TColumns>]: {
-    rowId: string;
-    columnId: K;
-    before: ColumnValue<TColumns, K>;
-    after: ColumnValue<TColumns, K>;
+type BrunoTableCellChange<TColumns> = {
+  [TColumnId in BrunoTableColumnIdOf<TColumns>]: {
+    rowId: BrunoTableRowId;
+    columnId: TColumnId;
+    before: BrunoTableColumnValue<TColumns, TColumnId>;
+    after: BrunoTableColumnValue<TColumns, TColumnId>;
   };
-}[ColumnIdOf<TColumns>];
+}[BrunoTableColumnIdOf<TColumns>];
 ```
 
-## Typed conflicts
+The same correlation applies to `baseValue`, `serverValue`, and `userValue` in conflicts. Avoid public `columnId: string` plus `unknown` value shapes.
+
+## Runtime decoding
+
+Compile-time types do not validate arbitrary server responses. The core may accept a generic decoder Adapter, with integrations for Effect Schema, Zod, Valibot, and custom decoders. No schema library is mandatory for non-View-Server consumers.
+
+## Required type-level tests
+
+Cover at minimum:
+
+- package-owned public exports use the `BrunoTable...` prefix
+- mandatory, literal-preserving, prefixed, uppercase `columnId`
+- rejection of lowercase and unprefixed column identities
+- invalid fields
+- duplicate IDs at runtime and at compile time only where the public shape can prove them
+- field value inference
+- computed return inference
+- rejection of simultaneous `field` and `valueGetter`
+- computed columns excluded from automatic filter and sort IDs
+- filter operators and operands correlated with column values
+- recursive filter expressions
+- sort column IDs and priority
+- `isEditable` callback inference
+- edit and conflict value correlation
+- Viewport Source topic/row compatibility
+- `BrunoTableClient` accepts only a complete `clientSource`
+- effect-view-server `LiveQueryResult<TRow>` is structurally assignable to `BrunoTableClientSource<TRow>`
+- rejection of incomplete ready/stale Client Sources
+- `BrunoTableViewport` accepts only a `viewportSource`
+- rejection of cross-variant source props
+- rejection of repeated generic annotations at JSX usage
+- rejection of `any` leaks in representative public inference paths
+- emitted-package consumer inference, not only source-level inference
+
+## Rejected public shapes
+
+Do not reintroduce:
 
 ```ts
-type CellConflict<TColumns> = {
-  [K in ColumnIdOf<TColumns>]: {
-    rowId: string;
-    columnId: K;
-    baseValue: ColumnValue<TColumns, K>;
-    serverValue: ColumnValue<TColumns, K>;
-    userValue: ColumnValue<TColumns, K>;
-    baseVersion: string;
-    serverVersion: string;
-  };
-}[ColumnIdOf<TColumns>];
+defineGrid(...);
+createColumnHelper(...);
+<DataGrid definition={...} rowModel={...} />;
+<BrunoTable mode="client" ... />;
 ```
 
-## Server query types
+Also reject:
 
-Derive query types from the grid definition:
+- implicit column IDs
+- header text as identity
+- raw TanStack state as the persistence contract
+- View Server fields as persisted grid identity
+- automatic server filtering or sorting for `valueGetter`-only columns
+- executing consumer functions to infer query fields or projection dependencies
+- one public component with client/viewport boolean modes or incompatible source unions
+- spreading Client Source rows, status, version, and diagnostics into separate required table props
+- accepting only client rows while discarding available source lifecycle state
+- duplicated filter, sort, navigation, clipboard, or cell UI per row model
 
-```ts
-type ServerGridRequest<TGrid> = {
-  startRow: number;
-  endRow: number;
-  sorting: SortModel<TGrid>;
-  filters: FilterModel<TGrid>;
-};
-```
+## Open interface decisions
 
-The datasource should be created through the grid definition:
+The following remain deliberately unresolved:
 
-```ts
-const dataSource = ordersGrid.defineViewportDataSource({
-  connect({ sink }) {
-    // fully inferred
-  },
-});
-```
+- the product default for enabling filter and sort UI on eligible field columns
+- the names and shapes of explicit computed-column client and server semantics
+- how selected dependencies and optimistic-concurrency fields are declared
+- the visual treatment and retry actions for Client Source lifecycle states
+- editable save/commit Adapter props
 
-Avoid forcing users to repeat:
-
-```ts
-ServerViewportDataSource<Order, OrdersQuery, OrderColumns>;
-```
-
-## Updates
-
-Avoid exposing unrestricted `Partial<TRow>` as the primary typed update API.
-
-Prefer typed field or column changes where possible.
-
-Distinguish:
-
-- complete row snapshots
-- sparse positional rows
-- identity-based value updates
-- invalidations
-- row moves
-- row removals
-
-The exact update union should preserve column/value correlation.
-
-## Runtime validation
-
-Compile-time types do not validate server responses.
-
-The core should accept an optional generic decoder:
-
-```ts
-interface RowDecoder<TRow> {
-  decode(input: unknown): TRow;
-}
-```
-
-Provide adapters for:
-
-- Effect Schema
-- Zod
-- Valibot
-- custom decoders
-
-Do not make a schema library mandatory.
-
-## Type-level tests
-
-Use `tsd`, `expect-type`, or equivalent compile-time tests for:
-
-- valid and invalid field names
-- accessor return inference
-- filter operators
-- filter value types
-- editor types
-- select options
-- sort column IDs
-- edit changes
-- conflicts
-- server requests
-- disabled capabilities
-- row-ID inference
-- nested optional values
+These decisions must extend the accepted small interface rather than restoring an intermediate grid-definition object.

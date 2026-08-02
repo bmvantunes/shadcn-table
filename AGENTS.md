@@ -95,6 +95,7 @@ The grid must support:
 18. React Compiler incompatibilities must be isolated behind small adapter boundaries.
 19. Every persisted format is versioned and sanitized against current column definitions.
 20. Any server-side mutation must use stable row identity and optimistic concurrency.
+21. Every package-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use `BrunoTable...`; unprefixed grid symbols remain internal.
 
 ## Preferred technology split
 

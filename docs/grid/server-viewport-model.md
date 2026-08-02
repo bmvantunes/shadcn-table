@@ -22,55 +22,72 @@ Grid row store
 View server
 ```
 
-## Public datasource shape
+## Public consumer shape
 
-Proposed direction:
+Consumers pass a long-lived `viewportSource` directly to `BrunoTableViewport`:
+
+```tsx
+type Order = TopicRow<typeof viewServer.topics, "orders">;
+
+const columns = [
+  { columnId: "COL_ID_SYMBOL", field: "symbol" },
+  { columnId: "COL_ID_PRICE", field: "price" },
+] satisfies BrunoTableColumns<Order>;
+
+const getOrderRowId = (row: Order) => row.id;
+
+function OrdersTable() {
+  const viewportSource = useLiveQueryViewport("orders");
+
+  return (
+    <BrunoTableViewport
+      tableId="orders"
+      getRowId={getOrderRowId}
+      columns={columns}
+      viewportSource={viewportSource}
+    />
+  );
+}
+```
+
+Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-session objects. The source and columns must carry enough type information for `BrunoTableViewport` to infer the topic row and valid query capabilities.
+
+## View Server Translation Adapter
+
+Grid-owned filters, sorts, and layouts use `columnId`. effect-view-server knows topic fields. The Adapter resolves each queryable `columnId` through the current column definition immediately before replacing the Live Query Viewport query.
+
+```text
+Grid state              Column registry             effect-view-server
+columnId condition  ->  field + capability      ->  where field condition
+columnId sort       ->  field + capability      ->  orderBy field entry
+rendered columns    ->  field dependencies      ->  explicit select
+```
+
+Rules:
+
+- Field columns provide the default View Server field mapping.
+- `valueGetter`-only columns have no automatic server filter, sort, or projection semantics.
+- Filter and sort mappings are separate capabilities because View Server supports nested filter paths but only top-level raw sort fields.
+- Persisted grid state never stores backend fields as identity.
+- Invalid or stale mappings are dropped conservatively during preference restoration and rejected if they reach query compilation.
+- The Adapter must include row-identity and optimistic-concurrency fields required by grid infrastructure.
+
+The exact exceptional mapping and projection-dependency property names remain open public-interface decisions.
+
+## Internal source seam
+
+`BrunoTableViewport` adapts the public Viewport Source to an internal long-lived session and grid-owned sparse sink. Conceptually, the internal session still needs operations equivalent to:
 
 ```ts
-interface ServerViewportDataSource<TGrid> {
-  connect(context: {
-    tableId: string;
-    sink: ServerViewportSink<TGrid>;
-  }): ServerViewportSession<TGrid>;
-}
-
-interface ServerViewportSession<TGrid> {
-  setQuery(request: { generation: number; query: ServerQuery<TGrid> }): void;
-
+interface ServerViewportSession<TQuery> {
+  setQuery(request: { generation: number; query: TQuery }): void;
   setViewport(request: { generation: number; visible: IndexRange; required: IndexRange }): void;
-
   refresh(request: { generation: number; range?: IndexRange }): void;
-
   dispose(): void;
 }
 ```
 
-The sink:
-
-```ts
-interface ServerViewportSink<TGrid> {
-  setRowCount(request: { generation: number; count: number | "unknown" }): void;
-
-  provideRange(request: {
-    generation: number;
-    startIndex: number;
-    rows: readonly GridRowSnapshot<TGrid>[];
-  }): void;
-
-  provideSparseRows(request: {
-    generation: number;
-    rows: readonly IndexedRowSnapshot<TGrid>[];
-  }): void;
-
-  applyUpdates(request: { generation: number; updates: readonly TypedRowUpdate<TGrid>[] }): void;
-
-  invalidate(request: { generation: number; range?: IndexRange }): void;
-
-  reportFailure(request: { generation: number; range: IndexRange; error: unknown }): void;
-}
-```
-
-The exact types should be refined during implementation.
+This is an internal seam, not an object the ordinary `BrunoTableViewport` consumer constructs.
 
 ## Why a long-lived object
 
@@ -321,8 +338,8 @@ Use sparse identity-keyed repositories:
 type CellKey = `${string}:${string}`;
 
 type EditRepository = {
-  drafts: Map<CellKey, CellDraft>;
-  conflicts: Map<CellKey, CellConflict>;
+  drafts: Map<CellKey, BrunoTableCellDraft>;
+  conflicts: Map<CellKey, BrunoTableCellConflict>;
   validationErrors: Map<CellKey, ValidationError>;
 };
 ```
@@ -331,7 +348,7 @@ When a row reloads, overlay drafts on top of canonical server data.
 
 ## Sorting and dirty rows
 
-In server mode, a local edit may alter the active sort order.
+In a Viewport Table, a local edit may alter the active sort order.
 
 Recommended policy:
 

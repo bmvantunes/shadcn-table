@@ -24,7 +24,9 @@ Challenge details where necessary, but preserve these hard requirements:
 
 - mandatory `tableId`
 - mandatory `getRowId`
-- mandatory stable column IDs
+- mandatory explicit `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, with no inferred identities
+- every package-owned public export carries the `BrunoTable` prefix; for example, `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`
+- explicit `BrunoTableClient` and `BrunoTableViewport` public variants over a shared internal grid runtime and renderer
 - React Compiler support
 - horizontal and vertical virtualization
 - pinned columns in one logical navigation order
@@ -35,3 +37,5 @@ Challenge details where necessary, but preserve these hard requirements:
 - no persistence of scroll, viewport, selection, or transient interaction state
 - no top-level React state updates for every scroll or server batch
 - strong TypeScript inference without public `any`
+- full strict TypeScript checks, including exact optional properties and unchecked indexed access
+- positive and negative type tests plus emitted-package consumer tests for every public inference guarantee
