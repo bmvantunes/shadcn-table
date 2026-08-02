@@ -36,6 +36,8 @@ That does not make TanStack's state public. BrunoTable still owns its branded `c
 
 The last point matters because TanStack documents that drag selection emits an update whenever the pointer crosses a cell boundary. Its React example deliberately excludes selection from the top-level `useTable` selector and subscribes at a fine-grained row boundary using a small derived selection key. That matches BrunoTable's 120 Hz architecture and should be preserved through the Adapter.
 
+See [TanStack Table v9 fine-grained React subscriptions](./tanstack-table-v9-fine-grained-subscriptions.md) for the exact APIs, React Compiler implications, selection and resizing patterns, and recommended BrunoTable subscription map.
+
 Sorting must remain stable while live client rows or sparse server windows change. The new v9 default already does this, but BrunoTable should set the private option deliberately so a future TanStack default cannot alter grid behaviour.
 
 Cell spanning is not needed for the first vertical slice. When added, the renderer must skip body cells whose computed row or column span is zero; emitting HTML `rowspan="0"` has different browser semantics and would be incorrect.

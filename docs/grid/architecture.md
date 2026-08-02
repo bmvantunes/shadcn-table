@@ -153,6 +153,32 @@ Keep high-frequency geometry outside React and XState context:
 - drag transforms
 - hit-testing data
 
+## React render subscription policy
+
+TanStack Table v9 exposes three different mechanisms that must not be confused:
+
+- `table.atoms.<slice>.get()` and `table.store.state` read current snapshots without subscribing React.
+- `table.Subscribe` and the standalone React `Subscribe` component create selector-based React render boundaries.
+- `table.store.subscribe()` is an imperative observer. It requires explicit cleanup and is not the normal React rendering primitive.
+
+Keep these mechanisms behind BrunoTable's private TanStack Adapter. Consumers never receive a TanStack table, store, atom, or subscription API.
+
+Use TanStack subscriptions only for state owned or derived by the private TanStack model. BrunoTable-owned rows, drafts, validation, conflicts, focus, and source lifecycle use Grid Runtime selectors with the same narrow-boundary rule; they are not copied into TanStack state merely to reuse `table.Subscribe`.
+
+The component that constructs the private TanStack table should select only structural state that genuinely changes the mounted tree. High-frequency state such as drag selection and live resize state must not invalidate that root. Place reactive render boundaries at the smallest useful invalidation domain:
+
+- a selection checkbox may select one row's boolean;
+- an editable cell may select only its own draft, validation, and conflict state;
+- drag-range presentation should use a per-row derived key when one change affects several cells and neighbouring selection edges;
+- a header may select only its own sort, filter, pin, resize, or menu presentation;
+- overlays, toolbars, footers, and status indicators subscribe independently to the values they render.
+
+Do not add a subscription to a component that only renders stable row data. Prefer a single slice atom as the source. When a render island depends on several slices, project the smallest primitive or shallow-stable object that completely describes its output.
+
+TanStack row, cell, column, and header builder methods hide state reads from React Compiler. Any nested compiled component that calls such a method must sit behind an explicit subscription boundary for every state dependency it renders. This is a correctness rule as well as a performance rule.
+
+Some hot presentation state should avoid React reconciliation entirely. During live column resize, subscribe imperatively to the sizing atom, write width CSS variables on the grid root, batch writes per animation frame, and unsubscribe on teardown. React render islands remain appropriate for the small pieces that must change semantically, such as the active resize handle.
+
 ## Row-pipeline Adapter seam
 
 The Grid Runtime owns one validated filter state and one validated sort state, both keyed by Column Identity. Filter and sort controls only dispatch `filters.replace` and `sorting.replace` commands.

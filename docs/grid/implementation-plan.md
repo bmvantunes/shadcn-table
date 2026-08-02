@@ -82,6 +82,8 @@ Build:
 - pinned start and end columns
 - basic headers and cells
 - React Compiler boundary
+- private TanStack subscription Adapter
+- dependency-shaped render boundaries for cells, rows, headers, and overlays
 - per-row subscriptions
 - stable unchanged row references
 
@@ -94,6 +96,7 @@ Success criteria:
 - 1,000 columns in stress fixture
 - bounded mounted cells
 - no full-grid rerender on a single row replacement
+- React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
 - smooth 120 Hz scrolling target on capable hardware
 
 ## Phase 3: Keyboard navigation
@@ -129,6 +132,8 @@ Build:
 - active sort count
 - hidden column count
 - reset actions
+- live resize widths applied through frame-batched CSS variables outside React reconciliation
+- isolated reactive state for resize handles and accessibility output
 - local-storage adapter
 - URL adapter
 - schema versioning and sanitization
@@ -147,6 +152,7 @@ Success criteria:
 - new/removed columns reconcile safely
 - no ephemeral state is serialized
 - drag commits once
+- live resize does not rerender the mounted body on each pointer frame
 - drag animation stays within frame budget
 
 ## Phase 5: Server viewport read-only model
@@ -200,12 +206,15 @@ Build:
 - server-side restrictions
 - clear user messaging for disabled operations
 - query-revision handling
+- cell-selection state excluded from the table-root subscription
+- derived row-level selection subscriptions for range styling and selection edges
 
 Success criteria:
 
 - no partial silent copy/fill/edit
 - selection can outlive mounted cells
 - selection clears or reconciles on query change
+- extending a range rerenders only mounted rows whose derived selection presentation changes
 
 ## Phase 7: Editing foundation
 
