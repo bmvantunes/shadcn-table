@@ -33,6 +33,9 @@ Challenge details where necessary, but preserve these hard requirements:
 - 120 Hz interaction target on capable hardware
 - first-class keyboard navigation
 - client and server viewport row models
+- explicit compiled Column Value Semantics for exact `bigint` and optional Effect BigDecimal support, with no `number` coercion or row sampling
+- half-open `inRange` parity between Client and Server Tables
+- typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout
 - no persistence of scroll, viewport, selection, or transient interaction state
 - no top-level React state updates for every scroll or server batch

@@ -1,0 +1,3 @@
+# Compile exact column value semantics and isolate Effect
+
+BrunoTable compiles one Column Value Semantics plan per normalized column and reuses it for equality, ordering, canonical text, editing, filtering, clipboard exchange, preference codecs, and conflict reconciliation. Native `bigint` is a core exact numeric kind; Effect `BigDecimal` is supplied by an optional Effect entry point and must match effect-view-server's wire-safe, allocation-safe semantics without making Effect a root-package dependency. Exact numeric domains never coerce through JavaScript `number`, and BrunoTable never samples loaded rows to discover them.

@@ -78,6 +78,7 @@ const columns = [
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
+    valueSemantics: "bigint",
     isEditable: ({ row }) => row.status === "open",
   },
   {
@@ -87,9 +88,9 @@ const columns = [
     isEditable: ({ row }) => row.status === "open",
   },
   {
-    columnId: "COL_ID_NOTIONAL",
-    headerName: "Notional",
-    valueGetter: ({ row }) => row.price * Number(row.quantity),
+    columnId: "COL_ID_DOUBLE_QUANTITY",
+    headerName: "Double quantity",
+    valueGetter: ({ row }) => row.quantity * 2n,
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -334,12 +335,53 @@ The minimal shared shape is conceptually:
 type BrunoTableColumnBase<TRow, TValue, TColumnId extends BrunoTableColumnId> = {
   columnId: TColumnId;
   headerName?: string;
+  valueSemantics?: "bigint" | BrunoTableValueSemantics<TValue>;
   isEditable?: boolean | ((params: { row: TRow; value: TValue }) => boolean);
   valueFormatter?: (params: { row: TRow; value: TValue }) => string;
 };
 ```
 
 The implementation may normalize static and callback capabilities once, but it must not turn ordinary cell rendering into a broad state subscription.
+
+### Column Value Semantics
+
+Column Value Semantics are the authority whenever BrunoTable must interpret a value rather than merely read it. The normalized plan contains semantic equality, order, canonical text, parsing, a versioned preference codec, and explicit capability markers. It is compiled once and reused by editing, client filtering/sorting, clipboard, persistence, drafts, and conflicts.
+
+Exact numeric columns select a preset rather than repeating functions:
+
+```ts
+import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+
+const columns = [
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    valueSemantics: "bigint",
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+  },
+] satisfies BrunoTableColumns<Order>;
+```
+
+The root package owns `"bigint"`. The optional `@bruno/table/effect` entry point owns `BrunoTableEffectBigDecimalValueSemantics` and has Effect as an optional peer. Importing the root entry point neither loads Effect nor exposes Effect-specific declarations.
+
+Do not sample rows to infer exact value semantics. TypeScript value types are erased, a Server Table begins sparse, and the public effect-view-server Viewport Source does not expose runtime field semantics. A future source Adapter may supply an opaque compiled semantics registry, but explicit column semantics remain the portable interface.
+
+Rules:
+
+- `number`, `bigint`, and BigDecimal operands never mix implicitly.
+- Mixed-domain unions have no automatic ordered-numeric capability.
+- `valueFormatter` changes visual presentation only.
+- Default edit and clipboard text is canonical, exact, and locale-independent.
+- Blank input is resolved by an explicit nullable clear policy before numeric parsing; it is never silently zero.
+- BigDecimal equality and comparison match effect-view-server, including differently scaled equal values and extreme safe scales.
+- Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.
+- Series-fill arithmetic is an optional capability separate from comparison.
+
+The conceptual `BrunoTableValueSemantics<TValue>` symbol is a deep interface, not an invitation for ordinary consumers to implement many callbacks. First-party built-ins and integration presets hide those details. Its final construction interface must be proven with type-level tests before export, while the `valueSemantics` column selection and exact behavior above are accepted.
 
 ### Field columns
 
@@ -377,8 +419,8 @@ A computed column has `valueGetter` instead of `field`:
 
 ```ts
 {
-  columnId: "COL_ID_NOTIONAL",
-  valueGetter: ({ row }) => row.price * Number(row.quantity),
+  columnId: "COL_ID_DOUBLE_QUANTITY",
+  valueGetter: ({ row }) => row.quantity * 2n,
 }
 ```
 
@@ -452,6 +494,8 @@ The filter model must support:
 
 For example, `contains` must be rejected for a numeric column and `greaterThan` must be rejected for a nonnumeric column.
 
+`inRange` is half-open in both variants: `filter <= value < filterTo`. Client filtering must install the compiled exact comparator instead of TanStack's inclusive `inNumberRange` helper. Runtime filters retain native typed operands; the Server Adapter changes only Column Identity to Query Field and lets effect-view-server own schema-aware transport encoding.
+
 TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
 
 ## Sort state
@@ -514,6 +558,8 @@ On restoration, sanitize every persisted filter and sort against:
 - the current operator and operand type
 - the current server-field mapping
 
+An exact-numeric filter leaf additionally carries the current semantics codec ID and version plus a JSON-safe canonical string. Restore it only through that column's decoder. Never put a native `bigint` in JSON, use a BigDecimal object's diagnostic `toJSON`, or infer a stale operand domain from text that happens to look numeric.
+
 Drop invalid state conservatively. If a backend field is renamed without changing the column's meaning, keep `columnId` stable and update `field`. If the meaning or value domain changes, change `columnId` or migrate the persisted format deliberately.
 
 ## View Server projection
@@ -521,7 +567,7 @@ Drop invalid state conservatively. If a backend field is renamed without changin
 effect-view-server raw queries require an explicit non-empty `select`.
 
 - A field column contributes its `field` to the projected fields required for rendering.
-- The Adapter must include infrastructure fields required by `getRowId`, optimistic concurrency, and live reconciliation.
+- The Adapter must include infrastructure fields required by `getRowId`, the explicit Row Version capability, and live reconciliation.
 - A computed column cannot reveal its dependencies automatically.
 - A computed column must eventually declare selected dependencies or map to a real server-projected field.
 
@@ -687,7 +733,8 @@ The following remain deliberately unresolved:
 - the product default for enabling filter and sort UI on eligible field columns
 - the names and shapes of explicit computed-column client and server semantics
 - the no-helper correlated type shape for computed-column formatters
-- how selected dependencies and optimistic-concurrency fields are declared
+- how computed-column selected dependencies are declared
+- the exact property shape for declaring and projecting the typed Row Version; the accepted invariant is that it is row-specific and never the Viewport Source Query Version
 - the visual treatment and retry actions for Client Source lifecycle states
 - the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted
 

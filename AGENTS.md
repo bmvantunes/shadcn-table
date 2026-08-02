@@ -103,6 +103,12 @@ The grid must support:
 26. Grid editing is a strict discriminated capability: `editable: true` requires `onSaveEdits`; false or omitted editing rejects edit-only props. Column `isEditable` policies identify potentially editable columns and decide exact cell eligibility.
 27. Immediate and Batch Edit Modes invoke the same `onSaveEdits` operation with a non-empty Save Change Set. Immediate mode preserves multi-cell paste, fill, and clear as one call; Batch mode sends accumulated net cell changes.
 28. The end user owns Edit Mode through BrunoTable's toggle; consumers cannot set a default or controlled mode prop. The toggle uses static column capability, never an all-row scan, and unresolved conflicts enter the same workflow from Save or the conflict-count control.
+29. Keep `number`, `bigint`, and BigDecimal as separate exact numeric domains. Never coerce `bigint` or BigDecimal through JavaScript `number` for rendering, editing, filtering, sorting, clipboard, persistence, saves, or conflicts.
+30. Compile explicit Column Value Semantics once during column normalization. Do not sample rows to discover exact value kinds, and do not use TanStack automatic filter or sort functions for exact numeric columns.
+31. Native `bigint` semantics belong to BrunoTable core. Effect `BigDecimal` support belongs to an optional entry point or Adapter; the root package and its declarations remain usable without Effect installed.
+32. Runtime filter state keeps native exact operands. Persist exact operands only through tagged, versioned, JSON-safe column codecs and drop stale or invalid operands conservatively.
+33. `inRange` is half-open in both Client and Server Tables: `filter <= value < filterTo`.
+34. Query Version and Row Version are distinct. Never use a Viewport Source's top-level version as optimistic concurrency, and never implement `onSaveEdits` with an unconditional server patch.
 
 ## Preferred technology split
 

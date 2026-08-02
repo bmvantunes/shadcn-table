@@ -33,7 +33,7 @@ type Order = TopicRow<typeof viewServer.topics, "orders">;
 
 const columns = [
   { columnId: "COL_ID_SYMBOL", field: "symbol" },
-  { columnId: "COL_ID_PRICE", field: "price" },
+  { columnId: "COL_ID_QUANTITY", field: "quantity", valueSemantics: "bigint" },
 ] satisfies BrunoTableColumns<Order>;
 
 const getOrderRowId = (row: Order) => row.id;
@@ -73,6 +73,10 @@ Rules:
 - Persisted grid state never stores backend fields as identity.
 - Invalid or stale mappings are dropped conservatively during preference restoration and rejected if they reach query compilation.
 - The Adapter must include row-identity and optimistic-concurrency fields required by grid infrastructure.
+
+The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Exact numeric columns therefore declare Column Value Semantics explicitly today. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
+
+Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 
 The exact exceptional mapping and projection-dependency property names remain open public-interface decisions.
 
@@ -174,12 +178,14 @@ class ViewportStore<TRow> {
 ```
 
 ```ts
-type RowRecord<TRow> = {
+type RowRecord<TRow, TRowVersion> = {
   row: TRow;
-  serverVersion: string;
+  serverVersion: TRowVersion;
   localRevision: number;
 };
 ```
+
+`TRowVersion` is the explicit row-specific optimistic-concurrency type, not the Viewport Source's query-level `version`.
 
 Benefits:
 
@@ -259,6 +265,8 @@ On query change:
 Bind each sink instance to its query generation. The public effect-view-server sink messages do not need an extra generation field; the Adapter ignores writes from a sink whose generation is no longer active.
 
 Ignore stale responses.
+
+The source `version` used by snapshot/delta delivery is a Query Version for this logical index space. It may reject stale read publications, but it must never be copied into a cell draft or save request as Row Version.
 
 ## Viewport requests
 
@@ -341,6 +349,10 @@ type EditRepository = {
 ```
 
 When a row reloads, overlay drafts on top of canonical server data.
+
+Editable Server Tables must explicitly project and retain a Row Version field/capability even when no visible column renders it. Save operations go through the consumer's application write/RPC Adapter, which atomically compares that version and returns canonical typed values plus the next version. Do not implement saves with effect-view-server's current unconditional runtime `patch` call.
+
+Exact numeric drafts and conflicts retain native `bigint` or BigDecimal values outside evictable blocks. Reconciliation calls the normalized column's semantic equality, so differently scaled equivalent BigDecimals converge without a false conflict.
 
 ## Sorting and dirty rows
 

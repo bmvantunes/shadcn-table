@@ -20,6 +20,14 @@ _Avoid_: Accessor column, field ID
 A column whose value is produced by `valueGetter` rather than a named row field. It has no automatic server filter or sort semantics.
 _Avoid_: Field column, implicitly queryable column
 
+**Column Value Semantics**:
+The stable rules that define equality, ordering, canonical text, and persisted identity for one column's values. Visual formatting may present those values differently without changing their meaning.
+_Avoid_: Value formatter, sampled data type, JavaScript coercion
+
+**Exact Numeric Domain**:
+One numeric domain whose values and operands remain `number`, `bigint`, or BigDecimal throughout a grid operation. Different numeric domains are never mixed implicitly.
+_Avoid_: Numeric-like value, number coercion, mixed numeric domain
+
 **Grid Filter Expression**:
 A filter expression whose leaves refer to Column Identity. It is persisted as user intent and translated through current column definitions before reaching a server.
 _Avoid_: View Server filter, field-keyed persisted filter
@@ -49,6 +57,14 @@ _Avoid_: Viewport Table, server mode, viewport flag, paginated table
 **Viewport Source**:
 The long-lived server-viewport input passed to a Server Table. It represents typed query replacement, sparse row delivery, total-row state, and lifecycle for one logical indexed row space.
 _Avoid_: Row array, page datasource, paginated result
+
+**Query Version**:
+The revision of one live query result stream or snapshot. It describes the read model as a whole and is not a concurrency token for any row.
+_Avoid_: Row Version, expected version
+
+**Row Version**:
+The row-specific token that an Edit Persistence Operation compares atomically before applying a mutation. It retains its source type and is independent of Query Version.
+_Avoid_: Query Version, viewport version, hard-coded string revision
 
 **Source Constraint**:
 An application-owned condition that defines which rows belong to a table's working set before user grid filters are applied. It is not a persisted grid preference and cannot be cleared by BrunoTable's filter controls.

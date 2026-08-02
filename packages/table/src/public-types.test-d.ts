@@ -34,8 +34,8 @@ const columns = [
     valueFormatter: ({ value }) => value.toFixed(2),
   },
   {
-    columnId: "COL_ID_NOTIONAL",
-    valueGetter: ({ row }) => row.price * Number(row.quantity),
+    columnId: "COL_ID_DOUBLE_QUANTITY",
+    valueGetter: ({ row }) => row.quantity * 2n,
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -44,13 +44,13 @@ type Columns = typeof columns;
 describe("BrunoTable public types", () => {
   it("preserves exact identities and values", () => {
     expectTypeOf<BrunoTableColumnIdOf<Columns>>().toEqualTypeOf<
-      "COL_ID_SYMBOL" | "COL_ID_PRICE" | "COL_ID_NOTIONAL"
+      "COL_ID_SYMBOL" | "COL_ID_PRICE" | "COL_ID_DOUBLE_QUANTITY"
     >();
     expectTypeOf<BrunoTableColumnValue<Order, Columns, "COL_ID_SYMBOL">>().toEqualTypeOf<string>();
     expectTypeOf<BrunoTableColumnValue<Order, Columns, "COL_ID_PRICE">>().toEqualTypeOf<number>();
     expectTypeOf<
-      BrunoTableColumnValue<Order, Columns, "COL_ID_NOTIONAL">
-    >().toEqualTypeOf<number>();
+      BrunoTableColumnValue<Order, Columns, "COL_ID_DOUBLE_QUANTITY">
+    >().toEqualTypeOf<bigint>();
   });
 
   it("derives capabilities instead of guessing computed server semantics", () => {
@@ -168,12 +168,12 @@ const invalidNumericFilter = [
 
 const invalidComputedFilter = [
   // @ts-expect-error computed columns have no automatic filter mapping.
-  { columnId: "COL_ID_NOTIONAL", type: "greaterThan", filter: 10 },
+  { columnId: "COL_ID_DOUBLE_QUANTITY", type: "greaterThan", filter: 10n },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
 const invalidSort = [
   // @ts-expect-error computed columns have no automatic sort mapping.
-  { columnId: "COL_ID_NOTIONAL", direction: "asc" },
+  { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
 ] satisfies BrunoTableSortBy<Columns>;
 
 const invalidPaginatedClient = {

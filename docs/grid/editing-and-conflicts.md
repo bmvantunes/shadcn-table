@@ -24,7 +24,7 @@ An Editable Table owns a compact `Batch editing` switch in its top-right grid ch
 
 Changing Edit Mode while an editor, drafts, validation, conflicts, or a save operation are active is blocked. The user completes or cancels the editor and uses Save or Reset before switching; BrunoTable must not silently persist, discard, or reinterpret pending work during a mode change.
 
-`onSaveEdits` receives a non-empty Save Change Set and returns the typed optimistic-concurrency result. The exact item/result shapes must preserve row, column, value, and version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
+`onSaveEdits` receives a non-empty Save Change Set and returns the typed optimistic-concurrency result. The exact item/result shapes must preserve row, column, value, and Row Version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
 
 - Immediate mode invokes `onSaveEdits` once per committed edit transaction. A normal cell commit usually produces one change; paste, drag fill, and multi-cell clear produce one atomic call containing every change in that transaction.
 - Batch mode accumulates drafts and invokes the same handler only after Save. Coalesce repeated edits to the same cell into one net change from its accepted base to its latest draft; do not send raw undo history.
@@ -71,10 +71,10 @@ Each editable cell conceptually has:
 ## Draft shape
 
 ```ts
-type BrunoTableCellDraft<T> = {
-  originalServerValue: T;
-  originalServerVersion: string;
-  editedValue: T;
+type BrunoTableCellDraft<TValue, TRowVersion> = {
+  originalServerValue: TValue;
+  originalServerVersion: TRowVersion;
+  editedValue: TValue;
   editedAt: number;
 };
 ```
@@ -82,12 +82,12 @@ type BrunoTableCellDraft<T> = {
 ## Conflict shape
 
 ```ts
-type BrunoTableCellConflict<T> = {
-  baseValue: T;
-  baseVersion: string;
-  serverValue: T;
-  serverVersion: string;
-  userValue: T;
+type BrunoTableCellConflict<TValue, TRowVersion> = {
+  baseValue: TValue;
+  baseVersion: TRowVersion;
+  serverValue: TValue;
+  serverVersion: TRowVersion;
+  userValue: TValue;
 };
 ```
 
@@ -141,7 +141,24 @@ Server: 102
 
 Record conflict.
 
-Equality must be column-aware.
+Equality must be column-aware and must come from the normalized Column Value Semantics plan.
+
+## Exact value editing and reconciliation
+
+Exact numeric values remain native throughout the edit workflow. A `bigint` draft contains a `bigint`; an Effect BigDecimal draft contains a BigDecimal. Do not convert either to `number`, persist them as strings in the edit store, JSON-clone them, or use object identity for dirtiness.
+
+The editor holds incomplete input as text. On Cell Edit Commit it:
+
+1. resolves the column's explicit blank/clear policy;
+2. parses canonical text through the compiled Column Value Semantics;
+3. validates the exact native value;
+4. records the typed draft only after parsing and validation succeed.
+
+Blank input is never silently `0n` or decimal zero. A nullable exact column must declare whether clear means `null` or `undefined`; ambiguous `T | null | undefined` columns require an explicit choice.
+
+Draft dirtiness, three-way reconciliation, and successful-save cleanup all use semantic equivalence. Therefore BigDecimal base `1.50`, server `1.5`, and user `1.500` converge automatically. Display text does not participate in this decision.
+
+The conflict modal formats Base, Server now, and Yours through the column's presentation channel, but its selection and resolution state retain the native typed values. A localized display formatter can never change the save payload.
 
 ## Visual behaviour
 
@@ -224,14 +241,18 @@ The client sends expected versions.
 Example row patch:
 
 ```ts
-type BrunoTableRowPatch<TChanges> = {
+type BrunoTableRowPatch<TChanges, TRowVersion> = {
   rowId: BrunoTableRowId;
-  expectedVersion: string;
+  expectedVersion: TRowVersion;
   changes: TChanges;
 };
 ```
 
 The server is the final concurrency authority.
+
+Row Version is an explicit typed editing capability and may itself be `bigint`. It is independent of the Viewport Source's top-level Query Version. The Query Version describes one live read result; it is not an `expectedVersion` for any row.
+
+The Server Table projection must include the Row Version source even when no visible column uses it. `onSaveEdits` must call an application write or RPC boundary that performs an atomic compare-and-set. effect-view-server's current runtime `patch` accepts no expected version and must not be used as a convenience save implementation.
 
 Even after local conflict resolution, a newer server version may arrive before save.
 
@@ -253,7 +274,7 @@ A batch result should distinguish:
 - permission failures
 - transient failures
 
-The server should return canonical values and new versions for applied rows.
+The server should return decoded canonical values and new typed Row Versions for applied rows. Semantic equivalence decides whether a canonical exact value clears the submitted draft.
 
 ## XState actors
 

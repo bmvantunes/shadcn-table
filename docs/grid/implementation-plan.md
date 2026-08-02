@@ -43,6 +43,9 @@ Build:
 - direct `field` value inference
 - computed `valueGetter` return inference
 - typed formatters
+- compiled Column Value Semantics with capability-derived filter operands
+- built-in explicit `bigint` semantics without `number` coercion
+- optional-integration type seam that keeps Effect out of root declarations
 - capability derivation for editing, sorting, and filtering
 - computed columns excluded from automatic filter and sort capabilities
 - type-level tests
@@ -59,6 +62,8 @@ Success criteria:
 - computed values infer correctly
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
+- `bigint` filters accept only `bigint` operands and mixed numeric domains receive no automatic ordering capability
+- a consumer fixture imports the root package successfully without Effect installed
 - invalid editor types fail
 - no repeated generic annotation at JSX usage
 - no `any` in exported declarations or representative inference paths
@@ -78,6 +83,7 @@ Build:
 - `BrunoTableToolbar` layout primitive with no empty region when absent
 - client row model
 - shared filter and sort commands with client row-model processing
+- explicit exact-numeric client comparators and filters, including half-open `inRange`
 - one continuous scroll surface with no pagination feature or controls
 - fixed row height
 - vertical virtualization
@@ -105,6 +111,7 @@ Success criteria:
 - no full-grid rerender on a single row replacement
 - React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
 - smooth 120 Hz scrolling target on capable hardware
+- exact-numeric hot paths perform no value-kind sampling, schema inspection, or per-cell registry lookup
 
 ## Phase 3: Keyboard navigation
 
@@ -146,6 +153,7 @@ Build:
 - local-storage adapter
 - URL adapter
 - schema versioning and sanitization
+- tagged, versioned JSON-safe codecs for exact filter operands
 
 Persist only:
 
@@ -162,6 +170,7 @@ Success criteria:
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Source Constraints are never serialized as grid preferences or cleared by grid filter reset
 - no ephemeral state is serialized
+- stale, wrong-codec, wrong-column, or invalid exact operands are dropped rather than coerced
 - drag commits once
 - live resize does not rerender the mounted body on each pointer frame
 - drag animation stays within frame budget
@@ -191,6 +200,9 @@ Build:
 - viewport-driven requests
 - row-level subscriptions
 - range invalidation
+- native exact operands preserved through query translation
+- explicit typed Row Version projection kept separate from Query Version
+- optional Effect BigDecimal semantics with effect-view-server wire-admission and comparator parity
 
 Success criteria:
 
@@ -207,6 +219,9 @@ Success criteria:
 - block cache is bounded
 - unloaded destination indexes render stable placeholders while their window is loading
 - fixed-height geometry remains stable
+- Client and Server exact numeric filters/sorts agree at equality, null, tie, and half-open range boundaries
+- pathological safe-scale BigDecimals compare without scale-dependent allocation
+- no save Adapter treats `viewportSource.version` as Row Version or delegates optimistic saves to unconditional runtime `patch`
 
 ## Phase 6: Selection and capability policies
 
@@ -247,6 +262,8 @@ Build:
 - unsaved count
 - validation count
 - client-row editing first
+- exact semantic equality for dirtiness, convergence, and canonical save results
+- explicit nullable clear policy so blank exact input never becomes zero
 
 Success criteria:
 
@@ -266,6 +283,7 @@ Success criteria:
 - no-edit state keeps the footer mounted with Reset and Save disabled
 - Reset clears edit-owned state only
 - stable row updates do not notify or rerender footer controls when their compact projections are unchanged
+- exact `bigint`, BigDecimal, and Row Version types survive editor, draft, transaction, handler, and result inference
 
 ## Phase 8: Conflicts and server save
 
@@ -298,6 +316,7 @@ Build:
 
 - TSV copy/paste
 - typed parsing
+- canonical exact-numeric text kept separate from display formatting
 - read-only skipping
 - validation
 - pattern fill
@@ -309,6 +328,7 @@ Build:
 Success criteria:
 
 - no accidental partial operations
+- an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
 - large operations do not emit one event per cell
 - undo remains transaction-level
 
@@ -330,6 +350,19 @@ Potential later work:
 - server-assisted bulk operations
 - per-cell subscriptions for hot columns
 - custom virtualization adapter without compiler escape hatch
+
+## Exact-numeric verification gates
+
+Before enabling Effect BigDecimal support by default, add:
+
+- type tests for exact operands, mixed-domain rejection, nullable clear policy, typed Row Version, and Effect-free root declarations;
+- property tests for comparison laws and BigDecimal scale normalization;
+- cross-repository contract tests against the pinned effect-view-server comparator, filters, admission rules, null placement, and row-ID ties;
+- 100k-row client sort/filter benchmarks for large bigints, wide decimal coefficients, and pathological safe scales;
+- a regression proving comparator work depends on coefficient digits rather than scale difference;
+- clipboard and persistence round trips beyond `Number.MAX_SAFE_INTEGER`;
+- conflict tests where differently scaled BigDecimals are semantically equal;
+- save tests proving Query Version is never used as Row Version and unconditional runtime patch is never selected as the optimistic write path.
 
 ## Initial Codex task
 

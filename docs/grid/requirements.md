@@ -178,6 +178,47 @@ Stable identity is required for:
 - live updates
 - transaction history
 
+## Column value semantics and exact numeric values
+
+Every column capability that interprets a value must use one compiled Column Value Semantics plan. The same plan governs equality, ordering, canonical text, editing, client filters, clipboard exchange, preference codecs, and conflict reconciliation. `valueFormatter` is visual presentation only.
+
+Exact numeric columns declare their semantics explicitly; do not inspect or sample rows to discover them:
+
+```ts
+import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+
+const columns = [
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    valueSemantics: "bigint",
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+  },
+] satisfies BrunoTableColumns<Order>;
+```
+
+Requirements:
+
+- native `bigint` is a root-package built-in;
+- Effect `BigDecimal` is provided only through an optional Effect entry point or Adapter;
+- importing `@bruno/table` must neither load Effect nor mention Effect in its emitted declarations;
+- `number`, `bigint`, and BigDecimal remain separate operand domains and are never implicitly converted between one another;
+- mixed numeric unions receive no automatic ordered-numeric capability;
+- no exact numeric operation may pass through JavaScript `number`;
+- client filtering and sorting use explicit exact functions, never TanStack automatic numeric/object inference;
+- `inRange` is half-open: `filter <= value < filterTo`;
+- BigDecimal equality is numeric, so differently scaled forms such as `1.5` and `1.50` are equivalent;
+- unrestricted View Server BigDecimals use effect-view-server-compatible digit comparison, not Effect's scale-aligning comparator;
+- a blank editor or pasted value is never silently numeric zero; nullable columns require an explicit clear representation;
+- default clipboard text is locale-independent and round-trippable; display-formatted clipboard text requires an explicit paired parser;
+- arithmetic series fill is a separate optional capability and cannot be inferred merely from ordering.
+
+Exact input parsing is an untrusted boundary. Apply bounded text and bulk-operation policies, return parse failures as data, and validate once before values enter trusted row, filter, draft, or save-result state. Mounted cells must not repeatedly reflect over value objects.
+
 ## Persistence
 
 Persist only intentional user preferences:
@@ -213,6 +254,8 @@ Persisted state must be:
 - storage-adapter based
 
 Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
+
+Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 
 Supported storage targets should include:
 
@@ -324,6 +367,10 @@ Both modes call the same `onSaveEdits` operation with a non-empty Save Change Se
 
 Never split a multi-cell edit transaction into one persistence call per cell. Never expose raw undo history as the Batch Save payload.
 
+Editable tables also require an explicit Row Version capability. It must preserve the actual version type, including `bigint`, and the Server Table projection must include its source field even when it has no visible column. The Viewport Source's top-level `version` is a Query Version for the read result and must never become a row's `expectedVersion`.
+
+`onSaveEdits` must cross an application write or RPC seam that atomically checks the Row Version. Do not implement it by calling effect-view-server's current unconditional runtime `patch`. Successful and conflicting results return decoded canonical values and the next typed Row Version before reconciliation.
+
 ## Edit safety footer
 
 An Editable Table mounts a persistent bottom Edit Safety Footer in either public variant.
@@ -429,6 +476,8 @@ Clipboard support must define:
 - invalid values
 - partially loaded ranges
 - large operations
+
+For exact numeric values, canonical text is the default copy/paste representation. Parse and validate the entire target matrix before applying it; any unavailable target, invalid exact operand, or missing clear policy aborts the whole transaction. Do not apply a valid prefix. Copy/repeat fill may use equality and canonical text, while arithmetic series fill requires an explicit exact-arithmetic capability.
 
 ## Validation
 

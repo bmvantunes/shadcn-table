@@ -28,14 +28,16 @@ const columns = [
     valueFormatter: ({ value }) => value.toFixed(2),
   },
   {
-    columnId: "COL_ID_NOTIONAL",
-    valueGetter: ({ row }) => row.price * Number(row.quantity),
+    columnId: "COL_ID_DOUBLE_QUANTITY",
+    valueGetter: ({ row }) => row.quantity * 2n,
   },
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
 type Price = Expect<Equal<BrunoTableColumnValue<Order, Columns, "COL_ID_PRICE">, number>>;
-type Notional = Expect<Equal<BrunoTableColumnValue<Order, Columns, "COL_ID_NOTIONAL">, number>>;
+type DoubleQuantity = Expect<
+  Equal<BrunoTableColumnValue<Order, Columns, "COL_ID_DOUBLE_QUANTITY">, bigint>
+>;
 type Filterable = Expect<
   Equal<BrunoTableFilterableColumnId<Columns>, "COL_ID_SYMBOL" | "COL_ID_PRICE">
 >;
@@ -68,11 +70,11 @@ const invalidColumn = [
 
 const invalidFilter = [
   // @ts-expect-error emitted declarations keep computed columns out of automatic filtering.
-  { columnId: "COL_ID_NOTIONAL", type: "greaterThan", filter: 10 },
+  { columnId: "COL_ID_DOUBLE_QUANTITY", type: "greaterThan", filter: 10n },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
 void (0 as unknown as Price);
-void (0 as unknown as Notional);
+void (0 as unknown as DoubleQuantity);
 void (0 as unknown as Filterable);
 void filters;
 void props;

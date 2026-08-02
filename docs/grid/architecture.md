@@ -10,6 +10,7 @@ Public React Variants
 Grid Core
 ├── table configuration
 ├── column model
+├── compiled column value semantics
 ├── grid-runtime interface
 ├── command bus
 ├── capability and policy engine
@@ -270,6 +271,63 @@ The Viewport Row Pipeline responds by resolving Column Identity through current 
 
 This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, editing, or clipboard code.
 
+## Column Value Semantics seam
+
+Every normalized leaf column owns one compiled internal value-semantics plan. It is the single authority for that column's:
+
+- runtime admission at untrusted boundaries;
+- semantic equality and total ordering of valid values;
+- canonical, locale-independent edit and clipboard text;
+- editor and paste parsing;
+- versioned JSON-safe filter-operand codec;
+- exact numeric filter capability;
+- optional arithmetic used by series fill.
+
+The plan is resolved once during column normalization and stored as direct functions on the internal column. Cell rendering, client filtering, sorting, draft reconciliation, conflicts, clipboard, and preference restoration call those functions directly. They do not inspect schema ASTs, look up a global registry, or detect value kinds during every row or cell operation.
+
+`valueFormatter` remains a row-aware visual presentation override. It cannot silently redefine equality, ordering, edit text, clipboard text, persistence encoding, or View Server query operands. Localized currency text such as `£1,234.50` is presentation; the canonical exchange value remains exact and locale-independent unless the column explicitly supplies a paired exchange formatter and parser.
+
+The accepted public direction for exact numeric columns is explicit and requires no per-column comparator boilerplate:
+
+```ts
+import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+
+const columns = [
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    valueSemantics: "bigint",
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+  },
+] satisfies BrunoTableColumns<Order>;
+```
+
+`"bigint"` is implemented by the root package. The Effect preset is exported only from an optional entry point whose implementation imports Effect; the root `@bruno/table` entry point and its declarations do not. A future source Adapter may supply an already-compiled opaque field-semantics registry to remove repetitive declarations, but the current effect-view-server Viewport Source exposes no such runtime metadata. Never replace that missing contract with row sampling.
+
+The internal semantics interface is deep: one small column selection hides rendering, parsing, comparison, persistence, and integration details. Consumers normally select a built-in or first-party preset instead of implementing each operation. Arithmetic is an optional capability because copy fill needs equality and canonical text, while numeric series fill additionally needs exact addition and subtraction.
+
+### Exact numeric invariants
+
+- `number`, `bigint`, and BigDecimal are separate domains. Mixed-domain unions have no automatic ordered-numeric capability.
+- Native `bigint` uses exact equality and relational comparison, signed base-10 canonical text, and a tagged string persistence codec. It never passes through `Number`.
+- BigDecimal equality is numeric, so differently scaled representations such as `1.5` and `1.50` converge.
+- The Effect preset admits only values compatible with effect-view-server's injective JSON wire rules and uses a comparator whose work depends on coefficient digits, not scale difference.
+- BrunoTable must not use Effect's general scale-aligning `BigDecimal.Order` or `BigDecimal.Equivalence` for unrestricted View Server values, because extreme safe-integer scale differences can attempt to materialize an impossible power of ten.
+- `inRange` is half-open everywhere: `lower <= value < upper`.
+- Client exact filters and sorts are explicit TanStack functions or grid-owned processing. TanStack automatic functions are never the semantic authority.
+- Runtime filter state retains native operands. Only preference persistence encodes them, and restoration requires the current Column Identity, codec ID, codec version, operator, and capability to agree.
+- Default clipboard text is canonical and round-trippable. Display-formatted copy is an explicit paired capability.
+
+For BigDecimal, the preferred integration is a public effect-view-server value-semantics authority reused by the optional Adapter. Until that exists, the optional Adapter may carry the audited digit comparator only with cross-repository parity tests against the vendored effect-view-server source. Do not import its private `@effect-view-server/effect-utils` workspace package.
+
+### Exact-value performance
+
+Exactness stays out of React state. Parse filter operands once when filter state changes, reuse direct comparator references, and cache BigDecimal canonical text/comparison metadata by immutable object identity where profiling justifies it. Client sort benchmarks must cover large coefficients and pathological safe scales; a regression gate must prove comparator cost is independent of scale difference.
+
 ## Technology split
 
 ### TanStack Table v9
@@ -355,6 +413,7 @@ Use it at boundaries:
 - cancellation
 - schemas
 - resource management
+- optional BigDecimal parsing, schema codecs, and hostile-input admission
 
 Do not use it for:
 
@@ -364,6 +423,7 @@ Do not use it for:
 - geometry
 - every pointer move
 - every scroll event
+- discovering value kinds during cell rendering
 
 ## Logical layout
 
