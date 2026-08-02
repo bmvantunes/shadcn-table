@@ -263,7 +263,9 @@ Rules:
 - Prefer children composition over `showSearch`, `showSave`, `showFilters`, or other page-specific boolean props.
 - `BrunoTableToolbar` supplies consistent shadcn/Base UI layout, responsive overflow, and accessibility semantics.
 - Arbitrary consumer components may appear beside BrunoTable-owned controls.
-- BrunoTable-owned controls consume only the narrow state they render; adding toolbar content must not subscribe the grid body or table root to broad changing state.
+- BrunoTable-owned controls can observe semantic grid state and dispatch typed grid actions from anywhere inside the provider. This includes separately named result-row, loaded-row, selected-row, active-filter, active-sort, dirty-cell, validation, and conflict counts where the control needs them.
+- Each BrunoTable-owned control consumes only the narrow state it renders; adding toolbar content must not subscribe the grid body or table root to broad changing state, and one control's update must not rerender unrelated sibling controls.
+- TanStack tables, atoms, stores, subscriptions, and state shapes remain private implementation details. Page-owned children do not receive them through props or context.
 - The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
 - A custom control must explicitly choose whether it updates persisted Grid Filter intent or an application-owned, non-persisted Source Constraint. BrunoTable never infers ownership from toolbar placement.
 

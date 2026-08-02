@@ -78,6 +78,16 @@ Both public composition roots render optional children into a toolbar region ins
 
 The provider exposes a stable private Grid Runtime reference rather than a broad changing snapshot. BrunoTable-owned compound controls subscribe to capability-specific selectors for exactly the state they render. Consumer toolbar components receive only their ordinary props and do not become grid subscribers merely because they are children.
 
+Toolbar state access follows the same ownership and subscription rules as the rest of the grid:
+
+- a row-count control selects semantic row metrics from the Client or Viewport Row Pipeline, including the authoritative result count and, when useful, the separately named loaded count;
+- an active-filter control selects the validated Grid Filter Expression and Quick Filter from the Grid Runtime, not a field-keyed server query;
+- sort, selection, dirty-edit, validation, and conflict controls select only their own compact count or presentation model;
+- control actions dispatch typed Grid Commands rather than mutating TanStack atoms or arbitrary runtime state;
+- one control changing must not rerender sibling controls, the table root, or the mounted body unless their own selected value also changes.
+
+The private TanStack Adapter may implement TanStack-owned parts with `table.Subscribe` or the standalone React `Subscribe` component. BrunoTable-owned source, row, edit, validation, and conflict state uses Grid Runtime selectors. Lowercase `table.store.subscribe(...)` and atom subscriptions are imperative observers and are reserved for work that should bypass React rendering. None of these mechanisms enter BrunoTable's public interface.
+
 Keep the public Module deep:
 
 - compose page-specific UI through children instead of adding feature booleans to table props;
