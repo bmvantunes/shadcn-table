@@ -2,6 +2,13 @@
 
 Base UI-powered shadcn components for BrunoTable and other React applications. The package follows the `b1D0ekG8` design preset: Mira, neutral colors, Inter Variable, and Phosphor icons.
 
+The complete official Base UI component set is included. Every component has a direct subpath and the package intentionally has no root barrel:
+
+```tsx
+import { Dialog, DialogContent, DialogTitle } from "@bruno/shadcn/dialog";
+import { toast } from "@bruno/shadcn/toast";
+```
+
 Components use direct package subpaths so consumers load only what they import:
 
 ```tsx

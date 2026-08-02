@@ -23,24 +23,36 @@ const config: UserConfig = defineConfig({
   },
   pack: {
     entry: {
-      button: "src/components/button.tsx",
-      "compiler-smoke": "src/compiler-smoke.tsx",
+      "*": ["src/components/*.tsx", "!src/components/*.test.tsx"],
+      "internal/compiler-smoke": "src/compiler-smoke.tsx",
     },
     dts: {
       tsgo: true,
     },
     exports: {
-      exclude: ["compiler-smoke"],
+      exclude: ["internal/**"],
       customExports(packageExports) {
-        delete packageExports["."];
+        const publicExports = Object.fromEntries(
+          Object.entries(packageExports)
+            .filter(([exportName]) => exportName !== ".")
+            .map(([exportName, target]) => {
+              if (typeof target !== "string" || !target.endsWith(".mjs")) {
+                return [exportName, target];
+              }
+
+              return [
+                exportName,
+                {
+                  types: target.replace(/\.mjs$/, ".d.mts"),
+                  import: target,
+                  default: target,
+                },
+              ];
+            }),
+        );
 
         return {
-          ...packageExports,
-          "./button": {
-            types: "./dist/button.d.mts",
-            import: "./dist/button.mjs",
-            default: "./dist/button.mjs",
-          },
+          ...publicExports,
           "./styles.css": "./src/styles/globals.css",
         };
       },

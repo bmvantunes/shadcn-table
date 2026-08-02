@@ -9,3 +9,4 @@ BrunoTable consumes generic UI primitives from a separate `@bruno/shadcn` packag
 - Direct subpaths keep imports statically analyzable and avoid loading unrelated components.
 - Applications import `@bruno/shadcn/styles.css` once and process it with Tailwind CSS v4 through the official Vite plugin.
 - New components are added with the shadcn CLI, reviewed as source, and explicitly added to the package export map and build entries.
+- The package inherits the workspace's strict TypeScript checks but disables `isolatedDeclarations`. Preserving current upstream component source is more valuable than adding hundreds of declaration-only annotations; the package build still emits and validates declarations for every public subpath. BrunoTable packages keep `isolatedDeclarations` enabled for their inference-heavy APIs.
