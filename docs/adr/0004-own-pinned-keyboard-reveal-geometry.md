@@ -8,4 +8,4 @@ BrunoTable owns keyboard destination resolution and minimal scroll-to-reveal geo
 - One horizontal key command moves to exactly one adjacent navigable column.
 - Pinned destinations never cause horizontal scrolling.
 - Centre destinations scroll by the minimum delta required inside the unobscured centre viewport after both pinned widths are removed.
-- The initial behavioural fixture pins `name` and `age` at start and `actions` at end, then tests both transition boundaries in both directions.
+- Behavioural fixtures cover zero, one, and multiple consumer-defined columns in both pinned regions; no specific field or Column Identity is privileged.

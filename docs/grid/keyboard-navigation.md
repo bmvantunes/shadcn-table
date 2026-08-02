@@ -34,13 +34,15 @@ Arrow-right from the final centre column enters the first pinned-end column.
 
 Hidden and non-navigable columns are skipped.
 
-For the canonical both-sides-pinned case:
+Pinned membership and order come from each table's current column definitions and sanitized preferences. No field name or Column Identity is special.
+
+When a table pins columns at both logical sides:
 
 ```text
-start: name, age -> centre: remaining data columns -> end: actions
+pinned-start columns -> centre columns -> pinned-end columns
 ```
 
-Arrow Right from `age` enters the first centre column. Arrow Right from the final centre column enters `actions`. Arrow Left traverses the exact reverse path. Each key command moves exactly one adjacent navigable column regardless of how many columns a scroll operation could reveal.
+Arrow Right from the final pinned-start column enters the first centre column. Arrow Right from the final centre column enters the first pinned-end column. Arrow Left traverses the exact reverse path. Each key command moves exactly one adjacent navigable column regardless of how many columns a scroll operation could reveal.
 
 ## Navigation pipeline
 
@@ -223,10 +225,11 @@ Support:
 
 Must include:
 
-- two pinned-start columns (`name`, `age`) through centre navigation
+- zero, one, and multiple consumer-defined columns in each pinned region
+- multiple pinned-start columns traversed one at a time before centre navigation
 - final pinned-start column to first centre column, revealing only that destination
-- final centre column to pinned-end `actions` without changing horizontal scroll
-- pinned-end `actions` back to the final centre column with minimal reveal
+- final centre column to first pinned-end column without changing horizontal scroll
+- first pinned-end column back to the final centre column with minimal reveal
 - first centre column back to pinned-start without changing horizontal scroll
 - header to body
 - body to header
