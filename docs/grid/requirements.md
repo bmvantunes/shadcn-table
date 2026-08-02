@@ -13,14 +13,35 @@ Build a dense, desktop-class data grid that feels native under heavy usage and i
 - React Compiler compatibility
 - 120 Hz interaction targets
 
+## TypeScript strictness
+
+BrunoTable must compile under the repository's full strict profile, including exact optional properties and unchecked indexed-access protection.
+
+The public interface must:
+
+- expose no `any`
+- preserve literal Column Identity and per-column value types
+- reject invalid fields, operators, values, source props, and capability combinations
+- correlate edit, validation, and conflict values with their exact Column Identity
+- require no casts for ordinary valid usage
+- decode persisted and external values at runtime instead of asserting them into trusted types
+
+Every public inference guarantee requires source-level type tests and an emitted-package consumer test.
+
+## Public export naming
+
+Every package-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form, including foundational types such as `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`.
+
+Do not export names such as `BrunoColumnId`, `GridRegion`, `GridSorting`, or other bare grid vocabulary. Concise unprefixed names may exist internally, but they must be renamed before crossing the package boundary. Type-level export-surface tests must prevent accidental unprefixed exports.
+
 ## Operating modes
 
 The grid has two independent dimensions.
 
 ### Row model
 
-- Client row model
-- Server viewport row model
+- Client row model through `BrunoTableClient`
+- Server viewport row model through `BrunoTableViewport`
 
 ### Editing
 
@@ -36,9 +57,30 @@ This creates four valid combinations:
 
 Editing must not be coupled to the row model.
 
+Expose the row models as explicit public variants, not as a `mode` prop:
+
+```tsx
+<BrunoTableClient clientSource={orders} {...commonProps} />
+<BrunoTableViewport viewportSource={viewportSource} {...commonProps} />
+```
+
+Both variants use the same column definitions, filter and sort controls, rendering, keyboard navigation, selection, clipboard, and editing experience. The row-pipeline Adapter behind the shared Grid Runtime owns the differences in row processing and source lifecycle.
+
 ## Client row model
 
 The client receives the complete dataset.
+
+`BrunoTableClient` accepts a complete `clientSource`. An effect-view-server `useLiveQuery(...)` result is directly assignable by structure, but the component itself does not require Effect:
+
+```tsx
+const orders = useLiveQuery("orders", completeQuery);
+
+<BrunoTableClient clientSource={orders} {...commonProps} />;
+```
+
+The Client Source contains `rows`, `totalRows`, `version`, `status`, optional `statusCode`, and optional `message`. Do not spread these into separate required table props. The lifecycle fields match the Viewport Source chrome so the shared view can render loading, stale, closed, and error states consistently.
+
+Queries used as Client Sources must not use `limit` or `offset`. When a ready or stale source reports `rows.length !== totalRows`, treat it as incomplete configuration rather than silently claiming whole-dataset client operations.
 
 The grid performs locally:
 
@@ -57,6 +99,8 @@ The client row model may apply transactions without replacing the full row array
 ## Server viewport row model
 
 The grid represents a logical indexed row space where only visible and nearby ranges are loaded.
+
+`BrunoTableViewport` accepts the long-lived result of `useLiveQueryViewport` as its `viewportSource`.
 
 The server owns:
 
@@ -77,11 +121,32 @@ The grid internally requests indexed ranges based on the visible viewport and ov
 Every grid requires:
 
 ```ts
+type BrunoTableRowId = string;
+
 tableId: string;
-getRowId: (row: TRow) => RowId;
+getRowId: (row: TRow) => BrunoTableRowId;
 ```
 
-Every column requires a stable ID.
+Every leaf column definition requires an explicit stable `columnId` with this type:
+
+```ts
+type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
+```
+
+Never infer column identity from a field, header, array position, or generated counter. Lowercase or unprefixed literals must fail compilation. External values must be validated at runtime. Duplicate `columnId` values are configuration errors.
+
+Keep column identity separate from row data and server query fields:
+
+```ts
+{
+  columnId: "COL_ID_DISPLAY_PRICE",
+  field: "unitPrice",
+}
+```
+
+Use `columnId` for all grid state and persistence. Resolve it through the current column definition to `field` only when reading row data or compiling a server query.
+
+A `valueGetter`-only column has no automatic server filter or sort capability because it has no query field.
 
 Indexes are positions under a query, not row identities.
 
@@ -131,6 +196,8 @@ Persisted state must be:
 - sanitised against current column definitions
 - migration-capable
 - storage-adapter based
+
+Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
 Supported storage targets should include:
 
@@ -206,14 +273,14 @@ Users must be able to resolve conflicts before attempting to save.
 
 ## Selection and server-side capability policies
 
-Server mode cannot assume all selected rows are loaded.
+A Viewport Table cannot assume all selected rows are loaded.
 
 Represent selection logically, but distinguish selection from operations over the selection.
 
 Possible capability states:
 
 ```ts
-type ServerGridCapabilities = {
+type BrunoTableViewportCapabilities = {
   rangeSelection: "disabled" | "loaded-only" | "logical";
   clipboard: "disabled" | "loaded-only" | "server-assisted";
   dragFill: "disabled" | "loaded-only" | "server-assisted";
@@ -265,10 +332,10 @@ Logical focus must survive DOM unmounting caused by virtualization.
 All edits should normalize to transactions:
 
 ```ts
-type GridEditTransaction = {
+type BrunoTableEditTransaction = {
   id: string;
   source: "cell-edit" | "paste" | "drag-fill" | "clear";
-  changes: readonly CellChange[];
+  changes: readonly BrunoTableCellChange[];
 };
 ```
 

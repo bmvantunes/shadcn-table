@@ -5,7 +5,8 @@
 Support at least:
 
 ```ts
-type SaveMode = { type: "immediate" } | { type: "debounced"; delayMs: number } | { type: "batch" };
+type BrunoTableSaveMode =
+  { type: "immediate" } | { type: "debounced"; delayMs: number } | { type: "batch" };
 ```
 
 The primary design focus is batch mode.
@@ -29,7 +30,7 @@ Each editable cell conceptually has:
 ## Draft shape
 
 ```ts
-type CellDraft<T> = {
+type BrunoTableCellDraft<T> = {
   originalServerValue: T;
   originalServerVersion: string;
   editedValue: T;
@@ -40,7 +41,7 @@ type CellDraft<T> = {
 ## Conflict shape
 
 ```ts
-type CellConflict<T> = {
+type BrunoTableCellConflict<T> = {
   baseValue: T;
   baseVersion: string;
   serverValue: T;
@@ -174,8 +175,8 @@ The client sends expected versions.
 Example row patch:
 
 ```ts
-type RowPatch<TChanges> = {
-  rowId: string;
+type BrunoTableRowPatch<TChanges> = {
+  rowId: BrunoTableRowId;
   expectedVersion: string;
   changes: TChanges;
 };
@@ -265,10 +266,10 @@ Use sparse active edit state.
 Normalize all changes:
 
 ```ts
-type GridEditTransaction = {
+type BrunoTableEditTransaction = {
   id: string;
   source: "cell-edit" | "paste" | "drag-fill" | "clear";
-  changes: readonly CellChange[];
+  changes: readonly BrunoTableCellChange[];
   createdAt: number;
 };
 ```
@@ -292,7 +293,7 @@ Do not conflate validation with conflict detection.
 
 ## Server viewport restrictions
 
-In server mode:
+In a Viewport Table:
 
 - cell editing requires a loaded row identity
 - drag fill requires a fully loaded target unless server-assisted

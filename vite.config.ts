@@ -1,6 +1,6 @@
-import { defineConfig } from "vite-plus";
+import { defineConfig, type UserConfig } from "vite-plus";
 
-export default defineConfig({
+const config: UserConfig = defineConfig({
   test: {
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
   },
@@ -24,3 +24,5 @@ export default defineConfig({
     ignorePatterns: [".repos/**"],
   },
 });
+
+export default config;
