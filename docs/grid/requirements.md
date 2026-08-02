@@ -461,6 +461,8 @@ Activating the conflict count opens the same conflict-resolution modal and actor
 
 Users must also be able to open and resolve conflicts proactively without first activating Save.
 
+Conflict resolution supports one row or an explicit selected set. Do not expose blind global Mine or Server actions; selecting all conflicts must itself be a deliberate user gesture. One resolution action is one current-Batch undo command regardless of the selected cell count.
+
 The footer remains present with disabled actions when no edits exist. Its controls use independent compact subscriptions; row-content updates that leave their displayed counts and booleans unchanged must not notify or rerender them.
 
 ## Selection and server-side capability policies
@@ -545,6 +547,8 @@ type BrunoTableEditTransaction = {
 ```
 
 Undo and redo exist only during an unsaved Batch session. One user gesture is one history command: one paste or fill operation is one undo step regardless of cell count. A successful Batch Save establishes a new baseline and clears both stacks; a rejected save preserves them. Immediate mode exposes no local undo or redo.
+
+When a live server update becomes semantically equal to a drafted cell, treat that cell as never changed in the current batch. Remove it from pending state and prune every patch for that Cell Identity from undo and redo history; remove history commands that become empty. Undo must not resurrect a value after server convergence.
 
 Clipboard support must define:
 

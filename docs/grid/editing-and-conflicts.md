@@ -256,13 +256,13 @@ Actions:
 
 - keep mine
 - accept server
-- keep all mine
-- accept all server values
-- apply this decision to all conflicts in this column
+- select one or more conflict rows
+- apply mine to the explicit selection
+- apply server to the explicit selection
 - cancel
 - apply resolutions
 
-Use user-facing labels rather than Git terminology.
+There are no blind global `Keep all mine` or `Accept all server values` actions. A user may deliberately select every conflict row and then apply one decision to that explicit selection. One individual resolution click is one Batch history gesture; one selected-row bulk resolution is also one gesture regardless of selected cell count. Every resolution remains undoable within the current Batch session. Use user-facing labels rather than Git terminology.
 
 ## Save workflow
 
@@ -360,7 +360,7 @@ cancelled
 Manages:
 
 - individual resolutions
-- global resolutions
+- explicit selected-row resolutions
 - unresolved count
 - modal lifecycle
 - applying decisions
@@ -395,6 +395,8 @@ Generate large fill/paste changes imperatively, then submit one meaningful actor
 Undo and redo exist only in Batch mode. History begins empty at the current accepted server baseline. One user gesture creates one history command regardless of its cell count: five separate edits require five undo operations, while one 500-cell paste requires one. Undo may travel only to the beginning of the current unsaved batch, and redo may travel only within that batch.
 
 A successful Batch Save establishes a new baseline and clears both history stacks. A rejected save preserves the complete batch and its history. The first edit after a successful Save therefore creates exactly one available undo command. Immediate mode exposes no undo or redo because reversing an already-persisted mutation would require a new server operation rather than local history.
+
+Live semantic convergence erases the converged Cell Identity as though the user had never changed that cell in the current batch. Remove its draft, conflict, validation, and every patch for that cell from both undo and redo history. If pruning makes a multi-cell history command empty, remove the command; otherwise it remains one gesture over its surviving cells. Undo must never resurrect a user value after the latest server value has already converged with it.
 
 ## Validation
 
