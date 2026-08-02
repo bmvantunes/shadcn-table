@@ -271,6 +271,24 @@ The Viewport Row Pipeline responds by resolving Column Identity through current 
 
 This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, editing, or clipboard code.
 
+## Column construction seam
+
+Raw definitions, built-in Column Helpers, and application Column Presets all converge into the same validated normalized-column representation before TanStack columns or render plans are created. Helpers are construction-time modules, not runtime column kinds: normalized cells do not branch on whether their definition came from `BrunoTableNumberColumn`, `priceColumn`, or a raw object.
+
+A raw value-bearing column declares `valueType`. A built-in helper supplies that Value Type together with coherent presentation and interaction defaults. Application presets specialize helpers for domain conventions without creating a string registry. Every path still requires explicit Column Identity and an explicit `field` or `valueGetter` mapping.
+
+Construction-time precedence is fixed:
+
+```text
+built-in helper defaults -> Column Preset defaults -> individual column options
+```
+
+The normalized column stores direct renderer, editor, formatter, class, comparator, parser, and capability references. Numeric alignment, checkbox centering, and full-width select editors resolve to semantic layout tokens consumed by the renderer and theme; they do not allocate style objects or execute helper lookup logic per cell.
+
+`valueFormatter`, `cellClassName`, and `cellRenderer` are typed Cell Presentation overrides. The formatter produces visible text, a conditional class changes presentation, and the renderer is the full React escape hatch. They never replace the normalized value-semantics functions. A custom representation used for edit or clipboard round trips must declare the paired parse/exchange capability explicitly.
+
+Factories and static column arrays live at module scope. Their types must preserve literal Column Identity, field/value correlation, computed getter values, and row/value callback parameters without consumer casts or repeated row generics. TanStack helper types may inform the implementation, but BrunoTable's helpers and normalized definitions remain the public interface.
+
 ## Column Value Semantics seam
 
 Every normalized leaf column owns one compiled internal value-semantics plan. It is the single authority for that column's:
@@ -290,20 +308,20 @@ The plan is resolved once during column normalization and stored as direct funct
 The accepted public direction for exact numeric columns is explicit and requires no per-column comparator boilerplate:
 
 ```ts
-import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+import { BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 
 const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
+    valueType: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
-    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+    valueType: BrunoTableBigDecimalValueType,
   },
 ] satisfies BrunoTableColumns<Order>;
 ```

@@ -29,16 +29,21 @@ View server
 Consumers pass a long-lived `viewportSource` directly to `BrunoTableServer`:
 
 ```tsx
+import { BrunoTableBigIntColumn, BrunoTableTextColumn, type BrunoTableColumns } from "@bruno/table";
+
 type Order = TopicRow<typeof viewServer.topics, "orders">;
 
 const columns = [
-  { columnId: "COL_ID_SYMBOL", field: "symbol", headerName: "Symbol" },
-  {
+  BrunoTableTextColumn({
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+  BrunoTableBigIntColumn({
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
-  },
+  }),
 ] satisfies BrunoTableColumns<Order>;
 
 const getOrderRowId = (row: Order) => row.id;
@@ -79,7 +84,7 @@ Rules:
 - Invalid or stale mappings are dropped conservatively during preference restoration and rejected if they reach query compilation.
 - The Adapter must include row-identity and optimistic-concurrency fields required by grid infrastructure.
 
-The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Exact numeric columns therefore declare Column Value Semantics explicitly today. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
+The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Raw columns therefore declare Value Type explicitly, while typed Column Helpers such as `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 

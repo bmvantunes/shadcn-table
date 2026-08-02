@@ -20,9 +20,25 @@ _Avoid_: Accessor column, field ID
 A column whose value is produced by `valueGetter` rather than a named row field. It has no automatic server filter or sort semantics.
 _Avoid_: Field column, implicitly queryable column
 
+**Value Type**:
+The explicit runtime category or custom descriptor that selects one column's value behavior. A raw value-bearing column declares it directly, while a Column Helper supplies it.
+_Avoid_: Sampled data type, TypeScript-only field type, column style
+
 **Column Value Semantics**:
 The stable rules that define equality, ordering, canonical text, and persisted identity for one column's values. Visual formatting may present those values differently without changing their meaning.
 _Avoid_: Value formatter, sampled data type, JavaScript coercion
+
+**Column Helper**:
+An optional typed constructor for a standard column family such as text, number, bigint, boolean, select, or BigDecimal. It supplies coherent behavior and presentation defaults while producing an ordinary column definition.
+_Avoid_: Required builder, string column type, generated column identity
+
+**Column Preset**:
+A reusable specialization of a Column Helper that captures application-wide domain conventions such as Price formatting, title, width, alignment, editor, and filter defaults.
+_Avoid_: Copied column configuration, global mutable defaults, string preset registry
+
+**Cell Presentation**:
+The visible text, styling, and rendered content of a cell. It may vary without changing the cell's underlying value or Column Value Semantics.
+_Avoid_: Cell value, persisted value, query operand
 
 **Exact Numeric Domain**:
 One numeric domain whose values and operands remain `number`, `bigint`, or BigDecimal throughout a grid operation. Different numeric domains are never mixed implicitly.

@@ -50,7 +50,7 @@ AG Grid reaches the same broad architectural conclusion with its cell data types
 
 ## Recommended public seam
 
-The research led to the accepted `valueSemantics` column selection recorded in the architecture and ADR 0008. The exact public construction interface for custom semantics still requires a type-design proof, but its capability split should be equivalent to the following conceptual interface. Every public symbol retains the required `BrunoTable...` brand.
+The research led to the accepted explicit Value Type selection recorded in the architecture and ADR 0008. Raw columns use `valueType`; typed Column Helpers supply the same selection. The exact public construction interface for custom types still requires a type-design proof, but its capability split should be equivalent to the following conceptual interface. Every public symbol retains the required `BrunoTable...` brand.
 
 ```ts
 export type BrunoTableOrdering = -1 | 0 | 1;
@@ -67,7 +67,7 @@ export type BrunoTableJsonValue =
   | readonly BrunoTableJsonValue[]
   | { readonly [key: string]: BrunoTableJsonValue };
 
-export type BrunoTableValueSemantics<TValue> = {
+export type BrunoTableValueType<TValue> = {
   /** Stable identity for persisted operands and migrations. */
   readonly codecId: string;
   readonly codecVersion: number;
@@ -87,28 +87,30 @@ export type BrunoTableValueSemantics<TValue> = {
 };
 ```
 
-The real interface should expose capability markers so type-level filter operators can be derived without importing a concrete value library. An exact numeric semantics object needs at least `equality`, `order`, `canonicalText`, and `numericFilter` capabilities. Arithmetic for series fill and aggregation is a separate optional capability; it must not be smuggled into the required comparator contract.
+The real interface should expose capability markers so type-level filter operators can be derived without importing a concrete value library. An exact numeric Value Type needs at least `equality`, `order`, `canonicalText`, and `numericFilter` capabilities. Arithmetic for series fill and aggregation is a separate optional capability; it must not be smuggled into the required comparator contract.
 
 Recommended column usage:
 
 ```ts
+import { BrunoTableBigDecimalValueType } from "@bruno/table/effect";
+
 const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
+    valueType: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
-    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+    valueType: BrunoTableBigDecimalValueType,
   },
 ] satisfies BrunoTableColumns<Order>;
 ```
 
-`"bigint"` is a core built-in. `BrunoTableEffectBigDecimalValueSemantics` comes from an optional Effect entry point or companion package. The root `@bruno/table` entry point must not import `effect`, and its declarations must not mention Effect types. If an `@bruno/table/effect` subpath is used, `effect` should be an optional peer and only that subpath may import it.
+`"bigint"` is a core built-in. `BrunoTableBigDecimalValueType` and `BrunoTableBigDecimalColumn` come from the optional Effect entry point. The root `@bruno/table` entry point must not import `effect`, and its declarations must not mention Effect types. If an `@bruno/table/effect` subpath is used, `effect` should be an optional peer and only that subpath may import it.
 
 Do not create a registry that executes package or application code to discover value semantics. Column normalization receives a value or built-in literal already selected by the consumer or source Adapter and compiles it once.
 
@@ -120,7 +122,7 @@ The effect-view-server Viewport Source also does not expose schema-derived field
 
 There are two lawful solutions:
 
-1. exact-numeric columns declare `valueSemantics` explicitly; or
+1. raw exact-numeric columns declare `valueType` explicitly, while their typed Column Helpers supply it; or
 2. a source Adapter carries an opaque, already-compiled field-semantics registry that BrunoTable can consume without importing Effect.
 
 The first solution can ship independently and should remain available for non-effect-view-server sources. The second would make the canonical `useLiveQueryViewport(...)` experience more concise, but requires a new effect-view-server public contract. Never fill this gap by scanning loaded rows.
@@ -134,10 +136,10 @@ Replace the hard-coded `Extract<TValue, number | bigint>` rule with capability-d
 - built-in `number` semantics contributes `number` operands;
 - built-in `bigint` semantics contributes `bigint` operands;
 - the Effect adapter contributes `BigDecimal.BigDecimal` operands;
-- a custom semantics object may contribute its exact operand type;
+- a custom Value Type may contribute its exact operand type;
 - a column with no ordered-numeric semantics cannot use numeric operators even if an unrelated union branch happens to be numeric.
 
-Mixed domains deserve conservative handling. `number | bigint`, `string | bigint`, or `number | BigDecimal` must not receive automatic ordered-numeric semantics because cross-domain comparison and persistence identity are ambiguous. Require an explicit custom semantics object or omit numeric filter/sort capability. effect-view-server makes the same concern concrete: it rejects schema unions whose different runtime members encode to the same JSON value, including `string | bigint` ([effect-view-server ADR 0003](../../../../effect-view-server/docs/adr/0003-canonical-topic-row-value-semantics.md#L46-L54)).
+Mixed domains deserve conservative handling. `number | bigint`, `string | bigint`, or `number | BigDecimal` must not receive automatic ordered-numeric semantics because cross-domain comparison and persistence identity are ambiguous. Require an explicit custom Value Type or omit numeric filter/sort capability. effect-view-server makes the same concern concrete: it rejects schema unions whose different runtime members encode to the same JSON value, including `string | bigint` ([effect-view-server ADR 0003](../../../../effect-view-server/docs/adr/0003-canonical-topic-row-value-semantics.md#L46-L54)).
 
 Type tests should prove that:
 
@@ -549,7 +551,7 @@ Include pathological safe scales and large coefficients, not only ordinary curre
 
 ## Implementation sequence
 
-1. Add the generic internal/public value-semantics vocabulary and capability-derived filter typing.
+1. Add the public Value Type and internal Column Value Semantics vocabulary plus capability-derived filter typing.
 2. Ship and test the core `bigint` semantics.
 3. Separate display formatting from canonical edit/clipboard text.
 4. Add tagged, versioned persistence encoding for exact filter operands.

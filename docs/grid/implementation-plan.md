@@ -40,10 +40,15 @@ Build:
 - mandatory `getRowId`
 - mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
 - mandatory explicit non-empty `headerName` on every leaf column
+- mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed `valueGetter` return inference
 - typed formatters
+- optional typed `BrunoTableTextColumn`, `BrunoTableNumberColumn`, `BrunoTableBigIntColumn`, `BrunoTableBooleanColumn`, and `BrunoTableSelectColumn` helpers that return ordinary definitions
+- reusable `withDefaults` Column Presets with built-in, preset, then individual-option precedence
+- optional Effect entry-point `BrunoTableBigDecimalColumn`
+- typed `valueFormatter`, conditional cell-class, and cell-renderer presentation overrides on raw, helper, and preset columns
 - compiled Column Value Semantics with capability-derived filter operands
 - built-in explicit `bigint` semantics without `number` coercion
 - optional-integration type seam that keeps Effect out of root declarations
@@ -56,11 +61,15 @@ No rendering sophistication yet.
 
 Success criteria:
 
-- no `defineGrid`, public column helper, `definition`, or `rowModel` prop
+- no `defineGrid`, required column helper, `definition`, or `rowModel` prop
 - no single public component with a client/viewport mode flag or source union
 - lowercase and unprefixed column identities fail compilation
 - missing header names fail compilation, while dynamic missing, non-string, or blank names fail runtime normalization
 - invalid fields fail compilation
+- raw columns without a Value Type fail compilation, while helpers supply the matching type
+- applying a helper to an incompatible field value fails compilation
+- helper and preset calls preserve literal identity, computed values, and exact row/value callback types without casts or repeated row generics
+- built-in, preset, and individual-option precedence is covered by behavioral tests
 - computed values infer correctly
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
@@ -93,6 +102,8 @@ Build:
 - horizontal centre-column virtualization
 - pinned start and end columns
 - basic headers and cells
+- helper-owned semantic layout defaults for start-aligned text, end-aligned numbers, centered checkboxes, and full-width select editors
+- typed per-column `valueFormatter`, `cellClassName`, and `cellRenderer` overrides without changing underlying semantics
 - React Compiler boundary
 - private TanStack subscription Adapter
 - dependency-shaped render boundaries for cells, rows, headers, and overlays

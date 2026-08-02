@@ -159,6 +159,7 @@ Keep column identity separate from row data and server query fields:
   columnId: "COL_ID_DISPLAY_PRICE",
   field: "unitPrice",
   headerName: "Price",
+  valueType: "number",
 }
 ```
 
@@ -181,27 +182,47 @@ Stable identity is required for:
 - live updates
 - transaction history
 
+## Column construction and presentation
+
+Every raw value-bearing column declares an explicit runtime `valueType`. TypeScript field types are erased, the Server Table begins sparse, and behavior must never depend on which row happens to load first. Built-in Value Types initially include text, number, bigint, and boolean; typed select and optional Effect BigDecimal support add their own explicit semantics.
+
+BrunoTable also provides optional typed Column Helpers as the recommended construction path:
+
+- `BrunoTableTextColumn` start-aligns cell content;
+- `BrunoTableNumberColumn` and `BrunoTableBigIntColumn` end-align display and editing controls;
+- `BrunoTableBooleanColumn` centers its checkbox and keyboard interaction target;
+- `BrunoTableSelectColumn` makes its editable control fill the available cell width;
+- `BrunoTableBigDecimalColumn` is exported only from `@bruno/table/effect` and preserves exact values.
+
+Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a server field, and never introduce a string-keyed registry or per-cell dispatch.
+
+Applications may specialize a helper with `withDefaults` into a reusable Column Preset for domain conventions such as Price title, fraction digits, width, alignment, editor, filter, and validation policy. Merge order is built-in helper defaults, then preset defaults, then individual column options. Presets and final columns live at module scope.
+
+Every helper and preset retains typed per-column `valueFormatter`, `cellClassName`, and `cellRenderer` overrides. `valueFormatter` changes visible text only; conditional classes and custom rendering change Cell Presentation only. None may redefine equality, ordering, parsing, clipboard exchange, preference codecs, draft/conflict reconciliation, or server query operands. A custom display representation that must round-trip requires an explicit paired parser/exchange capability or custom Value Type.
+
+Type tests must prove that helpers and presets preserve literal Column Identity, field/value compatibility, computed getter return values, exact callback row/value types, and individual override precedence without casts or repeated row generics. Applying a number helper to a string, bigint, or BigDecimal field must fail compilation.
+
 ## Column value semantics and exact numeric values
 
 Every column capability that interprets a value must use one compiled Column Value Semantics plan. The same plan governs equality, ordering, canonical text, editing, client filters, clipboard exchange, preference codecs, and conflict reconciliation. `valueFormatter` is visual presentation only.
 
-Exact numeric columns declare their semantics explicitly; do not inspect or sample rows to discover them:
+Exact numeric raw columns declare their Value Type explicitly; their corresponding helpers supply the same selection. Do not inspect or sample rows to discover it:
 
 ```ts
-import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+import { BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 
 const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
+    valueType: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
-    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+    valueType: BrunoTableBigDecimalValueType,
   },
 ] satisfies BrunoTableColumns<Order>;
 ```

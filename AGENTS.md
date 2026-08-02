@@ -110,6 +110,10 @@ The grid must support:
 33. `inRange` is half-open in both Client and Server Tables: `filter <= value < filterTo`.
 34. Query Version and Row Version are distinct. Never use a Viewport Source's top-level version as optimistic concurrency, and never implement `onSaveEdits` with an unconditional server patch.
 35. Every leaf column has an explicit non-empty `headerName`. It is the default visible and accessible header label, never identity, persistence, or query mapping, and is not inferred.
+36. Every raw value-bearing column declares an explicit runtime `valueType`; built-in Column Helpers supply it. TypeScript field types are not runtime metadata, and neither table variant samples rows to infer value behavior.
+37. BrunoTable provides optional typed `BrunoTable...Column` helpers and reusable presets for coherent rendering, layout, editing, filtering, clipboard, and styling defaults. Helpers return ordinary column definitions, never generate `columnId`, and never become a string-keyed registry.
+38. Column customization precedence is built-in helper defaults, then reusable preset defaults, then individual column options. Typed `valueFormatter`, conditional cell styling, and custom cell rendering remain available at the individual column level.
+39. Display formatting and styling never redefine value equality, ordering, parsing, clipboard exchange, persistence, conflicts, or server query operands. Round-trippable custom text requires an explicit paired parser/exchange capability or custom Value Type.
 
 ## Preferred technology split
 

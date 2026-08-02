@@ -57,41 +57,48 @@ Concise names may be used inside deep internal modules, but they must remain int
 ## Shared columns
 
 ```tsx
+import {
+  BrunoTableBigIntColumn,
+  BrunoTableNumberColumn,
+  BrunoTableSelectColumn,
+  BrunoTableTextColumn,
+  type BrunoTableColumns,
+} from "@bruno/table";
 import type { TopicRow } from "effect-view-server/config";
 
 type Order = TopicRow<typeof viewServer.topics, "orders">;
 
 const columns = [
-  {
+  BrunoTableTextColumn({
     columnId: "COL_ID_SYMBOL",
     field: "symbol",
     headerName: "Symbol",
-  },
-  {
+  }),
+  BrunoTableNumberColumn({
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
     isEditable: ({ row }) => row.status === "open",
     valueFormatter: ({ value }) => value.toFixed(2),
-  },
-  {
+  }),
+  BrunoTableBigIntColumn({
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
     isEditable: ({ row }) => row.status === "open",
-  },
-  {
+  }),
+  BrunoTableSelectColumn({
     columnId: "COL_ID_STATUS",
     field: "status",
     headerName: "Status",
+    options: ["open", "closed"],
     isEditable: ({ row }) => row.status === "open",
-  },
-  {
+  }),
+  BrunoTableBigIntColumn({
     columnId: "COL_ID_DOUBLE_QUANTITY",
     headerName: "Double quantity",
     valueGetter: ({ row }) => row.quantity * 2n,
-  },
+  }),
 ] satisfies BrunoTableColumns<Order>;
 
 const getOrderRowId = (row: Order) => row.id;
@@ -99,7 +106,7 @@ const getOrderRowId = (row: Order) => row.id;
 
 The same `columns` and `getOrderRowId` are accepted by both public variants.
 
-Static columns should normally live at module scope. Consumers should not need `useMemo`, a column helper, or a `defineGrid` call.
+Static columns, Column Helpers, and Column Presets should normally live at module scope. Consumers should not need `useMemo` or a `defineGrid` call. Helpers are optional constructors for ordinary column definitions, not a prerequisite for using BrunoTable.
 
 ## Canonical client usage
 
@@ -300,6 +307,7 @@ type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
   columnId: "COL_ID_PRICE",
   field: "price",
   headerName: "Price",
+  valueType: "number",
 }
 ```
 
@@ -335,12 +343,108 @@ Every leaf column definition also requires an explicit, non-empty `headerName`. 
   columnId: "COL_ID_PRICE",
   field: "price",
   headerName: "Price",
+  valueType: "number",
 }
 ```
 
 `headerName` is descriptive metadata, not identity. Never use it for persisted state, filtering, sorting, row access, or View Server queries, and never infer it from `columnId` or `field`. Runtime normalization rejects absent, non-string, or whitespace-only names from dynamic inputs.
 
 A future custom header renderer may replace the visible content, but `headerName` remains the stable human-readable fallback for screen readers and grid-owned UI such as menus, choosers, and conflict details. Icon-only and action columns still provide a meaningful name such as `"Actions"`; their renderer may hide the text visually without removing its semantics.
+
+## Value Types, Column Helpers, and Column Presets
+
+TypeScript preserves a field's static value type but does not emit runtime metadata. A Server Table also begins sparse, and a computed column may have no loaded values. Every raw value-bearing column therefore declares an explicit `valueType`; BrunoTable never samples rows to infer rendering, editing, filtering, sorting, clipboard, or persistence behavior:
+
+```ts
+const columns = [
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+  },
+] satisfies BrunoTableColumns<Order>;
+```
+
+The raw built-in Value Types initially include `"text"`, `"number"`, `"bigint"`, and `"boolean"`. Select columns add typed option semantics over their actual value domain. Date/time and other built-ins may be added only with explicit runtime semantics. A custom `BrunoTableValueType<TValue>` supplies a typed, declarative selection that is compiled into the internal Column Value Semantics plan.
+
+Most consumers should prefer the optional built-in Column Helpers:
+
+```ts
+const columns = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    format: {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    },
+  }),
+  BrunoTableBooleanColumn({
+    columnId: "COL_ID_ACTIVE",
+    field: "active",
+    headerName: "Active",
+  }),
+] satisfies BrunoTableColumns<Order>;
+```
+
+Helpers supply the Value Type plus coherent renderer, editor, filter, sort, clipboard, accessibility, and layout defaults. Text cells are start-aligned; numeric values and numeric editors are end-aligned; boolean checkboxes are centered; select editors fill the available cell width. These are semantic layout defaults compiled into the normalized column and rendered through BrunoTable's theme, not CSS callbacks repeated in every mounted cell.
+
+Root exports include `BrunoTableTextColumn`, `BrunoTableNumberColumn`, `BrunoTableBigIntColumn`, `BrunoTableBooleanColumn`, and `BrunoTableSelectColumn`. The optional `@bruno/table/effect` entry point exports `BrunoTableBigDecimalColumn` and its raw BigDecimal Value Type without causing the root package or declarations to import Effect.
+
+Column Helpers never infer or generate `columnId`. A final helper invocation still requires explicit Column Identity plus `field` or `valueGetter`, and its result is an ordinary definition that enters the same validation and normalization path as raw configuration. Helper-created, preset-created, and raw columns may coexist in one array. There is no grid-level string registry such as `type: "price"` and no per-cell helper dispatch.
+
+Applications specialize a helper into a reusable domain Column Preset when title, formatting, width, alignment, editor, filter, or validation policy repeats across tables:
+
+```ts
+export const priceColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  format: {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  },
+  width: 120,
+});
+
+const columns = [
+  priceColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+  }),
+] satisfies BrunoTableColumns<Order>;
+```
+
+The target `withDefaults` interface must preserve literal identity, exact field/value correlation, computed getter return types, and typed callbacks without casts or repeated row generics. Prove those properties with source and emitted-package type tests before exporting the helpers.
+
+Configuration precedence is deterministic:
+
+```text
+built-in Column Helper defaults
+    -> reusable Column Preset defaults
+    -> individual column options
+```
+
+Individual helper calls and raw definitions retain fully typed presentation escape hatches:
+
+```ts
+BrunoTableNumberColumn({
+  columnId: "COL_ID_PROFIT",
+  field: "profit",
+  headerName: "Profit",
+  valueFormatter: ({ value }) => (value < 0 ? `(${Math.abs(value).toFixed(1)})` : value.toFixed(1)),
+  cellClassName: ({ value }) => (value < 0 ? "text-destructive" : undefined),
+});
+```
+
+`valueFormatter` returns visible text. `cellClassName` applies static or value/row-aware presentation, and `cellRenderer` remains the fully custom React rendering escape hatch. Each callback preserves the exact row and column value type. These properties change Cell Presentation only: the example still sorts, filters, edits, saves, and reconciles `-5.5` as the numeric value `-5.5`, not the string `"(5.5)"`.
+
+If custom display text must round-trip through editing, paste, or formatted clipboard exchange, the column must provide an explicit paired parser/exchange capability or a custom Value Type. BrunoTable never assumes that a `valueFormatter` is reversible.
 
 ## Column kinds
 
@@ -352,9 +456,11 @@ The minimal shared shape is conceptually:
 type BrunoTableColumnBase<TRow, TValue, TColumnId extends BrunoTableColumnId> = {
   columnId: TColumnId;
   headerName: string;
-  valueSemantics?: "bigint" | BrunoTableValueSemantics<TValue>;
+  valueType: "text" | "number" | "bigint" | "boolean" | BrunoTableValueType<TValue>;
   isEditable?: boolean | ((params: { row: TRow; value: TValue }) => boolean);
   valueFormatter?: (params: { row: TRow; value: TValue }) => string;
+  cellClassName?: string | ((params: { row: TRow; value: TValue }) => string | undefined);
+  cellRenderer?: BrunoTableCellRenderer<TRow, TValue>;
 };
 ```
 
@@ -364,28 +470,28 @@ The implementation may normalize static and callback capabilities once, but it m
 
 Column Value Semantics are the authority whenever BrunoTable must interpret a value rather than merely read it. The normalized plan contains semantic equality, order, canonical text, parsing, a versioned preference codec, and explicit capability markers. It is compiled once and reused by editing, client filtering/sorting, clipboard, persistence, drafts, and conflicts.
 
-Exact numeric columns select a preset rather than repeating functions:
+Exact numeric raw columns select a Value Type rather than repeating functions:
 
 ```ts
-import { BrunoTableEffectBigDecimalValueSemantics } from "@bruno/table/effect";
+import { BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 
 const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
     headerName: "Quantity",
-    valueSemantics: "bigint",
+    valueType: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
-    valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
+    valueType: BrunoTableBigDecimalValueType,
   },
 ] satisfies BrunoTableColumns<Order>;
 ```
 
-The root package owns `"bigint"`. The optional `@bruno/table/effect` entry point owns `BrunoTableEffectBigDecimalValueSemantics` and has Effect as an optional peer. Importing the root entry point neither loads Effect nor exposes Effect-specific declarations.
+The root package owns `"bigint"`. The optional `@bruno/table/effect` entry point owns `BrunoTableBigDecimalValueType` and has Effect as an optional peer. Importing the root entry point neither loads Effect nor exposes Effect-specific declarations.
 
 Do not sample rows to infer exact value semantics. TypeScript value types are erased, a Server Table begins sparse, and the public effect-view-server Viewport Source does not expose runtime field semantics. A future source Adapter may supply an opaque compiled semantics registry, but explicit column semantics remain the portable interface.
 
@@ -400,7 +506,7 @@ Rules:
 - Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.
 - Series-fill arithmetic is an optional capability separate from comparison.
 
-The conceptual `BrunoTableValueSemantics<TValue>` symbol is a deep interface, not an invitation for ordinary consumers to implement many callbacks. First-party built-ins and integration presets hide those details. Its final construction interface must be proven with type-level tests before export, while the `valueSemantics` column selection and exact behavior above are accepted.
+The public `BrunoTableValueType<TValue>` descriptor is a deep interface, not an invitation for ordinary consumers to implement many callbacks. First-party built-ins, Column Helpers, and integration presets hide those details and compile them into a private Column Value Semantics plan. Its final construction interface must be proven with type-level tests before export, while the `valueType` column selection and exact behavior above are accepted.
 
 ### Field columns
 
@@ -411,6 +517,7 @@ A field column reads a real row field directly:
   columnId: "COL_ID_PRICE",
   field: "price",
   headerName: "Price",
+  valueType: "number",
 }
 ```
 
@@ -430,6 +537,7 @@ const columns = [
     columnId: "COL_ID_PRICE",
     field: "prices",
     headerName: "Price",
+    valueType: "number",
   },
 ] satisfies BrunoTableColumns<Order>;
 ```
@@ -442,13 +550,14 @@ A computed column has `valueGetter` instead of `field`:
 {
   columnId: "COL_ID_DOUBLE_QUANTITY",
   headerName: "Double quantity",
+  valueType: "bigint",
   valueGetter: ({ row }) => row.quantity * 2n,
 }
 ```
 
 The return type of `valueGetter` is the column value type.
 
-The initial package scaffold deliberately rejects `valueFormatter` on computed columns until the no-helper array interface can correlate a getter's inferred return type into a sibling callback without exposing `unknown`. Field-column formatters are fully typed. Do not weaken the computed formatter callback to `unknown` merely to accept the property; resolve this type-design problem before the renderer depends on it.
+The initial package scaffold deliberately rejects `valueFormatter` on computed raw columns until the plain-object interface can correlate a getter's inferred return type into a sibling callback without exposing `unknown`. Field-column formatters are fully typed. A typed Column Helper establishes the value family explicitly and should allow a correlated computed formatter, but that inference must be proven before export. Do not weaken any formatter callback to `unknown` merely to accept the property.
 
 Accepted default rule: a `valueGetter`-only column has no automatic filtering or sorting. There is no field to send to the View Server, and BrunoTable must never execute, inspect, or reverse-engineer arbitrary JavaScript to manufacture query semantics.
 
@@ -553,6 +662,7 @@ const columns = [
     columnId: "COL_ID_DISPLAY_PRICE",
     field: "unitPrice",
     headerName: "Price",
+    valueType: "number",
   },
 ] satisfies BrunoTableColumns<Order>;
 
