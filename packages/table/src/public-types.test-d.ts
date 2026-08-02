@@ -102,6 +102,7 @@ describe("BrunoTable public types", () => {
 
     const clientProps = {
       ...common,
+      children: "Page-specific toolbar content",
       clientSource: {
         rows: [] as readonly Order[],
         totalRows: 0,
@@ -125,6 +126,7 @@ describe("BrunoTable public types", () => {
     } satisfies BrunoTableServerProps<Order, Columns, typeof viewport>;
 
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
+    expectTypeOf(clientProps.children).toEqualTypeOf<string>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
   });
 });

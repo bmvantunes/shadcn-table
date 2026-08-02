@@ -24,6 +24,10 @@ _Avoid_: Field column, implicitly queryable column
 A filter expression whose leaves refer to Column Identity. It is persisted as user intent and translated through current column definitions before reaching a server.
 _Avoid_: View Server filter, field-keyed persisted filter
 
+**Quick Filter**:
+A grid-owned free-text filter applied across explicitly eligible columns. It is part of grid filter intent, not an application data-scope constraint.
+_Avoid_: TanStack global filter, Source Constraint, page search
+
 **Query Field**:
 A row field or supported field path understood by a server query language. A Query Field is resolved from a column definition and is never used as persisted Column Identity.
 _Avoid_: Column Identity, column ID
@@ -45,6 +49,10 @@ _Avoid_: Viewport Table, server mode, viewport flag, paginated table
 **Viewport Source**:
 The long-lived server-viewport input passed to a Server Table. It represents typed query replacement, sparse row delivery, total-row state, and lifecycle for one logical indexed row space.
 _Avoid_: Row array, page datasource, paginated result
+
+**Source Constraint**:
+An application-owned condition that defines which rows belong to a table's working set before user grid filters are applied. It is not a persisted grid preference and cannot be cleared by BrunoTable's filter controls.
+_Avoid_: Grid Filter Expression, Quick Filter, security rule
 
 **Continuous Row Space**:
 The uninterrupted vertical row sequence presented by both Client and Server Tables. It may be fully materialized or sparsely loaded, but the user never navigates pages.

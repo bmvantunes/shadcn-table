@@ -239,11 +239,39 @@ Column dragging should use a projected layout and transform animation rather tha
 
 Pinned columns remain part of one logical navigation order.
 
+## Optional toolbar composition
+
+`BrunoTableClient` and `BrunoTableServer` accept optional children for page-specific toolbar content. When no children are supplied, render no toolbar region and consume no vertical space.
+
+The recommended composition is:
+
+```tsx
+<BrunoTableServer {...tableProps}>
+  <BrunoTableToolbar>
+    <PageSpecificFilters />
+    <BrunoTableQuickFilter />
+    <BrunoTableToolbarSpacer />
+    <BrunoTableEditActions />
+  </BrunoTableToolbar>
+</BrunoTableServer>
+```
+
+`PageSpecificFilters` is illustrative consumer code; no field name, filter, or toolbar position is privileged by BrunoTable.
+
+Rules:
+
+- Prefer children composition over `showSearch`, `showSave`, `showFilters`, or other page-specific boolean props.
+- `BrunoTableToolbar` supplies consistent shadcn/Base UI layout, responsive overflow, and accessibility semantics.
+- Arbitrary consumer components may appear beside BrunoTable-owned controls.
+- BrunoTable-owned controls consume only the narrow state they render; adding toolbar content must not subscribe the grid body or table root to broad changing state.
+- The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
+- A custom control must explicitly choose whether it updates persisted Grid Filter intent or an application-owned, non-persisted Source Constraint. BrunoTable never infers ownership from toolbar placement.
+
 ## Right-side tool rail
 
 Vertical space is premium.
 
-Use a compact right-side tool rail rather than a permanent top toolbar.
+Use a compact right-side tool rail for universal grid management rather than rendering a permanent top toolbar on every table. The optional toolbar is present only on pages that compose children.
 
 The rail should show:
 

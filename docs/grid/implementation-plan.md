@@ -74,6 +74,8 @@ Build:
 - incomplete-source detection for ready/stale results
 - the shared Grid Runtime and `BrunoTableView`
 - the Client Row Pipeline Adapter
+- optional toolbar children rendered inside the stable grid provider
+- `BrunoTableToolbar` layout primitive with no empty region when absent
 - client row model
 - shared filter and sort commands with client row-model processing
 - one continuous scroll surface with no pagination feature or controls
@@ -92,6 +94,7 @@ Success criteria:
 
 - a complete effect-view-server `useLiveQuery` result passes directly as `clientSource` without an Adapter or Effect dependency in BrunoTable
 - loading/error lifecycle changes do not replace the Grid Runtime or rerender unrelated mounted cells
+- arbitrary toolbar children do not subscribe or rerender the grid body
 - ready/stale sources with `rows.length !== totalRows` fail visibly
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
@@ -130,6 +133,8 @@ Build:
 - visibility
 - pinning
 - right-side tool rail
+- `BrunoTableQuickFilter` with explicit eligible-column semantics
+- toolbar filter controls that dispatch the same typed filter commands as header filters
 - active filter count
 - active sort count
 - hidden column count
@@ -152,6 +157,8 @@ Persist only:
 Success criteria:
 
 - new/removed columns reconcile safely
+- Quick Filter and toolbar-created Grid Filters appear in global active-filter review
+- Source Constraints are never serialized as grid preferences or cleared by grid filter reset
 - no ephemeral state is serialized
 - drag commits once
 - live resize does not rerender the mounted body on each pointer frame

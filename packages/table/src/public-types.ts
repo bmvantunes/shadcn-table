@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 export type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 
 export type BrunoTableRowId = string;
@@ -224,6 +226,8 @@ export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>
   readonly tableId: string;
   readonly getRowId: (row: TRow) => BrunoTableRowId;
   readonly columns: TColumns;
+  /** Optional page-specific content rendered in BrunoTable's toolbar region. */
+  readonly children?: ReactNode;
 };
 
 export type BrunoTableClientProps<

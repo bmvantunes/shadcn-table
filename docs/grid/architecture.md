@@ -72,6 +72,19 @@ BrunoTableServer    -> Viewport Row Pipeline --+
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, and optional message. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store.
 
+## Toolbar composition seam
+
+Both public composition roots render optional children into a toolbar region inside BrunoTable's provider and above the shared scroll surface. `BrunoTableToolbar` owns consistent layout only; it does not own page-specific filter state or receive a TanStack table instance.
+
+The provider exposes a stable private Grid Runtime reference rather than a broad changing snapshot. BrunoTable-owned compound controls subscribe to capability-specific selectors for exactly the state they render. Consumer toolbar components receive only their ordinary props and do not become grid subscribers merely because they are children.
+
+Keep the public Module deep:
+
+- compose page-specific UI through children instead of adding feature booleans to table props;
+- expose focused BrunoTable-owned controls such as Quick Filter or edit actions instead of a public all-powerful table controller;
+- keep TanStack atoms, stores, contexts, and instance methods private;
+- keep Grid Filters separate from Source Constraints even when controls for both are visually adjacent.
+
 ## Continuous row-space Adapter
 
 `BrunoTableView` owns one vertical scroll container and one vertical virtualizer for both variants. It consumes a private row-space interface shaped conceptually like:

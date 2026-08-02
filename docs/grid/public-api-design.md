@@ -157,6 +157,7 @@ type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   getRowId: (row: TRow) => string;
   columns: TColumns;
+  children?: React.ReactNode;
 };
 
 type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = BrunoTableCommonProps<
@@ -208,6 +209,33 @@ Rules:
 - `viewportSource` is a long-lived source, not a row array copied into React state.
 - Both variants expose one continuous virtual row space. Do not add pagination, page-index, page-size, cursor, fetch-next-page, or load-more props.
 - Internal server windows may compile to `offset` and `limit`, but those values never enter the public interface or persisted grid state.
+- Optional children render inside the grid provider as page-specific toolbar content. When absent, no toolbar region is mounted.
+- Do not replace children composition with page-specific boolean props or expose TanStack state to custom toolbar components.
+
+## Optional toolbar composition
+
+The same toolbar composition works with both public variants:
+
+```tsx
+<BrunoTableClient {...tableProps}>
+  <BrunoTableToolbar>
+    <PageSpecificFilters />
+    <BrunoTableQuickFilter />
+    <BrunoTableToolbarSpacer />
+    <BrunoTableEditActions />
+  </BrunoTableToolbar>
+</BrunoTableClient>
+```
+
+Names beginning with `PageSpecific...` are illustrative consumer components, not BrunoTable requirements. Library-owned exported components retain the `BrunoTable...` brand.
+
+The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. When a custom control needs to own grid filter state, use the eventual typed controlled-filter interface at the table root rather than a public TanStack table or untyped imperative handle.
+
+Distinguish filter ownership explicitly:
+
+- Grid Filter Expressions and the Quick Filter are user grid intent, appear in global active-filter UI, and participate in filter persistence.
+- Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
+- Toolbar placement alone changes neither ownership nor persistence.
 
 ## Mandatory column identity
 
