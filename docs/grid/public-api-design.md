@@ -222,7 +222,7 @@ Rules:
 - Both variants expose one continuous virtual row space. Do not add pagination, page-index, page-size, cursor, fetch-next-page, or load-more props.
 - Internal server windows may compile to `offset` and `limit`, but those values never enter the public interface or persisted grid state.
 - Optional children render inside the grid provider as page-specific toolbar content. When absent, no toolbar region is mounted.
-- Client Row Selection is an explicit opt-in capability and defaults off. Its enabled header checkbox addresses the complete currently filtered Client row model, never only mounted rows. The Server interface exposes no corresponding capability.
+- Client Row Selection is an explicit opt-in capability and defaults off. Its enabled header checkbox addresses the complete currently filtered Client row model, never only mounted rows. Stable selected Row Identities survive being filtered out, while header-checkbox state reflects only the current filtered set. The Server interface exposes no corresponding capability.
 - Do not replace children composition with page-specific boolean props or expose TanStack state to custom toolbar components.
 
 ## Optional toolbar composition
