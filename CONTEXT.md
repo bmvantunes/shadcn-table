@@ -80,10 +80,22 @@ _Avoid_: Submit, server save, blur side effect
 The process that sends committed drafts to the server, applies optimistic-concurrency results, and enters conflict resolution when canonical server values diverge.
 _Avoid_: Cell Edit Commit, editor close
 
-**Batch Save Capability**:
-The ability of a table to send its committed drafts through a consumer-provided persistence operation and reconcile the typed result. Its presence is distinct from whether an individual column is editable.
+**Editable Table**:
+A table whose grid-level editing capability is enabled and whose definitions include at least one potentially editable column. Individual cell eligibility remains subject to its column policy.
+_Avoid_: Editable column, always-editable table
+
+**Edit Mode**:
+The current persistence timing policy for an Editable Table: Immediate saves each committed edit transaction, while Batch accumulates net changes until Save.
+_Avoid_: Cell Edit Session, Save Change Set
+
+**Save Change Set**:
+A non-empty collection of net cell changes submitted as one persistence unit. It may contain one or many changes in either Edit Mode.
+_Avoid_: Raw edit history, one-change-only callback
+
+**Edit Persistence Operation**:
+The consumer-provided operation that accepts a Save Change Set and reconciles its typed optimistic-concurrency result.
 _Avoid_: Save-button click handler, Cell Edit Commit
 
 **Edit Safety Footer**:
-The persistent batch-edit surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
+The persistent editing surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
 _Avoid_: Page toolbar, layout reset controls

@@ -240,7 +240,9 @@ Build:
 - sync parsing
 - sync validation
 - undo/redo
-- Batch Save Capability triggered by `onSaveEdits` on either public table variant
+- strict `editable` capability union that requires `onSaveEdits` and at least one potentially editable column
+- Immediate/Batch mode source and top-right toggle with clean-state transition guard
+- one non-empty Save Change Set handler shared by both modes
 - persistent Edit Safety Footer with status-left and Reset/Save-right layout
 - unsaved count
 - validation count
@@ -252,8 +254,15 @@ Success criteria:
 - row eviction cannot destroy edits
 - edit state is identity-keyed
 - editor arrows do not break text cursor behaviour
-- no `onSaveEdits` means no Edit Safety Footer
-- supplying `onSaveEdits` mounts the same footer in both public variants without changing column editability
+- false or omitted `editable` rejects edit-only props and renders no editing chrome
+- `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
+- `editable: true` mounts the same mode toggle and footer in both public variants without overriding cell policy
+- toggle visibility and updates require no all-row predicate evaluation or row-content subscription
+- mode switching is blocked while any edit-owned work or save is active and is never persisted
+- omitted `defaultEditMode` starts in Immediate mode
+- Immediate single-cell commit calls `onSaveEdits` with a one-element array
+- Immediate paste, drag fill, and multi-cell clear each call `onSaveEdits` once with the full transaction
+- Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - no-edit state keeps the footer mounted with Reset and Save disabled
 - Reset clears edit-owned state only
 - stable row updates do not notify or rerender footer controls when their compact projections are unchanged

@@ -1,23 +1,39 @@
 # Editing, validation, conflicts, and save workflow
 
-## Editing modes
+## Table editing capability and modes
 
-Support at least:
+Both public table variants use a strict discriminated editing interface:
 
 ```ts
-type BrunoTableSaveMode =
-  { type: "immediate" } | { type: "debounced"; delayMs: number } | { type: "batch" };
+type BrunoTableEditMode = "immediate" | "batch";
+
+type BrunoTableReadOnlyCapability = {
+  editable?: false;
+  defaultEditMode?: never;
+  onSaveEdits?: never;
+};
+
+type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  editable: true;
+  defaultEditMode?: BrunoTableEditMode;
+  onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
+};
 ```
 
-The primary design focus is batch mode.
+`editable: true` enables the Editable Table capability and makes `onSaveEdits` mandatory. False or omitted editing makes edit-only props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
 
-## Batch save capability
+At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all rows to discover the capability: a Server Table does not own every row, and a Client Table must not rescan changing data merely to show chrome.
 
-Both `BrunoTableClient` and `BrunoTableServer` accept an optional `onSaveEdits` operation. Its presence activates the Batch Save Capability and the BrunoTable-owned Edit Safety Footer. The name describes domain intent rather than a mouse event: pointer activation, keyboard activation, accessibility activation, or a retry all enter the same Save Workflow.
+An Editable Table owns a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. It is visible because the column definitions declare potential editability, subscribes only to the Edit Mode and a compact `canChangeEditMode` boolean, and never subscribes to row contents. Edit Mode is session state, not a persisted grid preference. `defaultEditMode` selects the initial value; omitting it starts in Immediate mode.
 
-`onSaveEdits` receives the typed optimistic-concurrency request assembled from committed drafts and returns the typed save result. The exact request/result shape must preserve row, column, value, and version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
+Changing Edit Mode while an editor, drafts, validation, conflicts, or a save operation are active is blocked. The user completes or cancels the editor and uses Save or Reset before switching; BrunoTable must not silently persist, discard, or reinterpret pending work during a mode change.
 
-Column `isEditable` policies still decide which cells can enter a Cell Edit Session. The Batch Save Capability decides whether committed drafts can enter a consumer-backed Save Workflow; it does not make otherwise read-only columns editable.
+`onSaveEdits` receives a non-empty Save Change Set and returns the typed optimistic-concurrency result. The exact item/result shapes must preserve row, column, value, and version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
+
+- Immediate mode invokes `onSaveEdits` once per committed edit transaction. A normal cell commit usually produces one change; paste, drag fill, and multi-cell clear produce one atomic call containing every change in that transaction.
+- Batch mode accumulates drafts and invokes the same handler only after Save. Coalesce repeated edits to the same cell into one net change from its accepted base to its latest draft; do not send raw undo history.
+
+The handler never changes shape based on Edit Mode and is never called once per cell for a multi-cell transaction.
 
 ## Cell edit lifecycle
 
@@ -34,7 +50,7 @@ Cell Edit Commit
 
 One Enter starts editing; a double key press or double click is not required. Escape cancels the active editor without committing its candidate value.
 
-A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: immediate, debounced, and batch Save Modes decide when committed drafts enter the Save Workflow.
+A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: Immediate and Batch Edit Modes decide when committed changes enter the Save Workflow.
 
 Tab commits and moves to the next editable cell; Shift+Tab commits and moves to the previous editable cell. Enter always commits, while any movement after Enter is a separate explicit navigation policy.
 
@@ -155,7 +171,7 @@ Define a status priority model for combinations such as:
 
 ## Edit safety footer
 
-Supplying `onSaveEdits` mounts a persistent bottom footer in either public table variant:
+Setting `editable: true` mounts a persistent bottom footer in either public table variant:
 
 ```text
 3 conflicts · 2 invalid · 12 unsaved changes                         Reset | Save
@@ -167,7 +183,7 @@ Render the conflict control only when the count is greater than zero. Activating
 
 Reset discards the active edit candidate, sparse drafts, edit-owned validation, and conflict resolutions back to the latest canonical server snapshots. It does not reset filters, sorting, layout, selection, or other grid preferences.
 
-The footer remains mounted when no edits exist, with Reset and Save disabled. During saving, prevent duplicate Save and Reset activation and expose progress accessibly.
+The footer remains mounted when no edits exist, with Reset and Save disabled. In Immediate mode this is normally the clean state after successful persistence; pending failures or conflicts remain accessible through the same safety surface. During saving, prevent duplicate Save and Reset activation and expose progress accessibly.
 
 The footer shell never subscribes to rows or the complete edit store. Status controls subscribe independently to compact counts; buttons subscribe only to the booleans and progress state they render. Streaming row updates that do not change those projections must neither notify nor rerender the footer.
 

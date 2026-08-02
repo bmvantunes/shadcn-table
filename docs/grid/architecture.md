@@ -97,11 +97,17 @@ Keep the public Module deep:
 - keep TanStack atoms, stores, contexts, and instance methods private;
 - keep Grid Filters separate from Source Constraints even when controls for both are visually adjacent.
 
-## Edit safety footer seam
+## Editable-table seam
 
-The presence of `onSaveEdits` installs the Batch Save Capability in either public composition root and causes `BrunoTableView` to mount the shared Edit Safety Footer. The footer is not a toolbar child and pages do not wire its counts, buttons, or modal.
+The `editable: true` discriminant installs the Edit Persistence Capability in either public composition root and causes `BrunoTableView` to mount the top-right Edit Mode toggle and shared Edit Safety Footer. `onSaveEdits` is mandatory in this branch. The toggle and footer are not toolbar children, and pages do not wire their mode, counts, buttons, or modal.
+
+Potential editability is compiled once from column definitions. A declared `isEditable` boolean or predicate makes a column potentially editable; the predicate itself runs only for a concrete cell. Never scan changing Client rows or incomplete Server rows to decide whether edit chrome exists.
+
+Edit Mode has its own compact runtime source. The toggle selects only the current `"immediate" | "batch"` value and `canChangeEditMode`; row publications do not notify it. Mode changes are rejected while the active editor, drafts, validation, conflicts, or save state are non-clean, and Edit Mode never enters persisted preferences.
 
 The footer dispatches `edits.reset`, `save.request`, and `conflicts.review.open` Grid Commands. It never calls the consumer operation directly from a button handler. The Save Workflow actor commits or rejects the active editor, evaluates validation and conflicts, opens the shared review workflow when blocked, and invokes the latest `onSaveEdits` operation only from its ready-to-persist transition. Updating the consumer callback reference must not replace the Grid Runtime or resubscribe the mounted grid.
+
+The persistence Adapter receives one non-empty Save Change Set in both modes. Immediate mode forwards one whole committed transaction, including every cell changed by paste, fill, or clear. Batch mode derives one net change per dirty Cell Identity from sparse drafts. Do not loop over the array and invoke the consumer operation once per cell.
 
 Footer render boundaries remain independent:
 
@@ -156,6 +162,7 @@ interface GridRuntime<TRow> {
     readonly rowMetrics: GridReadable<GridRowMetrics>;
     readonly sourceStatus: GridReadable<GridSourceStatus>;
     readonly selection: GridReadable<GridSelectionSnapshot>;
+    readonly editMode: GridReadable<GridEditModeSnapshot>;
     readonly edits: GridReadable<GridEditSummary>;
     readonly rows: GridRowStore<TRow>;
   };

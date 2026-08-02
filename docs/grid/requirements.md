@@ -303,9 +303,30 @@ The filters panel should support:
 
 The sorting panel should show sort priority.
 
+## Table editing capability and modes
+
+Both public variants expose a strict discriminated editing interface:
+
+- `editable: true` requires `onSaveEdits` and enables the Editable Table capability;
+- false or omitted `editable` rejects `onSaveEdits`, `defaultEditMode`, and other edit-only table props;
+- at least one column must be potentially editable through `isEditable: true` or an `isEditable` predicate;
+- column policy remains the authority for exact cell eligibility; the table-level capability never makes a read-only cell editable.
+
+An Editable Table renders a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. Determine its visibility from static column capability, not by evaluating row predicates over complete client data or incomplete server data. The toggle subscribes only to Edit Mode and whether switching is currently legal.
+
+Edit Mode is session state and is not persisted. `defaultEditMode` selects its initial value and defaults to Immediate. Block switching modes while an editor, drafts, validation, conflicts, or saving are active; never silently persist or discard work while switching.
+
+Both modes call the same `onSaveEdits` operation with a non-empty Save Change Set:
+
+- a normal Immediate cell commit usually sends one change;
+- Immediate paste, drag fill, and multi-cell clear send one atomic multi-change call;
+- Batch Save sends accumulated net changes, coalesced to one entry per dirty cell.
+
+Never split a multi-cell edit transaction into one persistence call per cell. Never expose raw undo history as the Batch Save payload.
+
 ## Edit safety footer
 
-Supplying `onSaveEdits` to either `BrunoTableClient` or `BrunoTableServer` activates the Batch Save Capability and mounts a persistent bottom Edit Safety Footer. Column `isEditable` policies remain the authority for whether a particular cell can edit.
+An Editable Table mounts a persistent bottom Edit Safety Footer in either public variant.
 
 The left side shows conditional status controls:
 

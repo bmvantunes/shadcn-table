@@ -150,30 +150,32 @@ Each component must infer `Order`, the exact column IDs, field value types, edit
 
 ## Explicit public variants
 
-The common properties have this conceptual shape:
+The base properties and explicit source variants have this conceptual shape. The strict editing capability is defined below and intersects both variants:
 
 ```ts
-type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   getRowId: (row: TRow) => string;
   columns: TColumns;
   children?: React.ReactNode;
 };
 
-type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = BrunoTableCommonProps<
+type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = BrunoTableBaseProps<
   TRow,
   TColumns
-> & {
-  clientSource: BrunoTableClientSource<TRow>;
-};
+> &
+  BrunoTableEditingCapability<TRow, TColumns> & {
+    clientSource: BrunoTableClientSource<TRow>;
+  };
 
 type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = BrunoTableCommonProps<TRow, TColumns> & {
-  viewportSource: BrunoTableServerSource<TViewport>;
-};
+> = BrunoTableBaseProps<TRow, TColumns> &
+  BrunoTableEditingCapability<TRow, TColumns> & {
+    viewportSource: BrunoTableServerSource<TViewport>;
+  };
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -239,26 +241,54 @@ Distinguish filter ownership explicitly:
 - Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
-## Batch save capability
+## Strict editable capability
 
-Both public variants accept the same optional save operation, shaped conceptually as:
+Both public variants accept the same discriminated editing capability, shaped conceptually as:
 
 ```ts
+type BrunoTableEditMode = "immediate" | "batch";
+
+type BrunoTableSaveChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
+  BrunoTableSaveChange<TRow, TColumns>,
+  ...BrunoTableSaveChange<TRow, TColumns>[],
+];
+
 type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>> = (
-  request: BrunoTableSaveRequest<TRow, TColumns>,
+  changes: BrunoTableSaveChangeSet<TRow, TColumns>,
 ) => PromiseLike<BrunoTableSaveResult<TRow, TColumns>>;
 
-type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
-  // existing common props
-  onSaveEdits?: BrunoTableSaveEditsHandler<TRow, TColumns>;
+type BrunoTableReadOnlyCapability = {
+  editable?: false;
+  defaultEditMode?: never;
+  onSaveEdits?: never;
 };
+
+type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>> =
+  BrunoTableEditableColumnId<TColumns> extends never
+    ? never
+    : {
+        editable: true;
+        defaultEditMode?: BrunoTableEditMode;
+        onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
+      };
+
+type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>> =
+  BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns>;
 ```
 
-Use `onSaveEdits`, not `onEditSaveClick`: the operation represents Save intent regardless of whether it came from pointer, keyboard, accessibility activation, or a retry. The exact request and result types remain to be finalized with the optimistic-concurrency field declaration, but they must retain exact row, Column Identity, editable-value, and version correlation without `any` or `unknown` in inference paths.
+`editable` is a capability discriminant, not a styling toggle: TypeScript makes `onSaveEdits` mandatory when true and rejects edit-only props otherwise. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured states while allowing the same columns to be reused in an explicitly read-only table.
 
-Presence of `onSaveEdits` activates the Batch Save Capability and automatically renders BrunoTable's Edit Safety Footer in both public variants. It does not change column editability. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children.
+Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result types remain to be finalized with the optimistic-concurrency field declaration, but they must retain exact row, Column Identity, editable-value, and version correlation without `any` or `unknown` in inference paths.
 
-Reset is internal grid intent and requires no consumer callback. Save dispatches into the Save Workflow; only the ready-to-persist transition invokes `onSaveEdits`. Unresolved conflicts and blocking validation open their BrunoTable-owned review UI first.
+The handler always receives the same non-empty array:
+
+- Immediate Cell Edit Commit normally supplies one change.
+- Immediate paste, drag fill, and multi-cell clear supply every change in one transaction-level call.
+- Batch Save supplies the accumulated net dirty cells, coalescing repeated edits of one cell rather than exposing undo history.
+
+`editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in both variants. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children.
+
+Edit Mode is session-only state initialized by `defaultEditMode`; omitting it starts in Immediate mode. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-persist transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
 
 ## Mandatory column identity
 
@@ -615,6 +645,10 @@ Cover at minimum:
 - sort column IDs and priority
 - `isEditable` callback inference
 - edit and conflict value correlation
+- `editable: true` requires `onSaveEdits` and at least one potentially editable column
+- read-only capability rejects `onSaveEdits` and `defaultEditMode`
+- `onSaveEdits` receives a non-empty, value-correlated Save Change Set in both Edit Modes
+- one multi-cell Immediate transaction remains one handler call rather than one call per cell
 - Viewport Source topic/row compatibility
 - `BrunoTableClient` accepts only a complete `clientSource`
 - effect-view-server `LiveQueryResult<TRow>` is structurally assignable to `BrunoTableClientSource<TRow>`
@@ -658,6 +692,6 @@ The following remain deliberately unresolved:
 - the no-helper correlated type shape for computed-column formatters
 - how selected dependencies and optimistic-concurrency fields are declared
 - the visual treatment and retry actions for Client Source lifecycle states
-- the exact `BrunoTableSaveRequest` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the `onSaveEdits` name, capability trigger, and owned footer behaviour are accepted
+- the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted
 
 These decisions must extend the accepted small interface rather than restoring an intermediate grid-definition object.
