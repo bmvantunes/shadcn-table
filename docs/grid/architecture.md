@@ -394,23 +394,37 @@ Do not persist View Server fields as grid identity, send `columnId` as a query f
 
 Need true two-axis virtualization.
 
-Preferred initial approach:
+Required layout:
 
 - vertical row virtualizer
-- horizontal centre-column virtualizer
+- one grid-level horizontal centre-column virtualizer, never one per row
 - pinned columns rendered outside horizontal virtualization
 - one scroll container
 - fixed row height fast path
+- one immutable column-window snapshot shared by headers and every mounted row
+- bounded mounted cells proportional to mounted rows multiplied by pinned plus virtual centre columns, never total centre-column count
 
-If the React adapter is not React Compiler compatible, isolate it in a small `"use no memo"` component and pass immutable virtual-item snapshots into compiled descendants.
+Rows and columns are virtualized for both Client and Server Tables. The Client Row Pipeline provides the complete final row count and resident rows. The Viewport Row Pipeline provides exact `totalRows` geometry and sparse indexed slots. The horizontal path is identical for both variants: it virtualizes the current visible centre-column sequence after order, visibility, and pinning have been applied. Pinned-start and pinned-end columns remain mounted and contribute to viewport insets, keyboard reveal, and mounted-cell instrumentation.
+
+### React Compiler virtualization boundary
+
+TanStack Table and TanStack Virtual expose stable objects with mutable internals and getter methods. A compiled component can memoize a getter call against the stable object reference and render stale geometry. The current vendored TanStack Table experimental column-virtualization example keeps React Compiler disabled specifically because `header.getSize()` can be frozen this way.
+
+Treat compiler isolation as an initial correctness requirement, not an emergency whole-grid opt-out:
+
+- only a small private Virtualizer Adapter may call `useVirtualizer`, read mutable virtualizer getters, or coordinate imperative measurement
+- mark that adapter function `"use no memo"` while the installed version requires it, with a tracked removal test
+- never pass mutable TanStack Table, Row, Cell, Column, Header, or Virtualizer instances into compiled cell, row, header, toolbar, or overlay descendants
+- publish immutable vertical and horizontal window snapshots through narrow external-store subscriptions
+- share one horizontal snapshot across header and body so every mounted row renders the same centre-column indexes and virtual padding
+- keep scroll offsets, measurements, and pointer geometry outside React state
+- preserve the private Adapter seam so `@tanstack/react-virtual` can be replaced by `@tanstack/virtual-core` without changing BrunoTable's public API or Grid Runtime
+
+Current TanStack Virtual React options such as `directDomUpdates`, `directDomUpdatesMode`, and `useFlushSync` remain private Adapter policy. Benchmark their exact installed behavior in production builds before selecting defaults. Direct DOM positioning can reduce scroll-only React renders, but transform mode creates stacking contexts that can affect pinned layers, while disabling `flushSync` trades synchronous accuracy for React 19 compatibility and batching. None is a substitute for immutable snapshots or compiler-on correctness tests.
 
 The public variants must be separate unconditional hook compositions. Do not choose `useClientGridRuntime` versus `useViewportGridRuntime` behind a runtime flag. Provide `BrunoTableView` with a stable runtime reference, and let cells and headers subscribe to narrow external-store selectors instead of placing changing table snapshots in one React context value.
 
-Long-term option:
-
-- use virtualization core
-- expose immutable snapshots through `useSyncExternalStore`
-- remove the compiler escape hatch
+On every TanStack Table, TanStack Virtual, React, or React Compiler upgrade, rerun the compiler-on geometry suite. Remove the escape hatch only after column resize, reorder, pinning, scrolling, keyboard reveal, and both virtual ranges remain live with compilation enabled.
 
 ### XState
 

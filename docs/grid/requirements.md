@@ -79,6 +79,8 @@ The shared renderer owns one vertical scroll container and virtualizer:
 
 Virtualization is mandatory for both variants. Keyboard navigation addresses logical row and column coordinates independently of which cells are mounted. When a held Arrow key moves beyond the visible boundary, the renderer minimally scrolls to reveal the new Active Cell. Client reveal mounts an already resident row; Server reveal updates the active viewport window and may temporarily focus a stable loading slot until the row arrives. Neither path creates page state.
 
+Horizontal virtualization is equally mandatory. A table with 150 centre columns must not mount all 150 cells for every visible row merely because its rows are virtualized. One grid-level horizontal virtualizer windows the currently visible centre columns; pinned-start and pinned-end columns remain mounted outside that window and participate in the same Logical Column Order. Header and body consume the same immutable column-window snapshot so widths, virtual padding, hit testing, and keyboard reveal cannot drift.
+
 Internal range alignment, buffering, and transport `offset`/`limit` values must remain invisible implementation details. They must not become persisted state or public pagination vocabulary.
 
 ## Client row model

@@ -786,6 +786,9 @@ Consumers should not need to register TanStack features or manipulate its table 
 - A cell must not subscribe to the complete table, row store, edit store, or selection store.
 - Add fine-grained subscriptions only for state the mounted cell actually renders.
 - Isolate any React Compiler-incompatible builder-method reads behind small subscription or adapter seams.
+- Never expose or pass mutable TanStack Table, Row, Cell, Column, Header, or Virtualizer instances into compiled descendants; publish immutable selected snapshots instead.
+- Keep any `"use no memo"` directive inside the smallest private Adapter function, document why it exists, and guard its eventual removal with compiler-on behavioural tests.
+- Column virtualization is always available and automatic; 150-column consumers receive no public virtualization mode or TanStack configuration surface.
 
 ## Typed edits and conflicts
 

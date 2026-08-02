@@ -101,6 +101,7 @@ Build:
 - vertical virtualization
 - horizontal centre-column virtualization
 - pinned start and end columns
+- one shared immutable centre-column window for header and body
 - basic headers and cells
 - helper-owned semantic layout defaults for start-aligned text, end-aligned numbers, centered checkboxes, and full-width select editors
 - typed per-column `valueFormatter`, `cellClassName`, and `cellRenderer` overrides without changing underlying semantics
@@ -121,9 +122,13 @@ Success criteria:
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
 - bounded mounted cells
+- a 150-column fixture mounts only pinned columns plus the visible and overscanned centre window for each mounted row
+- header and body render identical centre-column identities, widths, and virtual padding after resize, reorder, visibility, and pinning changes
 - the full processed client row model remains continuously scrollable without page state or row slicing
 - no full-grid rerender on a single row replacement
 - React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
+- compiler-on tests prove horizontal and vertical windows, column resizing, and keyboard reveal never freeze behind a memoized mutable getter
+- production benchmarks compare the exact installed Virtual React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before locking the private default
 - smooth 120 Hz scrolling target on capable hardware
 - exact-numeric hot paths perform no value-kind sampling, schema inspection, or per-cell registry lookup
 

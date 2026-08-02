@@ -359,6 +359,8 @@ sink.setRowData({
 
 The Adapter accepts that sparse absolute-index map, rejects invalid or out-of-range indexes, groups contiguous entries for efficient internal writes, and updates only affected row-slot subscribers. Identity-based live updates remain a separate internal operation so position and identity are never conflated.
 
+This shape is a deliberate fast path: each own key is already the absolute logical row index. The Adapter does not append an array, reconstruct indexes from a page offset, or replace the complete loaded window. It validates each key, resolves the corresponding sparse slot directly, preserves every unchanged row reference, and publishes one batched notification to only the affected mounted slots. A delivery containing `k` rows therefore performs work proportional to that delivery rather than `totalRows` or the retained cache size.
+
 ## Row count
 
 The initial effect-view-server integration requires the exact numeric `totalRows` exposed by the Viewport Source. That count defines the virtualizer's complete scroll height even though most row slots are unloaded.
