@@ -5,17 +5,13 @@
 Both public table variants use a strict discriminated editing interface:
 
 ```ts
-type BrunoTableEditMode = "immediate" | "batch";
-
 type BrunoTableReadOnlyCapability = {
   editable?: false;
-  defaultEditMode?: never;
   onSaveEdits?: never;
 };
 
 type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   editable: true;
-  defaultEditMode?: BrunoTableEditMode;
   onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
 };
 ```
@@ -24,7 +20,7 @@ type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>
 
 At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all rows to discover the capability: a Server Table does not own every row, and a Client Table must not rescan changing data merely to show chrome.
 
-An Editable Table owns a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. It is visible because the column definitions declare potential editability, subscribes only to the Edit Mode and a compact `canChangeEditMode` boolean, and never subscribes to row contents. Edit Mode is session state, not a persisted grid preference. `defaultEditMode` selects the initial value; omitting it starts in Immediate mode.
+An Editable Table owns a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. The end user owns this choice; consumers cannot provide a default or controlled Edit Mode prop. The switch starts off for each table session, is visible because the column definitions declare potential editability, subscribes only to the Edit Mode and a compact `canChangeEditMode` boolean, and never subscribes to row contents. Edit Mode is session state, not a persisted grid preference.
 
 Changing Edit Mode while an editor, drafts, validation, conflicts, or a save operation are active is blocked. The user completes or cancels the editor and uses Save or Reset before switching; BrunoTable must not silently persist, discard, or reinterpret pending work during a mode change.
 

@@ -259,7 +259,7 @@ Success criteria:
 - `editable: true` mounts the same mode toggle and footer in both public variants without overriding cell policy
 - toggle visibility and updates require no all-row predicate evaluation or row-content subscription
 - mode switching is blocked while any edit-owned work or save is active and is never persisted
-- omitted `defaultEditMode` starts in Immediate mode
+- no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it
 - Immediate single-cell commit calls `onSaveEdits` with a one-element array
 - Immediate paste, drag fill, and multi-cell clear each call `onSaveEdits` once with the full transaction
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells

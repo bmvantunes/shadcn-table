@@ -246,8 +246,6 @@ Distinguish filter ownership explicitly:
 Both public variants accept the same discriminated editing capability, shaped conceptually as:
 
 ```ts
-type BrunoTableEditMode = "immediate" | "batch";
-
 type BrunoTableSaveChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
   BrunoTableSaveChange<TRow, TColumns>,
   ...BrunoTableSaveChange<TRow, TColumns>[],
@@ -259,7 +257,6 @@ type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>> 
 
 type BrunoTableReadOnlyCapability = {
   editable?: false;
-  defaultEditMode?: never;
   onSaveEdits?: never;
 };
 
@@ -268,7 +265,6 @@ type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>
     ? never
     : {
         editable: true;
-        defaultEditMode?: BrunoTableEditMode;
         onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
       };
 
@@ -288,7 +284,7 @@ The handler always receives the same non-empty array:
 
 `editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in both variants. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children.
 
-Edit Mode is session-only state initialized by `defaultEditMode`; omitting it starts in Immediate mode. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-persist transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
+Edit Mode belongs to the end user, not the consumer interface. Do not expose default or controlled Edit Mode props. Each table session starts in Immediate mode; the top-right switch changes internal session state only. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-persist transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
 
 ## Mandatory column identity
 
@@ -646,7 +642,8 @@ Cover at minimum:
 - `isEditable` callback inference
 - edit and conflict value correlation
 - `editable: true` requires `onSaveEdits` and at least one potentially editable column
-- read-only capability rejects `onSaveEdits` and `defaultEditMode`
+- read-only capability rejects `onSaveEdits`
+- consumer props cannot set or control Edit Mode; the user-owned session starts Immediate
 - `onSaveEdits` receives a non-empty, value-correlated Save Change Set in both Edit Modes
 - one multi-cell Immediate transaction remains one handler call rather than one call per cell
 - Viewport Source topic/row compatibility

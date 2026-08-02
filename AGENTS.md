@@ -102,7 +102,7 @@ The grid must support:
 25. Command-only controls have zero grid-state subscriptions. Partition reactive notification sources so hot row updates do not wake unrelated toolbar, status, filter, preference, or edit subscribers.
 26. Grid editing is a strict discriminated capability: `editable: true` requires `onSaveEdits`; false or omitted editing rejects edit-only props. Column `isEditable` policies identify potentially editable columns and decide exact cell eligibility.
 27. Immediate and Batch Edit Modes invoke the same `onSaveEdits` operation with a non-empty Save Change Set. Immediate mode preserves multi-cell paste, fill, and clear as one call; Batch mode sends accumulated net cell changes.
-28. An Editable Table owns the Edit Mode toggle and Edit Safety Footer. The toggle uses static column capability, never an all-row scan, and unresolved conflicts enter the same workflow from Save or the conflict-count control.
+28. The end user owns Edit Mode through BrunoTable's toggle; consumers cannot set a default or controlled mode prop. The toggle uses static column capability, never an all-row scan, and unresolved conflicts enter the same workflow from Save or the conflict-count control.
 
 ## Preferred technology split
 
