@@ -35,7 +35,7 @@ Build:
 
 - `BrunoTableColumns<TRow>` for plain object arrays used with `satisfies`
 - the shared table-props interface
-- explicit `BrunoTableClient` and `BrunoTableViewport` prop interfaces
+- explicit `BrunoTableClient` and `BrunoTableServer` prop interfaces
 - mandatory `tableId`
 - mandatory `getRowId`
 - mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
@@ -153,7 +153,7 @@ Success criteria:
 
 Build:
 
-- `<BrunoTableViewport tableId getRowId columns viewportSource />`
+- `<BrunoTableServer tableId getRowId columns viewportSource />`
 - `viewportSource` support compatible with effect-view-server's Live Query Viewport
 - the Viewport Row Pipeline Adapter behind the shared Grid Runtime
 - Column Identity to Query Field translation
@@ -176,7 +176,7 @@ Build:
 
 Success criteria:
 
-- consumers render `BrunoTableViewport` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
+- consumers render `BrunoTableServer` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
 - client and viewport tables render the same header, filter, sort, cell, and navigation Modules
 - common UI contains no client-versus-viewport conditionals
 - persisted filters and sorts remain keyed by `columnId`

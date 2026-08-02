@@ -24,7 +24,7 @@ View server
 
 ## Public consumer shape
 
-Consumers pass a long-lived `viewportSource` directly to `BrunoTableViewport`:
+Consumers pass a long-lived `viewportSource` directly to `BrunoTableServer`:
 
 ```tsx
 type Order = TopicRow<typeof viewServer.topics, "orders">;
@@ -40,7 +40,7 @@ function OrdersTable() {
   const viewportSource = useLiveQueryViewport("orders");
 
   return (
-    <BrunoTableViewport
+    <BrunoTableServer
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
@@ -50,7 +50,7 @@ function OrdersTable() {
 }
 ```
 
-Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-session objects. The source and columns must carry enough type information for `BrunoTableViewport` to infer the topic row and valid query capabilities.
+Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-session objects. The source and columns must carry enough type information for `BrunoTableServer` to infer the topic row and valid query capabilities.
 
 ## View Server Translation Adapter
 
@@ -76,7 +76,7 @@ The exact exceptional mapping and projection-dependency property names remain op
 
 ## Internal source seam
 
-`BrunoTableViewport` adapts the public Viewport Source to an internal long-lived session and grid-owned sparse sink. Conceptually, the internal session still needs operations equivalent to:
+`BrunoTableServer` adapts the public Viewport Source to an internal long-lived session and grid-owned sparse sink. Conceptually, the internal session still needs operations equivalent to:
 
 ```ts
 interface ServerViewportSession<TQuery> {
@@ -87,7 +87,7 @@ interface ServerViewportSession<TQuery> {
 }
 ```
 
-This is an internal seam, not an object the ordinary `BrunoTableViewport` consumer constructs.
+This is an internal seam, not an object the ordinary `BrunoTableServer` consumer constructs.
 
 ## Why a long-lived object
 

@@ -1,0 +1,51 @@
+{
+  "name": "@bruno/table",
+  "version": "0.0.0",
+  "description": "A high-performance, strongly typed data grid for React.",
+  "license": "MIT",
+  "files": [
+    "dist/index.d.mts",
+    "dist/index.mjs"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "vp check",
+    "check:build": "node scripts/assert-build-output.mjs",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json",
+    "prepublishOnly": "vp run check && vp run test && vp run build && vp run check:build && vp run test:types:emitted"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "9.0.0-beta.71"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.18",
+    "@vitejs/plugin-react": "^6.0.5",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "react": "^19.2.8",
+    "typescript": "^7.0.2",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8"
+  }
+}

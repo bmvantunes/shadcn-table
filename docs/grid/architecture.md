@@ -5,7 +5,7 @@
 ```text
 Public React Variants
 ├── BrunoTableClient
-└── BrunoTableViewport
+└── BrunoTableServer
 
 Grid Core
 ├── table configuration
@@ -55,7 +55,7 @@ Expose two public React composition roots:
 
 ```tsx
 <BrunoTableClient tableId={...} getRowId={...} columns={...} clientSource={...} />
-<BrunoTableViewport tableId={...} getRowId={...} columns={...} viewportSource={...} />
+<BrunoTableServer tableId={...} getRowId={...} columns={...} viewportSource={...} />
 ```
 
 Do not expose one component with a row-model flag or incompatible source union. The two variants have materially different data ownership and lifecycles, so the public seam should make that difference explicit.
@@ -65,7 +65,7 @@ Both variants construct the same Grid Runtime and render the same `BrunoTableVie
 ```text
 BrunoTableClient    -> Client Row Pipeline   --+
                                                 +-> Grid Runtime -> BrunoTableView
-BrunoTableViewport  -> Viewport Row Pipeline --+
+BrunoTableServer    -> Viewport Row Pipeline --+
 ```
 
 `BrunoTableView` owns common rendering and interaction. It dispatches grid commands and consumes fine-grained runtime subscriptions; it does not import client or View Server implementations and does not branch on a mode flag.

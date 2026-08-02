@@ -41,7 +41,7 @@ The grid has two independent dimensions.
 ### Row model
 
 - Client row model through `BrunoTableClient`
-- Server viewport row model through `BrunoTableViewport`
+- Server viewport row model through `BrunoTableServer`
 
 ### Editing
 
@@ -61,7 +61,7 @@ Expose the row models as explicit public variants, not as a `mode` prop:
 
 ```tsx
 <BrunoTableClient clientSource={orders} {...commonProps} />
-<BrunoTableViewport viewportSource={viewportSource} {...commonProps} />
+<BrunoTableServer viewportSource={viewportSource} {...commonProps} />
 ```
 
 Both variants use the same column definitions, filter and sort controls, rendering, keyboard navigation, selection, clipboard, and editing experience. The row-pipeline Adapter behind the shared Grid Runtime owns the differences in row processing and source lifecycle.
@@ -100,7 +100,7 @@ The client row model may apply transactions without replacing the full row array
 
 The grid represents a logical indexed row space where only visible and nearby ranges are loaded.
 
-`BrunoTableViewport` accepts the long-lived result of `useLiveQueryViewport` as its `viewportSource`.
+`BrunoTableServer` accepts the long-lived result of `useLiveQueryViewport` as its `viewportSource`.
 
 The server owns:
 
@@ -280,7 +280,7 @@ Represent selection logically, but distinguish selection from operations over th
 Possible capability states:
 
 ```ts
-type BrunoTableViewportCapabilities = {
+type BrunoTableServerCapabilities = {
   rangeSelection: "disabled" | "loaded-only" | "logical";
   clipboard: "disabled" | "loaded-only" | "server-assisted";
   dragFill: "disabled" | "loaded-only" | "server-assisted";

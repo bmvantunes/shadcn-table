@@ -215,10 +215,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      '@tanstack/react-table':
-        specifier: 9.0.0-beta.65
-        version: 9.0.0-beta.65(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
     devDependencies:
       '@tanstack/intent':
         specifier: ^0.3.6
@@ -329,6 +325,46 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.7(@types/node@26.1.2)(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)
+
+  packages/table:
+    dependencies:
+      '@tanstack/react-table':
+        specifier: 9.0.0-beta.71
+        version: 9.0.0-beta.71(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+    devDependencies:
+      '@babel/core':
+        specifier: ^7.29.7
+        version: 7.29.7
+      '@rolldown/plugin-babel':
+        specifier: ^0.2.3
+        version: 0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(rolldown@1.2.1)
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.2
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@vitejs/plugin-react':
+        specifier: ^6.0.5
+        version: 6.0.5(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(rolldown@1.2.1))(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(babel-plugin-react-compiler@1.0.0)
+      babel-plugin-react-compiler:
+        specifier: ^1.0.0
+        version: 1.0.0
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vite:
+        specifier: npm:@voidzero-dev/vite-plus-core@0.2.7
+        version: '@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.2.7(@types/node@26.1.2)(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@26.1.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))
 
 packages:
 
@@ -1299,8 +1335,8 @@ packages:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  '@tanstack/react-table@9.0.0-beta.65':
-    resolution: {integrity: sha512-j7k5TIGMzV6z0USAwVmAZA8Q1PNyUmpwOzhBz2WOVj+k13iIfBun4IVSrVSd+Mfsq/mM68Z02sJpbeGacwkjsw==}
+  '@tanstack/react-table@9.0.0-beta.71':
+    resolution: {integrity: sha512-OB2D3+zoja1TAhgD4E6INOgb2j/wLs7cBYCxXnIPKZjjJKbI336H7gknm9FyIq8F/cCYsd3P/6pzBdM7SSV6cg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18'
@@ -1308,8 +1344,8 @@ packages:
   '@tanstack/store@0.11.0':
     resolution: {integrity: sha512-WlzzCt3xi0G6pCAJu1U+2jiECwabETDpQDi3hfkFZvJii9AuZqEKbOiVarX1/bWhTNjU486yQtJCCasi/0q+Cw==}
 
-  '@tanstack/table-core@9.0.0-beta.65':
-    resolution: {integrity: sha512-D5VNUoXLkU4lofjwTwByt1hLQHFDGr6MX7jeGzHycVCamisDiwdW1RemBdFuUh4JzXjmfq7jNH1RaOS8jsW06g==}
+  '@tanstack/table-core@9.0.0-beta.71':
+    resolution: {integrity: sha512-IILNAVzqKW4Mr5RrdHCQuoA3FbWQIRNIBaqOpColaqLByJ2RKO4eB4RNjmZo7hy7kVcX4reuIEYfLFs9KJjO/A==}
     engines: {node: '>=20'}
 
   '@testing-library/dom@10.4.1':
@@ -4301,17 +4337,17 @@ snapshots:
       react-dom: 19.2.8(react@19.2.8)
       use-sync-external-store: 1.6.0(react@19.2.8)
 
-  '@tanstack/react-table@9.0.0-beta.65(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@tanstack/react-table@9.0.0-beta.71(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@tanstack/react-store': 0.11.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@tanstack/table-core': 9.0.0-beta.65
+      '@tanstack/table-core': 9.0.0-beta.71
       react: 19.2.8
     transitivePeerDependencies:
       - react-dom
 
   '@tanstack/store@0.11.0': {}
 
-  '@tanstack/table-core@9.0.0-beta.65':
+  '@tanstack/table-core@9.0.0-beta.71':
     dependencies:
       '@tanstack/store': 0.11.0
 

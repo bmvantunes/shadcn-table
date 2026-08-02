@@ -26,7 +26,7 @@ const config: UserConfig = defineConfig({
     },
     overrides: [
       {
-        files: ["packages/shadcn/**/*.{ts,tsx}"],
+        files: ["packages/shadcn/**/*.{ts,tsx}", "packages/table/**/*.{ts,tsx}"],
         plugins: ["typescript", "react"],
         rules: {
           "react/react-compiler": "error",

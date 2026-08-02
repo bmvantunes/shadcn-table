@@ -6,6 +6,8 @@ This document is the canonical public-interface direction. It replaces the earli
 
 The consumer interface should feel like AG Grid: declare one typed column array, obtain rows or a Viewport Source, and render the explicit table variant. BrunoTable hides TanStack Table, virtualization, stores, and query translation behind two small interfaces.
 
+The public server composition root is named `BrunoTableServer`. `Viewport` remains precise internal row-model and effect-view-server transport vocabulary, but it is not the BrunoTable component brand.
+
 ## Design goals
 
 The public interface must preserve inference across:
@@ -130,11 +132,11 @@ Do not add `limit` or `offset` to this query. A Client Source must contain the c
 The caller obtains the long-lived source with `useLiveQueryViewport`. The viewport table owns query replacement and sparse range delivery through that source:
 
 ```tsx
-export function OrdersViewportTable() {
+export function OrdersServerTable() {
   const viewportSource = useLiveQueryViewport("orders");
 
   return (
-    <BrunoTableViewport
+    <BrunoTableServer
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
@@ -164,11 +166,12 @@ type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Bru
   clientSource: BrunoTableClientSource<TRow>;
 };
 
-type BrunoTableViewportProps<
+type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
+  TViewport = unknown,
 > = BrunoTableCommonProps<TRow, TColumns> & {
-  viewportSource: BrunoTableViewportSource<TRow>;
+  viewportSource: BrunoTableServerSource<TViewport>;
 };
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
@@ -184,9 +187,13 @@ type BrunoTableSourceChrome = {
 type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
   readonly rows: readonly TRow[];
 };
+
+type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
+  readonly viewport: TViewport;
+};
 ```
 
-Expose `BrunoTableClient` and `BrunoTableViewport`. Do not expose one component with `mode`, `serverSide`, or a union containing both `clientSource` and `viewportSource`. The variants are explicit composition roots with no impossible source combinations.
+Expose `BrunoTableClient` and `BrunoTableServer`. Do not expose one component with `mode`, `serverSide`, or a union containing both `clientSource` and `viewportSource`. The variants are explicit composition roots with no impossible source combinations.
 
 Rules:
 
@@ -297,6 +304,8 @@ A computed column has `valueGetter` instead of `field`:
 ```
 
 The return type of `valueGetter` is the column value type.
+
+The initial package scaffold deliberately rejects `valueFormatter` on computed columns until the no-helper array interface can correlate a getter's inferred return type into a sibling callback without exposing `unknown`. Field-column formatters are fully typed. Do not weaken the computed formatter callback to `unknown` merely to accept the property; resolve this type-design problem before the renderer depends on it.
 
 Accepted default rule: a `valueGetter`-only column has no automatic filtering or sorting. There is no field to send to the View Server, and BrunoTable must never execute, inspect, or reverse-engineer arbitrary JavaScript to manufacture query semantics.
 
@@ -441,12 +450,12 @@ Do not invoke `getRowId` or `valueGetter` against fabricated rows to guess proje
 
 ## Shared runtime and renderer
 
-`BrunoTableClient` and `BrunoTableViewport` are thin public composition roots. They construct different row-pipeline Adapters and then render the same internal grid experience:
+`BrunoTableClient` and `BrunoTableServer` are thin public composition roots. They construct different row-pipeline Adapters and then render the same internal grid experience:
 
 ```text
 BrunoTableClient    -> Client Row Pipeline   --+
                                                 +-> Grid Runtime -> BrunoTable View
-BrunoTableViewport  -> Viewport Row Pipeline --+
+BrunoTableServer    -> Viewport Row Pipeline --+
 ```
 
 The shared Grid Runtime and BrunoTable View own:
@@ -557,7 +566,7 @@ Cover at minimum:
 - `BrunoTableClient` accepts only a complete `clientSource`
 - effect-view-server `LiveQueryResult<TRow>` is structurally assignable to `BrunoTableClientSource<TRow>`
 - rejection of incomplete ready/stale Client Sources
-- `BrunoTableViewport` accepts only a `viewportSource`
+- `BrunoTableServer` accepts only a `viewportSource`
 - rejection of cross-variant source props
 - rejection of repeated generic annotations at JSX usage
 - rejection of `any` leaks in representative public inference paths
@@ -593,6 +602,7 @@ The following remain deliberately unresolved:
 
 - the product default for enabling filter and sort UI on eligible field columns
 - the names and shapes of explicit computed-column client and server semantics
+- the no-helper correlated type shape for computed-column formatters
 - how selected dependencies and optimistic-concurrency fields are declared
 - the visual treatment and retry actions for Client Source lifecycle states
 - editable save/commit Adapter props
