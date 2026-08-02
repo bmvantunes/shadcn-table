@@ -231,6 +231,8 @@ Names beginning with `PageSpecific...` are illustrative consumer components, not
 
 The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. When a custom control needs to own grid filter state, use the eventual typed controlled-filter interface at the table root rather than a public TanStack table or untyped imperative handle.
 
+Controls that only dispatch user intent have no grid-state subscription. `BrunoTableQuickFilter`, for example, keeps transient input text locally and dispatches through a stable command capability. It observes only the committed Quick Filter primitive when external resets or restored views must be reflected; streaming row-content changes are outside its notification domain.
+
 Distinguish filter ownership explicitly:
 
 - Grid Filter Expressions and the Quick Filter are user grid intent, appear in global active-filter UI, and participate in filter persistence.

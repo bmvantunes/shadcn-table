@@ -88,6 +88,8 @@ Toolbar state access follows the same ownership and subscription rules as the re
 
 The private TanStack Adapter may implement TanStack-owned parts with `table.Subscribe` or the standalone React `Subscribe` component. BrunoTable-owned source, row, edit, validation, and conflict state uses Grid Runtime selectors. Lowercase `table.store.subscribe(...)` and atom subscriptions are imperative observers and are reserved for work that should bypass React rendering. None of these mechanisms enter BrunoTable's public interface.
 
+`BrunoTableQuickFilter` is command-first. Its in-progress text is local input state. Its event handler dispatches through the stable Grid Runtime without reading a changing grid snapshot. It subscribes only to the committed Quick Filter primitive when external filter reset, controlled state, or saved-view restoration must update the displayed text. Streaming row changes never notify that subscription.
+
 Keep the public Module deep:
 
 - compose page-specific UI through children instead of adding feature booleans to table props;
@@ -124,16 +126,29 @@ React should consume immutable snapshots and issue commands.
 Conceptual runtime interface:
 
 ```ts
+interface GridReadable<TSnapshot> {
+  getSnapshot(): TSnapshot;
+  subscribe(listener: () => void): () => void;
+}
+
 interface GridRuntime<TRow> {
   readonly tableId: string;
-
   dispatch(command: GridCommand): void;
-
-  subscribe<T>(selector: (state: GridState<TRow>) => T, listener: (value: T) => void): () => void;
+  readonly sources: {
+    readonly filters: GridReadable<GridFilterSnapshot>;
+    readonly sorting: GridReadable<GridSortSnapshot>;
+    readonly rowMetrics: GridReadable<GridRowMetrics>;
+    readonly sourceStatus: GridReadable<GridSourceStatus>;
+    readonly selection: GridReadable<GridSelectionSnapshot>;
+    readonly edits: GridReadable<GridEditSummary>;
+    readonly rows: GridRowStore<TRow>;
+  };
 }
 ```
 
-Do not allow features to modify arbitrary state directly.
+These are internal notification domains, not public React context state. A source publishes only when its own semantic snapshot changes. Row-record replacement must not notify filter, sort, row-metric, source-status, selection, or edit sources unless the corresponding value also changed. Within each domain, React consumers still use the narrowest selector required by their output.
+
+Command-only descendants consume the stable `dispatch` capability and create no readable-state subscription. Do not allow features to modify arbitrary state directly.
 
 ## Commands and transactions
 

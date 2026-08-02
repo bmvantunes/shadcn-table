@@ -265,6 +265,9 @@ Rules:
 - Arbitrary consumer components may appear beside BrunoTable-owned controls.
 - BrunoTable-owned controls can observe semantic grid state and dispatch typed grid actions from anywhere inside the provider. This includes separately named result-row, loaded-row, selected-row, active-filter, active-sort, dirty-cell, validation, and conflict counts where the control needs them.
 - Each BrunoTable-owned control consumes only the narrow state it renders; adding toolbar content must not subscribe the grid body or table root to broad changing state, and one control's update must not rerender unrelated sibling controls.
+- A command-only control has zero grid-state subscriptions. Event handlers use a stable command dispatcher rather than subscribing to values needed only while handling an event.
+- A search or Quick Filter input owns transient keystroke text locally. It may observe only the committed Quick Filter primitive to reflect an external reset, controlled-state change, or restored view; row-content changes must neither notify nor rerender it.
+- Partition notification sources by capability. Selector equality alone is insufficient if it still causes every unrelated selector to execute for each hot row update.
 - TanStack tables, atoms, stores, subscriptions, and state shapes remain private implementation details. Page-owned children do not receive them through props or context.
 - The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
 - A custom control must explicitly choose whether it updates persisted Grid Filter intent or an application-owned, non-persisted Source Constraint. BrunoTable never infers ownership from toolbar placement.

@@ -99,6 +99,7 @@ The grid must support:
 22. The `@bruno/shadcn` package preserves canonical shadcn export names such as `Button` and exposes components through direct subpaths such as `@bruno/shadcn/button`.
 23. Both public table variants expose one continuous virtual row space. Do not expose pagination state or controls, and do not register TanStack's row-pagination feature.
 24. Page-specific table controls compose through optional toolbar children. Do not add page-specific `show...` props, expose a broad table controller, or leak TanStack context.
+25. Command-only controls have zero grid-state subscriptions. Partition reactive notification sources so hot row updates do not wake unrelated toolbar, status, filter, preference, or edit subscribers.
 
 ## Preferred technology split
 

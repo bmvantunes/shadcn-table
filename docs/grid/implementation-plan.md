@@ -95,6 +95,8 @@ Success criteria:
 - a complete effect-view-server `useLiveQuery` result passes directly as `clientSource` without an Adapter or Effect dependency in BrunoTable
 - loading/error lifecycle changes do not replace the Grid Runtime or rerender unrelated mounted cells
 - arbitrary toolbar children do not subscribe or rerender the grid body
+- under a 20 Hz row-update fixture, a command-only toolbar control receives no grid notifications or React renders, and a Quick Filter control does not render unless its committed filter value changes
+- row-record updates that preserve counts do not notify row-metric, filter, sort, preference, selection, source-status, or edit-summary channels
 - ready/stale sources with `rows.length !== totalRows` fail visibly
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
