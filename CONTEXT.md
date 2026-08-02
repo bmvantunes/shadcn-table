@@ -79,3 +79,11 @@ _Avoid_: Submit, server save, blur side effect
 **Save Workflow**:
 The process that sends committed drafts to the server, applies optimistic-concurrency results, and enters conflict resolution when canonical server values diverge.
 _Avoid_: Cell Edit Commit, editor close
+
+**Batch Save Capability**:
+The ability of a table to send its committed drafts through a consumer-provided persistence operation and reconcile the typed result. Its presence is distinct from whether an individual column is editable.
+_Avoid_: Save-button click handler, Cell Edit Commit
+
+**Edit Safety Footer**:
+The persistent batch-edit surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
+_Avoid_: Page toolbar, layout reset controls

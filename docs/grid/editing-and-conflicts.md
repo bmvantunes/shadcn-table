@@ -11,6 +11,14 @@ type BrunoTableSaveMode =
 
 The primary design focus is batch mode.
 
+## Batch save capability
+
+Both `BrunoTableClient` and `BrunoTableServer` accept an optional `onSaveEdits` operation. Its presence activates the Batch Save Capability and the BrunoTable-owned Edit Safety Footer. The name describes domain intent rather than a mouse event: pointer activation, keyboard activation, accessibility activation, or a retry all enter the same Save Workflow.
+
+`onSaveEdits` receives the typed optimistic-concurrency request assembled from committed drafts and returns the typed save result. The exact request/result shape must preserve row, column, value, and version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
+
+Column `isEditable` policies still decide which cells can enter a Cell Edit Session. The Batch Save Capability decides whether committed drafts can enter a consumer-backed Save Workflow; it does not make otherwise read-only columns editable.
+
 ## Cell edit lifecycle
 
 A Cell Edit Session is distinct from the Save Workflow. The accepted default interaction is:
@@ -145,17 +153,25 @@ Define a status priority model for combinations such as:
 - server-rejected
 - read-only
 
-## Edit footer
+## Edit safety footer
 
-Editable batch mode has a persistent bottom footer:
+Supplying `onSaveEdits` mounts a persistent bottom footer in either public table variant:
 
 ```text
-12 unsaved changes | 3 conflicts | 2 invalid | Revert all | Save
+3 conflicts · 2 invalid · 12 unsaved changes                         Reset | Save
 ```
 
-The conflict count is clickable.
+The left side contains status controls and the right side contains exactly two default actions: Reset and Save. Use `Reset edits` as the accessible name when the visible label is shortened to `Reset`.
 
-Clicking it opens conflict resolution before Save.
+Render the conflict control only when the count is greater than zero. Activating it opens the same conflict-resolution modal and actor used when Save finds unresolved conflicts. Save must remain activatable when conflicts exist so it can enter that workflow; it must not invoke `onSaveEdits` while unresolved conflicts remain.
+
+Reset discards the active edit candidate, sparse drafts, edit-owned validation, and conflict resolutions back to the latest canonical server snapshots. It does not reset filters, sorting, layout, selection, or other grid preferences.
+
+The footer remains mounted when no edits exist, with Reset and Save disabled. During saving, prevent duplicate Save and Reset activation and expose progress accessibly.
+
+The footer shell never subscribes to rows or the complete edit store. Status controls subscribe independently to compact counts; buttons subscribe only to the booleans and progress state they render. Streaming row updates that do not change those projections must neither notify nor rerender the footer.
+
+Pages do not reimplement this footer through toolbar children. The optional toolbar augments it.
 
 ## Conflict modal
 

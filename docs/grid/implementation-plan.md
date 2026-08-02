@@ -240,7 +240,8 @@ Build:
 - sync parsing
 - sync validation
 - undo/redo
-- batch footer
+- Batch Save Capability triggered by `onSaveEdits` on either public table variant
+- persistent Edit Safety Footer with status-left and Reset/Save-right layout
 - unsaved count
 - validation count
 - client-row editing first
@@ -251,6 +252,11 @@ Success criteria:
 - row eviction cannot destroy edits
 - edit state is identity-keyed
 - editor arrows do not break text cursor behaviour
+- no `onSaveEdits` means no Edit Safety Footer
+- supplying `onSaveEdits` mounts the same footer in both public variants without changing column editability
+- no-edit state keeps the footer mounted with Reset and Save disabled
+- Reset clears edit-owned state only
+- stable row updates do not notify or rerender footer controls when their compact projections are unchanged
 
 ## Phase 8: Conflicts and server save
 
@@ -259,7 +265,7 @@ Build:
 - base/server/user triple
 - conflict detection
 - conflict cell visuals
-- clickable conflict count
+- conflict count mounted on the footer left only when non-zero
 - merge-style modal
 - all mine/all server
 - column-wide resolution
@@ -272,6 +278,8 @@ Success criteria:
 
 - server remains final authority
 - unresolved conflicts block save
+- Save with unresolved conflicts and direct conflict-count activation open the same modal and actor
+- `onSaveEdits` is never invoked while conflicts or blocking validation remain
 - proactive review works before Save
 - stale versions can conflict again safely
 

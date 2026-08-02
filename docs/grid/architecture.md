@@ -97,6 +97,22 @@ Keep the public Module deep:
 - keep TanStack atoms, stores, contexts, and instance methods private;
 - keep Grid Filters separate from Source Constraints even when controls for both are visually adjacent.
 
+## Edit safety footer seam
+
+The presence of `onSaveEdits` installs the Batch Save Capability in either public composition root and causes `BrunoTableView` to mount the shared Edit Safety Footer. The footer is not a toolbar child and pages do not wire its counts, buttons, or modal.
+
+The footer dispatches `edits.reset`, `save.request`, and `conflicts.review.open` Grid Commands. It never calls the consumer operation directly from a button handler. The Save Workflow actor commits or rejects the active editor, evaluates validation and conflicts, opens the shared review workflow when blocked, and invokes the latest `onSaveEdits` operation only from its ready-to-persist transition. Updating the consumer callback reference must not replace the Grid Runtime or resubscribe the mounted grid.
+
+Footer render boundaries remain independent:
+
+- the conflict control selects only `conflictCount` and is absent when that count is zero;
+- unsaved and invalid summaries select only their own compact counts;
+- Reset selects only `canReset` and `isSaving`, then dispatches a command;
+- Save selects only `canSave`, `isSaving`, and the minimal blocking-summary presentation it renders;
+- the conflict modal reads sparse conflict records only while open.
+
+Row publications that preserve these projections do not notify any footer source. The footer remains mounted but its actions are disabled when there are no pending edits.
+
 ## Continuous row-space Adapter
 
 `BrunoTableView` owns one vertical scroll container and one vertical virtualizer for both variants. It consumes a private row-space interface shaped conceptually like:

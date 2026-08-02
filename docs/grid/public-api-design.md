@@ -239,6 +239,27 @@ Distinguish filter ownership explicitly:
 - Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
+## Batch save capability
+
+Both public variants accept the same optional save operation, shaped conceptually as:
+
+```ts
+type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>> = (
+  request: BrunoTableSaveRequest<TRow, TColumns>,
+) => PromiseLike<BrunoTableSaveResult<TRow, TColumns>>;
+
+type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  // existing common props
+  onSaveEdits?: BrunoTableSaveEditsHandler<TRow, TColumns>;
+};
+```
+
+Use `onSaveEdits`, not `onEditSaveClick`: the operation represents Save intent regardless of whether it came from pointer, keyboard, accessibility activation, or a retry. The exact request and result types remain to be finalized with the optimistic-concurrency field declaration, but they must retain exact row, Column Identity, editable-value, and version correlation without `any` or `unknown` in inference paths.
+
+Presence of `onSaveEdits` activates the Batch Save Capability and automatically renders BrunoTable's Edit Safety Footer in both public variants. It does not change column editability. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children.
+
+Reset is internal grid intent and requires no consumer callback. Save dispatches into the Save Workflow; only the ready-to-persist transition invokes `onSaveEdits`. Unresolved conflicts and blocking validation open their BrunoTable-owned review UI first.
+
 ## Mandatory column identity
 
 Every leaf column definition requires an explicit `columnId` from this namespace:
@@ -637,6 +658,6 @@ The following remain deliberately unresolved:
 - the no-helper correlated type shape for computed-column formatters
 - how selected dependencies and optimistic-concurrency fields are declared
 - the visual treatment and retry actions for Client Source lifecycle states
-- editable save/commit Adapter props
+- the exact `BrunoTableSaveRequest` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the `onSaveEdits` name, capability trigger, and owned footer behaviour are accepted
 
 These decisions must extend the accepted small interface rather than restoring an intermediate grid-definition object.

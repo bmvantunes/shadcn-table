@@ -303,21 +303,28 @@ The filters panel should support:
 
 The sorting panel should show sort priority.
 
-## Edit footer
+## Edit safety footer
 
-Editable batch grids should have a persistent bottom footer showing:
+Supplying `onSaveEdits` to either `BrunoTableClient` or `BrunoTableServer` activates the Batch Save Capability and mounts a persistent bottom Edit Safety Footer. Column `isEditable` policies remain the authority for whether a particular cell can edit.
+
+The left side shows conditional status controls:
 
 - unsaved change count
-- conflict count
 - validation error count
-- revert action
-- save action
+- conflict count, only when greater than zero
 
-The conflict count must be clickable.
+The right side shows exactly two default actions:
 
-Clicking it opens the same conflict-resolution UI used when Save encounters unresolved conflicts.
+- Reset, with the accessible name `Reset edits`
+- Save
 
-Users must be able to resolve conflicts before attempting to save.
+Reset clears only edit-owned state back to the latest canonical server snapshots. It does not reset filters, sorting, layout, selection, or preferences.
+
+Activating the conflict count opens the same conflict-resolution modal and actor used when Save encounters unresolved conflicts. Save remains activatable when conflicts exist but must not invoke `onSaveEdits` until every conflict and blocking validation error is resolved.
+
+Users must also be able to open and resolve conflicts proactively without first activating Save.
+
+The footer remains present with disabled actions when no edits exist. Its controls use independent compact subscriptions; row-content updates that leave their displayed counts and booleans unchanged must not notify or rerender them.
 
 ## Selection and server-side capability policies
 
