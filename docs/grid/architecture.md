@@ -121,6 +121,10 @@ Footer render boundaries remain independent:
 
 Row publications that preserve these projections do not notify any footer source. The footer remains mounted but its actions are disabled when there are no pending edits.
 
+Live-by-default is a source-lifecycle rule across the runtime. A mounted surface that presents current source state owns a narrow subscription for as long as it is mounted: grid cells, counts, filter results, open Set Filter facets, Reset Review rows, conflict rows, and `Server now` values all update from the active source generation. Closing an overlay or dialog releases subscriptions that exist only for that surface. Immutable edit bases, undo records, and submitted Save Change Sets remain snapshots because they are workflow evidence, not claims about current source state.
+
+Do not implement this by feeding full live datasets through React context or dialog-local copies. Keep canonical data in external stores and let the smallest useful render boundary select its row, cell, count, or facet projection. A filter input that only dispatches text still does not subscribe to row publications merely because the filtered result is live elsewhere.
+
 ## Continuous row-space Adapter
 
 `BrunoTableView` owns one vertical scroll container and one vertical virtualizer for both variants. It consumes a private row-space interface shaped conceptually like:

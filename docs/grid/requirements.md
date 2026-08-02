@@ -57,6 +57,14 @@ This creates four valid combinations:
 
 Editing must not be coupled to the row model.
 
+## Live-by-default data contract
+
+Any mounted BrunoTable surface that claims to show current source data must remain live for its complete lifetime. This applies to visible cells, row and result counts, filtering results, Quick Filter results, Set Filter values and counts, toolbar projections, conflict review, Reset Review, and every `Server now` presentation. Opening an on-demand surface acquires only the narrow source subscription it needs; closing or unmounting it releases that subscription. Do not capture a one-time array or dialog-opening snapshot and continue presenting it as current.
+
+Live does not mean broad React subscriptions. Streaming publications update the relevant external store, and each cell, count, filter surface, or review row selects only the exact projection it renders. A live update that does not change that projection must not notify or rerender it.
+
+Historical base values, the user's raw editor candidate, sparse drafts, undo commands, and an immutable in-flight Save Change Set are deliberate records rather than current-source displays. They remain stable until their owning workflow reconciles or discards them. Everything labelled or understood as latest server state stays subscribed and current.
+
 Expose the row models as explicit public variants, not as a `mode` prop:
 
 ```tsx
