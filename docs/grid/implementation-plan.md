@@ -39,6 +39,7 @@ Build:
 - mandatory `tableId`
 - mandatory `getRowId`
 - mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
+- mandatory explicit non-empty `headerName` on every leaf column
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed `valueGetter` return inference
@@ -58,6 +59,7 @@ Success criteria:
 - no `defineGrid`, public column helper, `definition`, or `rowModel` prop
 - no single public component with a client/viewport mode flag or source union
 - lowercase and unprefixed column identities fail compilation
+- missing header names fail compilation, while dynamic missing, non-string, or blank names fail runtime normalization
 - invalid fields fail compilation
 - computed values infer correctly
 - simultaneous `field` and `valueGetter` fails compilation
@@ -78,6 +80,7 @@ Build:
 - loading, stale, closed, and error lifecycle overlays without discarding retained rows
 - incomplete-source detection for ready/stale results
 - the shared Grid Runtime and `BrunoTableView`
+- semantic `<th>` rendering whose default visible and accessible label comes from `headerName`
 - the Client Row Pipeline Adapter
 - optional toolbar children rendered inside the stable grid provider
 - `BrunoTableToolbar` layout primitive with no empty region when absent

@@ -21,14 +21,16 @@ type Order = {
 };
 
 const columns = [
-  { columnId: "COL_ID_SYMBOL", field: "symbol" },
+  { columnId: "COL_ID_SYMBOL", field: "symbol", headerName: "Symbol" },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     valueFormatter: ({ value }) => value.toFixed(2),
   },
   {
     columnId: "COL_ID_DOUBLE_QUANTITY",
+    headerName: "Double quantity",
     valueGetter: ({ row }) => row.quantity * 2n,
   },
 ] satisfies BrunoTableColumns<Order>;
@@ -65,6 +67,15 @@ const invalidColumn = [
     // @ts-expect-error emitted declarations preserve the uppercase identity contract.
     columnId: "COL_ID_price",
     field: "price",
+    headerName: "Price",
+  },
+] satisfies BrunoTableColumns<Order>;
+
+const missingHeaderName = [
+  // @ts-expect-error emitted declarations require an explicit header name.
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -79,4 +90,5 @@ void (0 as unknown as Filterable);
 void filters;
 void props;
 void invalidColumn;
+void missingHeaderName;
 void invalidFilter;

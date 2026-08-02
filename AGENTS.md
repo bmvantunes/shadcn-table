@@ -109,6 +109,7 @@ The grid must support:
 32. Runtime filter state keeps native exact operands. Persist exact operands only through tagged, versioned, JSON-safe column codecs and drop stale or invalid operands conservatively.
 33. `inRange` is half-open in both Client and Server Tables: `filter <= value < filterTo`.
 34. Query Version and Row Version are distinct. Never use a Viewport Source's top-level version as optimistic concurrency, and never implement `onSaveEdits` with an unconditional server patch.
+35. Every leaf column has an explicit non-empty `headerName`. It is the default visible and accessible header label, never identity, persistence, or query mapping, and is not inferred.
 
 ## Preferred technology split
 

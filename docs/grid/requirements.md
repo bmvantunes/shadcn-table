@@ -150,12 +150,15 @@ type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 
 Never infer column identity from a field, header, array position, or generated counter. Lowercase or unprefixed literals must fail compilation. External values must be validated at runtime. Duplicate `columnId` values are configuration errors.
 
+Every leaf column also requires an explicit non-empty `headerName`. It is the default visible text and accessible name for the semantic column header. It is descriptive metadata, not identity: never use it for persistence, grid state, row access, or server queries, and never infer it from `columnId` or `field`. A future custom header renderer may replace the visible content, but `headerName` remains the stable human-readable fallback for accessibility and grid-owned UI. Icon-only and action columns still provide a meaningful name such as `"Actions"`, even if the renderer visually hides it.
+
 Keep column identity separate from row data and server query fields:
 
 ```ts
 {
   columnId: "COL_ID_DISPLAY_PRICE",
   field: "unitPrice",
+  headerName: "Price",
 }
 ```
 
@@ -191,11 +194,13 @@ const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
+    headerName: "Quantity",
     valueSemantics: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
   },
 ] satisfies BrunoTableColumns<Order>;

@@ -94,6 +94,7 @@ const columns = [
   {
     columnId: "COL_ID_PRICE",
     field: "unitPrice",
+    headerName: "Price",
     // filter/edit/render configuration
   },
 ] as const;
@@ -117,6 +118,7 @@ The common path should remain terse and cheap:
 {
   columnId: "COL_ID_PRICE",
   field: "price",
+  headerName: "Price",
   isEditable: ({ row }) => row.status === "open",
 }
 ```
@@ -126,6 +128,7 @@ The type should distinguish it from computed/display columns:
 ```ts
 {
   columnId: "COL_ID_NOTIONAL",
+  headerName: "Notional",
   valueGetter: ({ row }) => row.price * row.quantity,
   // no field: not server-filterable or server-sortable by default
 }

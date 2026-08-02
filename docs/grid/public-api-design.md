@@ -299,6 +299,7 @@ type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 {
   columnId: "COL_ID_PRICE",
   field: "price",
+  headerName: "Price",
 }
 ```
 
@@ -325,6 +326,22 @@ All grid-owned and persisted state uses `columnId`:
 
 Persisted identity is scoped by `tableId + columnId`.
 
+## Mandatory column name
+
+Every leaf column definition also requires an explicit, non-empty `headerName`. It is the default visible text and accessible name for the semantic column header:
+
+```ts
+{
+  columnId: "COL_ID_PRICE",
+  field: "price",
+  headerName: "Price",
+}
+```
+
+`headerName` is descriptive metadata, not identity. Never use it for persisted state, filtering, sorting, row access, or View Server queries, and never infer it from `columnId` or `field`. Runtime normalization rejects absent, non-string, or whitespace-only names from dynamic inputs.
+
+A future custom header renderer may replace the visible content, but `headerName` remains the stable human-readable fallback for screen readers and grid-owned UI such as menus, choosers, and conflict details. Icon-only and action columns still provide a meaningful name such as `"Actions"`; their renderer may hide the text visually without removing its semantics.
+
 ## Column kinds
 
 ### Shared definition
@@ -334,7 +351,7 @@ The minimal shared shape is conceptually:
 ```ts
 type BrunoTableColumnBase<TRow, TValue, TColumnId extends BrunoTableColumnId> = {
   columnId: TColumnId;
-  headerName?: string;
+  headerName: string;
   valueSemantics?: "bigint" | BrunoTableValueSemantics<TValue>;
   isEditable?: boolean | ((params: { row: TRow; value: TValue }) => boolean);
   valueFormatter?: (params: { row: TRow; value: TValue }) => string;
@@ -356,11 +373,13 @@ const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
+    headerName: "Quantity",
     valueSemantics: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
   },
 ] satisfies BrunoTableColumns<Order>;
@@ -391,6 +410,7 @@ A field column reads a real row field directly:
 {
   columnId: "COL_ID_PRICE",
   field: "price",
+  headerName: "Price",
 }
 ```
 
@@ -409,6 +429,7 @@ const columns = [
   {
     columnId: "COL_ID_PRICE",
     field: "prices",
+    headerName: "Price",
   },
 ] satisfies BrunoTableColumns<Order>;
 ```
@@ -420,6 +441,7 @@ A computed column has `valueGetter` instead of `field`:
 ```ts
 {
   columnId: "COL_ID_DOUBLE_QUANTITY",
+  headerName: "Double quantity",
   valueGetter: ({ row }) => row.quantity * 2n,
 }
 ```
@@ -530,6 +552,7 @@ const columns = [
   {
     columnId: "COL_ID_DISPLAY_PRICE",
     field: "unitPrice",
+    headerName: "Price",
   },
 ] satisfies BrunoTableColumns<Order>;
 

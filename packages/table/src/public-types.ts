@@ -43,7 +43,7 @@ type ValueGetterParams<TRow> = {
 type FieldColumn<TRow, TField extends FieldKey<TRow>> = {
   readonly columnId: BrunoTableColumnId;
   readonly field: TField;
-  readonly headerName?: string;
+  readonly headerName: string;
   readonly isEditable?: boolean | ((params: ValueParams<TRow, TRow[TField]>) => boolean);
   readonly valueFormatter?: (params: ValueParams<TRow, TRow[TField]>) => string;
   readonly valueGetter?: never;
@@ -55,7 +55,7 @@ type FieldColumns<TRow> = {
 
 type ComputedColumn<TRow> = {
   readonly columnId: BrunoTableColumnId;
-  readonly headerName?: string;
+  readonly headerName: string;
   readonly valueGetter: (params: ValueGetterParams<TRow>) => unknown;
   readonly field?: never;
   readonly isEditable?: false;

@@ -96,11 +96,13 @@ const columns = [
   {
     columnId: "COL_ID_QUANTITY",
     field: "quantity",
+    headerName: "Quantity",
     valueSemantics: "bigint",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     valueSemantics: BrunoTableEffectBigDecimalValueSemantics,
   },
 ] satisfies BrunoTableColumns<Order>;

@@ -32,8 +32,13 @@ Consumers pass a long-lived `viewportSource` directly to `BrunoTableServer`:
 type Order = TopicRow<typeof viewServer.topics, "orders">;
 
 const columns = [
-  { columnId: "COL_ID_SYMBOL", field: "symbol" },
-  { columnId: "COL_ID_QUANTITY", field: "quantity", valueSemantics: "bigint" },
+  { columnId: "COL_ID_SYMBOL", field: "symbol", headerName: "Symbol" },
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    headerName: "Quantity",
+    valueSemantics: "bigint",
+  },
 ] satisfies BrunoTableColumns<Order>;
 
 const getOrderRowId = (row: Order) => row.id;

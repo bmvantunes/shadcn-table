@@ -26,15 +26,18 @@ const columns = [
   {
     columnId: "COL_ID_SYMBOL",
     field: "symbol",
+    headerName: "Symbol",
   },
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     isEditable: ({ row, value }) => row.status === "open" && value > 0,
     valueFormatter: ({ value }) => value.toFixed(2),
   },
   {
     columnId: "COL_ID_DOUBLE_QUANTITY",
+    headerName: "Double quantity",
     valueGetter: ({ row }) => row.quantity * 2n,
   },
 ] satisfies BrunoTableColumns<Order>;
@@ -136,11 +139,13 @@ const invalidColumnIds = [
     // @ts-expect-error column identities are namespaced and uppercase.
     columnId: "price",
     field: "price",
+    headerName: "Price",
   },
   {
     // @ts-expect-error lowercase suffixes are rejected.
     columnId: "COL_ID_price",
     field: "price",
+    headerName: "Price",
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -149,6 +154,7 @@ const invalidField = [
     columnId: "COL_ID_PRICES",
     // @ts-expect-error field must be a real row key.
     field: "prices",
+    headerName: "Price",
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -157,7 +163,16 @@ const ambiguousColumn = [
   {
     columnId: "COL_ID_PRICE",
     field: "price",
+    headerName: "Price",
     valueGetter: ({ row }: { readonly row: Order }) => row.price,
+  },
+] satisfies BrunoTableColumns<Order>;
+
+const missingHeaderName = [
+  // @ts-expect-error every leaf column requires an explicit header name.
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
   },
 ] satisfies BrunoTableColumns<Order>;
 
@@ -207,6 +222,7 @@ const invalidPaginatedServer = {
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
+void missingHeaderName;
 void invalidNumericFilter;
 void invalidComputedFilter;
 void invalidSort;

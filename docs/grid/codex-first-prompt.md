@@ -25,6 +25,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - mandatory `tableId`
 - mandatory `getRowId`
 - mandatory explicit `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, with no inferred identities
+- mandatory explicit non-empty `headerName` on every leaf column, used as the default visible and accessible label but never as identity or query mapping
 - every BrunoTable-owned public export carries the `BrunoTable` prefix; for example, `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`
 - explicit `BrunoTableClient` and `BrunoTableServer` public variants over a shared internal grid runtime and renderer
 - React Compiler support
