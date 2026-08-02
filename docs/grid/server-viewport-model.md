@@ -364,7 +364,6 @@ This affects:
 
 - status text
 - Page Down
-- select all
 - scrollbar geometry
 - end-of-data detection
 

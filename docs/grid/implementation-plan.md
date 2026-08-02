@@ -255,13 +255,13 @@ Success criteria:
 
 Build:
 
-- Row Selection keyed by stable Row Identity
-- inclusive Shift-click Row Selection in current logical display order
+- Client Row Selection keyed by stable Row Identity
+- Client inclusive Shift-click Row Selection in current logical display order
 - Client logical range selection
 - Client drag selection
 - autoscroll
 - capability engine
-- Server Active Cell without Cell Range Selection
+- Server Active Cell without Row Selection or Cell Range Selection
 - Server single-loaded-cell copy restriction
 - clear user messaging for disabled operations
 - query-revision handling
@@ -272,8 +272,8 @@ Success criteria:
 
 - Row Selection and Cell Range Selection remain separate capabilities and state models
 - Client Shift-click Row Selection includes the complete current display-order interval
-- Server Shift-click never silently omits unloaded rows from the requested interval
-- Server cell interaction exposes no range selection, paste, fill, clear/delete, or editing and copies only its loaded Active Cell
+- Server mounts no row checkbox, selected-row state, Shift-click row interval, Select All command, or cell range; it copies only its loaded Active Cell
+- Server cell interaction exposes no paste, fill, clear/delete, or editing
 - no partial silent copy/fill/edit
 - selection can outlive mounted cells
 - selection clears or reconciles on query change

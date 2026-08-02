@@ -262,13 +262,15 @@ Use TanStack subscriptions only for state owned or derived by the private TanSta
 
 The component that constructs the private TanStack table should select only structural state that genuinely changes the mounted tree. High-frequency state such as drag selection and live resize state must not invalidate that root. Place reactive render boundaries at the smallest useful invalidation domain:
 
-- a selection checkbox may select one row's boolean;
+- a Client selection checkbox may select one row's boolean;
 - an editable cell may select only its own draft, validation, and conflict state;
 - drag-range presentation should use a per-row derived key when one change affects several cells and neighbouring selection edges;
 - a header may select only its own sort, filter, pin, resize, or menu presentation;
 - overlays, toolbars, footers, and status indicators subscribe independently to the values they render.
 
 Do not add a subscription to a component that only renders stable row data. Prefer a single slice atom as the source. When a render island depends on several slices, project the smallest primitive or shallow-stable object that completely describes its output.
+
+The selection-checkbox and range-presentation islands exist only when the Client composition root installs their capabilities. `BrunoTableServer` installs neither Row Selection nor Cell Range Selection, so it creates no checkbox, selection store, Shift-click anchor, Select All command, or range-decoration subscription. Its Active Cell belongs to keyboard navigation rather than selection state.
 
 TanStack row, cell, column, and header builder methods hide state reads from React Compiler. Any nested compiled component that calls such a method must sit behind an explicit subscription boundary for every state dependency it renders. This is a correctness rule as well as a performance rule.
 

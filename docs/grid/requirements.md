@@ -467,14 +467,14 @@ The footer remains present with disabled actions when no edits exist. Its contro
 
 ## Selection and server-side capability policies
 
-A Server Table cannot assume all selected rows are loaded.
-
-Keep Row Selection and Cell Range Selection distinct:
+Keep Client Row Selection and Cell Range Selection distinct:
 
 - Row Selection is stable Row Identity intent, usually exposed through row checkboxes or row actions.
 - Cell Range Selection is spreadsheet-style rectangular cell intent keyed by Row and Column Identity.
 
-When Row Selection UI is enabled, Shift-clicking a second selectable row must select or deselect the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model. A Server Table must not delegate unloaded-range semantics to TanStack's loaded-row model and silently omit intervening rows; its declared capability must make the operation loaded-only, logical, server-assisted, or unavailable.
+When Client Row Selection UI is enabled, Shift-clicking a second selectable row must select or deselect the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model.
+
+`BrunoTableServer` exposes neither Row Selection nor Cell Range Selection: no row checkboxes, selected-row state, Shift-click row interval, header checkbox, or Select All command. It owns only one logical Active Cell for navigation and single-loaded-cell copy.
 
 TanStack Table v9's row-range handler and cell-selection geometry are private implementation candidates. Their state, handlers, and feature types do not become BrunoTable's public contract, and neither selection kind is persisted.
 
@@ -490,7 +490,7 @@ type BrunoTableServerCapabilities = {
   paste: "disabled";
   clear: "disabled";
   bulkEdit: "disabled";
-  selectAll: "disabled" | "loaded-only" | "all-matching";
+  rowSelection: "disabled";
 };
 ```
 
@@ -504,11 +504,11 @@ Initial recommended rules:
 | Copy                 | Selected loaded ranges  | Active loaded cell only |
 | Paste                | Atomic selected targets | No                      |
 | Clear/delete         | Atomic selected targets | No                      |
-| Row select all       | Local IDs               | All matching query      |
+| Row selection        | Optional local IDs      | No                      |
 | Undo/redo            | Current Batch only      | No                      |
 | Conflicts            | Yes                     | No                      |
 
-Do not silently perform partial operations.
+Do not silently perform partial operations or mount unavailable Server selection controls.
 
 ## Accessibility and keyboard navigation
 
