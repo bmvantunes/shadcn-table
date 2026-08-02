@@ -1,23 +1,17 @@
-# vite-plus-starter
+# BrunoTable
 
-A starter for creating a Vite Plus project.
+A high-performance, strongly typed React data-grid workspace.
+
+## Packages
+
+- The repository root contains the emerging BrunoTable package.
+- [`@bruno/shadcn`](./packages/shadcn) contains Base UI-powered shadcn components shared by BrunoTable and consumer applications.
 
 ## Development
 
-- Install dependencies:
-
 ```bash
 vp install
-```
-
-- Run the unit tests:
-
-```bash
+vp check
 vp test
-```
-
-- Build the library:
-
-```bash
-vp pack
+vp run -r build
 ```

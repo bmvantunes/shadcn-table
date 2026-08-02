@@ -41,7 +41,7 @@ Type tests are part of the interface test surface. Every accepted inference guar
 
 ## Public export naming
 
-Every package-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form.
+Every BrunoTable-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form. Separate packages preserve their own vocabulary; in particular, `@bruno/shadcn/button` exports the canonical shadcn `Button` rather than a `BrunoTableButton` wrapper.
 
 Examples:
 
@@ -539,7 +539,7 @@ Compile-time types do not validate arbitrary server responses. The core may acce
 
 Cover at minimum:
 
-- package-owned public exports use the `BrunoTable...` prefix
+- BrunoTable-owned public exports use the `BrunoTable...` prefix
 - mandatory, literal-preserving, prefixed, uppercase `columnId`
 - rejection of lowercase and unprefixed column identities
 - invalid fields
