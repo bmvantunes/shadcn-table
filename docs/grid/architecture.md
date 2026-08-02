@@ -72,6 +72,26 @@ BrunoTableServer    -> Viewport Row Pipeline --+
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, and optional message. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store.
 
+## Continuous row-space Adapter
+
+`BrunoTableView` owns one vertical scroll container and one vertical virtualizer for both variants. It consumes a private row-space interface shaped conceptually like:
+
+```ts
+interface RowSpace<TRow> {
+  getRowCount(): number;
+  getRowSlot(index: number): RowSlot<TRow>;
+  setRequiredRange(range: IndexRange): void;
+}
+```
+
+The Client Row Pipeline exposes the complete final TanStack row model through that interface. Every index resolves to a loaded row, and `setRequiredRange` changes rendering geometry only; it never fetches or slices a page.
+
+The Viewport Row Pipeline exposes the source's exact `totalRows` and a sparse indexed row store. An unloaded index resolves to a stable placeholder slot. The visible range plus velocity-aware overscan becomes an inclusive effect-view-server window passed to the active generation's `setWindow`. A scrollbar jump can therefore request the destination window directly without loading every preceding row.
+
+Do not allocate a placeholder row object or TanStack row for every server index. The virtualizer owns total scroll geometry; the sparse store owns only loaded, loading, retained, or failed slots. Internal window alignment and buffer sizing are transport optimizations, not pagination state.
+
+Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window.
+
 ## Framework-independent core
 
 The grid engine should not depend directly on React.

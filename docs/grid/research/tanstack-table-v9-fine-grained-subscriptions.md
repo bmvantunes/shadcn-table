@@ -201,7 +201,7 @@ Sources:
 | Active column resizer styling                              | Exact resizer                                     | Boolean selector comparing the active resize Column Identity                                                          |
 | Live column widths                                         | No React render                                   | Imperative `columnSizing` atom subscription writing CSS variables, with explicit cleanup                              |
 | Scroll, measurement, hit testing, drag preview geometry    | No React render                                   | BrunoTable geometry engine plus `requestAnimationFrame`; publish immutable snapshots only where UI must render state  |
-| Toolbar, status bar, menus, pagination                     | The smallest owning control or panel              | Per-slice atom when one slice is sufficient; store selector for a small multi-slice projection                        |
+| Toolbar, status bar, and menus                             | The smallest owning control or panel              | Per-slice atom when one slice is sufficient; store selector for a small multi-slice projection                        |
 
 The internal adapter should centralize these mappings so public BrunoTable renderers never import TanStack atoms, stores, or `Subscribe`.
 

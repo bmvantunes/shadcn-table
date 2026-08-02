@@ -4,6 +4,8 @@
 
 Implement AG Grid-style viewport behaviour without copying its exact API.
 
+The public experience is one continuous virtual row space shared with `BrunoTableClient`. There is no page navigation, page index, page size, or load-more interaction.
+
 The grid owns a long-lived indexed row store.
 
 The grid tells a datasource session which logical indexed range is visible and required.
@@ -76,18 +78,20 @@ The exact exceptional mapping and projection-dependency property names remain op
 
 ## Internal source seam
 
-`BrunoTableServer` adapts the public Viewport Source to an internal long-lived session and grid-owned sparse sink. Conceptually, the internal session still needs operations equivalent to:
+`BrunoTableServer` adapts the public Viewport Source to a grid-owned sparse sink. The existing effect-view-server source already provides the required long-lived lifecycle. The Adapter uses it conceptually as:
 
 ```ts
-interface ServerViewportSession<TQuery> {
-  setQuery(request: { generation: number; query: TQuery }): void;
-  setViewport(request: { generation: number; visible: IndexRange; required: IndexRange }): void;
-  refresh(request: { generation: number; range?: IndexRange }): void;
-  dispose(): void;
-}
+const generation = viewportSource.viewport.replace({
+  query,
+  window: { firstRow, lastRow },
+  sink,
+});
+
+generation.setWindow({ firstRow, lastRow });
+generation.release();
 ```
 
-This is an internal seam, not an object the ordinary `BrunoTableServer` consumer constructs.
+`replace` is used when filter, sort, or projection semantics change. `setWindow` moves the active indexed window as the user scrolls. `release` runs on replacement or unmount. This is an internal Adapter seam, not an object the ordinary `BrunoTableServer` consumer constructs.
 
 ## Why a long-lived object
 
@@ -250,9 +254,9 @@ On query change:
 2. abort or obsolete old requests
 3. clear incompatible index mappings
 4. reset the viewport to the top
-5. request initial blocks
+5. replace the source query with the initial required window
 
-Every sink message carries its generation.
+Bind each sink instance to its query generation. The public effect-view-server sink messages do not need an extra generation field; the Adapter ignores writes from a sink whose generation is no longer active.
 
 Ignore stale responses.
 
@@ -263,7 +267,7 @@ The virtualizer reports:
 - visible range
 - overscan range
 
-The row model converts the required range to blocks and requests missing data.
+The row model expands the visible range using overscan, clamps it to `totalRows`, optionally aligns it to a small window quantum, and sends the resulting inclusive range to the active generation with `setWindow` only when it changes.
 
 Example:
 
@@ -272,39 +276,29 @@ Visible: 950-1030
 Required: 920-1060
 Block size: 200
 
-Needed:
-block 4: 800-999
-block 5: 1000-1199
+Requested source window: 920-1060
+
+Retained cache blocks: 800-999 and 1000-1199
 ```
 
-## Range responses
+The cache may use blocks internally for retention and eviction, but effect-view-server receives one active contiguous window. Its internal query translation may use `offset` and `limit`; those are transport details and do not create page state. A large scrollbar jump replaces the active window directly rather than fetching all preceding blocks.
 
-For contiguous data, prefer:
+## Sink responses
+
+The effect-view-server Viewport Sink writes the exact AG Grid-compatible shape:
 
 ```ts
-provideRange({
-  startIndex,
-  rows,
+sink.setRowCount(totalRows, keepRenderedRows);
+sink.setRowData({
+  [absoluteRowIndex]: row,
 });
 ```
 
-over a sparse numeric object.
-
-For sparse positional changes, use a separate method.
-
-For identity-based data updates, use another separate method.
-
-Do not overload one payload with ambiguous semantics.
+The Adapter accepts that sparse absolute-index map, rejects invalid or out-of-range indexes, groups contiguous entries for efficient internal writes, and updates only affected row-slot subscribers. Identity-based live updates remain a separate internal operation so position and identity are never conflated.
 
 ## Row count
 
-Support:
-
-```ts
-rowCount: number | "unknown";
-```
-
-Unknown totals require a growing estimated scroll range until the server reports the end.
+The initial effect-view-server integration requires the exact numeric `totalRows` exposed by the Viewport Source. That count defines the virtualizer's complete scroll height even though most row slots are unloaded.
 
 This affects:
 
@@ -313,6 +307,8 @@ This affects:
 - select all
 - scrollbar geometry
 - end-of-data detection
+
+An unknown-length append-only feed is a different future source capability. Do not emulate it with fake sentinel rows or weaken the initial viewport contract.
 
 ## Live updates
 

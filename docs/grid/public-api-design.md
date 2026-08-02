@@ -206,6 +206,8 @@ Rules:
 - Preserve unchanged row references between source versions and replace only changed rows.
 - `loading` with no rows shows the loading overlay. `stale`, `closed`, or `error` with retained rows keeps those rows visible and adds the appropriate non-destructive status treatment.
 - `viewportSource` is a long-lived source, not a row array copied into React state.
+- Both variants expose one continuous virtual row space. Do not add pagination, page-index, page-size, cursor, fetch-next-page, or load-more props.
+- Internal server windows may compile to `offset` and `limit`, but those values never enter the public interface or persisted grid state.
 
 ## Mandatory column identity
 

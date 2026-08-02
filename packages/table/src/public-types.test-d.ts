@@ -174,9 +174,39 @@ const invalidSort = [
   { columnId: "COL_ID_NOTIONAL", direction: "asc" },
 ] satisfies BrunoTableSortBy<Columns>;
 
+const invalidPaginatedClient = {
+  tableId: "orders",
+  getRowId: (row: Order) => row.id,
+  columns,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+  // @ts-expect-error Client Tables expose one continuous row space, not page size.
+  pageSize: 100,
+} satisfies BrunoTableClientProps<Order, Columns>;
+
+const invalidPaginatedServer = {
+  tableId: "orders",
+  getRowId: (row: Order) => row.id,
+  columns,
+  viewportSource: {
+    viewport: {},
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+  // @ts-expect-error Server Tables expose one continuous row space, not page index.
+  pageIndex: 0,
+} satisfies BrunoTableServerProps<Order, Columns>;
+
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
 void invalidNumericFilter;
 void invalidComputedFilter;
 void invalidSort;
+void invalidPaginatedClient;
+void invalidPaginatedServer;

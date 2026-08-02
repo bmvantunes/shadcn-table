@@ -66,6 +66,19 @@ Expose the row models as explicit public variants, not as a `mode` prop:
 
 Both variants use the same column definitions, filter and sort controls, rendering, keyboard navigation, selection, clipboard, and editing experience. The row-pipeline Adapter behind the shared Grid Runtime owns the differences in row processing and source lifecycle.
 
+## Continuous scrolling contract
+
+Both variants present one uninterrupted virtual row space. There are no pagination controls, page-number indicators, page-size selectors, page-index props, cursors, or load-more buttons in BrunoTable's public interface.
+
+Do not register TanStack Table's row-pagination feature in either variant. `Page Up` and `Page Down` are viewport-relative keyboard navigation commands, not pagination operations.
+
+The shared renderer owns one vertical scroll container and virtualizer:
+
+- The Client Table virtualizes the complete locally filtered and sorted row model.
+- The Server Table virtualizes the exact `totalRows` reported by the Viewport Source, renders sparse placeholders for unloaded indexes, and sends the visible range plus overscan to the source as one indexed window.
+
+Internal range alignment, buffering, and transport `offset`/`limit` values must remain invisible implementation details. They must not become persisted state or public pagination vocabulary.
+
 ## Client row model
 
 The client receives the complete dataset.
@@ -94,6 +107,8 @@ The grid performs locally:
 - drag fill
 - selection
 
+The virtualizer count is the length of the final locally processed row model. Scrolling never slices that model into pages; virtualization limits mounted DOM, not client data ownership.
+
 The client row model may apply transactions without replacing the full row array.
 
 ## Server viewport row model
@@ -112,7 +127,7 @@ The server owns:
 - canonical saved values
 - optimistic concurrency decisions
 
-The UI presents infinite scrolling. There is no visible page navigation.
+The UI presents the same continuous infinite-scrolling surface as the Client Table. There is no visible or public page navigation.
 
 The grid internally requests indexed ranges based on the visible viewport and overscan.
 

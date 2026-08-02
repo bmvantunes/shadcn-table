@@ -46,6 +46,10 @@ _Avoid_: Viewport Table, server mode, viewport flag, paginated table
 The long-lived server-viewport input passed to a Server Table. It represents typed query replacement, sparse row delivery, total-row state, and lifecycle for one logical indexed row space.
 _Avoid_: Row array, page datasource, paginated result
 
+**Continuous Row Space**:
+The uninterrupted vertical row sequence presented by both Client and Server Tables. It may be fully materialized or sparsely loaded, but the user never navigates pages.
+_Avoid_: Paginated rows, page index, load-more list
+
 **View Server Translation**:
 The Adapter that resolves Column Identity to current Query Fields and compiles grid filters, sorts, and projections into effect-view-server queries.
 _Avoid_: Sending column IDs as fields, adopting the View Server query language as persisted grid state

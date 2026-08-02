@@ -97,6 +97,7 @@ The grid must support:
 20. Any server-side mutation must use stable row identity and optimistic concurrency.
 21. Every BrunoTable-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use `BrunoTable...`; unprefixed grid symbols remain internal.
 22. The `@bruno/shadcn` package preserves canonical shadcn export names such as `Button` and exposes components through direct subpaths such as `@bruno/shadcn/button`.
+23. Both public table variants expose one continuous virtual row space. Do not expose pagination state or controls, and do not register TanStack's row-pagination feature.
 
 ## Preferred technology split
 

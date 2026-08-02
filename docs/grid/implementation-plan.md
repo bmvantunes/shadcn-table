@@ -76,6 +76,7 @@ Build:
 - the Client Row Pipeline Adapter
 - client row model
 - shared filter and sort commands with client row-model processing
+- one continuous scroll surface with no pagination feature or controls
 - fixed row height
 - vertical virtualization
 - horizontal centre-column virtualization
@@ -95,6 +96,7 @@ Success criteria:
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
 - bounded mounted cells
+- the full processed client row model remains continuously scrollable without page state or row slicing
 - no full-grid rerender on a single row replacement
 - React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
 - smooth 120 Hz scrolling target on capable hardware
@@ -169,10 +171,11 @@ Build:
 - long-lived datasource session
 - sink
 - query generations
+- effect-view-server `replace` and generation `setWindow` lifecycle
 - indexed block cache
 - stable identity store
 - range loading
-- row count and unknown count
+- exact `totalRows` scroll geometry
 - stale response rejection
 - block eviction
 - block errors and retry
@@ -183,6 +186,7 @@ Build:
 Success criteria:
 
 - consumers render `BrunoTableServer` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
+- server scrolling exposes no pagination state or controls and can jump directly to an arbitrary indexed window
 - client and viewport tables render the same header, filter, sort, cell, and navigation Modules
 - common UI contains no client-versus-viewport conditionals
 - persisted filters and sorts remain keyed by `columnId`
@@ -192,6 +196,7 @@ Success criteria:
 - one row update rerenders only relevant subscribers
 - stale query responses are ignored
 - block cache is bounded
+- unloaded destination indexes render stable placeholders while their window is loading
 - fixed-height geometry remains stable
 
 ## Phase 6: Selection and capability policies
