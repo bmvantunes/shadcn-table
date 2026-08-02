@@ -195,6 +195,8 @@ Build:
 
 - `<BrunoTableServer tableId getRowId columns viewportSource />`
 - `viewportSource` support compatible with effect-view-server's Live Query Viewport
+- conditional exact `routeBy` values inferred from the Viewport Source: required for leased topics and forbidden otherwise
+- source-owned Route Field tuples with no duplicated `routeByFields` table configuration
 - the Viewport Row Pipeline Adapter behind the shared Grid Runtime
 - Column Identity to Query Field translation
 - typed recursive grid-filter compilation into View Server `where`
@@ -221,6 +223,9 @@ Build:
 Success criteria:
 
 - consumers render `BrunoTableServer` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
+- every leased `viewport.replace(...)` includes the exact application-owned Feed Route, while materialized and source-free topics reject it
+- Route Fields do not require visible columns, projection, or filter capability, and Feed Routes are never inferred from Set Filters
+- a meaningful Feed Route change releases the old generation, clears sparse and transient row-space state, and retains compatible user preferences
 - server scrolling exposes no pagination state or controls and can jump directly to an arbitrary indexed window
 - client and viewport tables render the same header, filter, sort, cell, and navigation Modules
 - common UI contains no client-versus-viewport conditionals

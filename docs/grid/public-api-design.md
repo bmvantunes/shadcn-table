@@ -249,6 +249,10 @@ Distinguish filter ownership explicitly:
 - Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
+For effect-view-server leased topics, keep Feed Route ownership separate from both categories above. The source declaration owns the exact non-empty Route Field tuple. `BrunoTableServer` receives only the current exact `routeBy` value object, inferred conditionally from `viewportSource`: leased sources require all and only their declared fields, while materialized and source-free sources forbid the prop. Do not expose a duplicated `routeByFields` list.
+
+The View Server Adapter snapshots `routeBy` with exact source semantics and carries it unchanged into every `viewport.replace(...)` query. It never derives route values from columns, Grid Filters, Set Filters, loaded rows, or Source Constraints. Route Fields need not be projected or represented by visible columns. A meaningful route change replaces the complete sparse logical row space but does not alter or persist compatible user grid preferences.
+
 ## Strict editable capability
 
 Both public variants accept the same discriminated editing capability, shaped conceptually as:

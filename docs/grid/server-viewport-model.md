@@ -64,6 +64,49 @@ function OrdersTable() {
 
 Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-session objects. The source and columns must carry enough type information for `BrunoTableServer` to infer the topic row and valid query capabilities.
 
+## Leased feed routing
+
+effect-view-server leased sources declare one authoritative non-empty Route Field tuple when the source is configured:
+
+```ts
+routeBy: ["region", "desk"];
+```
+
+That declaration derives the exact Feed Route object required by every Live Query. BrunoTable never asks the consumer to duplicate the field-name tuple. It accepts only the current values, inferred from the Viewport Source:
+
+```tsx
+const viewportSource = useLiveQueryViewport("regionalOrders");
+
+<BrunoTableServer
+  tableId="TABLE_ID_REGIONAL_ORDERS"
+  getRowId={getOrderRowId}
+  columns={columns}
+  viewportSource={viewportSource}
+  routeBy={{ region: selectedRegion, desk: selectedDesk }}
+/>;
+```
+
+For leased topics, `routeBy` is mandatory and contains all and only the source-declared Route Fields with their exact row-field value types. For materialized or source-free topics it is forbidden. This conditional capability must be inferred without exposing TanStack objects or making Effect mandatory for the root package.
+
+The Feed Route chooses one upstream leased feed. It is not a Grid Filter Expression, Set Filter, Source Constraint, projection declaration, or Column Identity mapping. A Route Field need not appear in `select`, have a visible column, or support filtering. The Adapter forwards the snapshotted route unchanged in every replacement query:
+
+```ts
+viewportSource.viewport.replace({
+  window,
+  query: {
+    routeBy,
+    select: compiledProjection,
+    where: compiledFilters,
+    orderBy: compiledSorting,
+  },
+  sink,
+});
+```
+
+Do not add `routeByFields` to BrunoTable. The source declaration is the only field-list authority. Do not infer a Feed Route from a single-choice Set Filter: filtering occurs inside the selected feed and cannot substitute for routing.
+
+When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
+
 ## View Server Translation Adapter
 
 Grid-owned filters, sorts, and layouts use `columnId`. effect-view-server knows topic fields. The Adapter resolves each queryable `columnId` through the current column definition immediately before replacing the Live Query Viewport query.

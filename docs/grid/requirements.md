@@ -117,6 +117,26 @@ The grid represents a logical indexed row space where only visible and nearby ra
 
 `BrunoTableServer` accepts the long-lived result of `useLiveQueryViewport` as its `viewportSource`.
 
+For an effect-view-server leased topic, its source definition remains the single authority for the non-empty exact Route Field tuple, such as `routeBy: ["region", "desk"]`. Do not repeat that tuple in BrunoTable props, columns, filters, or persisted state. The Viewport Source type must instead make `BrunoTableServer` require the current exact Feed Route value object:
+
+```tsx
+const viewportSource = useLiveQueryViewport("regionalOrders");
+
+<BrunoTableServer
+  tableId="TABLE_ID_REGIONAL_ORDERS"
+  getRowId={getOrderRowId}
+  columns={columns}
+  viewportSource={viewportSource}
+  routeBy={{ region: selectedRegion, desk: selectedDesk }}
+/>;
+```
+
+The conditional public contract is strict: leased topics require every Route Field with its exact row-field value type and reject missing or extra fields; materialized and source-free topics reject `routeBy`. The root BrunoTable package remains structurally typed and does not import Effect or effect-view-server merely to enforce this capability.
+
+The View Server Adapter snapshots the Feed Route and includes it unchanged in every `viewport.replace(...)` query together with the grid-compiled `select`, `where`, and `orderBy`. Route Fields need not have visible columns, participate in projection, or be filterable. Never derive Feed Route values from Grid Filters, Set Filters, loaded rows, Column Identity, or Query Fields.
+
+A meaningful Feed Route change selects a new logical indexed row space. Release the previous generation, clear sparse blocks and transient focus/selection/scroll state, and begin the new route at row zero while retaining compatible user preferences. Route comparison and snapshotting belong to the effect-view-server Adapter and must preserve native exact values; do not use React object identity, generic `JSON.stringify`, or numeric coercion.
+
 The server owns:
 
 - filtering

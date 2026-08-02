@@ -90,6 +90,14 @@ _Avoid_: Query Version, viewport version, hard-coded string revision
 An application-owned condition that defines which rows belong to a table's working set before user grid filters are applied. It is not a persisted grid preference and cannot be cleared by BrunoTable's filter controls.
 _Avoid_: Grid Filter Expression, Quick Filter, security rule
 
+**Route Field**:
+One source-declared row field that participates in the exact address of an upstream leased feed. The complete non-empty Route Field tuple belongs to the source definition.
+_Avoid_: Grid Filter field, visible column, duplicated table configuration
+
+**Feed Route**:
+The application-supplied object containing values for all and only the Route Fields of one leased source. It selects the upstream feed before Source Constraints or Grid Filter Expressions are applied.
+_Avoid_: Grid Filter Expression, Source Constraint, selected column values
+
 **Continuous Row Space**:
 The uninterrupted vertical row sequence presented by both Client and Server Tables. It may be fully materialized or sparsely loaded, but the user never navigates pages.
 _Avoid_: Paginated rows, page index, load-more list

@@ -382,6 +382,8 @@ columnId sorts    ->   columnId -> field/capability  -> field ordering
 
 The Adapter also derives the explicit projection required by the current table and binds viewport windows to the caller-owned `viewportSource`.
 
+For leased sources, the effect-view-server source definition is the sole authority for the Route Field tuple. The Adapter's conditional capability requires the caller's exact Feed Route values through `BrunoTableServer`, snapshots them with effect-view-server semantics, and adds them unchanged to every viewport replacement. It never duplicates the field tuple or derives routing from column definitions, filters, loaded rows, or projection. Changing the Feed Route creates a new logical indexed row space and invalidates the old sparse cache and transient interaction state.
+
 Do not persist View Server fields as grid identity, send `columnId` as a query field by coincidence, or infer server semantics from `valueGetter`.
 
 ### Virtualization
