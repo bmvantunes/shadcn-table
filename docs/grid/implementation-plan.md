@@ -255,7 +255,8 @@ Success criteria:
 
 Build:
 
-- Client Row Selection keyed by stable Row Identity
+- opt-in Client Row Selection, default off, keyed by stable Row Identity
+- Client header checkbox selection over the complete currently filtered row model rather than mounted rows
 - Client inclusive Shift-click Row Selection in current logical display order
 - Client logical range selection
 - Client drag selection
@@ -271,6 +272,7 @@ Build:
 Success criteria:
 
 - Row Selection and Cell Range Selection remain separate capabilities and state models
+- Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - Client Shift-click Row Selection includes the complete current display-order interval
 - Server mounts no row checkbox, selected-row state, Shift-click row interval, Select All command, or cell range; it copies only its loaded Active Cell
 - Server cell interaction exposes no paste, fill, clear/delete, or editing

@@ -472,7 +472,7 @@ Keep Client Row Selection and Cell Range Selection distinct:
 - Row Selection is stable Row Identity intent, usually exposed through row checkboxes or row actions.
 - Cell Range Selection is spreadsheet-style rectangular cell intent keyed by Row and Column Identity.
 
-When Client Row Selection UI is enabled, Shift-clicking a second selectable row must select or deselect the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model.
+Client Row Selection is an explicit optional capability and defaults off. When enabled, its header checkbox selects or deselects the complete currently filtered Client row model, including virtualized rows that are not mounted. It never means only the visible DOM window. Shift-clicking a second selectable row selects or deselects the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model.
 
 `BrunoTableServer` exposes neither Row Selection nor Cell Range Selection: no row checkboxes, selected-row state, Shift-click row interval, header checkbox, or Select All command. It owns only one logical Active Cell for navigation and single-loaded-cell copy.
 
@@ -504,7 +504,7 @@ Initial recommended rules:
 | Copy                 | Selected loaded ranges  | Active loaded cell only |
 | Paste                | Atomic selected targets | No                      |
 | Clear/delete         | Atomic selected targets | No                      |
-| Row selection        | Optional local IDs      | No                      |
+| Row selection        | Opt-in; filtered rows   | No                      |
 | Undo/redo            | Current Batch only      | No                      |
 | Conflicts            | Yes                     | No                      |
 
