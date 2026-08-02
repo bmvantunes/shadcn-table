@@ -241,6 +241,8 @@ Success criteria:
 
 Build:
 
+- Row Selection keyed by stable Row Identity
+- inclusive Shift-click Row Selection in current logical display order
 - logical range selection
 - drag selection
 - autoscroll
@@ -254,6 +256,9 @@ Build:
 
 Success criteria:
 
+- Row Selection and Cell Range Selection remain separate capabilities and state models
+- Client Shift-click Row Selection includes the complete current display-order interval
+- Server Shift-click never silently omits unloaded rows from the requested interval
 - no partial silent copy/fill/edit
 - selection can outlive mounted cells
 - selection clears or reconciles on query change

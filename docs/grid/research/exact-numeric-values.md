@@ -6,7 +6,7 @@ Research completed against these source snapshots:
 
 - BrunoTable workspace at the current working tree
 - Effect `f4151e1937c26de14f1d64566f8126173f1b5014`
-- TanStack Table v9 `958551dbbc28752345033c40e6b4c88d592e8120`
+- TanStack Table v9 `1b70a17ce2ec6a88869e04d587dc6f5dee877ce7`
 - AG Grid `26102912f3d5f90dab8e6c4fe3264a31e5fb8410`
 - effect-view-server `0e09abb1384b899279ea07b15f0bcb3c852284b9`
 

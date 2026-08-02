@@ -51,9 +51,9 @@ if (Object.keys(packageJson.exports).some((exportName) => exportName.includes("i
   throw new Error("A private @bruno/table module was exported publicly.");
 }
 
-if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0-beta.71") {
+if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0-beta.74") {
   throw new Error(
-    "The private TanStack Table engine is not pinned to the audited beta.71 version.",
+    "The private TanStack Table engine is not pinned to the audited beta.74 version.",
   );
 }
 

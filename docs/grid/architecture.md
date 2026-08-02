@@ -24,6 +24,7 @@ Row Pipelines
 
 Interaction
 ├── navigation engine
+├── row selection
 ├── cell editing
 ├── range selection
 ├── drag fill

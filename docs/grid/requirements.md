@@ -424,6 +424,15 @@ The footer remains present with disabled actions when no edits exist. Its contro
 
 A Server Table cannot assume all selected rows are loaded.
 
+Keep Row Selection and Cell Range Selection distinct:
+
+- Row Selection is stable Row Identity intent, usually exposed through row checkboxes or row actions.
+- Cell Range Selection is spreadsheet-style rectangular cell intent keyed by Row and Column Identity.
+
+When Row Selection UI is enabled, Shift-clicking a second selectable row must select or deselect the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model. A Server Table must not delegate unloaded-range semantics to TanStack's loaded-row model and silently omit intervening rows; its declared capability must make the operation loaded-only, logical, server-assisted, or unavailable.
+
+TanStack Table v9's row-range handler and cell-selection geometry are private implementation candidates. Their state, handlers, and feature types do not become BrunoTable's public contract, and neither selection kind is persisted.
+
 Represent selection logically, but distinguish selection from operations over the selection.
 
 Possible capability states:

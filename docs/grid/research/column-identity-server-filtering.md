@@ -5,7 +5,7 @@ Research date: 2026-08-02
 Sources inspected:
 
 - AG Grid `latest`, commit [`2610291`](https://github.com/ag-grid/ag-grid/tree/26102912f3d5f90dab8e6c4fe3264a31e5fb8410) (`36.0.0-beta.20260731.1136`)
-- TanStack Table `beta`, commit [`958551d`](https://github.com/TanStack/table/tree/958551dbbc28752345033c40e6b4c88d592e8120) (`9.0.0-beta.71`)
+- TanStack Table `beta`, commit [`1b70a17`](https://github.com/TanStack/table/tree/1b70a17ce2ec6a88869e04d587dc6f5dee877ce7) (`9.0.0-beta.74`)
 - effect-view-server, commit [`0e09abb`](https://github.com/bmvantunes/effect-view-server/tree/0e09abb1384b899279ea07b15f0bcb3c852284b9)
 - Kevin Van Cott's [2026-08-02 X post](https://x.com/KevinVanCott/status/2083714340679512098) and attached screenshot
 
