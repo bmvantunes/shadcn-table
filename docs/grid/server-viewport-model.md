@@ -231,22 +231,17 @@ class ViewportStore<TRow> {
 ```
 
 ```ts
-type RowRecord<TRow, TRowVersion> = {
+type RowRecord<TRow> = {
   row: TRow;
-  serverVersion: TRowVersion;
   localRevision: number;
 };
 ```
 
-`TRowVersion` is the explicit row-specific optimistic-concurrency type, not the Viewport Source's query-level `version`.
-
 Benefits:
 
-- row moves do not destroy edits
-- conflicts remain keyed by row identity
+- row moves retain stable identity
 - live updates are direct
 - query blocks can be invalidated independently
-- dirty data survives cache eviction
 - duplicate entity payloads can share references
 
 ## Stable references
@@ -389,51 +384,13 @@ Start with safe range invalidation when a live update affects active sorting or 
 
 Explicit row moves can be added later if benchmarks justify the complexity.
 
-## Editing
+## Read-only interaction contract
 
-Drafts, conflicts, and validation do not live inside evictable row blocks.
+`BrunoTableServer` is always read-only. Its composition root does not install editing, drafts, validation, conflicts, Batch mode, paste, drag fill, clear/delete, or undo/redo. Column definitions may still declare Client editing semantics for reuse, but Server cells normalize them to read-only presentation.
 
-Use sparse identity-keyed repositories:
+The Server Table maintains one logical Active Cell for keyboard navigation across pinned, virtualized, and temporarily unloaded coordinates. Cell Range Selection is disabled. Copy is available only when the Active Cell is loaded and serializes that one value; it never claims to copy an unloaded range, row, or column.
 
-```ts
-type CellKey = `${string}:${string}`;
-
-type EditRepository = {
-  drafts: Map<CellKey, BrunoTableCellDraft>;
-  conflicts: Map<CellKey, BrunoTableCellConflict>;
-  validationErrors: Map<CellKey, ValidationError>;
-};
-```
-
-When a row reloads, overlay drafts on top of canonical server data.
-
-Editable Server Tables must explicitly project and retain a Row Version field/capability even when no visible column renders it. Save operations go through the consumer's application write/RPC Adapter, which atomically compares that version and returns canonical typed values plus the next version. Do not implement saves with effect-view-server's current unconditional runtime `patch` call.
-
-Exact numeric drafts and conflicts retain native `bigint` or BigDecimal values outside evictable blocks. Reconciliation calls the normalized column's semantic equality, so differently scaled equivalent BigDecimals converge without a false conflict.
-
-## Sorting and dirty rows
-
-In a Server Table, a local edit may alter the active sort order.
-
-Recommended policy:
-
-- keep the dirty row visually stable until save or revert
-- mark that it may move after save
-- after save, apply canonical returned values
-- refresh affected ranges if sort or filter fields changed
-
-Do not attempt global local repositioning without server knowledge.
-
-## Filter mismatch and dirty rows
-
-A live server update may cause a dirty row to stop matching the active filter.
-
-Recommended behaviour:
-
-- retain it as a dirty exceptional row
-- show that it no longer matches the filter
-- keep its edits accessible
-- resolve on save or revert
+Live updates may move a row or remove it from the current server-filtered and sorted result. Reconcile focus by stable Row Identity when still present, otherwise move to the safe logical fallback defined by keyboard navigation. There are no local dirty rows to preserve or reposition.
 
 ## Fixed row height
 

@@ -249,7 +249,7 @@ Success criteria:
 - fixed-height geometry remains stable
 - Client and Server exact numeric filters/sorts agree at equality, null, tie, and half-open range boundaries
 - pathological safe-scale BigDecimals compare without scale-dependent allocation
-- no save Adapter treats `viewportSource.version` as Row Version or delegates optimistic saves to unconditional runtime `patch`
+- `BrunoTableServer` rejects `editable`, `onSaveEdits`, and every edit-only prop while still accepting shared column definitions that declare Client editability
 
 ## Phase 6: Selection and capability policies
 
@@ -257,12 +257,12 @@ Build:
 
 - Row Selection keyed by stable Row Identity
 - inclusive Shift-click Row Selection in current logical display order
-- logical range selection
-- drag selection
+- Client logical range selection
+- Client drag selection
 - autoscroll
 - capability engine
-- loaded-range checks
-- server-side restrictions
+- Server Active Cell without Cell Range Selection
+- Server single-loaded-cell copy restriction
 - clear user messaging for disabled operations
 - query-revision handling
 - cell-selection state excluded from the table-root subscription
@@ -273,6 +273,7 @@ Success criteria:
 - Row Selection and Cell Range Selection remain separate capabilities and state models
 - Client Shift-click Row Selection includes the complete current display-order interval
 - Server Shift-click never silently omits unloaded rows from the requested interval
+- Server cell interaction exposes no range selection, paste, fill, clear/delete, or editing and copies only its loaded Active Cell
 - no partial silent copy/fill/edit
 - selection can outlive mounted cells
 - selection clears or reconciles on query change
@@ -294,14 +295,13 @@ Build:
 - persistent Edit Safety Footer with status-left and Reset/Save-right layout
 - unsaved count
 - validation count
-- client-row editing first
+- client-row editing only
 - exact semantic equality for dirtiness, convergence, and canonical save results
 - explicit nullable clear policy so blank exact input never becomes zero
 
 Success criteria:
 
 - one paste/fill is one undo step
-- row eviction cannot destroy edits
 - edit state is identity-keyed
 - editor arrows do not break text cursor behaviour
 - an invalid editor candidate cannot exit through Enter, Tab, Shift+Tab, or an outside pointer action; it remains active with an accessible anchored error until corrected or cancelled with Escape
@@ -309,7 +309,7 @@ Success criteria:
 - one invalid target rejects a complete multi-cell edit gesture without applying a valid prefix
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
-- `editable: true` mounts the same mode toggle and footer in both public variants without overriding cell policy
+- `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome
 - toggle visibility and updates require no all-row predicate evaluation or row-content subscription
 - mode switching is blocked while any edit-owned work or save is active and is never persisted
 - no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it

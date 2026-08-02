@@ -2,7 +2,7 @@
 
 ## Table editing capability and modes
 
-Both public table variants use a strict discriminated editing interface:
+Only `BrunoTableClient` uses a strict discriminated editing interface:
 
 ```ts
 type BrunoTableReadOnlyCapability = {
@@ -18,7 +18,7 @@ type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>
 
 `editable: true` enables the Editable Table capability and makes `onSaveEdits` mandatory. False or omitted editing makes edit-only props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
 
-At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all rows to discover the capability: a Server Table does not own every row, and a Client Table must not rescan changing data merely to show chrome.
+At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all Client rows to discover the capability or rescan changing data merely to show chrome. Shared definitions may carry these declarations into `BrunoTableServer`, but the Server Table never activates them and its props reject the editing capability.
 
 An Editable Table owns a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. The end user owns this choice; consumers cannot provide a default or controlled Edit Mode prop. The switch starts off for each table session, is visible because the column definitions declare potential editability, subscribes only to the Edit Mode and a compact `canChangeEditMode` boolean, and never subscribes to row contents. Edit Mode is session state, not a persisted grid preference.
 
@@ -200,7 +200,7 @@ Define a status priority model for combinations such as:
 
 ## Edit safety footer
 
-Setting `editable: true` mounts a persistent bottom footer in either public table variant:
+Setting `editable: true` on `BrunoTableClient` mounts a persistent bottom footer:
 
 ```text
 3 conflicts · 2 invalid · 12 unsaved changes                         Reset | Save
@@ -293,7 +293,7 @@ The server is the final concurrency authority.
 
 Row Version is an explicit typed editing capability and may itself be `bigint`. It is independent of the Viewport Source's top-level Query Version. The Query Version describes one live read result; it is not an `expectedVersion` for any row.
 
-The Server Table projection must include the Row Version source even when no visible column uses it. `onSaveEdits` must call an application write or RPC boundary that performs an atomic compare-and-set. effect-view-server's current runtime `patch` accepts no expected version and must not be used as a convenience save implementation.
+The complete editable Client Source must retain the Row Version even when no visible column uses it. `onSaveEdits` must call an application write or RPC seam that performs an atomic compare-and-set. effect-view-server's current runtime `patch` accepts no expected version and must not be used as a convenience save implementation.
 
 Even after local conflict resolution, a newer server version may arrive before save.
 
@@ -411,13 +411,8 @@ Async validation must be cancellable when the user edits again.
 
 Do not conflate validation with conflict detection.
 
-## Server viewport restrictions
+## Server viewport exclusion
 
-In a Server Table:
+`BrunoTableServer` is always read-only. It does not install the editor, drafts, validation, save operations, conflict workflow, Batch switch, Edit Safety Footer, paste, drag fill, clear/delete, or undo/redo. Shared columns may declare `isEditable` for a Client Table without enabling any of those capabilities in the Server composition root.
 
-- cell editing requires a loaded row identity
-- drag fill requires a fully loaded target unless server-assisted
-- paste requires a fully loaded target unless server-assisted
-- local clear/delete requires loaded targets
-- drafts survive block eviction
-- conflicts survive block eviction
+Server keyboard navigation still owns one Active Cell across pinned and virtualized regions. Copy operates only on that one loaded cell. Cell Range Selection is absent, so BrunoTable never claims that an unloaded rectangle was selected or copied.

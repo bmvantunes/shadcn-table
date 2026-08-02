@@ -154,11 +154,11 @@ export function OrdersServerTable() {
 }
 ```
 
-Each component must infer `Order`, the exact column IDs, field value types, editable columns, filterable columns, and sortable columns from its `columns` and row source.
+Each component must infer `Order`, the exact column IDs, field value types, filterable columns, and sortable columns from its `columns` and row source. `BrunoTableClient` additionally infers editable columns when its editing capability is enabled. `BrunoTableServer` may reuse those same definitions but ignores their editing declarations.
 
 ## Explicit public variants
 
-The base properties and explicit source variants have this conceptual shape. The strict editing capability is defined below and intersects both variants:
+The base properties and explicit source variants have this conceptual shape. The strict editing capability is defined below and intersects only the Client variant:
 
 ```ts
 type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
@@ -180,10 +180,11 @@ type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = BrunoTableBaseProps<TRow, TColumns> &
-  BrunoTableEditingCapability<TRow, TColumns> & {
-    viewportSource: BrunoTableServerSource<TViewport>;
-  };
+> = BrunoTableBaseProps<TRow, TColumns> & {
+  viewportSource: BrunoTableServerSource<TViewport>;
+  editable?: never;
+  onSaveEdits?: never;
+};
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -224,7 +225,7 @@ Rules:
 
 ## Optional toolbar composition
 
-The same toolbar composition works with both public variants:
+The toolbar composition seam works with both public variants, while edit controls require the Client editing capability:
 
 ```tsx
 <BrunoTableClient {...tableProps}>
@@ -255,7 +256,7 @@ The View Server Adapter snapshots `routeBy` with exact source semantics and carr
 
 ## Strict editable capability
 
-Both public variants accept the same discriminated editing capability, shaped conceptually as:
+Only `BrunoTableClient` accepts the discriminated editing capability, shaped conceptually as:
 
 ```ts
 type BrunoTableSaveChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
@@ -284,7 +285,7 @@ type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>>
   BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns>;
 ```
 
-`editable` is a capability discriminant, not a styling toggle: TypeScript makes `onSaveEdits` mandatory when true and rejects edit-only props otherwise. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured states while allowing the same columns to be reused in an explicitly read-only table.
+`editable` is a capability discriminant, not a styling toggle: TypeScript makes `onSaveEdits` mandatory when true and rejects edit-only props otherwise. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable` and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
 
 Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result types remain to be finalized with the optimistic-concurrency field declaration, but they must retain exact row, Column Identity, editable-value, and version correlation without `any` or `unknown` in inference paths.
 
@@ -294,7 +295,7 @@ The handler always receives the same non-empty array:
 - Immediate paste, drag fill, and multi-cell clear supply every change in one transaction-level call.
 - Batch Save supplies the accumulated net dirty cells, coalescing repeated edits of one cell rather than exposing undo history.
 
-`editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in both variants. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children.
+`editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in `BrunoTableClient`. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children. `BrunoTableServer` renders none of this chrome even when shared columns declare potential editability.
 
 Edit Mode belongs to the end user, not the consumer interface. Do not expose default or controlled Edit Mode props. Each table session starts in Immediate mode; the top-right switch changes internal session state only. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-persist transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
 
@@ -359,7 +360,7 @@ A future custom header renderer may replace the visible content, but `headerName
 
 ## Value Types, Column Helpers, and Column Presets
 
-TypeScript preserves a field's static value type but does not emit runtime metadata. A Server Table also begins sparse, and a computed column may have no loaded values. Every raw value-bearing column therefore declares an explicit `valueType`; BrunoTable never samples rows to infer rendering, editing, filtering, sorting, clipboard, or persistence behavior:
+TypeScript preserves a field's static value type but does not emit runtime metadata. A Server Table also begins sparse, and a computed column may have no loaded values. Every raw value-bearing column therefore declares an explicit `valueType`; BrunoTable never samples rows to infer rendering, Client editing, filtering, sorting, clipboard, or persistence behavior:
 
 ```ts
 const columns = [

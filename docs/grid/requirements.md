@@ -36,7 +36,7 @@ Do not export names such as `BrunoColumnId`, `GridRegion`, `GridSorting`, or oth
 
 ## Operating modes
 
-The grid has two independent dimensions.
+The public row-model variants have deliberately different editing capabilities.
 
 ### Row model
 
@@ -45,17 +45,17 @@ The grid has two independent dimensions.
 
 ### Editing
 
-- Read-only
-- Editable
+- `BrunoTableClient` may be read-only or editable.
+- `BrunoTableServer` is always read-only.
 
-This creates four valid combinations:
+This creates three valid combinations:
 
 | Row model       | Read-only | Editable |
 | --------------- | --------: | -------: |
 | Client          |       Yes |      Yes |
-| Server viewport |       Yes |      Yes |
+| Server viewport |       Yes |       No |
 
-Editing must not be coupled to the row model.
+Viewport editing, drafts, conflicts, paste, drag fill, clear/delete, and local undo/redo are intentionally absent. An incomplete sparse row space cannot honestly retain or operate on every affected cell. Shared column definitions may still contain `isEditable` declarations for reuse by `BrunoTableClient`; `BrunoTableServer` does not activate them or mount editing chrome.
 
 ## Live-by-default data contract
 
@@ -72,7 +72,7 @@ Expose the row models as explicit public variants, not as a `mode` prop:
 <BrunoTableServer viewportSource={viewportSource} {...commonProps} />
 ```
 
-Both variants use the same column definitions, filter and sort controls, rendering, keyboard navigation, selection, clipboard, and editing experience. The row-pipeline Adapter behind the shared Grid Runtime owns the differences in row processing and source lifecycle.
+Both variants use the same column definitions, filter and sort controls, rendering, keyboard-navigation infrastructure, layout, and preference model. Client-only editing and range operations install optional capabilities into the shared Grid Runtime; the Server composition root never installs them. The row-pipeline Adapter owns the differences in row processing and source lifecycle.
 
 ## Continuous scrolling contract
 
@@ -413,14 +413,14 @@ The sorting panel should show sort priority.
 
 ## Table editing capability and modes
 
-Both public variants expose a strict discriminated editing interface:
+Only `BrunoTableClient` exposes the strict discriminated editing interface:
 
 - `editable: true` requires `onSaveEdits` and enables the Editable Table capability;
 - false or omitted `editable` rejects `onSaveEdits` and other edit-only table props;
 - at least one column must be potentially editable through `isEditable: true` or an `isEditable` predicate;
 - column policy remains the authority for exact cell eligibility; the table-level capability never makes a read-only cell editable.
 
-An Editable Table renders a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. Determine its visibility from static column capability, not by evaluating row predicates over complete client data or incomplete server data. The toggle subscribes only to Edit Mode and whether switching is currently legal.
+An Editable Client Table renders a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. Determine its visibility from static column capability, not by evaluating predicates over the complete client dataset. The toggle subscribes only to Edit Mode and whether switching is currently legal.
 
 The end user owns Edit Mode. Do not expose default or controlled Edit Mode props to the consumer. Each table session starts in Immediate mode, and the user's switch selection remains internal session state rather than a persisted grid preference. Block switching modes while an editor, drafts, validation, conflicts, or saving are active; never silently persist or discard work while switching.
 
@@ -436,13 +436,13 @@ Each Save Change Set is atomic and has no partial-success outcome. Accepted mean
 
 Successful operations flash every affected cell green for two seconds. Rejected operations restore every affected cell to its latest live server value immediately, retain a red non-color-accessible rejected treatment for five seconds, and enter one table-scoped persistent failure notification workflow. Aggregate concurrent failures into one manually dismissed toast with operation-level details; do not stack a persistent toast per cell or per failure.
 
-Editable tables also require an explicit Row Version capability. It must preserve the actual version type, including `bigint`, and the Server Table projection must include its source field even when it has no visible column. The Viewport Source's top-level `version` is a Query Version for the read result and must never become a row's `expectedVersion`.
+Editable Client Tables also require an explicit Row Version capability. It must preserve the actual version type, including `bigint`, and the complete Client Source must retain the value even when no visible column renders it. A source result's top-level `version` is a Query Version for the complete read result and must never become a row's `expectedVersion`.
 
 `onSaveEdits` must cross an application write or RPC seam that atomically checks the Row Version. Do not implement it by calling effect-view-server's current unconditional runtime `patch`. Successful and conflicting results return decoded canonical values and the next typed Row Version before reconciliation.
 
 ## Edit safety footer
 
-An Editable Table mounts a persistent bottom Edit Safety Footer in either public variant.
+An Editable Client Table mounts a persistent bottom Edit Safety Footer. `BrunoTableServer` never renders the Batch switch, footer, conflict workflow, or any edit-owned notification.
 
 The left side shows conditional status controls:
 
@@ -480,31 +480,33 @@ TanStack Table v9's row-range handler and cell-selection geometry are private im
 
 Represent selection logically, but distinguish selection from operations over the selection.
 
-Possible capability states:
+The initial server capabilities are fixed rather than configurable promises the grid cannot honour:
 
 ```ts
 type BrunoTableServerCapabilities = {
-  rangeSelection: "disabled" | "loaded-only" | "logical";
-  clipboard: "disabled" | "loaded-only" | "server-assisted";
-  dragFill: "disabled" | "loaded-only" | "server-assisted";
-  bulkEdit: "disabled" | "loaded-only" | "server-assisted";
+  cellRangeSelection: "disabled";
+  clipboard: "single-loaded-cell";
+  dragFill: "disabled";
+  paste: "disabled";
+  clear: "disabled";
+  bulkEdit: "disabled";
   selectAll: "disabled" | "loaded-only" | "all-matching";
 };
 ```
 
 Initial recommended rules:
 
-| Feature      | Client    | Server viewport          |
-| ------------ | --------- | ------------------------ |
-| Drag select  | Full      | Logical range            |
-| Cell edit    | Full      | Loaded rows only         |
-| Drag fill    | Full      | Fully loaded target only |
-| Copy         | Full      | Fully loaded range only  |
-| Paste        | Full      | Fully loaded target only |
-| Clear/delete | Full      | Fully loaded target only |
-| Select all   | Local IDs | All matching query       |
-| Undo/redo    | Full      | Local edits only         |
-| Conflicts    | Yes       | Yes                      |
+| Feature              | Client                  | Server viewport         |
+| -------------------- | ----------------------- | ----------------------- |
+| Cell range selection | Full                    | No                      |
+| Cell edit            | Immediate or Batch      | No                      |
+| Drag fill            | Full                    | No                      |
+| Copy                 | Selected loaded ranges  | Active loaded cell only |
+| Paste                | Atomic selected targets | No                      |
+| Clear/delete         | Atomic selected targets | No                      |
+| Row select all       | Local IDs               | All matching query      |
+| Undo/redo            | Current Batch only      | No                      |
+| Conflicts            | Yes                     | No                      |
 
 Do not silently perform partial operations.
 
@@ -530,7 +532,7 @@ Support at minimum:
 - movement to virtualized cells
 - movement to unloaded server rows
 
-For editing, one Enter starts the focused cell when it is editable. Enter, Tab, Shift+Tab, and an accepted pointer action outside the editor perform a Cell Edit Commit; Tab then moves forward and Shift+Tab moves backward through editable cells. A Cell Edit Commit updates BrunoTable's draft/transaction state and is distinct from saving to the server.
+In an Editable Client Table, one Enter starts the focused cell when it is editable. Enter, Tab, Shift+Tab, and an accepted pointer action outside the editor perform a Cell Edit Commit; Tab then moves forward and Shift+Tab moves backward through editable cells. A Cell Edit Commit updates BrunoTable's draft/transaction state and is distinct from saving to the server. In a Server Table, Enter never starts an editor; focus and single-cell copy remain available.
 
 Logical focus must survive DOM unmounting caused by virtualization.
 

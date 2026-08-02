@@ -101,9 +101,9 @@ Keep the public Module deep:
 
 ## Editable-table seam
 
-The `editable: true` discriminant installs the Edit Persistence Capability in either public composition root and causes `BrunoTableView` to mount the top-right Edit Mode toggle and shared Edit Safety Footer. `onSaveEdits` is mandatory in this branch. The toggle and footer are not toolbar children, and pages do not wire their mode, counts, buttons, or modal.
+The `editable: true` discriminant installs the Edit Persistence Capability only in the `BrunoTableClient` composition root and causes `BrunoTableView` to mount the top-right Edit Mode toggle and shared Edit Safety Footer. `onSaveEdits` is mandatory in this branch. The toggle and footer are not toolbar children, and pages do not wire their mode, counts, buttons, or modal. `BrunoTableServer` rejects edit-only props and never installs this capability.
 
-Potential editability is compiled once from column definitions. A declared `isEditable` boolean or predicate makes a column potentially editable; the predicate itself runs only for a concrete cell. Never scan changing Client rows or incomplete Server rows to decide whether edit chrome exists.
+Potential editability is compiled once from column definitions. A declared `isEditable` boolean or predicate makes a column potentially editable; the predicate itself runs only for a concrete Client cell. Never scan changing Client rows to decide whether edit chrome exists. The Server composition may reuse the normalized column's read-only presentation but does not install its editor capability.
 
 Edit Mode has its own compact runtime source initialized to Immediate for each table session. Only the end-user toggle dispatches mode changes; consumer props neither initialize nor control it. The toggle selects only the current `"immediate" | "batch"` value and `canChangeEditMode`; row publications do not notify it. Mode changes are rejected while the active editor, drafts, validation, conflicts, or save state are non-clean, and Edit Mode never enters persisted preferences.
 
@@ -282,7 +282,7 @@ The Client Row Pipeline ingests a complete Client Source and responds to filter/
 
 The Viewport Row Pipeline responds by resolving Column Identity through current column definitions, replacing the View Server query, advancing the query generation, and treating delivered sparse rows as already filtered and sorted.
 
-This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, editing, or clipboard code.
+This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, or filtering code. Editing and range-clipboard capabilities are installed only by the Client composition root; the shared renderer receives capability presence rather than testing the row-model variant throughout its implementation.
 
 ## Column construction seam
 
@@ -506,12 +506,11 @@ row ID -> row record
 
 This allows:
 
-- stable edits when rows move
-- stable conflict records
+- stable identity when rows move
 - live row updates
 - safe cache invalidation
 - multiple positional references to one entity
-- block eviction without losing drafts
+- block eviction without losing canonical row identity
 
 ## Plugin architecture
 
