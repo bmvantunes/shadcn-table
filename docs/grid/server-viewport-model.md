@@ -344,6 +344,8 @@ Retained cache blocks: 800-999 and 1000-1199
 
 The cache may use blocks internally for retention and eviction, but effect-view-server receives one active contiguous window. Its internal query translation may use `offset` and `limit`; those are transport details and do not create page state. A large scrollbar jump replaces the active window directly rather than fetching all preceding blocks.
 
+Keyboard reveal follows the same rule. Holding Arrow Down advances the logical Active Cell by absolute row index and causes the virtualizer to reveal it. The range planner should use source overscan to request upcoming rows before the Active Cell reaches the final visible row. When the user outruns delivery, the requested index remains active as a fixed-height loading slot and the latest required contiguous window is sent to the active generation. Do not issue a request per repeated key event, wait for each row before accepting the next event, or model the operation as fetching a next page.
+
 ## Sink responses
 
 The effect-view-server Viewport Sink writes the exact AG Grid-compatible shape:

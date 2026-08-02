@@ -77,6 +77,8 @@ The shared renderer owns one vertical scroll container and virtualizer:
 - The Client Table virtualizes the complete locally filtered and sorted row model.
 - The Server Table virtualizes the exact `totalRows` reported by the Viewport Source, renders sparse placeholders for unloaded indexes, and sends the visible range plus overscan to the source as one indexed window.
 
+Virtualization is mandatory for both variants. Keyboard navigation addresses logical row and column coordinates independently of which cells are mounted. When a held Arrow key moves beyond the visible boundary, the renderer minimally scrolls to reveal the new Active Cell. Client reveal mounts an already resident row; Server reveal updates the active viewport window and may temporarily focus a stable loading slot until the row arrives. Neither path creates page state.
+
 Internal range alignment, buffering, and transport `offset`/`limit` values must remain invisible implementation details. They must not become persisted state or public pagination vocabulary.
 
 ## Client row model

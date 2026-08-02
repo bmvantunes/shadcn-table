@@ -146,6 +146,10 @@ Success criteria:
 - no DOM-order dependency
 - no focus loss under virtualization
 - arrows always reveal destination
+- held-arrow repeat crosses multiple virtual boundaries without losing logical moves
+- Client reveal performs no source fetch, page slice, or pagination transition
+- Server reveal publishes bounded contiguous viewport windows and can retain an unloaded Active Cell
+- geometry, scrolling, and repeated-key handling cause no top-level React update per command
 
 ## Phase 4: Column management and persistence
 

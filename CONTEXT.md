@@ -116,6 +116,10 @@ _Avoid_: DOM order, separate pinned navigation loops
 The single focused body cell that receives keyboard navigation and single-cell commands. An Active Cell does not imply Cell Range Selection or Row Selection.
 _Avoid_: Selected range, selected row
 
+**Active Cell Reveal**:
+The operation that minimally scrolls the shared virtualized row and column space until the logical Active Cell can be rendered. Reveal never changes the cell's identity or turns navigation into pagination.
+_Avoid_: Page navigation, DOM focus search, selection reset
+
 **Cell Range Selection**:
 Spreadsheet-style rectangular cell intent used for multi-cell clipboard and editing operations in a Client Table. A Server Table never creates Cell Range Selection from its Active Cell.
 _Avoid_: Active Cell, Row Selection

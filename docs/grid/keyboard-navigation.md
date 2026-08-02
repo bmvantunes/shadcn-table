@@ -51,28 +51,27 @@ keyboard command
     ↓
 resolve logical destination
     ↓
-ensure row is available
+record logical Active Cell
     ↓
-scroll destination into view
+reveal destination through the shared virtualizer
     ↓
-wait for virtualized cell to mount
+publish the required row range
     ↓
-apply DOM or ARIA focus
+project the active descendant onto the mounted cell or loading slot
 ```
 
 Conceptual API:
 
 ```ts
-async function navigate(command: NavigationCommand) {
+function navigate(command: NavigationCommand) {
   const destination = navigationModel.resolve(currentFocus, command);
 
-  await rowModel.ensureRowAvailable(destination.rowIndex);
-
-  viewport.ensureCellVisible(destination);
-
   focusStore.set(destination);
+  viewport.revealCell(destination, { align: "auto" });
 }
 ```
+
+Navigation never waits for a DOM node or a network response before accepting the next command. The logical Active Cell is authoritative; mounted DOM focus is only its current projection.
 
 ## Header and body navigation
 
@@ -112,6 +111,12 @@ Maintain preferred-column memory when moving vertically.
 
 Navigation must always reveal the destination.
 
+Both Client and Server Tables use the same vertically and horizontally virtualized renderer. When an Arrow command reaches the final visible row, Active Cell Reveal advances the logical row normally and scrolls by the minimum amount required to mount it. The same rule applies repeatedly while the key is held.
+
+The Client Table's virtual row count is the complete locally filtered and sorted row model. Its rows already exist in memory, so reveal changes scroll geometry and mounted cells but never asks the Client Source for a page.
+
+The Server Table's virtual row count is the source's exact `totalRows`. Reveal may target an unloaded sparse row slot. The resulting virtual range change extends or replaces the active effect-view-server window; it does not fetch a "next page". Source overscan should normally request rows ahead of the visible boundary before the Active Cell reaches it.
+
 For centre columns, scroll horizontally by the minimum delta required to reveal the destination inside the unobscured centre viewport. That viewport begins after the total pinned-start width and ends before the total pinned-end width.
 
 Pinned columns are already horizontally visible but still require vertical scrolling.
@@ -122,6 +127,19 @@ Do not delegate horizontal navigation reveal directly to native `Element.scrollI
 
 For Page Up and Page Down, derive the target from viewport geometry, not a hard-coded row count.
 
+## Held keys and frame scheduling
+
+Browser key repeat produces a sequence of real navigation commands. BrunoTable must preserve every valid logical move even when rendering or the network is slower than the repeat rate.
+
+- resolve each repeated command against the latest logical Active Cell
+- clamp the destination to the current logical row and column bounds
+- never wait for the previously targeted DOM cell to mount
+- coalesce geometry reads, scroll writes, and required-range publication to at most once per animation frame
+- publish only the latest required server window for that frame or changed range
+- do not put the scroll offset or per-repeat position in top-level React state
+
+Coalescing physical reveal work must not discard semantic key movements. Holding Arrow Down for ten valid repeats advances ten logical rows; it may perform fewer scroll writes and server-window updates.
+
 ## Server Table
 
 Navigation may target an unloaded row.
@@ -129,12 +147,13 @@ Navigation may target an unloaded row.
 The flow should:
 
 1. record the logical destination
-2. request the required block
-3. keep focus on the grid root
-4. scroll toward the destination
-5. focus the cell when loaded and mounted
+2. keep focus on the grid root
+3. reveal the destination index in the virtual scroll space
+4. publish the visible range plus source overscan to the active viewport generation
+5. render a stable fixed-height loading cell with the destination's DOM identity if the user outruns delivery
+6. replace its contents when the real row arrives without changing logical or DOM focus
 
-Repeated key presses should coalesce to the latest intended destination rather than forcing one network round trip per row.
+Repeated key presses must coalesce range requests to the latest required contiguous window rather than forcing one network round trip per row. The Active Cell remains at the requested absolute row index while its slot is loading; BrunoTable must not skip unloaded rows, reset focus, or invent a sentinel row. Navigation stops at `totalRows - 1`.
 
 ## Editing mode versus navigation mode
 
@@ -145,7 +164,7 @@ Keyboard behaviour changes by mode.
 - arrows move cells
 - one Enter or F2 starts a Cell Edit Session when the focused cell is editable for its current row
 - Enter on a non-editable cell does not fabricate an editor
-- Shift + arrows extends selection
+- Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
 - Tab follows configured navigation policy
 
 ### Editing mode
@@ -220,6 +239,10 @@ Support:
 14. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
 15. Enter starts an editable focused cell with one key press.
 16. Enter, Tab, Shift+Tab, and an accepted outside pointer action commit the active cell edit.
+17. Client and Server Tables both virtualize the logical row space.
+18. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+19. Server keyboard reveal changes the active viewport window, never page state.
+20. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -236,6 +259,12 @@ Must include:
 - group header to leaf header
 - visible to horizontally virtualized column
 - loaded to unloaded row
+- held Arrow Down across several Client viewport boundaries
+- held Arrow Down across a prefetched Server viewport boundary
+- held Arrow Down that outruns Server delivery, followed by row arrival
+- repeated Server navigation publishes bounded contiguous window changes rather than one request per row
+- final-row clamping at `totalRows - 1`
+- no focus loss while the active destination is represented by a loading slot
 - one Enter starts an editable cell
 - Enter commits the active editor
 - Tab and Shift+Tab commit and move to the next or previous editable cell

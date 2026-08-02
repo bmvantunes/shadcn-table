@@ -137,6 +137,10 @@ The Client Row Pipeline exposes the complete final TanStack row model through th
 
 The Viewport Row Pipeline exposes the source's exact `totalRows` and a sparse indexed row store. An unloaded index resolves to a stable placeholder slot. The visible range plus velocity-aware overscan becomes an inclusive effect-view-server window passed to the active generation's `setWindow`. A scrollbar jump can therefore request the destination window directly without loading every preceding row.
 
+Keyboard navigation uses this same row-space seam. The navigation engine records the logical Active Cell before asking the view to reveal it. The view frame-batches geometry and scroll work; the row-space Adapter receives the latest required range for that frame. In a Client Table this only changes which resident rows are mounted. In a Server Table it may replace the active source window, while the logical Active Cell remains valid on a stable loading slot until sparse delivery fills that index.
+
+Held-key repeat is semantic input, not scroll sampling. Every valid Arrow command advances the logical coordinate, while repeated reveal writes and Server range publications may be coalesced. No navigation command waits for a mounted cell or a source response, and no per-repeat update is lifted into top-level React state.
+
 Do not allocate a placeholder row object or TanStack row for every server index. The virtualizer owns total scroll geometry; the sparse store owns only loaded, loading, retained, or failed slots. Internal window alignment and buffer sizing are transport optimizations, not pagination state.
 
 Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window.
