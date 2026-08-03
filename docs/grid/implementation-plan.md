@@ -275,6 +275,7 @@ Success criteria:
 - Client Cell Range Selection owns at most one contiguous horizontal `1×N` or vertical `N×1` Linear Cell Range; new gestures replace it and Ctrl/Cmd never creates two-axis, additive, subtractive, or disconnected ranges
 - public types and private normalized state contain one optional discriminated horizontal-or-vertical range rather than a general rectangle, `ranges[]`, or include/exclude operations
 - the first accepted range extension locks one axis; pointer drag slop publishes no range, greater absolute displacement wins after the threshold, an exact tie stays `1×1`, parallel movement may resize through the anchor, and perpendicular movement is projected away until collapse
+- drag autoscroll remains off before axis acquisition and enables only the matching horizontal or vertical channel afterward; perpendicular and pinned-region edge proximity cannot scroll the other axis
 - Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
@@ -410,6 +411,7 @@ Success criteria:
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
 - Drag Fill publishes no preview inside drag slop, uses the same dominant-displacement and exact-tie rule to acquire an axis, projects later diagonal movement onto it, and cannot switch axes or publish a two-dimensional intermediate target
+- Drag Fill autoscroll is inactive before axis acquisition and parallel-only afterward
 - large operations do not emit one event per cell
 - undo remains transaction-level
 
