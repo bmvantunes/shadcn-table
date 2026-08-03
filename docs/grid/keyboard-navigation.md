@@ -244,7 +244,7 @@ Support:
 6. Server rows can be targeted before loading.
 7. Focus survives row and column virtualization.
 8. Shift navigation extends from a stable anchor.
-9. Cell selection owns at most one contiguous Linear Cell Range; its first accepted extension locks one axis until collapse or replacement, and no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range even transiently.
+9. Cell selection owns at most one contiguous Linear Cell Range; its first accepted extension locks one axis until collapse or replacement, diagonal pointer movement projects onto that axis, and no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range even transiently.
 10. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
 11. Editor cursor behaviour is preserved.
 12. Sorting/filtering clears or reconciles focus safely.
@@ -303,7 +303,7 @@ Must include:
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
 - a horizontal or vertical selected range preserves its bounds while Tab or Enter cycles the Active Cell forward through eligible cells and shifted forms cycle backwards
 - the first Shift+Arrow extension locks its axis, parallel commands may resize through the anchor, perpendicular commands do nothing, and collapse permits the next extension to choose either axis
-- a diagonal pointer gesture resolves one axis before publishing a range and cannot switch axes during that gesture
+- a diagonal pointer gesture resolves one axis before publishing a range, then follows only the parallel logical coordinate without freezing or switching axes
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates

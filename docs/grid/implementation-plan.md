@@ -274,7 +274,7 @@ Success criteria:
 - Row Selection and Cell Range Selection remain separate capabilities and state models
 - Client Cell Range Selection owns at most one contiguous horizontal `1×N` or vertical `N×1` Linear Cell Range; new gestures replace it and Ctrl/Cmd never creates two-axis, additive, subtractive, or disconnected ranges
 - public types and private normalized state contain one optional discriminated horizontal-or-vertical range rather than a general rectangle, `ranges[]`, or include/exclude operations
-- the first accepted range extension locks one axis; parallel movement may resize through the anchor, perpendicular movement is ignored until collapse, and diagonal pointer movement resolves one axis before publishing multi-cell state
+- the first accepted range extension locks one axis; parallel movement may resize through the anchor, perpendicular movement is ignored until collapse, and diagonal pointer movement resolves one axis before publishing multi-cell state and then projects onto that axis without freezing
 - Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
@@ -409,7 +409,7 @@ Success criteria:
 - paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
-- Drag Fill resolves one axis before its first preview and cannot switch axes or publish a two-dimensional intermediate target
+- Drag Fill resolves one axis before its first preview, projects diagonal pointer movement onto that axis, and cannot switch axes or publish a two-dimensional intermediate target
 - large operations do not emit one event per cell
 - undo remains transaction-level
 
