@@ -457,6 +457,7 @@ The left side shows conditional status controls:
 - unsaved change count
 - validation error count
 - conflict count, only when greater than zero
+- blocked-change count, only when greater than zero
 
 The right side shows exactly two default actions:
 
@@ -470,6 +471,8 @@ Activating the conflict count opens the same conflict-resolution modal and actor
 Users must also be able to open and resolve conflicts proactively without first activating Save.
 
 Conflict resolution supports one row or an explicit selected set. Do not expose blind global Mine or Server actions; selecting all conflicts must itself be a deliberate user gesture. One resolution action is one current-Batch undo command regardless of the selected cell count.
+
+Activating the blocked count opens a live read-only Blocked Changes Review with Row, Column, Server now, Mine, and blocking reason. It may use explicit internal row selection for `Discard Selected Changes`. That local discard restores the selected cells to latest canonical server values, invokes no save operation, and creates one undoable Batch command regardless of selected cell count. Ordinary `Ctrl+Z` remains gesture-based and may affect a larger original paste or fill; targeted discard exists only as a rare precise escape hatch.
 
 The footer remains present with disabled actions when no edits exist. Its controls use independent compact subscriptions; row-content updates that leave their displayed counts and booleans unchanged must not notify or rerender them.
 

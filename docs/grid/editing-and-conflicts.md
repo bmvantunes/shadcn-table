@@ -219,12 +219,12 @@ Define a status priority model for combinations such as:
 Setting `editable: true` on `BrunoTableClient` mounts a persistent bottom footer:
 
 ```text
-3 conflicts · 2 invalid · 12 unsaved changes                         Reset | Save
+3 conflicts · 2 blocked · 2 invalid · 12 unsaved changes             Reset | Save
 ```
 
 The left side contains status controls and the right side contains exactly two default actions: Reset and Save. Use `Reset edits` as the accessible name when the visible label is shortened to `Reset`.
 
-Render the conflict control only when the count is greater than zero. Activating it opens the same conflict-resolution modal and actor used when Save finds unresolved conflicts. Save must remain activatable when conflicts exist so it can enter that workflow; it must not invoke `onSaveEdits` while unresolved conflicts remain.
+Render conflict and blocked controls only when their counts are greater than zero. Activating the conflict count opens the same conflict-resolution modal and actor used when Save finds unresolved conflicts. Activating the blocked count opens Blocked Changes Review. Save must remain activatable when conflicts exist so it can enter that workflow, but it must not invoke `onSaveEdits` while unresolved conflicts, blocked drafts, or validation errors remain.
 
 Reset is disabled when no edit-owned work exists. When work is pending, activating Reset opens the Reset Review dialog rather than discarding anything immediately. Confirming Reset discards the active edit candidate, sparse drafts, edit-owned validation, conflict resolutions, and current-batch undo/redo history back to the latest canonical server snapshots. It begins a new clean batch context and does not reset filters, sorting, layout, selection, or other grid preferences.
 
@@ -233,6 +233,12 @@ The footer remains mounted when no edits exist, with Reset and Save disabled. In
 The footer shell never subscribes to rows or the complete edit store. Status controls subscribe independently to compact counts; buttons subscribe only to the booleans and progress state they render. Streaming row updates that do not change those projections must neither notify nor rerender the footer.
 
 Pages do not reimplement this footer through toolbar children. The optional toolbar augments it.
+
+## Blocked Changes Review
+
+Blocked Changes Review is a live read-only internal `BrunoTableClient` over the sparse blocked-draft collection. It shows Row, Column, latest Server now, Mine, and the current blocking reason using the source column's compiled read-only presentation. It enables explicit internal row selection only for the rare targeted recovery action; the source table's selection state is unrelated and unaffected.
+
+The user may close the dialog and wait for permission to return, use ordinary gesture-based Batch undo, open Reset Review for the complete batch, or select one or more blocked rows and activate `Discard Selected Changes`. Targeted discard restores those cells to their latest canonical server values and records one Batch history command regardless of selected cell count. `Ctrl+Z` can restore those blocked drafts because this was an explicit user discard rather than automatic server convergence. The action is disabled with no selected rows and never calls `onSaveEdits`.
 
 ## Reset Review dialog
 
@@ -413,7 +419,7 @@ Normalize all changes:
 ```ts
 type BrunoTableEditTransaction = {
   id: string;
-  source: "cell-edit" | "paste" | "drag-fill" | "clear";
+  source: "cell-edit" | "paste" | "drag-fill" | "clear" | "discard-blocked";
   changes: readonly BrunoTableCellChange[];
   createdAt: number;
 };

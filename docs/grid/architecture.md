@@ -128,10 +128,12 @@ The notification actor keeps a compact operation-indexed convergence record afte
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;
+- the blocked control selects only `blockedCount` and opens its sparse live review only when activated;
 - unsaved and invalid summaries select only their own compact counts;
 - Reset selects only `canReset` and `isSaving`, then dispatches a command;
 - Save selects only `canSave`, `isSaving`, and the minimal blocking-summary presentation it renders;
 - the conflict modal reads sparse conflict records only while open.
+- Blocked Changes Review reads sparse blocked records only while open; its internal selection exists solely for one targeted discard command.
 
 Row publications that preserve these projections do not notify any footer source. The footer remains mounted but its actions are disabled when there are no pending edits.
 
