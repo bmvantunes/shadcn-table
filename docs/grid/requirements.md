@@ -554,6 +554,8 @@ Logical focus must survive DOM unmounting caused by virtualization.
 
 V1 supports Copy and Paste but no Cut or destructive cell Clear/Delete capability. Do not register `Ctrl/Cmd+X`, `Delete`, or `Backspace` as mutation shortcuts; do not clear cells after a browser clipboard write; and do not expose Cut or Clear/Delete through menus, commands, or the public interface. Editable Client users change a value only through an editor or an explicit paste transaction. Deliberately entered or pasted blank text is still subject to the destination column's explicit blank policy, parsing, atomic validation, Batch history, and save rules.
 
+Paste shape is strict. A 1×1 source may broadcast across the one selected Client rectangle. A source with more than one cell must match a selected destination's row and column counts exactly; equal total cell count with a different shape is incompatible. With only one Active Cell, use it as the top-left anchor and infer a destination rectangle exactly equal to the source dimensions. Never tile an exact-multiple destination, transpose, clip, repeat a partial source, or apply a valid prefix. Resolve inferred columns through visible Logical Column Order and inferred rows through current logical body order. Any out-of-bounds, unavailable, non-editable, locked, invalid, or stale target rejects the whole gesture before application.
+
 All edits should normalize to transactions:
 
 ```ts
@@ -571,13 +573,14 @@ When a live server update becomes semantically equal to a drafted cell, treat th
 Clipboard support must define:
 
 - TSV parsing
+- exact source/destination matrix shape, with only 1×1 broadcast
 - raw versus formatted values
 - read-only columns
 - invalid values
 - partially loaded ranges
 - large operations
 
-For exact numeric values, canonical text is the default copy/paste representation. Parse and validate the entire target matrix before applying it; any unavailable target, invalid exact operand, or missing clear policy aborts the whole transaction. Do not apply a valid prefix. Copy/repeat fill may use equality and canonical text, while arithmetic series fill requires an explicit exact-arithmetic capability.
+For exact numeric values, canonical text is the default copy/paste representation. Validate shape and target availability before parsing, then parse and validate the entire target matrix before applying it; any unavailable target, invalid exact operand, or missing clear policy aborts the whole transaction. Do not apply a valid prefix. Copy/repeat fill may use equality and canonical text, while arithmetic series fill requires an explicit exact-arithmetic capability.
 
 ## Validation
 

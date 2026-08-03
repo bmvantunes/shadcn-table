@@ -321,10 +321,13 @@ Copying a display-formatted value should require an explicit clipboard formatter
 Paste processing should:
 
 1. parse TSV into candidate text cells;
-2. resolve each loaded destination cell and exact column semantics;
-3. parse and validate every target;
-4. abort the whole transaction if any target fails or is unavailable;
-5. otherwise submit one typed multi-cell transaction.
+2. validate exact source/destination shape, permitting only 1×1 broadcast or an exact larger matrix match/inferred Active Cell rectangle;
+3. resolve each loaded destination cell and exact column semantics;
+4. parse and validate every target;
+5. abort the whole transaction if any target fails or is unavailable;
+6. otherwise submit one typed multi-cell transaction.
+
+Do not tile, repeat, transpose, clip, or coerce matrices by equal total cell count. Shape rejection happens before exact numeric parsing, preventing unnecessary hostile-input work for a gesture that cannot be applied.
 
 This follows the existing rule that server viewport operations must not silently perform partial work and that Immediate multi-cell operations remain one save call ([grid requirements](../requirements.md#L350-L382), [grid requirements](../requirements.md#L319-L325)).
 
