@@ -328,6 +328,7 @@ Success criteria:
 - no XState actor, Effect schedule, transport Adapter, or toast action automatically retries a save; only the current surface's explicit Save control can start a fresh live-preflight operation
 - a failed Conflict Review save leaves the modal open, while a failed Footer save with no conflicts leaves it closed; the next Save may open it only after current live conflict detection
 - a thrown request or transport failure never claims that nothing committed; Batch drafts remain until live View Server reconciliation converges them, conflicts them, or the user resets them
+- transport-failure toast resolution is operation-specific: every submitted cell must converge semantically through live canonical data; never infer confirmation from global pending-change count
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value

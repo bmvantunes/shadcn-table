@@ -121,6 +121,8 @@ The Save Workflow stores `initiatedFrom` as Footer or Conflict Review. Failure r
 
 An operation actor distinguishes a typed rejected result from invocation failure. The latter drives failure presentation and releases locks but makes no assertion about whether the atomic write committed. Batch drafts remain in the sparse store until live source reconciliation converges them, conflicts them, or the user resets them. Do not add a separate durable `unconfirmed` product state: the live View Server is the outcome oracle.
 
+The notification actor keeps a compact operation-indexed convergence record after transport failure. Canonical updates for an affected Cell Identity compare through compiled Column Value Semantics and dispatch a narrow convergence event. When that operation's unresolved count reaches zero, its persistent notification changes from error to resolved without auto-dismissing. Global draft count is never used as proof, and unrelated row publications do not notify the actor.
+
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;

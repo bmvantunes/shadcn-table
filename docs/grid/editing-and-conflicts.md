@@ -46,6 +46,8 @@ Atomicity means the application persisted every submitted change or none of them
 
 The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected or transport-failed Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. It contains no Retry, Save, or other mutation action. A thrown request, timeout, disconnect, or HTTP failure says that the call was not confirmed; the toast must not claim that nothing committed merely because no typed result arrived. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
+A transport-failure notification retains the compact immutable submitted cell set already owned by that operation. Live reconciliation emits operation-specific convergence events when an affected canonical server value becomes semantically equal to its submitted value. When every cell from that operation converges, update its persistent notification from error to a non-error `Changes now reflected by the server` presentation; it remains mounted until explicit dismissal. Never infer this from global `changes.length === 0`: Reset can make that count zero without server confirmation, and unrelated later edits can keep it nonzero after the failed operation fully converges. Editing, undoing, or resetting a submitted cell does not count as server convergence.
+
 ## Cell edit lifecycle
 
 A Cell Edit Session is distinct from the Save Workflow. The accepted default interaction is:
@@ -392,6 +394,8 @@ Use sparse active edit state.
 ### Save operation manager
 
 The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports accepted, typed rejected, or invocation-failed. Invocation failure is an orchestration event, not a claim about the server's atomic outcome. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells. A failed actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
+
+The notification actor retains only the compact failed-operation evidence needed after the cell presentation deadline: Operation Identity, affected Cell Identities, submitted typed values or their existing immutable change references, and unresolved convergence count. A canonical update performs the column's compiled semantic equality for the affected cell and emits one narrow event; do not rescan the complete draft store or grid after every source publication.
 
 ## Transactions
 
