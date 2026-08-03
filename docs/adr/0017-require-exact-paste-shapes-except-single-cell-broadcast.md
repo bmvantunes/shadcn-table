@@ -7,11 +7,11 @@ There are exactly three destination rules:
 1. A 1×1 source pasted into one Active Cell targets that cell.
 2. A 1×1 source pasted into a multi-cell Client range broadcasts that one candidate to every cell in the selected rectangle.
 3. A source containing more than one cell either:
-   - maps to a selected multi-cell rectangle with exactly the same row and column counts; or
-   - when only one Active Cell exists, treats it as the top-left anchor and infers one destination rectangle with exactly the source dimensions.
+   - maps immediately to a selected multi-cell rectangle with exactly the same row and column counts; or
+   - when the destination shape differs, opens Paste Confirmation and proposes one source-sized rectangle from the Active Cell or the current selection's top-left coordinate.
 
-All other shape combinations are rejected before target parsing. No exact-multiple repetition exists: 2×2 into 4×4 is an error, as are 3×2 into 2×3, 3×2 into 6×1, and 3×2 into 3×3.
+No exact-multiple repetition exists: 2×2 into 4×4, 3×2 into 2×3, 3×2 into 6×1, and 3×2 into 3×3 all require explicit confirmation of a proposed source-sized destination. Confirmation never applies data to the mismatched selected shape.
 
 Destination expansion uses current logical body-row order and visible Logical Column Order across pinned-start, centre, and pinned-end regions. Hidden columns are not invisible paste targets. If the inferred or selected rectangle crosses a row or column boundary, contains an unavailable row, or includes any non-editable, locked, unparseable, or invalid cell, reject the entire gesture. Live identity reconciliation must succeed for every selected target before application.
 
-Only after shape and availability checks succeed does BrunoTable parse and validate the complete candidate matrix. One accepted paste creates one immutable edit transaction, one Batch undo command, and one Immediate `onSaveEdits` operation regardless of cell count. Rejection creates none of them and reports one accessible table-scoped toast with a clear bounded shape or target diagnostic.
+Only after shape handling and availability checks succeed does BrunoTable parse and validate the complete candidate matrix. One accepted paste creates one immutable edit transaction, one Batch undo command, and one Immediate `onSaveEdits` operation regardless of cell count. Direct rejection creates none of them and reports one accessible table-scoped toast with a clear bounded target diagnostic. A mismatch routes to the modal confirmation surface instead; cancellation applies nothing, while failed confirmation preflight remains in that dialog with an inline reason.

@@ -512,7 +512,7 @@ Rules:
 - `valueFormatter` changes visual presentation only.
 - Default edit and clipboard text is canonical, exact, and locale-independent.
 - V1 exposes Copy and Paste but no Cut or cell Clear/Delete prop, command, or menu item. It registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler; value changes enter through an editor or explicit paste transaction.
-- Paste has no public tiling or mismatch policy. A 1×1 source is the only broadcast shape; every larger matrix must match the selected destination dimensions exactly or infer exactly those dimensions from one Active Cell.
+- Paste has no public tiling or mismatch policy. A 1×1 source is the only no-confirmation broadcast shape; every larger mismatch is resolved by BrunoTable's internal Paste Confirmation and can apply only to one explicitly described source-sized rectangle.
 - Blank input is resolved by an explicit nullable clear policy before numeric parsing; it is never silently zero.
 - BigDecimal equality and comparison match effect-view-server, including differently scaled equal values and extreme safe scales.
 - Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.

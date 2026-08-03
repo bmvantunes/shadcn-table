@@ -384,13 +384,13 @@ Success criteria:
 Build:
 
 - Client TSV copy/paste
-- exact source/destination shape matching for multi-cell paste, with 1×1 as the only broadcast source
-- one-Active-Cell paste anchoring that infers exactly the source dimensions
+- exact source/destination shape matching for direct multi-cell paste, with 1×1 as the only no-confirmation broadcast source
+- an XState-owned Base UI AlertDialog for every larger mismatch, including one Active Cell, proposing exactly the source dimensions from the active or selected top-left coordinate
 - no Cut command, menu item, public capability, or `Ctrl/Cmd+X` binding
 - typed parsing
 - canonical exact-numeric text kept separate from display formatting
 - whole-gesture rejection for read-only or otherwise unavailable targets
-- one replaceable table-scoped `Paste rejected` toast with a specific bounded reason and no Retry action
+- one replaceable table-scoped `Paste rejected` toast for direct rejection, while mismatch and confirmed-preflight errors remain in the AlertDialog surface
 - validation
 - pattern fill
 - fill preview
@@ -399,10 +399,11 @@ Build:
 Success criteria:
 
 - no accidental partial operations
-- no paste tiling, repetition, transposition, clipping, or equal-cell-count shape coercion
-- 1×1 broadcasts to the selected rectangle; every larger source matches the selected row and column counts exactly or expands from one Active Cell to exactly its own dimensions
-- out-of-bounds, unavailable, read-only, locked, invalid, or stale destinations reject the complete paste before application
-- rejected paste reports source/destination dimensions or the first deterministic failing row/column plus a bounded additional count; repeated failures never stack per-cell toasts
+- no paste tiling, repetition, transposition, clipping, or equal-cell-count shape coercion, including after confirmation
+- 1×1 broadcasts to the selected rectangle; every larger mismatch opens confirmation and can apply only to one explicitly described source-sized rectangle
+- confirmation displays copied, selected, and proposed dimensions plus proposed start/end coordinates; Cancel/Escape applies nothing and restores grid focus
+- confirm reruns current preflight; out-of-bounds, unavailable, read-only, locked, invalid, or stale destinations keep the dialog open with one inline reason
+- direct rejected paste reports the first deterministic failing row/column plus a bounded additional count; repeated failures never stack per-cell toasts
 - paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
