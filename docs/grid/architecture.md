@@ -115,6 +115,8 @@ The Save Workflow actor manages discrete atomic operation lifecycles. Immediate 
 
 The notification actor aggregates rejected operations into one table-scoped persistent toast and owns explicit dismissal. XState is the brain for legal transitions, operation ownership, aggregation, and dialog/toast lifecycles. The sparse external store is the memory for drafts, history, conflicts, operation references, and per-cell presentation deadlines. CSS owns the border-tracer and flash animation; neither actor nor store emits frame-by-frame events.
 
+The rejected transition dispatches different reconciliation commands by Edit Mode. Immediate rejection replaces the operation-owned presentation with the latest canonical source values and a bounded failure deadline. Batch rejection releases the global mutation lock but preserves drafts and history, records persistent failure evidence, and returns the workflow to an inspect/correct/retry state. The application outcome remains one atomic rejection in either path.
+
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;

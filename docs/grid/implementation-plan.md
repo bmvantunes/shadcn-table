@@ -323,7 +323,8 @@ Success criteria:
 - disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
 - Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles
 - accepted operations flash all affected cells green for two seconds without React or XState animation-frame events
-- rejected operations immediately restore all affected cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
+- rejected Immediate operations restore owned cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
+- rejected Batch Save preserves every draft, conflict, validation record, and history command, unlocks editing, and keeps affected cells failed until correction, retry, successful reconciliation, or Reset
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value

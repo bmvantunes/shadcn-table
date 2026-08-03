@@ -37,9 +37,14 @@ Immediate mode supports multiple concurrent save operations over disjoint Cell I
 
 While an Immediate operation is in flight, lock only its complete owned cell set. While a Batch Save is in flight, install one table-wide edit mutation lock so no cell can begin or commit another mutation. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner; the prototype should compare treatments. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
 
-An atomic success keeps all accepted canonical values and flashes every affected cell green for two seconds. An atomic failure immediately restores every affected cell to its latest live canonical server value, marks each one with the non-color server-rejected presentation and a red treatment for five seconds, and records one failed operation rather than one failure per cell.
+An atomic success keeps all accepted canonical values and flashes every affected cell green for two seconds. Rejection reconciliation is mode-specific even though the server outcome remains atomic:
 
-The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details. The toast never auto-dismisses; the user explicitly closes it. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
+- Immediate rejection restores every operation-owned cell to its latest live canonical server value immediately, marks each with the non-color server-rejected presentation and a red treatment for five seconds, and records one failed operation rather than one failure per cell.
+- Batch rejection preserves the complete submitted draft set, conflicts, validation evidence, and both history stacks. Release the table-wide mutation lock, mark the diagnosed cells or complete submitted set as failed, and allow the user to correct, retry, inspect conflicts, or open Reset Review. The Batch failure presentation remains until the relevant user action, retry, successful reconciliation, or Reset rather than disappearing while rejected drafts remain.
+
+Atomicity means the application persisted every submitted change or none of them. It does not authorize BrunoTable to discard a rejected Batch.
+
+The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
 ## Cell edit lifecycle
 
