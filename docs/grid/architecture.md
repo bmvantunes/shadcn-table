@@ -449,7 +449,6 @@ Use XState for workflows with legal transitions:
 - column resize
 - save
 - conflict resolution
-- async validation
 
 Do not send every pointer coordinate or scroll event through XState.
 

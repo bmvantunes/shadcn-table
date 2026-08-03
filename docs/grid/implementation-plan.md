@@ -386,7 +386,7 @@ Success criteria:
 
 Potential later work:
 
-- async validation
+- asynchronous per-cell validation, only after a new product and architecture decision proves the atomic save seam insufficient
 - named views
 - shared views
 - group headers

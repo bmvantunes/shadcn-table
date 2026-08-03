@@ -329,7 +329,6 @@ Recommended actors:
 idle
 editing
 dirty
-validating
 readyToSave
 resolvingConflicts
 saving
@@ -355,7 +354,6 @@ idle
 armed
 dragging
 previewing
-validating
 applying
 cancelled
 ```
@@ -408,11 +406,9 @@ Live semantic convergence erases the converged Cell Identity as though the user 
 Column definitions may provide:
 
 - parser
-- sync validator
-- async validator
-- server validator
+- synchronous local validator
 
-Async validation must be cancellable when the user edits again.
+Parsing and local validation run once at Cell Edit Commit or once over the complete candidate matrix before an atomic multi-cell gesture. They never run as an asynchronous per-cell workflow or on every keystroke. Business, permission, cross-row, and other asynchronous validation belongs to the atomic `onSaveEdits` application seam and returns a typed rejected result without partially persisting the Save Change Set.
 
 Do not conflate validation with conflict detection.
 

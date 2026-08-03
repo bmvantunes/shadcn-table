@@ -568,15 +568,12 @@ For exact numeric values, canonical text is the default copy/paste representatio
 Separate:
 
 - parse errors
-- local validation errors
-- async validation errors
-- server rejections
+- synchronous local validation errors
+- typed atomic save rejections, including asynchronous business validation
 - conflicts
 - permission errors
 
-Validation must support synchronous and asynchronous rules.
-
-Async validation must be cancellable.
+Column definitions expose no asynchronous per-cell validator in v1. Parsing and local validation complete synchronously at gesture commit before any draft, history command, or Immediate save operation exists. Asynchronous business authority belongs to `onSaveEdits`, and rejection preserves atomic all-or-nothing semantics.
 
 ## Saved views
 
