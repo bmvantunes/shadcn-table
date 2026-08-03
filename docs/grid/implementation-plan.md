@@ -315,6 +315,8 @@ Success criteria:
 - printable text over an eligible focused Client cell starts a replace-mode editor seeded with only the produced text, while Enter/F2 preserve the current pre-session value
 - replace-on-type targets only the Active Cell, ignores non-text commands, `Delete`, and `Backspace`, and preserves AltGr/Option/IME/dead-key produced text exactly once
 - Escape after replace-on-type restores the pre-session value or Batch draft without creating a transaction
+- a locally accepted Enter commit moves one logical body row down and Shift+Enter moves one row up in the same column without waiting for Immediate persistence
+- Enter movement reveals virtualized destinations, never wraps at the first or last logical row, and invalid input never moves
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
 - `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome

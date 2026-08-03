@@ -70,7 +70,7 @@ Escape cancels the active editor without committing its candidate value and rest
 
 A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: Immediate and Batch Edit Modes decide when committed changes enter the Save Workflow.
 
-Tab commits and moves to the next editable cell; Shift+Tab commits and moves to the previous editable cell. Enter always commits, while any movement after Enter is a separate explicit navigation policy.
+Tab commits and moves to the next editable cell; Shift+Tab commits and moves to the previous editable cell. After a locally accepted commit, Enter moves the Active Cell one logical body row down in the same column and Shift+Enter moves it one logical body row up. Movement happens after local parsing, validation, and transaction creation; Immediate mode does not wait for the persistence operation to settle. The vertical virtualizer reveals an off-screen destination. The first and last logical rows do not wrap, and rejected parsing or validation leaves the editor and Active Cell in place.
 
 A pointer press outside the editor attempts to commit before logical focus moves or the clicked action runs. If parsing or validation rejects the candidate, the editor remains active and the candidate is preserved rather than being discarded by blur.
 

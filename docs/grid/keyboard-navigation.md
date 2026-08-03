@@ -174,7 +174,9 @@ Keyboard behaviour changes by mode.
 
 - editors receive normal text-input behaviour
 - Escape cancels
-- Enter performs a Cell Edit Commit; post-commit movement is a separate explicit policy
+- Enter performs a Cell Edit Commit and, when locally accepted, moves one logical body row down in the same column
+- Shift+Enter performs a Cell Edit Commit and, when locally accepted, moves one logical body row up in the same column
+- Enter movement does not wait for Immediate persistence, reveals virtualized destinations, and does not wrap at row boundaries
 - Tab performs a Cell Edit Commit and moves to the next editable cell
 - Shift+Tab performs a Cell Edit Commit and moves to the previous editable cell
 - a pointer press outside the active editor attempts a Cell Edit Commit before transferring logical focus or running the clicked action
@@ -243,11 +245,12 @@ Support:
 15. Enter starts an editable focused cell with one key press.
 16. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
 17. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
-18. Enter, Tab, Shift+Tab, and an accepted outside pointer action commit the active cell edit.
-19. Client and Server Tables both virtualize the logical row space.
-20. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
-21. Server keyboard reveal changes the active viewport window, never page state.
-22. An unloaded active Server row retains its logical Active Cell until delivery.
+18. Enter commits and moves one logical row down; Shift+Enter commits and moves one logical row up.
+19. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
+20. Client and Server Tables both virtualize the logical row space.
+21. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+22. Server keyboard reveal changes the active viewport window, never page state.
+23. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -276,7 +279,10 @@ Must include:
 - non-text command shortcuts, Delete, Backspace, navigation keys, and function keys do not seed replace mode
 - composed and dead-key text enters exactly once without leaking intermediate key values
 - Escape after replace-on-type restores the exact pre-session value or Batch draft and creates no transaction
-- Enter commits the active editor
+- Enter commits and moves one logical row down in the same column, including to an off-screen virtualized row
+- Shift+Enter commits and moves one logical row up in the same column
+- Enter and Shift+Enter remain in the editor on invalid input and do not wrap at the first or last row
+- accepted Immediate Enter movement occurs before persistence settles; a later rejection does not steal focus back from its new Active Cell
 - Tab and Shift+Tab commit and move to the next or previous editable cell
 - outside-cell and outside-grid pointer commits before focus transfer
 - invalid outside-pointer commit retains the active editor
