@@ -170,6 +170,8 @@ Keyboard behaviour changes by mode.
 - Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
 - in an Editable Client body, Tab moves to the next currently editable cell and Shift+Tab moves to the previous one, wrapping across logical rows and crossing pinned regions one column at a time
 - at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
+- when one contiguous multi-cell Client rectangle contains at least two currently editable cells, Tab and Shift+Tab preserve it and cycle its Active Cell through eligible cells inside it in row-major order
+- Escape collapses that rectangle to its Active Cell; when an editor is open, the first Escape cancels editing and the second collapses the range
 
 ### Editing mode
 
@@ -249,11 +251,13 @@ Support:
 17. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
 18. Enter commits and moves one logical row down; Shift+Enter commits and moves one logical row up.
 19. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
-20. Terminal Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
-21. Client and Server Tables both virtualize the logical row space.
-22. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
-23. Server keyboard reveal changes the active viewport window, never page state.
-24. An unloaded active Server row retains its logical Active Cell until delivery.
+20. A contiguous multi-cell Client range with at least two editable cells retains its rectangle and cycles the Active Cell through its eligible cells in row-major order.
+21. Escape collapses range traversal to the Active Cell; editor Escape cancels first and range Escape requires the following press.
+22. Terminal ordinary Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
+23. Client and Server Tables both virtualize the logical row space.
+24. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+25. Server keyboard reveal changes the active viewport window, never page state.
+26. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -291,6 +295,10 @@ Must include:
 - Tab and Shift+Tab skip row-specific non-editable cells and reveal virtualized destinations
 - Tab at the final eligible cell and Shift+Tab at the first eligible cell leave the grid in browser focus order
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
+- a contiguous selected rectangle preserves its bounds while Tab cycles the Active Cell forward through eligible cells and Shift+Tab cycles backwards
+- selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates
+- a selected rectangle with zero or one currently editable cell falls back to ordinary body traversal rather than trapping Tab
+- the first Escape from an active editor cancels editing without collapsing its range; the next Escape collapses the range to the Active Cell
 - outside-cell and outside-grid pointer commits before focus transfer
 - invalid outside-pointer commit retains the active editor
 - hidden columns

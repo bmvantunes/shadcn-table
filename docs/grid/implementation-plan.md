@@ -319,6 +319,8 @@ Success criteria:
 - Enter movement reveals virtualized destinations, never wraps at the first or last logical row, and invalid input never moves
 - Editable Client Tab and Shift+Tab traverse currently editable cells across one pinned-aware Logical Column Order, skip ineligible cells, wrap across rows, and reveal virtualized destinations
 - terminal Tab movement leaves the grid through browser focus order; read-only Client and Server Tables never trap Tab for internal navigation
+- one contiguous multi-cell Client range with at least two eligible cells remains selected while Tab and Shift+Tab cycle its Active Cell forward or backward, wrapping inside the rectangle
+- Escape cancels an active editor before a following Escape collapses range traversal; ranges with fewer than two eligible cells fall back to ordinary traversal
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
 - `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome
