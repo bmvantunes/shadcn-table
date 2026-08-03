@@ -44,7 +44,7 @@ An atomic success keeps all accepted canonical values and flashes every affected
 
 Atomicity means the application persisted every submitted change or none of them. It does not authorize BrunoTable to discard a rejected Batch.
 
-The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
+The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. It contains no Retry, Save, or other mutation action. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
 ## Cell edit lifecycle
 
@@ -280,6 +280,15 @@ ready
 
 After conflict choices are applied, the user may continue editing or save.
 
+Every Save activation performs a fresh preflight against the latest live canonical values and Row Versions: commit or reject the active editor, reconcile converged drafts, evaluate local and retained server validation, derive current conflicts, and only then construct one new immutable Save Change Set. BrunoTable, XState, Effect integration, and the transport Adapter never schedule an automatic save retry or blindly replay a previous request. A retry exists only when the user explicitly activates the authoritative Save control again.
+
+The Save Workflow records its initiating surface:
+
+- A Save started inside Conflict Review keeps that modal mounted throughout the attempt. Success closes it; rejection or transport failure leaves it open with all drafts, resolutions, live Server-now values, and diagnostics intact.
+- A Save started from the Edit Safety Footer with no conflicts keeps Conflict Review closed if the attempt fails. The next explicit Footer Save runs the complete live preflight again and opens Conflict Review only when conflicts exist at that later moment.
+
+The persistent toast explains the failure but never becomes a second Save surface. This keeps every attempt on one state-machine path and prevents a stale notification action from bypassing current conflict and validation checks.
+
 ## Optimistic concurrency
 
 The client sends expected versions.
@@ -374,7 +383,7 @@ Use sparse active edit state.
 
 ### Save operation manager
 
-The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports one accepted or rejected terminal outcome. The manager maintains cell ownership, derives the Batch global mutation lock, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells.
+The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports one accepted or rejected terminal outcome. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells. A failed actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
 
 ## Transactions
 

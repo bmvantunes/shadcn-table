@@ -117,6 +117,8 @@ The notification actor aggregates rejected operations into one table-scoped pers
 
 The rejected transition dispatches different reconciliation commands by Edit Mode. Immediate rejection replaces the operation-owned presentation with the latest canonical source values and a bounded failure deadline. Batch rejection releases the global mutation lock but preserves drafts and history, records persistent failure evidence, and returns the workflow to an inspect/correct/retry state. The application outcome remains one atomic rejection in either path.
 
+The Save Workflow stores `initiatedFrom` as Footer or Conflict Review. Failure returns to that same mounted surface; it never opens or closes Conflict Review merely because transport failed. Success closes Conflict Review only when that surface initiated the successful attempt. No actor, Effect schedule, Adapter, or notification action retries automatically. A later explicit Save event reruns live preflight and creates a new operation rather than reusing a stale Save Change Set.
+
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;

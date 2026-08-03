@@ -325,6 +325,8 @@ Success criteria:
 - accepted operations flash all affected cells green for two seconds without React or XState animation-frame events
 - rejected Immediate operations restore owned cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
 - rejected Batch Save preserves every draft, conflict, validation record, and history command, unlocks editing, and keeps affected cells failed until correction, retry, successful reconciliation, or Reset
+- no XState actor, Effect schedule, transport Adapter, or toast action automatically retries a save; only the current surface's explicit Save control can start a fresh live-preflight operation
+- a failed Conflict Review save leaves the modal open, while a failed Footer save with no conflicts leaves it closed; the next Save may open it only after current live conflict detection
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value
@@ -343,12 +345,11 @@ Build:
 - conflict cell visuals
 - conflict count mounted on the footer left only when non-zero
 - merge-style modal
-- all mine/all server
-- column-wide resolution
+- explicit selected-row Mine or Server resolution
 - optimistic concurrency
 - save results
 - canonical server reconciliation
-- conflict retry
+- explicit fresh-preflight resubmission after conflict resolution
 
 Success criteria:
 
