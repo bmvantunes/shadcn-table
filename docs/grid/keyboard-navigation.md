@@ -174,7 +174,8 @@ Keyboard behaviour changes by mode.
 - at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
 - when one multi-cell Linear Cell Range contains at least two currently editable cells, both Tab and Enter preserve it and cycle its Active Cell forward along the selected axis; Shift+Tab and Shift+Enter cycle backward
 - printable text or F2 still starts editing the range's Active Cell
-- Escape collapses the Linear Cell Range to its Active Cell; when an editor is open, the first Escape cancels editing and the second collapses the range
+- during pointer range selection or Drag Fill, Escape first cancels the gesture and restores its pre-gesture state without also collapsing the restored range
+- otherwise Escape collapses the Linear Cell Range to its Active Cell; when an editor is open, the first Escape cancels editing and the second collapses the range
 
 ### Editing mode
 
@@ -305,6 +306,7 @@ Must include:
 - the first Shift+Arrow extension locks its axis, parallel commands may resize through the anchor, perpendicular commands do nothing, and collapse permits the next extension to choose either axis
 - pointer selection remains `1×1` inside drag slop; after the threshold, greater absolute displacement wins the axis while an exact tie stays `1×1`, then only the parallel logical coordinate changes
 - pointer selection and Drag Fill do not autoscroll before axis acquisition and never autoscroll the perpendicular axis afterward, including near pinned-region edges
+- Escape and `pointercancel` stop autoscroll; selection restores its exact pre-gesture Active Cell/range, while Drag Fill removes its preview and creates no transaction
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates

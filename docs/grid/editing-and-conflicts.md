@@ -401,6 +401,8 @@ cancelled
 
 Drag Fill publishes no preview or autoscroll inside drag slop. After crossing the threshold, greater absolute pointer displacement from the gesture origin chooses and locks the axis; an exact tie remains armed without a preview until one axis wins. Once locked, diagonal pointer movement continues updating the preview through only its parallel logical coordinate rather than freezing, and only the corresponding parallel viewport edge can trigger autoscroll. Its source, preview, validated candidate vector, edit transaction, and Batch undo command are always horizontal `1×N` or vertical `N×1`; perpendicular movement and edge proximity never switch or scroll the other axis or create a two-dimensional target, even transiently.
 
+Escape or browser `pointercancel` transitions the actor to `cancelled`, stops autoscroll, releases its preview, and returns to `idle` without applying. Cancellation creates no candidate validation, draft, edit transaction, history command, save actor, or persistence invocation. Pointer release is the only gesture completion that may preflight and atomically apply the current preview.
+
 ### Conflict actor
 
 Manages:
