@@ -396,6 +396,7 @@ Build:
 - canonical exact-numeric text kept separate from display formatting
 - whole-gesture rejection for read-only or otherwise unavailable targets
 - one replaceable table-scoped `Paste rejected` toast for direct rejection, while mismatch and confirmed-preflight errors remain in the AlertDialog surface
+- one replaceable table-scoped Base UI `Fill rejected` toast for Drag Fill preflight rejection, with error presentation, Close, and no Retry action
 - validation
 - one-axis pattern fill
 - one-axis fill preview
@@ -416,6 +417,8 @@ Success criteria:
 - Drag Fill autoscroll is inactive before axis acquisition and parallel-only afterward
 - Escape and `pointercancel` discard the Drag Fill preview, stop autoscroll, and create no candidate validation, draft, transaction, history, save actor, or persistence call
 - ordinary pointer release outside the grid reruns preflight and applies the last valid projected fill preview atomically; no acquired axis or non-empty preview is a silent no-op
+- rejected Drag Fill preflight removes its preview, applies nothing, reports the first deterministic row/column failure plus a bounded additional count, and creates no edit, history, save, or persistence state
+- later fill rejection replaces the existing fill toast, accepted fill clears it, and row updates never notify its rendering subscriber
 - large operations do not emit one event per cell
 - undo remains transaction-level
 

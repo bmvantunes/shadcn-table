@@ -30,6 +30,8 @@ Escape or a browser `pointercancel` cancels an in-progress pointer gesture and s
 
 The grid holds pointer capture for the gesture. A normal pointer release outside the grid therefore completes the last visible projected result rather than cancelling merely because the pointer crossed a DOM boundary. Range selection retains that projected Linear Cell Range. Drag Fill may preflight and atomically apply only an acquired, currently valid preview; release with no acquired axis or valid preview is a no-op.
 
+If current Drag Fill preflight rejects any target on release, the whole gesture applies nothing and removes its preview. One accessible table-scoped `Fill rejected` toast explains the first deterministic failure and a bounded count of additional failures. It exposes Close but no Retry or mutation action and creates no draft, transaction, history, save actor, persistence call, or partial edit.
+
 Copy, paste, Drag Fill, preview, validation, edit transactions, and Batch undo operate only on `1×1`, `1×N`, or `N×1`. A two-dimensional clipboard matrix is rejected with one explanatory toast and never enters Paste Confirmation. A supported linear clipboard source may paste directly into an equal axis and length, while any other linear destination mismatch uses Paste Confirmation to propose one source-oriented linear range. A 1×1 source may broadcast along either selected axis.
 
 Within a selected Linear Cell Range, Tab and Enter both advance through currently editable cells along its one locked axis; Shift+Tab and Shift+Enter reverse that order. Drag Fill resolves and locks one axis before previewing any target. Ordinary body Tab/Enter behaviour outside Cell Range Selection remains unchanged.

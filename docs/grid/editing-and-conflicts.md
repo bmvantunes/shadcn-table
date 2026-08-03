@@ -395,7 +395,9 @@ idle
 armed
 dragging
 previewing
+preflighting
 applying
+rejected
 cancelled
 ```
 
@@ -404,6 +406,8 @@ Drag Fill publishes no preview or autoscroll inside drag slop. After crossing th
 Escape or browser `pointercancel` transitions the actor to `cancelled`, stops autoscroll, releases its preview, and returns to `idle` without applying. Cancellation creates no candidate validation, draft, edit transaction, history command, save actor, or persistence invocation. Pointer release is the only gesture completion that may preflight and atomically apply the current preview.
 
 The actor owns pointer capture, so an ordinary release outside the grid still completes the last visible projected preview. Completion reruns current target, lock, parsing, and validation preflight before creating one atomic transaction. If no axis was acquired, no non-empty preview exists, or the extension has returned to its source bounds, release is a silent no-op with no transaction, history, save actor, or notification.
+
+If any preflight target is unavailable, stale, non-editable, save-locked, unparseable, or invalid, transition to `rejected`, remove the preview, and apply nothing. Publish one bounded `Fill rejected` diagnostic containing the first deterministic user-facing row/column reason and an additional failure count, then return to `idle`. The Base UI toast from `@bruno/shadcn/toast` renders it with error presentation, description, and Close; it has no Retry or mutation action, persists until dismissal or the next accepted fill, and a later rejection replaces it. No rejected fill creates a draft, edit transaction, Batch history command, save actor, persistence invocation, or save-failure toast.
 
 ### Conflict actor
 

@@ -308,6 +308,7 @@ Must include:
 - pointer selection and Drag Fill do not autoscroll before axis acquisition and never autoscroll the perpendicular axis afterward, including near pinned-region edges
 - Escape and `pointercancel` stop autoscroll; selection restores its exact pre-gesture Active Cell/range, while Drag Fill removes its preview and creates no transaction
 - pointer capture preserves the gesture outside the grid; normal release retains the last projected range or applies a valid fill preview, while fill with no axis or non-empty preview is a no-op
+- rejected Drag Fill preflight applies nothing, removes the preview, and publishes one non-stacking accessible `Fill rejected` toast with no Retry action
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates
