@@ -317,6 +317,8 @@ Success criteria:
 - Escape after replace-on-type restores the pre-session value or Batch draft without creating a transaction
 - a locally accepted Enter commit moves one logical body row down and Shift+Enter moves one row up in the same column without waiting for Immediate persistence
 - Enter movement reveals virtualized destinations, never wraps at the first or last logical row, and invalid input never moves
+- Editable Client Tab and Shift+Tab traverse currently editable cells across one pinned-aware Logical Column Order, skip ineligible cells, wrap across rows, and reveal virtualized destinations
+- terminal Tab movement leaves the grid through browser focus order; read-only Client and Server Tables never trap Tab for internal navigation
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
 - `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome

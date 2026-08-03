@@ -168,7 +168,8 @@ Keyboard behaviour changes by mode.
 - command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` never enter replace mode; AltGr/Option text remains valid produced input
 - Enter on a non-editable cell does not fabricate an editor
 - Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
-- Tab follows configured navigation policy
+- in an Editable Client body, Tab moves to the next currently editable cell and Shift+Tab moves to the previous one, wrapping across logical rows and crossing pinned regions one column at a time
+- at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
 
 ### Editing mode
 
@@ -179,6 +180,7 @@ Keyboard behaviour changes by mode.
 - Enter movement does not wait for Immediate persistence, reveals virtualized destinations, and does not wrap at row boundaries
 - Tab performs a Cell Edit Commit and moves to the next editable cell
 - Shift+Tab performs a Cell Edit Commit and moves to the previous editable cell
+- Tab traversal uses the same row wrapping, pinned-aware reveal, virtualized destination, and terminal browser-focus exit as Navigation Mode
 - a pointer press outside the active editor attempts a Cell Edit Commit before transferring logical focus or running the clicked action
 - a rejected parse or validation keeps the Cell Edit Session active and does not silently discard the candidate value
 - arrow keys remain with the editor unless boundary-transfer policy applies
@@ -236,7 +238,7 @@ Support:
 6. Server rows can be targeted before loading.
 7. Focus survives row and column virtualization.
 8. Shift navigation extends from a stable anchor.
-9. Tab can skip non-editable cells.
+9. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
 10. Editor cursor behaviour is preserved.
 11. Sorting/filtering clears or reconciles focus safely.
 12. Focus never falls to the document body because a cell unmounted.
@@ -247,10 +249,11 @@ Support:
 17. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
 18. Enter commits and moves one logical row down; Shift+Enter commits and moves one logical row up.
 19. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
-20. Client and Server Tables both virtualize the logical row space.
-21. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
-22. Server keyboard reveal changes the active viewport window, never page state.
-23. An unloaded active Server row retains its logical Active Cell until delivery.
+20. Terminal Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
+21. Client and Server Tables both virtualize the logical row space.
+22. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+23. Server keyboard reveal changes the active viewport window, never page state.
+24. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -284,6 +287,10 @@ Must include:
 - Enter and Shift+Enter remain in the editor on invalid input and do not wrap at the first or last row
 - accepted Immediate Enter movement occurs before persistence settles; a later rejection does not steal focus back from its new Active Cell
 - Tab and Shift+Tab commit and move to the next or previous editable cell
+- Tab crosses pinned-start, centre, and pinned-end in Logical Column Order, wrapping to the next row without a multi-column reveal jump
+- Tab and Shift+Tab skip row-specific non-editable cells and reveal virtualized destinations
+- Tab at the final eligible cell and Shift+Tab at the first eligible cell leave the grid in browser focus order
+- read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
 - outside-cell and outside-grid pointer commits before focus transfer
 - invalid outside-pointer commit retains the active editor
 - hidden columns
