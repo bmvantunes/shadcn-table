@@ -303,7 +303,7 @@ Must include:
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
 - a horizontal or vertical selected range preserves its bounds while Tab or Enter cycles the Active Cell forward through eligible cells and shifted forms cycle backwards
 - the first Shift+Arrow extension locks its axis, parallel commands may resize through the anchor, perpendicular commands do nothing, and collapse permits the next extension to choose either axis
-- a diagonal pointer gesture resolves one axis before publishing a range, then follows only the parallel logical coordinate without freezing or switching axes
+- pointer selection remains `1×1` inside drag slop; after the threshold, greater absolute displacement wins the axis while an exact tie stays `1×1`, then only the parallel logical coordinate changes
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates

@@ -399,7 +399,7 @@ applying
 cancelled
 ```
 
-Drag Fill resolves one axis before publishing its first preview and locks it for the complete gesture. Once locked, diagonal pointer movement continues updating the preview through only its parallel logical coordinate rather than freezing. Its source, preview, validated candidate vector, edit transaction, and Batch undo command are always horizontal `1×N` or vertical `N×1`; perpendicular movement never switches the chosen axis or creates a two-dimensional target, even transiently.
+Drag Fill publishes no preview inside drag slop. After crossing the threshold, greater absolute pointer displacement from the gesture origin chooses and locks the axis; an exact tie remains armed without a preview until one axis wins. Once locked, diagonal pointer movement continues updating the preview through only its parallel logical coordinate rather than freezing. Its source, preview, validated candidate vector, edit transaction, and Batch undo command are always horizontal `1×N` or vertical `N×1`; perpendicular movement never switches the chosen axis or creates a two-dimensional target, even transiently.
 
 ### Conflict actor
 
