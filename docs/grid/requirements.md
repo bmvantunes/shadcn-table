@@ -556,6 +556,8 @@ V1 supports Copy and Paste but no Cut or destructive cell Clear/Delete capabilit
 
 Paste shape is strict. A 1×1 source may broadcast across the one selected Client rectangle. A source with more than one cell must match a selected destination's row and column counts exactly; equal total cell count with a different shape is incompatible. With only one Active Cell, use it as the top-left anchor and infer a destination rectangle exactly equal to the source dimensions. Never tile an exact-multiple destination, transpose, clip, repeat a partial source, or apply a valid prefix. Resolve inferred columns through visible Logical Column Order and inferred rows through current logical body order. Any out-of-bounds, unavailable, non-editable, locked, invalid, or stale target rejects the whole gesture before application.
 
+Every paste rejection shows one accessible table-scoped toast with its specific reason and confirms that nothing was applied. Shape diagnostics include source and destination dimensions. Target or value diagnostics identify the first deterministic user-facing row/column location and summarize a bounded count of additional failures rather than stacking messages or rendering an unbounded list. The toast has no Retry or mutation action, remains until dismissal or the next accepted paste, and is replaced by a later paste rejection. It is separate from operation-aware persistent save-failure notifications because rejection creates no draft, history, save actor, or persistence call.
+
 All edits should normalize to transactions:
 
 ```ts
@@ -579,6 +581,7 @@ Clipboard support must define:
 - invalid values
 - partially loaded ranges
 - large operations
+- one bounded accessible rejection toast with deterministic reason details
 
 For exact numeric values, canonical text is the default copy/paste representation. Validate shape and target availability before parsing, then parse and validate the entire target matrix before applying it; any unavailable target, invalid exact operand, or missing clear policy aborts the whole transaction. Do not apply a valid prefix. Copy/repeat fill may use equality and canonical text, while arithmetic series fill requires an explicit exact-arithmetic capability.
 

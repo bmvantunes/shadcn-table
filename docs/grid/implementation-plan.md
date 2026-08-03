@@ -390,6 +390,7 @@ Build:
 - typed parsing
 - canonical exact-numeric text kept separate from display formatting
 - whole-gesture rejection for read-only or otherwise unavailable targets
+- one replaceable table-scoped `Paste rejected` toast with a specific bounded reason and no Retry action
 - validation
 - pattern fill
 - fill preview
@@ -401,6 +402,8 @@ Success criteria:
 - no paste tiling, repetition, transposition, clipping, or equal-cell-count shape coercion
 - 1×1 broadcasts to the selected rectangle; every larger source matches the selected row and column counts exactly or expands from one Active Cell to exactly its own dimensions
 - out-of-bounds, unavailable, read-only, locked, invalid, or stale destinations reject the complete paste before application
+- rejected paste reports source/destination dimensions or the first deterministic failing row/column plus a bounded additional count; repeated failures never stack per-cell toasts
+- paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
 - large operations do not emit one event per cell
