@@ -169,6 +169,7 @@ Keyboard behaviour changes by mode.
 - command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` never enter replace mode; AltGr/Option text remains valid produced input
 - Enter on a non-editable cell does not fabricate an editor
 - Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
+- Client Cell Range Selection always means zero or one contiguous rectangle; a new selection replaces it and Ctrl/Cmd never adds, toggles, or subtracts ranges
 - in an Editable Client body, Tab moves to the next currently editable cell and Shift+Tab moves to the previous one, wrapping across logical rows and crossing pinned regions one column at a time
 - at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
 - when one contiguous multi-cell Client rectangle contains at least two currently editable cells, Tab and Shift+Tab preserve it and cycle its Active Cell through eligible cells inside it in row-major order
@@ -242,25 +243,26 @@ Support:
 6. Server rows can be targeted before loading.
 7. Focus survives row and column virtualization.
 8. Shift navigation extends from a stable anchor.
-9. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
-10. Editor cursor behaviour is preserved.
-11. Sorting/filtering clears or reconciles focus safely.
-12. Focus never falls to the document body because a cell unmounted.
-13. One horizontal navigation command moves to exactly one adjacent navigable column.
-14. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
-15. Enter starts an editable focused cell with one key press.
-16. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
-17. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
-18. Without active range traversal, Enter commits and moves one logical row down while Shift+Enter commits and moves one logical row up.
-19. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
-20. A contiguous multi-cell Client range with at least two editable cells retains its rectangle and cycles the Active Cell row-major with Tab or column-major with Enter; shifted forms reverse the corresponding order.
-21. Range-navigation Enter does not start an editor; F2 and printable text retain their edit-entry roles.
-22. Escape collapses range traversal to the Active Cell; editor Escape cancels first and range Escape requires the following press.
-23. Terminal ordinary Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
-24. Client and Server Tables both virtualize the logical row space.
-25. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
-26. Server keyboard reveal changes the active viewport window, never page state.
-27. An unloaded active Server row retains its logical Active Cell until delivery.
+9. Cell selection owns at most one contiguous rectangle; no keyboard or pointer modifier creates additive, subtractive, or disconnected ranges.
+10. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
+11. Editor cursor behaviour is preserved.
+12. Sorting/filtering clears or reconciles focus safely.
+13. Focus never falls to the document body because a cell unmounted.
+14. One horizontal navigation command moves to exactly one adjacent navigable column.
+15. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
+16. Enter starts an editable focused cell with one key press.
+17. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
+18. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
+19. Without active range traversal, Enter commits and moves one logical row down while Shift+Enter commits and moves one logical row up.
+20. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
+21. A contiguous multi-cell Client range with at least two editable cells retains its rectangle and cycles the Active Cell row-major with Tab or column-major with Enter; shifted forms reverse the corresponding order.
+22. Range-navigation Enter does not start an editor; F2 and printable text retain their edit-entry roles.
+23. Escape collapses range traversal to the Active Cell; editor Escape cancels first and range Escape requires the following press.
+24. Terminal ordinary Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
+25. Client and Server Tables both virtualize the logical row space.
+26. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+27. Server keyboard reveal changes the active viewport window, never page state.
+28. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -299,6 +301,8 @@ Must include:
 - Tab at the final eligible cell and Shift+Tab at the first eligible cell leave the grid in browser focus order
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
 - a contiguous selected rectangle preserves its bounds while Tab cycles the Active Cell forward through eligible cells and Shift+Tab cycles backwards
+- a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
+- no selection state, visuals, copy, paste, fill, or traversal path accepts disconnected rectangles or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates
 - Enter cycles the same selected rectangle top-to-bottom then column-to-column, while Shift+Enter exactly reverses that order
 - Enter in selected-range Navigation Mode advances without editing; F2 edits the current value and printable text replaces it

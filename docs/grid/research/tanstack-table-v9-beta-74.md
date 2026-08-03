@@ -37,6 +37,8 @@ Do not conflate row range selection with cell range selection.
 
 TanStack's cell-selection feature stores ordered include/exclude rectangle operations keyed by stable Row and Column Identities. Its React example demonstrates drag selection, Shift extension, additive and subtractive ranges, pinned and reordered columns, keyboard movement, clipboard extraction, and fine-grained row subscriptions.
 
+BrunoTable deliberately adopts only the contiguous rectangle geometry and identity handling. Its permanent public and internal product contract permits at most one positive rectangle; additive operations, subtractive holes, and disconnected multi-range state are never installed or exposed.
+
 This is the first implementation candidate for BrunoTable's spreadsheet-style cell selection and range geometry. BrunoTable should adapt it behind the private runtime instead of immediately rebuilding rectangle resolution, inclusion and exclusion, pinned-column ordering, and span expansion.
 
 ### Row range selection

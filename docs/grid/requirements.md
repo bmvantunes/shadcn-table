@@ -483,9 +483,11 @@ Keep Client Row Selection and Cell Range Selection distinct:
 - Row Selection is stable Row Identity intent, usually exposed through row checkboxes or row actions.
 - Cell Range Selection is spreadsheet-style rectangular cell intent keyed by Row and Column Identity.
 
+Cell Range Selection is singular and contiguous by permanent contract: `BrunoTableClient` owns zero or one positive anchor/focus rectangle, never an array of disconnected ranges or include/exclude operations. A new click or drag replaces the previous rectangle, while Shift extension resizes that one range from its stable anchor. Ctrl/Cmd-modified cell gestures do not add, toggle, or subtract another region. No public interface, clipboard operation, mutation transaction, or private selection command may expose additive ranges, subtractive holes, or discontiguous rectangles. This restriction does not limit the separate Row Selection capability.
+
 Client Row Selection is an explicit optional capability and defaults off. When enabled, its header checkbox selects or deselects the complete currently filtered Client row model, including virtualized rows that are not mounted. It never means only the visible DOM window. Selection remains keyed by stable Row Identity when filters hide selected rows; clearing or changing the filter reveals those rows still selected. The header checkbox's checked and indeterminate presentation is computed against the current filtered set rather than hidden selections. Select All records the matching Row Identities present at that user gesture; later live inserts are not silently selected, and live deletion prunes a removed identity from selection. Shift-clicking a second selectable row selects or deselects the inclusive interval from the previous row-selection anchor in the current logical display order. The Client Table can adapt TanStack Table v9's row-range handler over its complete processed row model.
 
-One active contiguous multi-cell Cell Range Selection with at least two currently editable cells owns Excel-style traversal: preserve the rectangle and cycle only its Active Cell forward in row-major Logical Column Order with Tab or column-major order with Enter; Shift+Tab and Shift+Enter are the exact respective reverses. Skip cells whose current policy is not editable and wrap inside the rectangle. In Navigation Mode, range-traversal Enter moves rather than starting an editor; F2 edits the current value and printable text starts replace mode. Escape in Navigation Mode collapses the range to the Active Cell and returns to ordinary body traversal; when editing, the first Escape cancels the editor and the next collapses the range. A rectangle with fewer than two eligible cells falls back to ordinary body behaviour. Do not infer an ordering for additive, subtractive, or discontiguous multi-range traversal until that separate contract is decided.
+One active contiguous multi-cell Cell Range Selection with at least two currently editable cells owns Excel-style traversal: preserve the rectangle and cycle only its Active Cell forward in row-major Logical Column Order with Tab or column-major order with Enter; Shift+Tab and Shift+Enter are the exact respective reverses. Skip cells whose current policy is not editable and wrap inside the rectangle. In Navigation Mode, range-traversal Enter moves rather than starting an editor; F2 edits the current value and printable text starts replace mode. Escape in Navigation Mode collapses the range to the Active Cell and returns to ordinary body traversal; when editing, the first Escape cancels the editor and the next collapses the range. A rectangle with fewer than two eligible cells falls back to ordinary body behaviour. Multi-range traversal is impossible because BrunoTable never owns more than one rectangle.
 
 `BrunoTableServer` exposes neither Row Selection nor Cell Range Selection: no row checkboxes, selected-row state, Shift-click row interval, header checkbox, or Select All command. It owns only one logical Active Cell for navigation and single-loaded-cell copy.
 
@@ -508,17 +510,17 @@ type BrunoTableServerCapabilities = {
 
 Initial recommended rules:
 
-| Feature              | Client                  | Server viewport         |
-| -------------------- | ----------------------- | ----------------------- |
-| Cell range selection | Full                    | No                      |
-| Cell edit            | Immediate or Batch      | No                      |
-| Drag fill            | Full                    | No                      |
-| Copy                 | Selected loaded ranges  | Active loaded cell only |
-| Paste                | Atomic selected targets | No                      |
-| Cell clear/delete    | No                      | No                      |
-| Row selection        | Opt-in; filtered rows   | No                      |
-| Undo/redo            | Current Batch only      | No                      |
-| Conflicts            | Yes                     | No                      |
+| Feature              | Client                   | Server viewport         |
+| -------------------- | ------------------------ | ----------------------- |
+| Cell range selection | One contiguous rectangle | No                      |
+| Cell edit            | Immediate or Batch       | No                      |
+| Drag fill            | Full                     | No                      |
+| Copy                 | Selected loaded range    | Active loaded cell only |
+| Paste                | Atomic selected targets  | No                      |
+| Cell clear/delete    | No                       | No                      |
+| Row selection        | Opt-in; filtered rows    | No                      |
+| Undo/redo            | Current Batch only       | No                      |
+| Conflicts            | Yes                      | No                      |
 
 Do not silently perform partial operations or mount unavailable Server selection controls.
 

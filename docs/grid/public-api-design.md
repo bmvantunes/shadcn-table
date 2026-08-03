@@ -219,6 +219,7 @@ Rules:
 - `loading` with no rows shows the loading overlay. `stale`, `closed`, or `error` with retained rows keeps those rows visible and adds the appropriate non-destructive status treatment.
 - `viewportSource` is a long-lived source, not a row array copied into React state.
 - `BrunoTableServer` exposes no Row Selection or Cell Range Selection interface: no checkbox column, selected-row callback/state, Shift-click row selection, Select All, or range operation. Its only cell cursor is the private logical Active Cell used by navigation and single-loaded-cell copy.
+- `BrunoTableClient` Cell Range Selection is permanently limited to zero or one contiguous rectangle. No prop, callback, command, or state shape exposes additive ranges, subtractive holes, or disconnected regions; a new selection replaces the previous rectangle.
 - Both variants expose one continuous virtual row space. Do not add pagination, page-index, page-size, cursor, fetch-next-page, or load-more props.
 - Internal server windows may compile to `offset` and `limit`, but those values never enter the public interface or persisted grid state.
 - Optional children render inside the grid provider as page-specific toolbar content. When absent, no toolbar region is mounted.

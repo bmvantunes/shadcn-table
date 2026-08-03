@@ -272,6 +272,8 @@ Build:
 Success criteria:
 
 - Row Selection and Cell Range Selection remain separate capabilities and state models
+- Client Cell Range Selection owns at most one positive contiguous rectangle; new gestures replace it and Ctrl/Cmd never creates additive, subtractive, or disconnected ranges
+- public types and private normalized state contain one optional range rather than `ranges[]` or include/exclude operations
 - Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
