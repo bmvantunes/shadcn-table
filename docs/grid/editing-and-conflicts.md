@@ -181,6 +181,14 @@ Draft dirtiness, three-way reconciliation, and successful-save cleanup all use s
 
 The conflict modal formats Base, Server now, and Yours through the column's presentation channel, but its selection and resolution state retain the native typed values. A localized display formatter can never change the save payload.
 
+## Live editability and permission changes
+
+Evaluate `isEditable` for a concrete dirty Client cell when a live row update changes inputs that may affect that predicate. If it becomes false, preserve Mine, Base, latest Server now, conflicts, validation, and history, but mark the draft as blocked and prevent it from entering a Batch Save Change Set. The cell cannot re-enter edit mode and exposes an accessible explanation that its row state or permission no longer permits editing. Never silently discard the trader's value.
+
+If the predicate becomes true again, remove the block without changing the draft. If the live canonical value becomes semantically equal to Mine, normal convergence removes the draft and its history. Reset remains the only explicit discard path. An Immediate operation already in flight keeps its operation lock and settles through its normal accepted, rejected, or invocation-failed reconciliation; a mid-flight predicate change does not pretend to cancel an application write.
+
+Re-evaluate only affected dirty cells through narrow row-update dependencies. Do not scan the complete dataset, all editable columns, or every draft on each publication.
+
 ## Visual behaviour
 
 When a conflict arrives:
@@ -203,6 +211,7 @@ Define a status priority model for combinations such as:
 - conflicted
 - saving
 - server-rejected
+- blocked
 - read-only
 
 ## Edit safety footer

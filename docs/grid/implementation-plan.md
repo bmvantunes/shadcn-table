@@ -332,6 +332,7 @@ Success criteria:
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value
+- a live `isEditable` transition to false preserves the dirty cell and history, blocks editing and Batch Save with an accessible explanation, and clears only when permission returns, semantic convergence occurs, or Reset is confirmed
 - no-edit state keeps the footer mounted with Reset and Save disabled
 - Reset with pending work opens a read-only Reset Review table over every pending changed cell and performs no mutation until `Reset All Changes` is confirmed
 - Reset Review exposes only `Keep Editing` and `Reset All Changes`; confirmation clears edit-owned state and current-batch undo/redo history together while preserving grid preferences
