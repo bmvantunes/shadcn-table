@@ -258,7 +258,7 @@ Build:
 - opt-in Client Row Selection, default off, keyed by stable Row Identity
 - Client header checkbox selection over the complete currently filtered row model rather than mounted rows
 - Client inclusive Shift-click Row Selection in current logical display order
-- Client logical range selection
+- Client logical one-axis range selection
 - Client drag selection
 - autoscroll
 - capability engine
@@ -272,8 +272,8 @@ Build:
 Success criteria:
 
 - Row Selection and Cell Range Selection remain separate capabilities and state models
-- Client Cell Range Selection owns at most one positive contiguous rectangle; new gestures replace it and Ctrl/Cmd never creates additive, subtractive, or disconnected ranges
-- public types and private normalized state contain one optional range rather than `ranges[]` or include/exclude operations
+- Client Cell Range Selection owns at most one contiguous horizontal `1×N` or vertical `N×1` Linear Cell Range; new gestures replace it and Ctrl/Cmd never creates two-axis, additive, subtractive, or disconnected ranges
+- public types and private normalized state contain one optional discriminated horizontal-or-vertical range rather than a general rectangle, `ranges[]`, or include/exclude operations
 - Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
@@ -321,8 +321,8 @@ Success criteria:
 - Enter movement reveals virtualized destinations, never wraps at the first or last logical row, and invalid input never moves
 - Editable Client Tab and Shift+Tab traverse currently editable cells across one pinned-aware Logical Column Order, skip ineligible cells, wrap across rows, and reveal virtualized destinations
 - terminal Tab movement leaves the grid through browser focus order; read-only Client and Server Tables never trap Tab for internal navigation
-- one contiguous multi-cell Client range with at least two eligible cells remains selected while Tab and Shift+Tab cycle its Active Cell forward or backward, wrapping inside the rectangle
-- Enter and Shift+Enter cycle the same range in forward or reverse column-major order; range-navigation Enter moves without opening an editor while F2 and printable text retain editing roles
+- one multi-cell Client Linear Cell Range with at least two eligible cells remains selected while Tab and Enter cycle its Active Cell forward along the selected axis and Shift+Tab and Shift+Enter cycle backward
+- selected-range traversal wraps within that one axis; range-navigation Enter moves without opening an editor while F2 and printable text retain editing roles
 - Escape cancels an active editor before a following Escape collapses range traversal; ranges with fewer than two eligible cells fall back to ordinary traversal
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
@@ -384,29 +384,31 @@ Success criteria:
 Build:
 
 - Client TSV copy/paste
-- exact source/destination shape matching for direct multi-cell paste, with 1×1 as the only no-confirmation broadcast source
-- an XState-owned Base UI AlertDialog for every larger mismatch, including one Active Cell, proposing exactly the source dimensions from the active or selected top-left coordinate
+- immediate rejection with one explanatory toast when clipboard row and column counts both exceed one
+- exact orientation-and-length matching for direct `1×N` or `N×1` paste, with 1×1 as the only no-confirmation broadcast source
+- an XState-owned Base UI AlertDialog for every supported linear mismatch, including one Active Cell or an opposite-axis selection, proposing exactly one source-oriented range from the Active Cell or the selected range's logical start
 - no Cut command, menu item, public capability, or `Ctrl/Cmd+X` binding
 - typed parsing
 - canonical exact-numeric text kept separate from display formatting
 - whole-gesture rejection for read-only or otherwise unavailable targets
 - one replaceable table-scoped `Paste rejected` toast for direct rejection, while mismatch and confirmed-preflight errors remain in the AlertDialog surface
 - validation
-- pattern fill
-- fill preview
+- one-axis pattern fill
+- one-axis fill preview
 - transaction batching
 
 Success criteria:
 
 - no accidental partial operations
-- no paste tiling, repetition, transposition, clipping, or equal-cell-count shape coercion, including after confirmation
-- 1×1 broadcasts to the selected rectangle; every larger mismatch opens confirmation and can apply only to one explicitly described source-sized rectangle
-- confirmation displays copied, selected, and proposed dimensions plus proposed start/end coordinates; Cancel/Escape applies nothing and restores grid focus
+- no paste tiling, repetition, transposition, clipping, two-dimensional target, or equal-cell-count coercion, including after confirmation
+- a two-dimensional clipboard source is rejected before target parsing; 1×1 broadcasts along the selected Linear Cell Range; a supported linear mismatch opens confirmation and can apply only to one explicitly described source-oriented range
+- confirmation displays copied, selected, and proposed orientations and lengths plus proposed start/end coordinates; Cancel/Escape applies nothing and restores grid focus
 - confirm reruns current preflight; out-of-bounds, unavailable, read-only, locked, invalid, or stale destinations keep the dialog open with one inline reason
 - direct rejected paste reports the first deterministic failing row/column plus a bounded additional count; repeated failures never stack per-cell toasts
 - paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
+- Drag Fill and its preview remain locked to one horizontal or vertical axis
 - large operations do not emit one event per cell
 - undo remains transaction-level
 

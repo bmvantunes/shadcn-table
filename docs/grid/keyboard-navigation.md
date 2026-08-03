@@ -163,18 +163,18 @@ Keyboard behaviour changes by mode.
 
 - arrows move cells
 - one Enter or F2 starts a Cell Edit Session when the focused cell is editable for its current row
-- inside a contiguous multi-cell Client range with at least two currently editable cells, Enter and Shift+Enter retain the range and cycle its Active Cell through eligible cells in column-major order instead of opening an editor; F2 still edits
+- inside a multi-cell Linear Cell Range with at least two currently editable cells, Enter and Shift+Enter retain the range and cycle its Active Cell forward or backward along that one axis instead of opening an editor; F2 still edits
 - printable text input on an eligible editable Client Active Cell starts a replace-mode Cell Edit Session seeded only with the produced text; the previous value is not included
 - replace-on-type targets only the Active Cell, not every cell in a Cell Range Selection
 - command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` never enter replace mode; AltGr/Option text remains valid produced input
 - Enter on a non-editable cell does not fabricate an editor
 - Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
-- Client Cell Range Selection always means zero or one contiguous rectangle; a new selection replaces it and Ctrl/Cmd never adds, toggles, or subtracts ranges
+- Client Cell Range Selection always means zero or one contiguous horizontal-or-vertical range; no command may extend both axes, a new selection replaces the old one, and Ctrl/Cmd never adds, toggles, or subtracts ranges
 - in an Editable Client body, Tab moves to the next currently editable cell and Shift+Tab moves to the previous one, wrapping across logical rows and crossing pinned regions one column at a time
 - at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
-- when one contiguous multi-cell Client rectangle contains at least two currently editable cells, Tab and Shift+Tab preserve it and cycle its Active Cell through eligible cells inside it in row-major order
-- that rectangle gives Enter and Shift+Enter complementary column-major forward and reverse traversal; printable text or F2 still starts editing its Active Cell
-- Escape collapses that rectangle to its Active Cell; when an editor is open, the first Escape cancels editing and the second collapses the range
+- when one multi-cell Linear Cell Range contains at least two currently editable cells, both Tab and Enter preserve it and cycle its Active Cell forward along the selected axis; Shift+Tab and Shift+Enter cycle backward
+- printable text or F2 still starts editing the range's Active Cell
+- Escape collapses the Linear Cell Range to its Active Cell; when an editor is open, the first Escape cancels editing and the second collapses the range
 
 ### Editing mode
 
@@ -185,6 +185,7 @@ Keyboard behaviour changes by mode.
 - Enter movement does not wait for Immediate persistence, reveals virtualized destinations, and does not wrap at row boundaries
 - Tab performs a Cell Edit Commit and moves to the next editable cell
 - Shift+Tab performs a Cell Edit Commit and moves to the previous editable cell
+- inside a Linear Cell Range, accepted Enter and Tab commits advance along its axis while shifted forms reverse it
 - Tab traversal uses the same row wrapping, pinned-aware reveal, virtualized destination, and terminal browser-focus exit as Navigation Mode
 - a pointer press outside the active editor attempts a Cell Edit Commit before transferring logical focus or running the clicked action
 - a rejected parse or validation keeps the Cell Edit Session active and does not silently discard the candidate value
@@ -243,7 +244,7 @@ Support:
 6. Server rows can be targeted before loading.
 7. Focus survives row and column virtualization.
 8. Shift navigation extends from a stable anchor.
-9. Cell selection owns at most one contiguous rectangle; no keyboard or pointer modifier creates additive, subtractive, or disconnected ranges.
+9. Cell selection owns at most one contiguous Linear Cell Range; no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range.
 10. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
 11. Editor cursor behaviour is preserved.
 12. Sorting/filtering clears or reconciles focus safely.
@@ -255,7 +256,7 @@ Support:
 18. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
 19. Without active range traversal, Enter commits and moves one logical row down while Shift+Enter commits and moves one logical row up.
 20. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
-21. A contiguous multi-cell Client range with at least two editable cells retains its rectangle and cycles the Active Cell row-major with Tab or column-major with Enter; shifted forms reverse the corresponding order.
+21. A multi-cell Linear Cell Range with at least two editable cells remains selected while both Tab and Enter cycle its Active Cell forward along the one axis; shifted forms reverse that order.
 22. Range-navigation Enter does not start an editor; F2 and printable text retain their edit-entry roles.
 23. Escape collapses range traversal to the Active Cell; editor Escape cancels first and range Escape requires the following press.
 24. Terminal ordinary Tab and Shift+Tab leave the grid through browser focus order; read-only tables never trap Tab for internal cell movement.
@@ -300,14 +301,13 @@ Must include:
 - Tab and Shift+Tab skip row-specific non-editable cells and reveal virtualized destinations
 - Tab at the final eligible cell and Shift+Tab at the first eligible cell leave the grid in browser focus order
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
-- a contiguous selected rectangle preserves its bounds while Tab cycles the Active Cell forward through eligible cells and Shift+Tab cycles backwards
+- a horizontal or vertical selected range preserves its bounds while Tab or Enter cycles the Active Cell forward through eligible cells and shifted forms cycle backwards
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
-- no selection state, visuals, copy, paste, fill, or traversal path accepts disconnected rectangles or range holes
+- no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates
-- Enter cycles the same selected rectangle top-to-bottom then column-to-column, while Shift+Enter exactly reverses that order
 - Enter in selected-range Navigation Mode advances without editing; F2 edits the current value and printable text replaces it
-- accepted Enter from an editor advances column-major inside the range without waiting for Immediate persistence; invalid input stays in place
-- a selected rectangle with zero or one currently editable cell falls back to ordinary body traversal rather than trapping Tab
+- accepted Enter or Tab from an editor advances along the selected axis without waiting for Immediate persistence; invalid input stays in place
+- a selected Linear Cell Range with zero or one currently editable cell falls back to ordinary body traversal rather than trapping Tab
 - the first Escape from an active editor cancels editing without collapsing its range; the next Escape collapses the range to the Active Cell
 - outside-cell and outside-grid pointer commits before focus transfer
 - invalid outside-pointer commit retains the active editor

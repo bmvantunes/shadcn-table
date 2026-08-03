@@ -121,8 +121,8 @@ The operation that minimally scrolls the shared virtualized row and column space
 _Avoid_: Page navigation, DOM focus search, selection reset
 
 **Cell Range Selection**:
-Spreadsheet-style rectangular cell intent used for multi-cell clipboard and editing operations in a Client Table. A Server Table never creates Cell Range Selection from its Active Cell.
-_Avoid_: Active Cell, Row Selection
+One contiguous one-axis cell intent used for multi-cell clipboard and editing operations in a Client Table. It is either horizontal (`1×N`) or vertical (`N×1`); a Server Table never creates it from its Active Cell.
+_Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection
 
 **Cell Edit Session**:
 The transient interaction in which one editable cell owns an active editor and candidate value.

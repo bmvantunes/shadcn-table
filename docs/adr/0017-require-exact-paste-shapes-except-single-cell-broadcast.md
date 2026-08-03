@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0020
+---
+
 # Require exact paste shapes except single-cell broadcast
 
 BrunoTable never tiles, repeats, transposes, clips, or partially applies a clipboard matrix. Clipboard shape is semantic: a 3×2 source is compatible with a selected 3×2 destination, not a 2×3 or any larger rectangle merely because its cell count is related.

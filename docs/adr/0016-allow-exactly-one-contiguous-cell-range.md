@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0020
+---
+
 # Allow exactly one contiguous Cell Range Selection
 
 `BrunoTableClient` supports at most one contiguous rectangular Cell Range Selection. This is a permanent product invariant, not a V1 deferral: BrunoTable exposes no additive ranges, subtractive holes, disconnected rectangles, or multi-range mode.

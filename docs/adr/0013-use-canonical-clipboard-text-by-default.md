@@ -11,6 +11,6 @@ This intentionally differs from AG Grid's default of applying the value formatte
 - `valueFormatter` can remain row-aware and visually expressive without being required to parse in reverse.
 - Formatted clipboard exchange is available, but its reversibility is explicit and testable.
 - V1 exposes no Cut or destructive cell Clear/Delete capability and registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler. A value changes only through an editor or explicit paste transaction.
-- A 1×1 clipboard source may broadcast to a selected rectangle. Every larger source proceeds directly only into an exactly equal selected shape; any mismatch, including one Active Cell, requires explicit confirmation of one described source-sized destination. BrunoTable never tiles, clips, transposes, or partially pastes matrices.
-- A multi-cell paste parses and validates the complete matrix before applying one atomic gesture; one invalid target applies nothing.
+- A 1×1 clipboard source may broadcast along a selected Linear Cell Range. A supported `1×N` or `N×1` source proceeds directly only into the same axis and length; any other supported linear destination requires explicit confirmation of one described source-oriented range. A clipboard matrix with both dimensions greater than one is rejected.
+- A multi-cell paste parses and validates the complete linear candidate set before applying one atomic gesture; one invalid target applies nothing.
 - Clipboard tests cover exact values beyond `Number.MAX_SAFE_INTEGER`, BigDecimal scale variants, localized formatting, accounting negatives, and custom paired exchange.

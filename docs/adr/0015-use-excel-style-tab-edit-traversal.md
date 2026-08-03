@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0020
+---
+
 # Use Excel-style Tab traversal without trapping browser focus
 
 In an Editable `BrunoTableClient` body, Tab advances the Active Cell to the next currently editable cell and Shift+Tab moves to the previous one. The traversal follows one Logical Column Order across pinned-start, virtualized-centre, and pinned-end columns, skips cells whose current column/row policy is not editable, and wraps from the last eligible cell in one logical row to the first eligible cell in the next row. Reverse traversal wraps symmetrically into the previous row.

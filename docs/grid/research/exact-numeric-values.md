@@ -321,13 +321,14 @@ Copying a display-formatted value should require an explicit clipboard formatter
 Paste processing should:
 
 1. parse TSV into candidate text cells;
-2. validate exact source/destination shape, permitting 1×1 broadcast or an exact larger matrix match to proceed directly and routing every larger mismatch to Paste Confirmation;
-3. after direct or confirmed shape handling, resolve each loaded destination cell and exact column semantics;
-4. parse and validate every target;
-5. abort the whole transaction if any target fails or is unavailable;
-6. otherwise submit one typed multi-cell transaction.
+2. reject a source whose row and column counts both exceed one before target or exact-value parsing;
+3. permit a 1×1 broadcast, allow an exact orientation-and-length match for a `1×N` or `N×1` source, and route every other supported linear mismatch to Paste Confirmation;
+4. after direct or confirmed linear-range handling, resolve each loaded destination cell and exact column semantics;
+5. parse and validate every target;
+6. abort the whole transaction if any target fails or is unavailable;
+7. otherwise submit one typed multi-cell transaction.
 
-Do not tile, repeat, transpose, clip, or coerce matrices by equal total cell count. Shape mismatch is identified before exact numeric parsing; parsing waits for explicit confirmation of the proposed source-sized destination, preventing unnecessary hostile-input work for a gesture the user may cancel.
+Do not tile, repeat, transpose, clip, construct a two-dimensional target, or coerce candidates by equal total cell count. Unsupported two-dimensional input and supported linear mismatch are identified before exact numeric parsing; linear parsing waits for explicit confirmation of the proposed source-oriented destination, preventing unnecessary hostile-input work for a gesture the user may cancel.
 
 This follows the existing rule that server viewport operations must not silently perform partial work and that Immediate multi-cell operations remain one save call ([grid requirements](../requirements.md#L350-L382), [grid requirements](../requirements.md#L319-L325)).
 
