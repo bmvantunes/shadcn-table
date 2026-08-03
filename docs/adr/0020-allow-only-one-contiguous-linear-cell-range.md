@@ -22,8 +22,10 @@ type BrunoTableCellRange =
 
 The Active Cell represents `1×1`; `BrunoTableCellRange` exists only when at least two cells participate. A new range replaces the old one, no additive or subtractive state exists, and private TanStack rectangle primitives must be normalized through this union so a two-axis range cannot cross the Adapter boundary.
 
+The first accepted extension away from the Active Cell chooses the range axis and locks it for that range. Further keyboard or pointer movement may extend, shrink, or cross the anchor only on that axis; perpendicular movement is ignored rather than switching axes or creating a two-dimensional intermediate state. Collapsing back to the Active Cell removes the axis lock, and a new selection gesture may choose either axis. A diagonal pointer gesture must resolve one dominant axis before publishing a multi-cell range and keep that axis for the rest of the gesture.
+
 Copy, paste, Drag Fill, preview, validation, edit transactions, and Batch undo operate only on `1×1`, `1×N`, or `N×1`. A two-dimensional clipboard matrix is rejected with one explanatory toast and never enters Paste Confirmation. A supported linear clipboard source may paste directly into an equal axis and length, while any other linear destination mismatch uses Paste Confirmation to propose one source-oriented linear range. A 1×1 source may broadcast along either selected axis.
 
-Within a selected Linear Cell Range, Tab and Enter both advance through currently editable cells along its one axis; Shift+Tab and Shift+Enter reverse that order. Drag Fill and its preview remain on one locked axis. Ordinary body Tab/Enter behaviour outside Cell Range Selection remains unchanged.
+Within a selected Linear Cell Range, Tab and Enter both advance through currently editable cells along its one locked axis; Shift+Tab and Shift+Enter reverse that order. Drag Fill resolves and locks one axis before previewing any target. Ordinary body Tab/Enter behaviour outside Cell Range Selection remains unchanged.
 
 This supersedes ADR 0016, the selected-range traversal portions of ADR 0015, and the two-dimensional paste-shape rules in ADR 0017. ADR 0019 remains the confirmation workflow for supported linear shape mismatches only.

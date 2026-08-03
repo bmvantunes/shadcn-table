@@ -168,8 +168,8 @@ Keyboard behaviour changes by mode.
 - replace-on-type targets only the Active Cell, not every cell in a Cell Range Selection
 - command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` never enter replace mode; AltGr/Option text remains valid produced input
 - Enter on a non-editable cell does not fabricate an editor
-- Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
-- Client Cell Range Selection always means zero or one contiguous horizontal-or-vertical range; no command may extend both axes, a new selection replaces the old one, and Ctrl/Cmd never adds, toggles, or subtracts ranges
+- Shift + arrows extends Cell Range Selection in a Client Table; the first accepted direction chooses its axis, parallel commands resize or cross its anchor, and perpendicular commands are ignored until it collapses; a Server Table never creates a range
+- Client Cell Range Selection always means zero or one contiguous horizontal-or-vertical range; no command may switch or extend both axes, a new selection replaces the old one, and Ctrl/Cmd never adds, toggles, or subtracts ranges
 - in an Editable Client body, Tab moves to the next currently editable cell and Shift+Tab moves to the previous one, wrapping across logical rows and crossing pinned regions one column at a time
 - at the terminal eligible cell, Tab or Shift+Tab leaves the grid through normal browser focus order rather than cycling; read-only Client and Server Tables use Tab only to cross the composite boundary
 - when one multi-cell Linear Cell Range contains at least two currently editable cells, both Tab and Enter preserve it and cycle its Active Cell forward along the selected axis; Shift+Tab and Shift+Enter cycle backward
@@ -244,7 +244,7 @@ Support:
 6. Server rows can be targeted before loading.
 7. Focus survives row and column virtualization.
 8. Shift navigation extends from a stable anchor.
-9. Cell selection owns at most one contiguous Linear Cell Range; no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range.
+9. Cell selection owns at most one contiguous Linear Cell Range; its first accepted extension locks one axis until collapse or replacement, and no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range even transiently.
 10. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
 11. Editor cursor behaviour is preserved.
 12. Sorting/filtering clears or reconciles focus safely.
@@ -302,6 +302,8 @@ Must include:
 - Tab at the final eligible cell and Shift+Tab at the first eligible cell leave the grid in browser focus order
 - read-only Client and Server Tables use Tab to cross the grid boundary rather than moving between body cells
 - a horizontal or vertical selected range preserves its bounds while Tab or Enter cycles the Active Cell forward through eligible cells and shifted forms cycle backwards
+- the first Shift+Arrow extension locks its axis, parallel commands may resize through the anchor, perpendicular commands do nothing, and collapse permits the next extension to choose either axis
+- a diagonal pointer gesture resolves one axis before publishing a range and cannot switch axes during that gesture
 - a new click or drag replaces the existing range, Shift extends only that range, and Ctrl/Cmd gestures never add, toggle, or subtract another range
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates

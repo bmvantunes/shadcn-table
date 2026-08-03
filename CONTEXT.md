@@ -121,7 +121,7 @@ The operation that minimally scrolls the shared virtualized row and column space
 _Avoid_: Page navigation, DOM focus search, selection reset
 
 **Cell Range Selection**:
-One contiguous one-axis cell intent used for multi-cell clipboard and editing operations in a Client Table. It is either horizontal (`1×N`) or vertical (`N×1`); a Server Table never creates it from its Active Cell.
+One contiguous one-axis cell intent used for multi-cell clipboard and editing operations in a Client Table. It is either horizontal (`1×N`) or vertical (`N×1`), and its chosen axis remains fixed until the range collapses or is replaced; a Server Table never creates it from its Active Cell.
 _Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection
 
 **Cell Edit Session**:
