@@ -385,7 +385,7 @@ Explicit row moves can be added later if benchmarks justify the complexity.
 
 ## Read-only interaction contract
 
-`BrunoTableServer` is always read-only. Its composition root does not install editing, drafts, validation, conflicts, Batch mode, paste, drag fill, clear/delete, or undo/redo. Column definitions may still declare Client editing semantics for reuse, but Server cells normalize them to read-only presentation.
+`BrunoTableServer` is always read-only. Its composition root does not install editing, drafts, validation, conflicts, Batch mode, paste, drag fill, or undo/redo. Column definitions may still declare Client editing semantics for reuse, but Server cells normalize them to read-only presentation. Destructive cell Clear/Delete commands are absent from V1 in both row models.
 
 The Server Table maintains one logical Active Cell for keyboard navigation across pinned, virtualized, and temporarily unloaded coordinates. Cell Range Selection is disabled. Copy is available only when the Active Cell is loaded and serializes that one value; it never claims to copy an unloaded range, row, or column.
 

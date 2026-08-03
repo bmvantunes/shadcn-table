@@ -26,14 +26,14 @@ Changing Edit Mode while an editor, drafts, validation, conflicts, or a save ope
 
 `onSaveEdits` receives a non-empty Save Change Set and returns the typed optimistic-concurrency result. The exact item/result shapes must preserve row, column, value, and Row Version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
 
-- Immediate mode invokes `onSaveEdits` once per committed edit transaction. A normal cell commit usually produces one change; paste, drag fill, and multi-cell clear produce one atomic call containing every change in that transaction.
+- Immediate mode invokes `onSaveEdits` once per committed edit transaction. A normal cell commit usually produces one change; paste and drag fill produce one atomic call containing every change in that transaction.
 - Batch mode accumulates drafts and invokes the same handler only after Save. Coalesce repeated edits to the same cell into one net change from its accepted base to its latest draft; do not send raw undo history.
 
 The handler never changes shape based on Edit Mode and is never called once per cell for a multi-cell transaction.
 
 Every Save Change Set is atomic. The complete immutable set succeeds or fails together; there is no public partial-success outcome. A rejection may carry per-cell or per-row diagnostic details, canonical latest server values, and conflicts for review, but it never reports that a valid prefix was persisted. Consumers that require several writes must provide a transactional application seam behind `onSaveEdits`.
 
-Immediate mode supports multiple concurrent save operations over disjoint Cell Identities. Each operation owns a unique Operation Identity and one immutable Save Change Set, which may itself contain many cells from one paste, fill, or clear gesture. Maintain an operation registry plus a reverse Cell Identity-to-operation index: a cell belongs to at most one active operation, while unrelated cells may commit new operations without waiting. Do not model Immediate persistence with one table-level `isSaving` boolean.
+Immediate mode supports multiple concurrent save operations over disjoint Cell Identities. Each operation owns a unique Operation Identity and one immutable Save Change Set, which may itself contain many cells from one paste or fill gesture. Maintain an operation registry plus a reverse Cell Identity-to-operation index: a cell belongs to at most one active operation, while unrelated cells may commit new operations without waiting. Do not model Immediate persistence with one table-level `isSaving` boolean.
 
 While an Immediate operation is in flight, lock only its complete owned cell set. While a Batch Save is in flight, install one table-wide edit mutation lock so no cell can begin or commit another mutation. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner; the prototype should compare treatments. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
 
@@ -71,7 +71,9 @@ A pointer press outside the editor attempts to commit before logical focus moves
 
 An invalid candidate cannot leave the Cell Edit Session through Enter, Tab, Shift+Tab, or an outside pointer action. The editor keeps the raw candidate, retains logical focus, sets `aria-invalid`, and opens an accessible error popover anchored to the cell. The popover uses the invalid visual treatment and a text explanation; color alone is never the error signal. Escape is the explicit cancellation path: it discards the raw candidate, restores the latest accepted typed value, closes the error presentation, and exits edit mode.
 
-Failed parsing or local validation creates no draft, edit transaction, undo entry, or Save Change Set and never invokes `onSaveEdits`. For example, `"hello"` entered into a Number column remains editor text and can never enter the typed edit model. A multi-cell paste, fill, or clear gesture validates the complete candidate matrix before applying anything; one invalid target rejects the whole gesture and creates no partial transaction.
+Failed parsing or local validation creates no draft, edit transaction, undo entry, or Save Change Set and never invokes `onSaveEdits`. For example, `"hello"` entered into a Number column remains editor text and can never enter the typed edit model. A multi-cell paste or fill gesture validates the complete candidate matrix before applying anything; one invalid target rejects the whole gesture and creates no partial transaction.
+
+V1 exposes no destructive cell Clear/Delete capability: no public command, menu item, `Delete` key, or `Backspace` key clears a cell or selected range. Users change values through an editor or an explicit paste transaction, including deliberately entering or pasting blank text when the destination column's explicit blank policy permits it. Those paths retain normal parsing, validation, transaction, history, and save rules.
 
 ## Sparse edit model
 
@@ -419,7 +421,7 @@ Normalize all changes:
 ```ts
 type BrunoTableEditTransaction = {
   id: string;
-  source: "cell-edit" | "paste" | "drag-fill" | "clear" | "discard-blocked";
+  source: "cell-edit" | "paste" | "drag-fill" | "discard-blocked";
   changes: readonly BrunoTableCellChange[];
   createdAt: number;
 };
@@ -450,6 +452,6 @@ Do not conflate validation with conflict detection.
 
 ## Server viewport exclusion
 
-`BrunoTableServer` is always read-only. It does not install the editor, drafts, validation, save operations, conflict workflow, Batch switch, Edit Safety Footer, paste, drag fill, clear/delete, or undo/redo. Shared columns may declare `isEditable` for a Client Table without enabling any of those capabilities in the Server composition root.
+`BrunoTableServer` is always read-only. It does not install the editor, drafts, validation, save operations, conflict workflow, Batch switch, Edit Safety Footer, paste, drag fill, or undo/redo. Shared columns may declare `isEditable` for a Client Table without enabling any of those capabilities in the Server composition root. The V1-wide prohibition on destructive cell Clear/Delete commands applies to both table modes.
 
 Server keyboard navigation still owns one Active Cell across pinned and virtualized regions. Copy operates only on that one loaded cell. Cell Range Selection is absent, so BrunoTable never claims that an unloaded rectangle was selected or copied.

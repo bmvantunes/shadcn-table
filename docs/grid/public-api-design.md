@@ -294,7 +294,7 @@ Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence r
 The handler always receives the same non-empty array:
 
 - Immediate Cell Edit Commit normally supplies one change.
-- Immediate paste, drag fill, and multi-cell clear supply every change in one transaction-level call.
+- Immediate paste and drag fill supply every change in one transaction-level call.
 - Batch Save supplies the accumulated net dirty cells, coalescing repeated edits of one cell rather than exposing undo history.
 
 `editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in `BrunoTableClient`. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children. `BrunoTableServer` renders none of this chrome even when shared columns declare potential editability.
@@ -510,7 +510,7 @@ Rules:
 - Mixed-domain unions have no automatic ordered-numeric capability.
 - `valueFormatter` changes visual presentation only.
 - Default edit and clipboard text is canonical, exact, and locale-independent.
-- V1 exposes Copy and Paste but no Cut prop, command, menu item, or `Ctrl/Cmd+X` handler; destructive removal uses the explicit atomic Clear/Delete edit transaction.
+- V1 exposes Copy and Paste but no Cut or cell Clear/Delete prop, command, or menu item. It registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler; value changes enter through an editor or explicit paste transaction.
 - Blank input is resolved by an explicit nullable clear policy before numeric parsing; it is never silently zero.
 - BigDecimal equality and comparison match effect-view-server, including differently scaled equal values and extreme safe scales.
 - Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.

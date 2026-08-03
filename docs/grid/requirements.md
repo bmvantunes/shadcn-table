@@ -55,7 +55,7 @@ This creates three valid combinations:
 | Client          |       Yes |      Yes |
 | Server viewport |       Yes |       No |
 
-Viewport editing, drafts, conflicts, paste, drag fill, clear/delete, and local undo/redo are intentionally absent. An incomplete sparse row space cannot honestly retain or operate on every affected cell. Shared column definitions may still contain `isEditable` declarations for reuse by `BrunoTableClient`; `BrunoTableServer` does not activate them or mount editing chrome.
+Viewport editing, drafts, conflicts, paste, drag fill, and local undo/redo are intentionally absent. An incomplete sparse row space cannot honestly retain or operate on every affected cell. Shared column definitions may still contain `isEditable` declarations for reuse by `BrunoTableClient`; `BrunoTableServer` does not activate them or mount editing chrome. Destructive cell Clear/Delete commands are absent from V1 in both row models.
 
 ## Live-by-default data contract
 
@@ -427,7 +427,7 @@ The end user owns Edit Mode. Do not expose default or controlled Edit Mode props
 Both modes call the same `onSaveEdits` operation with a non-empty Save Change Set:
 
 - a normal Immediate cell commit usually sends one change;
-- Immediate paste, drag fill, and multi-cell clear send one atomic multi-change call;
+- Immediate paste and drag fill send one atomic multi-change call;
 - Batch Save sends accumulated net changes, coalesced to one entry per dirty cell.
 
 Never split a multi-cell edit transaction into one persistence call per cell. Never expose raw undo history as the Batch Save payload.
@@ -499,7 +499,6 @@ type BrunoTableServerCapabilities = {
   clipboard: "single-loaded-cell";
   dragFill: "disabled";
   paste: "disabled";
-  clear: "disabled";
   bulkEdit: "disabled";
   rowSelection: "disabled";
 };
@@ -514,7 +513,7 @@ Initial recommended rules:
 | Drag fill            | Full                    | No                      |
 | Copy                 | Selected loaded ranges  | Active loaded cell only |
 | Paste                | Atomic selected targets | No                      |
-| Clear/delete         | Atomic selected targets | No                      |
+| Cell clear/delete    | No                      | No                      |
 | Row selection        | Opt-in; filtered rows   | No                      |
 | Undo/redo            | Current Batch only      | No                      |
 | Conflicts            | Yes                     | No                      |
@@ -549,14 +548,14 @@ Logical focus must survive DOM unmounting caused by virtualization.
 
 ## Undo, redo, clipboard, and fill
 
-V1 supports Copy and Paste but no Cut capability. Do not register `Ctrl/Cmd+X`, do not clear cells after attempting a browser clipboard write, and do not expose a Cut command through menus or the public interface. Editable Client users perform destructive removal through the explicit atomic Clear/Delete gesture, which runs editability, parsing, validation, Batch history, and save rules independently of clipboard success.
+V1 supports Copy and Paste but no Cut or destructive cell Clear/Delete capability. Do not register `Ctrl/Cmd+X`, `Delete`, or `Backspace` as mutation shortcuts; do not clear cells after a browser clipboard write; and do not expose Cut or Clear/Delete through menus, commands, or the public interface. Editable Client users change a value only through an editor or an explicit paste transaction. Deliberately entered or pasted blank text is still subject to the destination column's explicit blank policy, parsing, atomic validation, Batch history, and save rules.
 
 All edits should normalize to transactions:
 
 ```ts
 type BrunoTableEditTransaction = {
   id: string;
-  source: "cell-edit" | "paste" | "drag-fill" | "clear" | "discard-blocked";
+  source: "cell-edit" | "paste" | "drag-fill" | "discard-blocked";
   changes: readonly BrunoTableCellChange[];
 };
 ```

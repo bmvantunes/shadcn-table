@@ -149,7 +149,7 @@ Type tests should prove that:
 - `contains` is rejected for exact numeric columns;
 - `greaterThan` is rejected when no ordered-numeric capability exists;
 - edit changes keep exact `before` and `after` types by Column Identity;
-- nullable exact numeric columns cannot silently choose a clear value;
+- nullable exact numeric columns cannot silently choose a blank-input representation;
 - the root package remains usable in a project where Effect is not installed.
 
 ## Native `bigint` semantics
@@ -190,11 +190,11 @@ Canonical formatting deliberately erases representational trailing zeroes. If `1
 The grid must resolve blank input before calling the numeric parser:
 
 - non-nullable value: blank is a parse error;
-- `T | null`: the column may explicitly choose `null` as its clear value;
+- `T | null`: the column may explicitly choose `null` as its blank-input value;
 - `T | undefined`: the column may explicitly choose `undefined`;
-- `T | null | undefined`: the consumer must choose which representation a clear operation means.
+- `T | null | undefined`: the consumer must choose which representation accepted blank input means.
 
-This keeps clear/delete semantics distinct from numeric zero and prevents a blank pasted cell from silently becoming `0n` or decimal zero.
+This keeps blank-input semantics distinct from numeric zero and prevents a blank edited or pasted cell from silently becoming `0n` or decimal zero. It does not imply a destructive Clear/Delete command; V1 accepts blank values only through an editor or explicit paste transaction.
 
 ### Comparator safety is the hard requirement
 
@@ -308,13 +308,13 @@ filter <= value < filterTo
 
 ([effect-view-server query semantics](../../../../effect-view-server/docs/query-semantics.md#L41-L56)). TanStack's built-in `inNumberRange` is inclusive at both ends ([TanStack filter functions](../../../.repos/table/packages/table-core/src/features/column-filtering/filterFns.ts#L277-L307)). Using it would make Client and Server Tables disagree at the upper endpoint. BrunoTable should implement half-open `inRange` in both paths, or introduce differently named operators; it must not leave the difference implicit.
 
-## Clipboard, paste, fill, and clear
+## Clipboard, paste, fill, and blank values
 
 Exact numeric clipboard defaults should use canonical text:
 
 - `bigint`: signed base-10 digits;
 - BigDecimal: the Effect-compatible canonical plain/scientific string;
-- nullish clear values: empty text only when the destination column has an explicit clear policy.
+- nullish blank values: empty text only when the destination column has an explicit blank policy.
 
 Copying a display-formatted value should require an explicit clipboard formatter. If it is intended to round-trip, it also needs a matching clipboard parser. The safe default remains canonical exact text. AG Grid, by comparison, applies its display formatter on copy and parser on paste ([AG Grid clipboard](../../../.repos/ag-grid/documentation/ag-grid-docs/src/content/docs/clipboard/index.mdoc#L128-L138), [clipboard service](../../../.repos/ag-grid/packages/ag-grid-enterprise/src/clipboard/clipboardService.ts#L1138-L1179)); BrunoTable should separate the channels to prevent a localized display formatter from silently corrupting pasted values.
 

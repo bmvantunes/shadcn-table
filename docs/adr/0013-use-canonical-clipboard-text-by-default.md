@@ -10,6 +10,6 @@ This intentionally differs from AG Grid's default of applying the value formatte
 - Copy, paste, fill, parsing, and semantic equality reuse the compiled Column Value Semantics rather than guessing from display text.
 - `valueFormatter` can remain row-aware and visually expressive without being required to parse in reverse.
 - Formatted clipboard exchange is available, but its reversibility is explicit and testable.
-- V1 exposes no Cut capability or `Ctrl/Cmd+X` handler. Destructive mutation remains an explicit atomic Clear/Delete gesture after clipboard concerns have completed.
+- V1 exposes no Cut or destructive cell Clear/Delete capability and registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler. A value changes only through an editor or explicit paste transaction.
 - A multi-cell paste parses and validates the complete matrix before applying one atomic gesture; one invalid target applies nothing.
 - Clipboard tests cover exact values beyond `Number.MAX_SAFE_INTEGER`, BigDecimal scale variants, localized formatting, accounting negatives, and custom paired exchange.

@@ -277,7 +277,7 @@ Success criteria:
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
 - Client Shift-click Row Selection includes the complete current display-order interval
 - Server mounts no row checkbox, selected-row state, Shift-click row interval, Select All command, or cell range; it copies only its loaded Active Cell
-- Server cell interaction exposes no paste, fill, clear/delete, or editing
+- Server cell interaction exposes no paste, fill, or editing; V1 exposes no destructive cell Clear/Delete command in either row model
 - no partial silent copy/fill/edit
 - selection can outlive mounted cells
 - selection clears or reconciles on query change
@@ -319,7 +319,8 @@ Success criteria:
 - mode switching is blocked while any edit-owned work or save is active and is never persisted
 - no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it
 - Immediate single-cell commit calls `onSaveEdits` with a one-element array
-- Immediate paste, drag fill, and multi-cell clear each call `onSaveEdits` once with the full transaction
+- Immediate paste and drag fill each call `onSaveEdits` once with the full transaction
+- V1 exposes no cell Clear/Delete command, menu item, public capability, or `Delete`/`Backspace` shortcut; a value changes only through an editor or an explicit paste transaction
 - every Save Change Set is atomic: the complete operation is accepted or rejected with no partial-success result
 - disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
 - Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles

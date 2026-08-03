@@ -35,7 +35,7 @@ Its `useSpreadsheetHistory` hook uses a React reducer containing `rows`, `past`,
 
 TanStack React Store is used separately for the Table-owned cell-selection atom ([local Spreadsheet setup](../../../.repos/table/examples/react/spreadsheet/src/Spreadsheet.tsx#L163-L175)). The history hook's only state dependency is React itself. Therefore the lesson to copy is the command model—one logical user action containing all affected cell patches—not the example's particular React reducer.
 
-For BrunoTable, a single edit, paste, fill, or clear should produce one typed `applyCommand` event containing every patch. That gives one notification and one undo unit. XState Store's `getTransactionId` can group several events, but it is unnecessary when the command boundary is modeled correctly in the first place ([XState Store undo/redo transactions](https://stately.ai/docs/xstate-store/undo-redo#transactions)).
+For BrunoTable, a single edit, paste, fill, or targeted blocked-draft discard should produce one typed `applyCommand` event containing every patch. That gives one notification and one undo unit. XState Store's `getTransactionId` can group several events, but it is unnecessary when the command boundary is modeled correctly in the first place ([XState Store undo/redo transactions](https://stately.ai/docs/xstate-store/undo-redo#transactions)). V1 later chose not to expose a destructive cell Clear/Delete command at all.
 
 ## Why the two stores are not interchangeable
 
