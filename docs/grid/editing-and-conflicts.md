@@ -44,7 +44,7 @@ An atomic success keeps all accepted canonical values and flashes every affected
 
 Atomicity means the application persisted every submitted change or none of them. It does not authorize BrunoTable to discard a rejected Batch.
 
-The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. It contains no Retry, Save, or other mutation action. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
+The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected or transport-failed Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. It contains no Retry, Save, or other mutation action. A thrown request, timeout, disconnect, or HTTP failure says that the call was not confirmed; the toast must not claim that nothing committed merely because no typed result arrived. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
 ## Cell edit lifecycle
 
@@ -328,6 +328,14 @@ One operation has exactly one atomic outcome:
 
 A rejected result may describe several affected rows or cells without becoming a partial-success result. Semantic equivalence decides whether canonical accepted values clear submitted drafts.
 
+The asynchronous invocation may itself fail before BrunoTable receives either typed outcome. Do not introduce a durable user-facing `unconfirmed` edit state or guess whether the server committed. Apply the mode-specific failure presentation, preserve Batch drafts, and let the live View Server remain the reconciliation authority:
+
+- if live canonical values become semantically equal to the drafts, convergence removes those changes and their history as though they were never locally pending;
+- if live canonical values differ, normal conflict detection records the divergence;
+- if no confirming update arrives, the drafts remain available for review and a later explicit fresh-preflight Save.
+
+An Immediate operation still reverts to the latest currently known server values on call failure; a later View Server publication is rendered and reconciled normally.
+
 ## XState actors
 
 Recommended actors:
@@ -383,7 +391,7 @@ Use sparse active edit state.
 
 ### Save operation manager
 
-The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports one accepted or rejected terminal outcome. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells. A failed actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
+The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports accepted, typed rejected, or invocation-failed. Invocation failure is an orchestration event, not a claim about the server's atomic outcome. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells. A failed actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
 
 ## Transactions
 

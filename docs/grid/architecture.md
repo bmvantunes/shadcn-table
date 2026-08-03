@@ -119,6 +119,8 @@ The rejected transition dispatches different reconciliation commands by Edit Mod
 
 The Save Workflow stores `initiatedFrom` as Footer or Conflict Review. Failure returns to that same mounted surface; it never opens or closes Conflict Review merely because transport failed. Success closes Conflict Review only when that surface initiated the successful attempt. No actor, Effect schedule, Adapter, or notification action retries automatically. A later explicit Save event reruns live preflight and creates a new operation rather than reusing a stale Save Change Set.
 
+An operation actor distinguishes a typed rejected result from invocation failure. The latter drives failure presentation and releases locks but makes no assertion about whether the atomic write committed. Batch drafts remain in the sparse store until live source reconciliation converges them, conflicts them, or the user resets them. Do not add a separate durable `unconfirmed` product state: the live View Server is the outcome oracle.
+
 Footer render boundaries remain independent:
 
 - the conflict control selects only `conflictCount` and is absent when that count is zero;
