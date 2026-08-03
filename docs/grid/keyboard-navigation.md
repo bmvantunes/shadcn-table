@@ -163,6 +163,9 @@ Keyboard behaviour changes by mode.
 
 - arrows move cells
 - one Enter or F2 starts a Cell Edit Session when the focused cell is editable for its current row
+- printable text input on an eligible editable Client Active Cell starts a replace-mode Cell Edit Session seeded only with the produced text; the previous value is not included
+- replace-on-type targets only the Active Cell, not every cell in a Cell Range Selection
+- command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` never enter replace mode; AltGr/Option text remains valid produced input
 - Enter on a non-editable cell does not fabricate an editor
 - Shift + arrows extends Cell Range Selection in a Client Table; a Server Table never creates a range
 - Tab follows configured navigation policy
@@ -238,11 +241,13 @@ Support:
 13. One horizontal navigation command moves to exactly one adjacent navigable column.
 14. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
 15. Enter starts an editable focused cell with one key press.
-16. Enter, Tab, Shift+Tab, and an accepted outside pointer action commit the active cell edit.
-17. Client and Server Tables both virtualize the logical row space.
-18. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
-19. Server keyboard reveal changes the active viewport window, never page state.
-20. An unloaded active Server row retains its logical Active Cell until delivery.
+16. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
+17. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
+18. Enter, Tab, Shift+Tab, and an accepted outside pointer action commit the active cell edit.
+19. Client and Server Tables both virtualize the logical row space.
+20. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
+21. Server keyboard reveal changes the active viewport window, never page state.
+22. An unloaded active Server row retains its logical Active Cell until delivery.
 
 ## Test matrix
 
@@ -266,6 +271,11 @@ Must include:
 - final-row clamping at `totalRows - 1`
 - no focus loss while the active destination is represented by a loading slot
 - one Enter starts an editable cell
+- typing printable text over `hello` starts a replace-mode editor whose candidate is only the produced text
+- replace-on-type affects only the Active Cell when a Client range is selected
+- non-text command shortcuts, Delete, Backspace, navigation keys, and function keys do not seed replace mode
+- composed and dead-key text enters exactly once without leaking intermediate key values
+- Escape after replace-on-type restores the exact pre-session value or Batch draft and creates no transaction
 - Enter commits the active editor
 - Tab and Shift+Tab commit and move to the next or previous editable cell
 - outside-cell and outside-grid pointer commits before focus transfer

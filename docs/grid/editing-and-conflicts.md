@@ -54,14 +54,19 @@ A Cell Edit Session is distinct from the Save Workflow. The accepted default int
 
 ```text
 focused editable cell
-    -> Enter or F2
+    -> Enter or F2: edit current value
+    -> printable text input: replace with produced text
 active editor
     -> Enter, Tab, Shift+Tab, or accepted outside pointer action
 Cell Edit Commit
     -> sparse draft + one cell-edit transaction
 ```
 
-One Enter starts editing; a double key press or double click is not required. Escape cancels the active editor without committing its candidate value.
+One Enter starts editing; a double key press or double click is not required. Enter and F2 initialize the editor from the cell's current pre-session typed value. Printable text input on an eligible Active Cell instead starts the editor in replace mode: the produced text becomes the complete initial raw candidate, so typing `bye` over `hello` produces `bye`, not `hellobye`. Subsequent input continues normally in the mounted editor.
+
+Replace-on-type applies only to a currently editable `BrunoTableClient` cell whose compiled editor accepts direct text input. It affects only the Active Cell even if a Cell Range Selection is present. Command shortcuts that produce no text, navigation keys, function keys, `Delete`, and `Backspace` never seed this path. AltGr/Option characters, IME composition, and dead-key sequences must enter as the browser-produced text rather than being rejected because a modifier is present or duplicated from intermediate `keydown` fragments.
+
+Escape cancels the active editor without committing its candidate value and restores the exact pre-session value, including an existing Batch draft. Starting replace mode does not itself create a draft, transaction, undo entry, or save operation; those remain Cell Edit Commit consequences.
 
 A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: Immediate and Batch Edit Modes decide when committed changes enter the Save Workflow.
 

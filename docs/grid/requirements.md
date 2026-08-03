@@ -542,7 +542,7 @@ Support at minimum:
 - movement to virtualized cells
 - movement to unloaded server rows
 
-In an Editable Client Table, one Enter starts the focused cell when it is editable. Enter, Tab, Shift+Tab, and an accepted pointer action outside the editor perform a Cell Edit Commit; Tab then moves forward and Shift+Tab moves backward through editable cells. A Cell Edit Commit updates BrunoTable's draft/transaction state and is distinct from saving to the server. In a Server Table, Enter never starts an editor; focus and single-cell copy remain available.
+In an Editable Client Table, one Enter or F2 starts the focused cell from its current pre-session value when it is editable. Printable text input instead starts an eligible direct-text editor in replace mode with only the produced text as its raw candidate; it never appends to the previous value and affects only the Active Cell when a range exists. AltGr/Option characters, IME composition, and dead keys use the browser-produced text, not modifier heuristics or intermediate key values. Command shortcuts that produce no text, navigation and function keys, `Delete`, and `Backspace` do not enter replace mode. Enter, Tab, Shift+Tab, and an accepted pointer action outside the editor perform a Cell Edit Commit; Tab then moves forward and Shift+Tab moves backward through editable cells. A Cell Edit Commit updates BrunoTable's draft/transaction state and is distinct from saving to the server. Escape restores the exact pre-session value without a transaction. In a Server Table, no key starts an editor; focus and single-cell copy remain available.
 
 Logical focus must survive DOM unmounting caused by virtualization.
 

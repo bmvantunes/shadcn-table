@@ -312,6 +312,9 @@ Success criteria:
 - an invalid editor candidate cannot exit through Enter, Tab, Shift+Tab, or an outside pointer action; it remains active with an accessible anchored error until corrected or cancelled with Escape
 - failed parsing or local validation creates no draft, undo entry, Save Change Set, or `onSaveEdits` invocation
 - one invalid target rejects a complete multi-cell edit gesture without applying a valid prefix
+- printable text over an eligible focused Client cell starts a replace-mode editor seeded with only the produced text, while Enter/F2 preserve the current pre-session value
+- replace-on-type targets only the Active Cell, ignores non-text commands, `Delete`, and `Backspace`, and preserves AltGr/Option/IME/dead-key produced text exactly once
+- Escape after replace-on-type restores the pre-session value or Batch draft without creating a transaction
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
 - `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome
