@@ -320,6 +320,7 @@ Success criteria:
 - Editable Client Tab and Shift+Tab traverse currently editable cells across one pinned-aware Logical Column Order, skip ineligible cells, wrap across rows, and reveal virtualized destinations
 - terminal Tab movement leaves the grid through browser focus order; read-only Client and Server Tables never trap Tab for internal navigation
 - one contiguous multi-cell Client range with at least two eligible cells remains selected while Tab and Shift+Tab cycle its Active Cell forward or backward, wrapping inside the rectangle
+- Enter and Shift+Enter cycle the same range in forward or reverse column-major order; range-navigation Enter moves without opening an editor while F2 and printable text retain editing roles
 - Escape cancels an active editor before a following Escape collapses range traversal; ranges with fewer than two eligible cells fall back to ordinary traversal
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
 - `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
