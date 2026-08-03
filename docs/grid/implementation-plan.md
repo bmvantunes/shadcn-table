@@ -277,6 +277,7 @@ Success criteria:
 - the first accepted range extension locks one axis; pointer drag slop publishes no range, greater absolute displacement wins after the threshold, an exact tie stays `1×1`, parallel movement may resize through the anchor, and perpendicular movement is projected away until collapse
 - drag autoscroll remains off before axis acquisition and enables only the matching horizontal or vertical channel afterward; perpendicular and pinned-region edge proximity cannot scroll the other axis
 - Escape and `pointercancel` stop range autoscroll and restore the exact pre-gesture Active Cell/range snapshot without also applying ordinary Escape collapse
+- pointer capture keeps outside release authoritative: selection retains its last projected range, while leaving the grid alone never cancels the gesture
 - Client Row Selection is absent by default and its enabled Select All operation includes filtered virtualized rows outside the mounted DOM window
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
@@ -414,6 +415,7 @@ Success criteria:
 - Drag Fill publishes no preview inside drag slop, uses the same dominant-displacement and exact-tie rule to acquire an axis, projects later diagonal movement onto it, and cannot switch axes or publish a two-dimensional intermediate target
 - Drag Fill autoscroll is inactive before axis acquisition and parallel-only afterward
 - Escape and `pointercancel` discard the Drag Fill preview, stop autoscroll, and create no candidate validation, draft, transaction, history, save actor, or persistence call
+- ordinary pointer release outside the grid reruns preflight and applies the last valid projected fill preview atomically; no acquired axis or non-empty preview is a silent no-op
 - large operations do not emit one event per cell
 - undo remains transaction-level
 

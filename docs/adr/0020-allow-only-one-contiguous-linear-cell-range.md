@@ -28,6 +28,8 @@ Drag autoscroll is inactive until an axis is acquired and then operates only on 
 
 Escape or a browser `pointercancel` cancels an in-progress pointer gesture and stops autoscroll. Range selection restores the exact pre-gesture Active Cell and optional Linear Cell Range. Drag Fill discards its preview and creates no edit transaction, draft, Batch history command, save operation, or partial change.
 
+The grid holds pointer capture for the gesture. A normal pointer release outside the grid therefore completes the last visible projected result rather than cancelling merely because the pointer crossed a DOM boundary. Range selection retains that projected Linear Cell Range. Drag Fill may preflight and atomically apply only an acquired, currently valid preview; release with no acquired axis or valid preview is a no-op.
+
 Copy, paste, Drag Fill, preview, validation, edit transactions, and Batch undo operate only on `1×1`, `1×N`, or `N×1`. A two-dimensional clipboard matrix is rejected with one explanatory toast and never enters Paste Confirmation. A supported linear clipboard source may paste directly into an equal axis and length, while any other linear destination mismatch uses Paste Confirmation to propose one source-oriented linear range. A 1×1 source may broadcast along either selected axis.
 
 Within a selected Linear Cell Range, Tab and Enter both advance through currently editable cells along its one locked axis; Shift+Tab and Shift+Enter reverse that order. Drag Fill resolves and locks one axis before previewing any target. Ordinary body Tab/Enter behaviour outside Cell Range Selection remains unchanged.

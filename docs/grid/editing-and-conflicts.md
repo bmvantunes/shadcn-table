@@ -403,6 +403,8 @@ Drag Fill publishes no preview or autoscroll inside drag slop. After crossing th
 
 Escape or browser `pointercancel` transitions the actor to `cancelled`, stops autoscroll, releases its preview, and returns to `idle` without applying. Cancellation creates no candidate validation, draft, edit transaction, history command, save actor, or persistence invocation. Pointer release is the only gesture completion that may preflight and atomically apply the current preview.
 
+The actor owns pointer capture, so an ordinary release outside the grid still completes the last visible projected preview. Completion reruns current target, lock, parsing, and validation preflight before creating one atomic transaction. If no axis was acquired, no non-empty preview exists, or the extension has returned to its source bounds, release is a silent no-op with no transaction, history, save actor, or notification.
+
 ### Conflict actor
 
 Manages:
