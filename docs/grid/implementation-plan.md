@@ -370,20 +370,20 @@ Success criteria:
 
 Build:
 
-- TSV copy/paste
+- Client TSV copy/paste
+- no Cut command, menu item, public capability, or `Ctrl/Cmd+X` binding
 - typed parsing
 - canonical exact-numeric text kept separate from display formatting
-- read-only skipping
+- whole-gesture rejection for read-only or otherwise unavailable targets
 - validation
 - pattern fill
 - fill preview
-- loaded-range restrictions
 - transaction batching
-- server-assisted extension points
 
 Success criteria:
 
 - no accidental partial operations
+- browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
 - large operations do not emit one event per cell
 - undo remains transaction-level

@@ -549,12 +549,14 @@ Logical focus must survive DOM unmounting caused by virtualization.
 
 ## Undo, redo, clipboard, and fill
 
+V1 supports Copy and Paste but no Cut capability. Do not register `Ctrl/Cmd+X`, do not clear cells after attempting a browser clipboard write, and do not expose a Cut command through menus or the public interface. Editable Client users perform destructive removal through the explicit atomic Clear/Delete gesture, which runs editability, parsing, validation, Batch history, and save rules independently of clipboard success.
+
 All edits should normalize to transactions:
 
 ```ts
 type BrunoTableEditTransaction = {
   id: string;
-  source: "cell-edit" | "paste" | "drag-fill" | "clear";
+  source: "cell-edit" | "paste" | "drag-fill" | "clear" | "discard-blocked";
   changes: readonly BrunoTableCellChange[];
 };
 ```

@@ -510,6 +510,7 @@ Rules:
 - Mixed-domain unions have no automatic ordered-numeric capability.
 - `valueFormatter` changes visual presentation only.
 - Default edit and clipboard text is canonical, exact, and locale-independent.
+- V1 exposes Copy and Paste but no Cut prop, command, menu item, or `Ctrl/Cmd+X` handler; destructive removal uses the explicit atomic Clear/Delete edit transaction.
 - Blank input is resolved by an explicit nullable clear policy before numeric parsing; it is never silently zero.
 - BigDecimal equality and comparison match effect-view-server, including differently scaled equal values and extreme safe scales.
 - Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.
