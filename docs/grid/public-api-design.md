@@ -511,12 +511,12 @@ Rules:
 - Mixed-domain unions have no automatic ordered-numeric capability.
 - `valueFormatter` changes visual presentation only.
 - Default edit and clipboard text is canonical, exact, and locale-independent.
-- V1 exposes Copy and Paste but no Cut or cell Clear/Delete prop, command, or menu item. It registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler; value changes enter through an editor or explicit paste transaction.
+- V1 exposes Copy and Paste but no Cut or cell Clear/Delete prop, command, or menu item. It registers no `Ctrl/Cmd+X`, `Delete`, or `Backspace` mutation handler; value changes enter through an editor, explicit paste transaction, or repetition-only Drag Fill transaction.
 - Paste has no public tiling or mismatch policy. A source whose row and column counts both exceed one is rejected with one explanatory toast. A 1×1 source is the only no-confirmation broadcast shape; a supported `1×N` or `N×1` mismatch is resolved by BrunoTable's internal Paste Confirmation and can apply only to one explicitly described source-oriented Linear Cell Range.
 - Blank input is resolved by an explicit nullable clear policy before numeric parsing; it is never silently zero.
 - BigDecimal equality and comparison match effect-view-server, including differently scaled equal values and extreme safe scales.
 - Numeric filter operators derive from semantics capabilities rather than `Extract<TValue, number | bigint>`.
-- Series-fill arithmetic is an optional capability separate from comparison.
+- Drag Fill is fixed repetition-only behavior and exposes no series, arithmetic, inference, or fill-strategy capability in `BrunoTableValueType`, Column Helpers, or table props.
 
 The public `BrunoTableValueType<TValue>` descriptor is a deep interface, not an invitation for ordinary consumers to implement many callbacks. First-party built-ins, Column Helpers, and integration presets hide those details and compile them into a private Column Value Semantics plan. Its final construction interface must be proven with type-level tests before export, while the `valueType` column selection and exact behavior above are accepted.
 

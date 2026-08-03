@@ -336,7 +336,7 @@ Success criteria:
 - no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it
 - Immediate single-cell commit calls `onSaveEdits` with a one-element array
 - Immediate paste and drag fill each call `onSaveEdits` once with the full transaction
-- V1 exposes no cell Clear/Delete command, menu item, public capability, or `Delete`/`Backspace` shortcut; a value changes only through an editor or an explicit paste transaction
+- V1 exposes no cell Clear/Delete command, menu item, public capability, or `Delete`/`Backspace` shortcut; a value changes only through an editor, an explicit paste transaction, or repetition-only Drag Fill
 - every Save Change Set is atomic: the complete operation is accepted or rejected with no partial-success result
 - disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
 - Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles
@@ -398,7 +398,7 @@ Build:
 - one replaceable table-scoped `Paste rejected` toast for direct rejection, while mismatch and confirmed-preflight errors remain in the AlertDialog surface
 - one replaceable table-scoped Base UI `Fill rejected` toast for Drag Fill preflight rejection, with error presentation, Close, and no Retry action
 - validation
-- one-axis pattern fill
+- one-axis repetition-only Drag Fill
 - one-axis fill preview
 - transaction batching
 
@@ -413,6 +413,9 @@ Success criteria:
 - paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
+- one-cell fill repeats that value and multi-cell fill repeats the exact source sequence cyclically in both directions, phase-aligned to the source's logical start
+- Drag Fill performs no numeric, BigInt, BigDecimal, date, text-suffix, or trend inference; modifier keys and public APIs cannot enable series generation
+- repeated values pass through canonical exchange text, destination parsing, and whole-vector validation, so incompatible heterogeneous targets reject atomically
 - Drag Fill publishes no preview inside drag slop, uses the same dominant-displacement and exact-tie rule to acquire an axis, projects later diagonal movement onto it, and cannot switch axes or publish a two-dimensional intermediate target
 - Drag Fill autoscroll is inactive before axis acquisition and parallel-only afterward
 - Escape and `pointercancel` discard the Drag Fill preview, stop autoscroll, and create no candidate validation, draft, transaction, history, save actor, or persistence call

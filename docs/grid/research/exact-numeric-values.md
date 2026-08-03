@@ -87,7 +87,7 @@ export type BrunoTableValueType<TValue> = {
 };
 ```
 
-The real interface should expose capability markers so type-level filter operators can be derived without importing a concrete value library. An exact numeric Value Type needs at least `equality`, `order`, `canonicalText`, and `numericFilter` capabilities. Arithmetic for series fill and aggregation is a separate optional capability; it must not be smuggled into the required comparator contract.
+The real interface should expose capability markers so type-level filter operators can be derived without importing a concrete value library. An exact numeric Value Type needs at least `equality`, `order`, `canonicalText`, and `numericFilter` capabilities. Drag Fill is repetition-only and must not smuggle arithmetic into the required comparator contract. Any future aggregation arithmetic would be a separate capability justified by that feature, not by filling.
 
 Recommended column usage:
 
@@ -332,12 +332,7 @@ Do not tile, repeat, transpose, clip, construct a two-dimensional target, or coe
 
 This follows the existing rule that server viewport operations must not silently perform partial work and that Immediate multi-cell operations remain one save call ([grid requirements](../requirements.md#L350-L382), [grid requirements](../requirements.md#L319-L325)).
 
-Copy/repeat fill requires only canonical text and equality. Arithmetic series fill is a separate capability:
-
-- `bigint` may provide exact subtraction and addition;
-- the Effect adapter may provide exact BigDecimal arithmetic;
-- a custom type may omit arithmetic and still support copy fill;
-- no series algorithm may convert values to `number` as an implementation shortcut.
+Drag Fill repeats canonical source text through each target column's parser and complete-vector validation. It never increments, extrapolates, or performs arithmetic for `number`, `bigint`, BigDecimal, dates, text, or custom values. Exact numeric Value Types therefore need no fill-specific addition or subtraction capability.
 
 ## Preference persistence
 
@@ -455,7 +450,6 @@ During column normalization, resolve:
 - canonical formatter/parser;
 - persistence codec and version;
 - TanStack client filter and sort bridges;
-- optional arithmetic/fill capability;
 - blank/clear policy.
 
 Store direct function references in the normalized internal column. Do not look up a registry by string, inspect schema ASTs, or detect `BigDecimal` inside every cell render/comparison.

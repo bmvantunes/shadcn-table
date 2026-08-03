@@ -124,6 +124,10 @@ _Avoid_: Page navigation, DOM focus search, selection reset
 One contiguous one-axis cell intent used for multi-cell clipboard and editing operations in a Client Table. It is either horizontal (`1×N`) or vertical (`N×1`), and its chosen axis remains fixed until the range collapses or is replaced; a Server Table never creates it from its Active Cell.
 _Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection
 
+**Drag Fill**:
+A Client gesture that extends an Active Cell or Linear Cell Range along one axis by repeating its exact source sequence. It never infers increments, trends, dates, or arithmetic series.
+_Avoid_: Autofill, series fill, increment fill
+
 **Cell Edit Session**:
 The transient interaction in which one editable cell owns an active editor and candidate value.
 _Avoid_: Save workflow, server mutation

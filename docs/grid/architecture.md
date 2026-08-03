@@ -331,8 +331,7 @@ Every normalized leaf column owns one compiled internal value-semantics plan. It
 - canonical, locale-independent edit and clipboard text;
 - editor and paste parsing;
 - versioned JSON-safe filter-operand codec;
-- exact numeric filter capability;
-- optional arithmetic used by series fill.
+- exact numeric filter capability.
 
 The plan is resolved once during column normalization and stored as direct functions on the internal column. Cell rendering, client filtering, sorting, draft reconciliation, conflicts, clipboard, and preference restoration call those functions directly. They do not inspect schema ASTs, look up a global registry, or detect value kinds during every row or cell operation.
 
@@ -361,7 +360,7 @@ const columns = [
 
 `"bigint"` is implemented by the root package. The Effect preset is exported only from an optional entry point whose implementation imports Effect; the root `@bruno/table` entry point and its declarations do not. A future source Adapter may supply an already-compiled opaque field-semantics registry to remove repetitive declarations, but the current effect-view-server Viewport Source exposes no such runtime metadata. Never replace that missing contract with row sampling.
 
-The internal semantics interface is deep: one small column selection hides rendering, parsing, comparison, persistence, and integration details. Consumers normally select a built-in or first-party preset instead of implementing each operation. Arithmetic is an optional capability because one-axis copy fill needs equality and canonical text, while one-axis numeric series fill additionally needs exact addition and subtraction.
+The internal semantics interface is deep: one small column selection hides rendering, parsing, comparison, persistence, and integration details. Consumers normally select a built-in or first-party preset instead of implementing each operation. Drag Fill uses canonical exchange text and target parsing to repeat source values; it never asks the value-semantics plan for arithmetic or series inference.
 
 ### Exact numeric invariants
 

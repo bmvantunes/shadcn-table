@@ -36,4 +36,4 @@ Copy, paste, Drag Fill, preview, validation, edit transactions, and Batch undo o
 
 Within a selected Linear Cell Range, Tab and Enter both advance through currently editable cells along its one locked axis; Shift+Tab and Shift+Enter reverse that order. Drag Fill resolves and locks one axis before previewing any target. Ordinary body Tab/Enter behaviour outside Cell Range Selection remains unchanged.
 
-This supersedes ADR 0016, the selected-range traversal portions of ADR 0015, and the two-dimensional paste-shape rules in ADR 0017. ADR 0019 remains the confirmation workflow for supported linear shape mismatches only.
+This supersedes ADR 0016, the selected-range traversal portions of ADR 0015, and the two-dimensional paste-shape rules in ADR 0017. ADR 0019 remains the confirmation workflow for supported linear shape mismatches only. ADR 0021 defines repetition-only Drag Fill value generation.
