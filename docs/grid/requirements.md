@@ -32,6 +32,8 @@ Grid Filter state is internally owned in V1. An optional typed `initialFilters` 
 
 Every table requires a non-empty typed `initialOrderBy` keyed by Column Identity. Each `columnId` must be the exact literal union of sortable identities inferred from that table's `columns` tuple, so consumers receive autocomplete and compile-time rejection of unknown, misspelled, computed, or explicitly nonsortable identities. Duplicate identities do not require specialized compile-time tuple validation; one-time normalization retains their first, highest-priority occurrence. A valid non-empty persisted `orderBy` wins during restoration; otherwise the grid uses the initial baseline. Later prop changes do not control current ordering, and Reset returns to `initialOrderBy`. Active sorting may contain any number of entries from one through the number of sortable columns; UI and command surfaces may add or remove entries within that range but must disable or reject removal of the final entry. Plain header activation creates one priority-one sort and toggles that column's direction when it was already present anywhere in the order; Shift-activation appends new sorts or toggles existing directions without changing priority, and the Sort panel supports pointer and keyboard priority reordering. No table state, command, persistence document, or UI cycle may represent an empty unsorted order.
 
+Raw rows and grouped summaries have separate durable sorting contexts. `orderBy` remains the untouched normal-row order, while `groupOrderBy` records grouped-summary order. Entering grouping sanitizes a restored grouped order against the active group keys, Rows, and currently visible participating aggregate columns; when no valid entry survives, every active group key becomes ascending in Group By priority order. Grouped header, Shift-header, keyboard, panel, and command interactions mutate only `groupOrderBy` and preserve the same non-empty, direction, and priority rules as normal sorting. Removing or reordering group keys or hiding an aggregate drops newly invalid grouped entries while retaining valid priorities; if none remain, the active group-key fallback restores a non-empty order. Clearing grouping leaves the grouped preference dormant and restores the unchanged normal `orderBy`.
+
 A committed sorting change resets both row models to vertical row zero while preserving horizontal scroll and column layout. It clears position-based Active Cell and Linear Cell Range state, preserves drafts and conflicts by stable Row Identity plus Column Identity, and leaves keyboard focus on the header or Sort panel control that initiated the command.
 
 Live data that changes a current sort key may reorder rows without creating a user sorting command. It must never reset vertical scroll or transfer the Active Cell to a different Row Identity merely because that row inherited the old index. Follow `rowId + columnId` to the new position when known without forcing scroll. While a Client Cell Edit Session is active, a sort-key move keeps the edited row at the same visual Y-coordinate through immediate fixed-row-height scroll anchoring: the row enters its correct sorted index and surrounding rows move, while frame-coalesced geometry adjusts `scrollTop` by the corresponding offset delta. Do not freeze the row out of sort order, animate after it, or drive anchoring through React or XState. If a Server row moves outside the known sparse window and its new index is unavailable, clear the Active Cell while retaining focus on the grid root. A Client Linear Cell Range follows its stable row identities only while they still form one contiguous range; otherwise clear it rather than inventing a disconnected selection.
@@ -243,6 +245,8 @@ Whenever grouping is active, BrunoTable adds one visible grid-owned System Colum
 
 Row count is group metadata rather than a field aggregation. Consumers cannot declare `aggFunc: "count"`; `countDistinct` remains available because it measures distinct values of a specific field. The automatic Rows column is non-filterable in V1 because the View Server does not support aggregate-result filtering.
 
+Rows has the reserved persisted System Column Identity `COL_ID_BRUNO_TABLE_ROWS`. Consumer definitions cannot claim that identity. Grouped sorting may target an active group key, Rows, or a visible participating aggregate column even when the corresponding raw Field Column opted out of normal-row sorting. The Viewport Adapter translates active-key identities to group fields and Rows or aggregate-column identities to private aggregate aliases immediately before query replacement; those View Server details never enter persisted state.
+
 Active grouping creates a temporary derived Logical Column Order:
 
 ```text
@@ -359,7 +363,7 @@ Exact input parsing is an untrusted boundary. Apply bounded text and bulk-operat
 Persist only intentional user preferences:
 
 - Grid Filter Expressions
-- sorting
+- normal-row and grouped-summary sorting
 - ordered grouping
 - column order
 - column visibility
@@ -390,7 +394,7 @@ Persisted state must be:
 - JSON-safe
 - emitted as a complete replacement snapshot through `onPersistChange`
 
-Persisted filters, sorts, grouping, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
+Persisted filters, both sort contexts, grouping, and layouts refer to `columnId`, never directly to backend fields or aggregate aliases. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
 Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
 

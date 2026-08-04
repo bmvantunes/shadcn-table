@@ -125,6 +125,7 @@ The grid must support:
 37. BrunoTable provides optional typed `BrunoTable...Column` helpers and reusable presets for coherent rendering, layout, editing, filtering, clipboard, and styling defaults. Helpers return ordinary column definitions, never generate `columnId`, and never become a string-keyed registry.
 38. Column customization precedence is built-in helper defaults, then reusable preset defaults, then individual column options. Typed `valueFormatter`, conditional cell styling, and custom cell rendering remain available at the individual column level.
 39. Display formatting and styling never redefine value equality, ordering, parsing, clipboard exchange, persistence, conflicts, or server query operands. Round-trippable custom text requires an explicit paired parser/exchange capability or custom Value Type.
+40. Normal rows and grouped summaries own separate durable `orderBy` and `groupOrderBy` contexts. Grouping never rewrites normal sorting; grouped sorting admits only active keys, the reserved `COL_ID_BRUNO_TABLE_ROWS` System Column, and visible participating aggregates, and compiles aggregate targets through private aliases.
 
 ## Preferred technology split
 

@@ -42,6 +42,7 @@ Build:
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
 - mandatory non-empty Column Identity-keyed `initialOrderBy`
+- separate typed `BrunoTableGroupSortBy` persistence for grouped summaries, including the reserved Rows System Column Identity
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
@@ -188,6 +189,7 @@ Build:
 - one-time `initialPersistedState` restoration supplied by the application
 - complete JSON-safe `onPersistChange` snapshots after committed preference changes
 - ordered Group By persistence beside one durable base Column Order and Column Pinning snapshot
+- independent durable normal `orderBy` and grouped `groupOrderBy` contexts, with no `initialGroupOrderBy` prop
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
 - mandatory non-empty `initialOrderBy` baseline with valid persisted `orderBy` precedence and no unsorted state
 - schema versioning and sanitization
@@ -196,7 +198,9 @@ Build:
 Persist only:
 
 - Grid Filter Expressions
-- non-empty `orderBy`
+- non-empty normal `orderBy`
+- grouped `groupOrderBy` once established
+- ordered Group By state
 - order
 - visibility
 - widths
@@ -206,6 +210,10 @@ Success criteria:
 
 - new/removed columns reconcile safely
 - restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
+- grouped restoration and every Group By or aggregate-visibility change retain valid `groupOrderBy` priorities and fall back to all active keys ascending when no entry survives
+- clearing grouping restores untouched normal `orderBy`, while re-entering a compatible grouping may restore its dormant grouped order
+- grouped sort IDs autocomplete from potential group keys, aggregate columns, and Rows, then runtime validation admits only active keys, Rows, and visible participating aggregates
+- the Viewport Adapter maps grouped key identities to fields and grouped result identities to private aggregate aliases without leaking aliases into persistence
 - duplicate sort identities normalize quietly by retaining the first, highest-priority occurrence rather than requiring complex tuple-uniqueness typing
 - pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry
 - Shift-add appends at lowest priority, Shift-direction toggles preserve priority, plain activation of an existing sorted column toggles it while making it the sole priority-one sort, and Sort panel priority reordering works through both pointer drag and keyboard actions
@@ -488,6 +496,7 @@ Build:
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
+- separate durable normal and grouped sort contexts, with grouped eligibility derived from the current grouped projection
 - grouped View Server result typing without casting aggregate rows to the raw source row type
 - flat Client result normalization with no hierarchical group rows or expansion state
 - shared formatting, sorting controls, keyboard behavior, and accessibility for grouped results
@@ -516,6 +525,8 @@ Success criteria:
 - the Server query always carries one native `count` aggregate, while the Client produces an equal exact `bigint` value
 - Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
 - aggregate aliases and group fields sort through validated View Server query members
+- grouped sorting accepts only active keys, Rows, and visible participating aggregates; sanitization preserves surviving priorities and falls back to every active key ascending rather than producing an unsorted state
+- clearing grouping restores normal `orderBy` unchanged, and private View Server aggregate aliases never enter public or persisted state
 - grouped rows have explicit stable identity semantics appropriate to the chosen presentation shape
 - both variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
 - virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination

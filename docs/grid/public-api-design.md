@@ -190,6 +190,7 @@ type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = 
   readonly tableId: string;
   readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
   readonly orderBy: BrunoTableSortBy<TColumns>;
+  readonly groupOrderBy?: BrunoTableGroupSortBy<TColumns>;
   readonly groupBy: readonly BrunoTableGroupableColumnId<TColumns>[];
   readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
   readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
@@ -246,7 +247,7 @@ Rules:
 - `getRowId` is mandatory; row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
-- `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a table is never unsorted.
+- `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline for normal rows. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites this normal baseline or current order.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
@@ -693,6 +694,8 @@ Active grouping also installs one BrunoTable-owned System Column whose default h
 
 The visible Rows column is the sole row-count representation. `BrunoTableAggFunc` therefore excludes `count`, avoiding duplicate counts and the false implication that row count belongs to an arbitrary field. `countDistinct` remains a field-level function. Because effect-view-server has no HAVING or aggregate-result filter contract, the System Column cannot participate in Grid Filters in V1.
 
+Rows uses the reserved System Column Identity `COL_ID_BRUNO_TABLE_ROWS` in BrunoTable commands and persisted grouped sort state. Its exported type name is `BrunoTableRowsColumnId`; consumers cannot declare a column with that reserved identity. The Viewport Adapter maps it to its private `count` aggregate alias only while compiling a grouped query.
+
 Grouping owns a derived rendered layout rather than mutating persisted column preferences. Its Logical Column Order is the active group-key columns in Group By order, followed by Rows, followed by participating aggregate columns in their normal relative order. Reordering Group By chips changes the group-key tuple and rendered key-column order together.
 
 This sequence is the complete grouped projection. A non-key consumer column appears only when it explicitly declares `aggFunc`; every column without grouped semantics is temporarily omitted and restored unchanged afterward. `aggFunc` is deliberately optional. BrunoTable does not guess a field's domain meaning, expose arbitrary representative source values, or request unused aggregates merely to keep every raw column mounted.
@@ -706,6 +709,32 @@ All start/end pinning is suspended in this derived grouped layout, including pin
 While grouped, the ordinary header reorder interaction and command are unavailable. Only Group By chip reordering changes presentation order. Aggregate columns retain their relative durable base `columnOrder`.
 
 The persisted `columnOrder` and `columnPinning` always describe the normal ungrouped layout. The persisted ordered `groupBy` list describes current grouping intent. BrunoTable never serializes the derived rendered order or a second `orderBeforeFirstGroupBy` copy. On restoration it sanitizes all three against current capabilities, restores the base layout plus Group By order, and derives the grouped presentation. Clearing grouping after hydration therefore restores the user's expected normal layout without a browser-only backup.
+
+Grouped-summary sorting is a second durable context rather than a reinterpretation of raw-row `orderBy`. Its conceptual public types are:
+
+```ts
+type BrunoTableRowsColumnId = "COL_ID_BRUNO_TABLE_ROWS";
+
+type BrunoTableGroupedSortableColumnId<TColumns> =
+  | BrunoTableGroupableColumnId<TColumns>
+  | BrunoTableAggregatedColumnId<TColumns>
+  | BrunoTableRowsColumnId;
+
+type BrunoTableGroupSortBy<TColumns> = readonly [
+  {
+    readonly columnId: BrunoTableGroupedSortableColumnId<TColumns>;
+    readonly direction: "asc" | "desc";
+  },
+  ...Array<{
+    readonly columnId: BrunoTableGroupedSortableColumnId<TColumns>;
+    readonly direction: "asc" | "desc";
+  }>,
+];
+```
+
+The static union provides autocomplete for every potentially valid grouped target. Runtime state narrows it to active group keys, Rows, and currently visible participating aggregate columns. Grouped eligibility is intentionally independent of normal-row `sortable`: an active group key and a produced aggregate result remain sortable even if their raw Field Column opted out of normal sorting.
+
+On first grouping, or when restored `groupOrderBy` has no valid survivor, BrunoTable orders every active group key ascending in Group By order. Otherwise it preserves valid grouped entries and priorities. Removing or reordering group keys or hiding an aggregate sanitizes the grouped order; newly invalid entries are dropped, and the active-key fallback is applied only if the result would be empty. Clearing grouping retains this context dormant for a future compatible grouping and immediately restores the untouched `orderBy`. No `initialGroupOrderBy` prop is required in V1.
 
 ## Grid filter expressions
 
@@ -774,7 +803,7 @@ TanStack Table's column-filter state may coordinate simple header-filter UI inte
 
 ## Sort state
 
-Grid order state uses `columnId`, never View Server fields:
+Normal raw-row order state uses `columnId`, never View Server fields:
 
 ```ts
 const orderBy = [
@@ -783,9 +812,9 @@ const orderBy = [
 ] satisfies BrunoTableSortBy<typeof columns>;
 ```
 
-`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, `initialOrderBy` receives contextual autocomplete for that table's sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted `orderBy` use this shape; the View Server Adapter resolves each Column Identity to its current Query Field only when compiling `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
+`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, `initialOrderBy` receives contextual autocomplete for that table's sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted normal-row `orderBy` use this shape; the View Server Adapter resolves each Column Identity to its current Query Field only when compiling a raw `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
 
-Sorting has no unsorted state. Active sorting may contain from one entry through all sortable columns. Plain-activating an unsorted header replaces the current order with that column ascending at priority one. Plain-activating a column already present anywhere in the current order replaces the order with only that column at priority one and toggles its existing direction: `asc` becomes `desc`, and `desc` becomes `asc`. Shift-activating a new column appends it ascending at the lowest priority, while Shift-activating an existing member toggles its direction without changing its priority or clearing other entries; it never removes a member. The Sort panel may add or remove entries anywhere inside the valid cardinality range, but removal of the final remaining entry is disabled. It supports priority reordering through pointer drag handles and equivalent accessible keyboard move-up and move-down actions. No sequence of pointer, Shift-pointer, keyboard, panel, or command activations can produce an empty order. Restoration sanitizers and reset paths enforce the same non-empty invariant. Every sorted header displays direction and one-based priority. BrunoTable does not infer a descending-first cycle for numeric Value Types.
+Sorting has no unsorted state in either active context. The normal `orderBy` and active grouped `groupOrderBy` each may contain from one entry through every target eligible in that context. Plain activation, Shift activation, panel removal/reorder, keyboard behavior, direction toggling, duplicate normalization, visible priority, and the prohibition on removing the final entry are identical. BrunoTable does not infer a descending-first cycle for numeric Value Types.
 
 Every committed ordering change creates a new logical row-position generation and resets vertical scroll to row zero in both Client and Server Tables. Horizontal scroll and column layout remain unchanged. Position-based Active Cell and Linear Cell Range state is cleared because its old indexes no longer describe the reordered row space, while drafts and conflicts survive through stable `rowId + columnId` identity. Keyboard focus stays on the header or Sort panel control that initiated the command rather than jumping into the body.
 
@@ -801,7 +830,15 @@ columnId + type + value   columnId -> field               field + type + value
 
 grid sort                 current column definition       View Server order
 columnId + direction      columnId -> field               field + direction
+
+grouped key sort          active grouping                 View Server grouped order
+columnId + direction      columnId -> group field         field + direction
+
+grouped result sort       grouped aggregate plan          View Server grouped order
+columnId + direction      columnId -> private alias       aggregate + direction
 ```
+
+`COL_ID_BRUNO_TABLE_ROWS` takes the grouped-result path and resolves to the private count alias. Persisted state never stores the alias. A grouped order entry never sends both `field` and `aggregate`.
 
 Example:
 
@@ -832,7 +869,7 @@ const where = {
 
 Never send `columnId` directly as a View Server field merely because the strings happen to match.
 
-On restoration, sanitize every persisted filter and sort against:
+On restoration, sanitize every persisted filter and both sort contexts against:
 
 - the persisted format version
 - the current `columnId` registry
@@ -901,9 +938,9 @@ filter UI -> filters.replace command -> validated grid filter state
                                       -> Client Adapter: recompute local row model
                                       -> Viewport Adapter: compile and replace server query
 
-sort UI   -> sorting.replace command -> validated grid sort state
-                                      -> Client Adapter: recompute local row model
-                                      -> Viewport Adapter: compile and replace server query
+sort UI   -> active sort command -> validated normal or grouped sort context
+                                 -> Client Adapter: recompute local row model
+                                 -> Viewport Adapter: compile fields/aliases and replace server query
 ```
 
 Do not implement a public `BrunoTableBase` or a shared renderer with `if (mode === ...)` branches. An internal React wrapper may exist, but `BrunoTableView` is the more precise role: it consumes a stable runtime interface and does not know which Adapter produced it.

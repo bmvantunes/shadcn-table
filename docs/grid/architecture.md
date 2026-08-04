@@ -324,11 +324,11 @@ Some hot presentation state should avoid React reconciliation entirely. During l
 
 ## Row-pipeline Adapter seam
 
-The Grid Runtime owns one validated filter state and one validated sort state, both keyed by Column Identity. Filter and sort controls only dispatch `filters.replace` and `sorting.replace` commands.
+The Grid Runtime owns one validated filter state plus two validated Column Identity-keyed sort contexts: normal-row `orderBy` and grouped-summary `groupOrderBy`. Only one sort context is active in the row pipeline at a time. Filter and sort controls dispatch `filters.replace`, `sorting.normal.replace`, or `sorting.grouped.replace` commands without knowing which Adapter executes them.
 
 The Client Row Pipeline ingests a complete Client Source and responds to filter/sort commands by recomputing local TanStack row-model stages over its rows. Source lifecycle changes update shared overlays without placing the source envelope or full row collection in React context.
 
-The Viewport Row Pipeline responds by resolving Column Identity through current column definitions, replacing the View Server query, advancing the query generation, and treating delivered sparse rows as already filtered and sorted.
+The Viewport Row Pipeline responds by resolving Column Identity through current column definitions, replacing the View Server query, advancing the query generation, and treating delivered sparse rows as already filtered and sorted. Raw ordering compiles identities to Query Fields. Grouped ordering compiles active-key identities to grouped fields and Rows or aggregate-column identities to private aggregate aliases; no alias crosses the Adapter seam.
 
 This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, or filtering code. Editing and range-clipboard capabilities are installed only by the Client composition root; the shared renderer receives capability presence rather than testing the row-model variant throughout its implementation.
 
@@ -361,6 +361,10 @@ The normalized grouped projection includes no other consumer columns. A non-key 
 The projection's visibility selector force-includes active keys and Rows, then includes aggregate columns only when base Column Visibility is not explicitly false. This is a pure derived snapshot: it dispatches no visibility command and never writes the forced inclusions into persisted state. Normal visibility remains the sole authority restored when grouping clears.
 
 The column-visibility control reads the all-normalized-columns registry so an omitted hidden aggregate remains discoverable. Ordinary visibility commands stay enabled only for aggregate columns while grouped; they mutate the same base visibility state and publish the same persistence event used outside grouping. Capability checks reject active-key and Rows hide commands. No grouped-only visibility store or reconciliation path exists.
+
+The grouping projection also derives the eligible grouped-sort registry: active keys, the reserved `COL_ID_BRUNO_TABLE_ROWS` System Column, and visible participating aggregate columns. The persisted preference Module keeps normal `orderBy` and optional grouped `groupOrderBy` independently. Entering or changing grouping sanitizes only the grouped context, retaining surviving priorities and falling back to every active group key ascending in Group By order when none survive. Hiding a sorted aggregate applies the same sanitizer. Clearing grouping leaves the grouped context dormant and reactivates normal `orderBy` without mutation.
+
+The Client Adapter compares flat grouped key and aggregate values through the same compiled Column Value Semantics used elsewhere. The Viewport Adapter emits `{ field, direction }` for an active key and `{ aggregate, direction }` for Rows or an aggregate column. It generates private aggregate aliases from the normalized plan and never persists or exposes them. Both active sort contexts enforce at least one entry; grouped sorting can use a grouping or aggregate capability even when the raw column's ordinary `sortable` capability is false.
 
 Grouped layout has one unpinned region in V1. The renderer does not apply ordinary start/end pinning until grouping is cleared. Base Column Order and Column Pinning remain immutable inputs to the derivation, so entering, reordering, or leaving grouping never destroys or rewrites them. A Group By command may publish the changed ordered grouping preference, but it must not masquerade as a Column Order or Column Pinning mutation.
 
