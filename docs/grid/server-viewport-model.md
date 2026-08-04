@@ -121,7 +121,7 @@ rendered columns    ->  field dependencies      ->  explicit select
 Rules:
 
 - Field columns provide the default View Server field mapping.
-- `valueGetter`-only columns have no automatic server filter, sort, or projection semantics.
+- Computed Columns contribute their explicit non-empty `fields` dependency tuple to projection but have no server filter or sort semantics.
 - Filter and sort mappings are separate capabilities because View Server supports nested filter paths but only top-level raw sort fields.
 - Persisted grid state never stores backend fields as identity.
 - Invalid or stale mappings are dropped conservatively during preference restoration and rejected if they reach query compilation.
@@ -131,7 +131,7 @@ The public effect-view-server Viewport Source preserves TypeScript row/query typ
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 
-The exact exceptional mapping and projection-dependency property names remain open public-interface decisions.
+V1 exposes no exceptional computed filter or sort mapping. A Computed Column's `fields` tuple is its complete projection dependency declaration.
 
 ## Internal source seam
 

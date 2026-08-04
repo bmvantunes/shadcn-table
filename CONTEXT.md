@@ -21,8 +21,8 @@ A column whose value comes directly from a named row field. Its `field` is the d
 _Avoid_: Accessor column, field ID
 
 **Computed Column**:
-A column whose value is produced by `valueGetter` rather than a named row field. It has no automatic server filter or sort semantics.
-_Avoid_: Field column, implicitly queryable column
+A column whose value is produced by `valueGetter` from an explicit non-empty `fields` dependency tuple rather than one direct row field. The tuple limits what the getter can read and supplies Server Table projection dependencies. A Computed Column is never filterable, sortable, or editable in V1.
+_Avoid_: Field column, implicit dependency discovery, queryable column, editable derived value
 
 **Value Type**:
 The explicit runtime category or custom descriptor that selects one column's value behavior. A raw value-bearing column declares it directly, while a Column Helper supplies it.

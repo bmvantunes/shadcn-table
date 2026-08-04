@@ -206,9 +206,9 @@ Keep column identity separate from row data and server query fields:
 
 Use `columnId` for all grid state and persistence. Resolve it through the current column definition to `field` only when reading row data or compiling a server query.
 
-A `valueGetter`-only column has no automatic server filter or sort capability because it has no query field.
+A Computed Column declares a non-empty `fields` tuple together with `valueGetter`. Every dependency is a valid row field, the getter receives only the corresponding `Pick` of the row, and a Server Table adds those fields to its explicit projection. It is always non-filterable, non-sortable, and non-editable in V1.
 
-A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column remains non-filterable and non-sortable until it declares explicit capability-specific semantics.
+A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column cannot opt into filtering, sorting, or editing in V1.
 
 Indexes are positions under a query, not row identities.
 
@@ -237,7 +237,7 @@ BrunoTable also provides optional typed Column Helpers as the recommended constr
 - `BrunoTableSelectColumn` makes its editable control fill the available cell width;
 - `BrunoTableBigDecimalColumn` is exported only from `@bruno/table/effect` and preserves exact values.
 
-Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a server field, and never introduce a string-keyed registry or per-cell dispatch.
+Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a direct server field, and never introduce a string-keyed registry or per-cell dispatch. A helper-created Computed Column still declares every projection dependency through its non-empty `fields` tuple.
 
 Applications may specialize a helper with `withDefaults` into a reusable Column Preset for domain conventions such as Price title, fraction digits, width, alignment, editor, filter, and validation policy. Merge order is built-in helper defaults, then preset defaults, then individual column options. Presets and final columns live at module scope.
 

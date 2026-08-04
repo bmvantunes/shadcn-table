@@ -97,6 +97,7 @@ const columns = [
   BrunoTableBigIntColumn({
     columnId: "COL_ID_DOUBLE_QUANTITY",
     headerName: "Double quantity",
+    fields: ["quantity"],
     valueGetter: ({ row }) => row.quantity * 2n,
   }),
 ] satisfies BrunoTableColumns<Order>;
@@ -410,7 +411,7 @@ Helpers supply the Value Type plus coherent renderer, editor, filter, sort, clip
 
 Root exports include `BrunoTableTextColumn`, `BrunoTableNumberColumn`, `BrunoTableBigIntColumn`, `BrunoTableBooleanColumn`, and `BrunoTableSelectColumn`. The optional `@bruno/table/effect` entry point exports `BrunoTableBigDecimalColumn` and its raw BigDecimal Value Type without causing the root package or declarations to import Effect.
 
-Column Helpers never infer or generate `columnId`. A final helper invocation still requires explicit Column Identity plus `field` or `valueGetter`, and its result is an ordinary definition that enters the same validation and normalization path as raw configuration. Helper-created, preset-created, and raw columns may coexist in one array. There is no grid-level string registry such as `type: "price"` and no per-cell helper dispatch.
+Column Helpers never infer or generate `columnId`. A final helper invocation still requires explicit Column Identity plus either one direct `field` or a non-empty `fields` dependency tuple with `valueGetter`, and its result is an ordinary definition that enters the same validation and normalization path as raw configuration. Helper-created, preset-created, and raw columns may coexist in one array. There is no grid-level string registry such as `type: "price"` and no per-cell helper dispatch.
 
 Applications specialize a helper into a reusable domain Column Preset when title, formatting, width, alignment, editor, filter, or validation policy repeats across tables:
 
@@ -558,37 +559,27 @@ const columns = [
 
 ### Computed columns
 
-A computed column has `valueGetter` instead of `field`:
+A Computed Column has `valueGetter` plus an explicit non-empty `fields` dependency tuple instead of `field`:
 
 ```ts
 {
   columnId: "COL_ID_DOUBLE_QUANTITY",
   headerName: "Double quantity",
   valueType: "bigint",
+  fields: ["quantity"],
   valueGetter: ({ row }) => row.quantity * 2n,
 }
 ```
 
-The return type of `valueGetter` is the column value type.
+The return type of `valueGetter` is the column value type. Every dependency must be a valid row field, and the getter's `row` parameter is restricted to `Pick<TRow, TFields[number]>`; accessing an undeclared field must fail TypeScript. The Server Table unions this tuple into its explicit `select` projection, while the Client Table uses the same declaration over its complete resident row.
 
-The initial package scaffold deliberately rejects `valueFormatter` on computed raw columns until the plain-object interface can correlate a getter's inferred return type into a sibling callback without exposing `unknown`. Field-column formatters are fully typed. A typed Column Helper establishes the value family explicitly and should allow a correlated computed formatter, but that inference must be proven before export. Do not weaken any formatter callback to `unknown` merely to accept the property.
+Computed raw columns and typed Column Helpers must preserve the getter's inferred return type in `valueFormatter`, `cellClassName`, and `cellRenderer` without exposing `unknown`. The exact plain-object type machinery must be proven before export; do not weaken any presentation callback merely to accept the property.
 
-Accepted default rule: a `valueGetter`-only column has no automatic filtering or sorting. There is no field to send to the View Server, and BrunoTable must never execute, inspect, or reverse-engineer arbitrary JavaScript to manufacture query semantics.
-
-A computed column may later opt into:
-
-- an explicit client-side filter or comparator
-- an explicit server filter-field mapping
-- an explicit server sort-field mapping
-- explicit selected field dependencies
-
-Those are separate capabilities. They must be declared and type-checked explicitly; their final property names are not yet accepted.
-
-Until those capabilities exist, a computed column is excluded from `BrunoTableFilterableColumnId<TColumns>` and `BrunoTableSortableColumnId<TColumns>`.
+A Computed Column is presentation-only in V1. It is always excluded from `BrunoTableFilterableColumnId<TColumns>`, `BrunoTableSortableColumnId<TColumns>`, and `BrunoTableEditableColumnId<TColumns>`. BrunoTable never executes, inspects, or reverse-engineers arbitrary JavaScript to manufacture query or mutation semantics.
 
 ### Field and computed definitions are exclusive
 
-The initial definition should not accept both `field` and `valueGetter`. That combination makes the displayed value, edited value, filter value, sort value, and server field ambiguous. Use a field column plus `valueFormatter` when only presentation differs.
+The definition accepts exactly one of `field` or non-empty `fields` plus `valueGetter`. Supplying both paths, neither path, an empty dependency tuple, or `fields` without a getter is invalid. Use a Field Column plus `valueFormatter` when only presentation differs.
 
 ## Capability derivation
 
@@ -604,7 +595,7 @@ type BrunoTableSortableColumnId<TColumns> = ...;
 
 Having a `field` plus the required Value Type semantics makes a column eligible for default field-based query semantics. Filtering and sorting UI are enabled by default for such a Field Column, with explicit per-column opt-outs. A Computed Column remains excluded unless it declares explicit capability-specific semantics.
 
-Capabilities must remove invalid columns from their state models. A computed or action column without explicit filter semantics cannot appear in the filter model merely because a caller writes its `columnId`.
+Capabilities must remove invalid columns from their state models. A Computed Column cannot appear in filter, sort, or edit state merely because a caller writes its `columnId`.
 
 ## Grid filter expressions
 
@@ -715,8 +706,8 @@ effect-view-server raw queries require an explicit non-empty `select`.
 
 - A field column contributes its `field` to the projected fields required for rendering.
 - The Adapter must include infrastructure fields required by `getRowId`, the explicit Row Version capability, and live reconciliation.
-- A computed column cannot reveal its dependencies automatically.
-- A computed column must eventually declare selected dependencies or map to a real server-projected field.
+- A Computed Column contributes every member of its explicit non-empty `fields` dependency tuple.
+- Its getter receives only those declared fields at the public TypeScript boundary.
 
 Do not invoke `getRowId` or `valueGetter` against fabricated rows to guess projection dependencies.
 
@@ -831,7 +822,7 @@ Cover at minimum:
 - field value inference
 - computed return inference
 - rejection of simultaneous `field` and `valueGetter`
-- computed columns excluded from automatic filter and sort IDs
+- computed columns excluded from filter, sort, and edit IDs
 - filter operators and operands correlated with column values
 - recursive filter expressions
 - sort column IDs and priority
@@ -880,9 +871,7 @@ Also reject:
 
 The following remain deliberately unresolved:
 
-- the names and shapes of explicit computed-column client and server semantics
 - the no-helper correlated type shape for computed-column formatters
-- how computed-column selected dependencies are declared
 - the exact property shape for declaring and projecting the typed Row Version; the accepted invariant is that it is row-specific and never the Viewport Source Query Version
 - the visual treatment and retry actions for Client Source lifecycle states
 - the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted

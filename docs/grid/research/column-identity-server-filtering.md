@@ -13,7 +13,7 @@ Sources inspected:
 
 `BrunoTable` should make `columnId` mandatory for every leaf column. It is the durable identity of a **grid column**, scoped by `tableId`, and should key all persisted column preferences, filters, and sorts. The accepted public identifier grammar is `` `COL_ID_${Uppercase<string>}` ``.
 
-`field` should identify a **row/query field**, not a column. For an ordinary data-backed column it is the cheap direct cell-value path and the default effect-view-server field used when compiling a filter or sort. A computed/action column can omit `field`, but then server filtering and sorting must be disabled unless that column declares an explicit server-query mapping.
+`field` should identify a **row/query field**, not a column. For an ordinary data-backed column it is the cheap direct cell-value path and the default effect-view-server field used when compiling a filter or sort. A Computed Column instead declares a non-empty `fields` dependency tuple with `valueGetter`; those dependencies enter projection, while the column remains non-filterable, non-sortable, and non-editable in V1.
 
 The important correction to the initial hypothesis is that AG Grid does **not** persist or send ordinary filter state keyed by `field`. Its filter model and sort model are keyed by column ID. They only appear field-keyed in most examples because AG Grid defaults `colId` to `field` when no explicit `colId` is supplied.
 
@@ -137,14 +137,14 @@ The type should distinguish it from computed/display columns:
 }
 ```
 
-If a computed/display column really has server semantics, require an explicit capability-specific mapping (for example `server.filterField`, `server.sortField`, or a typed translator). Do not infer a server predicate from `valueGetter`, and do not execute that function to construct a query.
+V1 does not expose an exceptional computed filter or sort mapping. Do not infer a server predicate from `valueGetter`, and do not execute that function to construct a query. A server-queryable derived value must instead be exposed as a real Field Column.
 
 Because effect-view-server accepts nested filter paths but only top-level raw sort fields, the final TypeScript design should type-check filtering and sorting capabilities separately even if both default from one ordinary `field` in the common case.
 
 ### Separate projection consequence
 
-`field` also gives the viewport adapter an obvious `select` entry for an ordinary data-backed column, but it does not make an arbitrary `valueGetter` queryable. effect-view-server raw queries require an explicit non-empty top-level `select`, so a computed column must either consume explicitly declared selected dependencies or map to a real server-projected field. The adapter must also include infrastructure fields required for row identity and optimistic concurrency. Do not execute or inspect a `valueGetter` to guess those dependencies.
+`field` gives the viewport adapter an obvious `select` entry for an ordinary data-backed column. A Computed Column contributes its explicit non-empty `fields` dependency tuple instead. Its getter is typed against only that `Pick` of the row. The adapter must also include infrastructure fields required for row identity and optimistic concurrency. Do not execute or inspect a `valueGetter` to guess dependencies.
 
-## Remaining uncertainty
+## Subsequent V1 decision
 
-The naming of the exceptional mapping (`server`, `query`, `filterField`/`sortField`, or typed translator functions) is still a public-API design choice. The identity boundary is not uncertain: persisted/TanStack state uses `columnId`; effect-view-server wire queries use validated topic fields resolved through current column definitions.
+The later product decision closed the exceptional-mapping uncertainty for V1: Computed Columns declare `fields` only for projection and cannot opt into filtering, sorting, or editing. The identity boundary remains unchanged: persisted/TanStack state uses `columnId`; effect-view-server wire queries use validated topic fields resolved through current Field Columns.

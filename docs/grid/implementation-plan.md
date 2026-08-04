@@ -43,7 +43,7 @@ Build:
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
 - mutually exclusive field and computed columns
 - direct `field` value inference
-- computed `valueGetter` return inference
+- computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
 - typed formatters
 - optional typed `BrunoTableTextColumn`, `BrunoTableNumberColumn`, `BrunoTableBigIntColumn`, `BrunoTableBooleanColumn`, and `BrunoTableSelectColumn` helpers that return ordinary definitions
 - reusable `withDefaults` Column Presets with built-in, preset, then individual-option precedence
@@ -54,7 +54,7 @@ Build:
 - optional-integration type seam that keeps Effect out of root declarations
 - capability derivation for editing, sorting, and filtering
 - default-enabled filtering and sorting for eligible Field Columns, with explicit per-column opt-outs
-- computed columns excluded from automatic filter and sort capabilities
+- computed columns excluded from filter, sort, and edit capabilities in V1
 - type-level tests
 - emitted-package consumer type tests
 
@@ -242,7 +242,8 @@ Success criteria:
 - common UI contains no client-versus-viewport conditionals
 - persisted filters and sorts remain keyed by `columnId`
 - View Server queries contain validated fields resolved from current column definitions
-- `valueGetter`-only columns cannot silently enter server filters, sorts, or projections
+- Computed Columns enter projection only through their declared `fields` dependencies and cannot enter server filters or sorts
+- undeclared getter field access, empty dependency tuples, and `field`/`fields` combinations fail type tests
 - scrolling does not route row batches through top-level React state
 - one row update rerenders only relevant subscribers
 - stale query responses are ignored
