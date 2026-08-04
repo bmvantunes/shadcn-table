@@ -292,7 +292,8 @@ Exact input parsing is an untrusted boundary. Apply bounded text and bulk-operat
 
 Persist only intentional user preferences:
 
-- filters
+- Grid Filter Expressions
+- committed Quick Filter text
 - sorting
 - column order
 - column visibility
@@ -323,6 +324,8 @@ Persisted state must be:
 - storage-adapter based
 
 Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
+
+Quick Filter persistence stores only its committed text. The application-provided `quickFilterFields` tuple remains current table configuration and is never restored from storage. If the current table has no Quick Filter capability, discard stale saved Quick Filter text during sanitization.
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 

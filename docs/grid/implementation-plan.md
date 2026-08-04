@@ -186,7 +186,8 @@ Build:
 
 Persist only:
 
-- filters
+- Grid Filter Expressions
+- committed Quick Filter text
 - sorts
 - order
 - visibility
