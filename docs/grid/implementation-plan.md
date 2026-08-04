@@ -201,6 +201,7 @@ Success criteria:
 - restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
 - duplicate sort identities normalize quietly by retaining the first, highest-priority occurrence rather than requiring complex tuple-uniqueness typing
 - pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry
+- Shift-add appends at lowest priority, direction toggles preserve priority, plain header activation creates one priority-one sort, and Sort panel priority reordering works through both pointer drag and keyboard actions
 - source JSX and emitted-package consumer type tests prove that `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
