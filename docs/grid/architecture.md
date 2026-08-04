@@ -181,6 +181,8 @@ A live row publication that changes current sort-key values is not a sorting com
 
 The Client presentation projection may retain one active editor row that has fallen outside current filters as an edit-owned anchored exception. This does not mutate filter intent or feed the row back into the ordinary filtered model. It projects the same identity-keyed editor and live reconciliation state with an accessible out-of-filter status until commit or cancellation releases it. Keep this exception in the narrow presentation/geometry seam rather than contaminating TanStack filter state, persisted preferences, row counts, or general selection semantics.
 
+When that active Row Identity disappears from the Client Source, the same narrow projection becomes an anchored tombstone rather than unmounting the editor. The tombstone owns only the recoverable raw candidate and missing-row status; it cannot construct a Save Change Set. Escape or accessible cancellation releases it. Reappearance of the same identity before cancellation reattaches the session to the newly published row and typed Row Version, then routes through ordinary reconciliation.
+
 ## Framework-independent core
 
 The grid engine should not depend directly on React.

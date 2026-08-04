@@ -206,6 +206,7 @@ Success criteria:
 - live sort-key row movement never resets scroll or retargets the old index; it follows stable identity without forced reveal when possible and safely clears unknown Server activation or newly noncontiguous Client ranges
 - a live sort-key move of the active Client editor row preserves its visual Y-coordinate through frame-coalesced fixed-height scroll anchoring while the row remains correctly sorted and surrounding rows move
 - a live-filtered active editor row survives as one anchored presentation exception with accessible status and full reconciliation until valid commit or Escape, without changing filter state or row counts
+- deletion of the active editor row creates a recoverable anchored tombstone that cannot save, supports Escape and accessible cancellation, and reconnects only if the same Row Identity returns before cancellation
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
 - source JSX and emitted-package consumer type tests prove that `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review

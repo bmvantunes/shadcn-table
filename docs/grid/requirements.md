@@ -38,6 +38,8 @@ Live data that changes a current sort key may reorder rows without creating a us
 
 If a live update makes the active Client editor row fail current filters, keep it visible at the same anchored Y-coordinate as one temporary edit-owned presentation exception. Expose a non-color `Row no longer matches current filters` status, continue live canonical and conflict reconciliation, and preserve the raw candidate. End the exception only after valid commit or Escape, then allow the row to disappear normally. Never auto-commit or discard input merely to restore filter presentation.
 
+If the active Client editor row is deleted from the live Source, keep an anchored tombstone that preserves the raw candidate and exposes an accessible `This row was removed from the server. Changes cannot be saved.` status. Block commit and never call `onSaveEdits` for the missing row. Permit text recovery plus Escape or an explicit accessible `Cancel editing` action. If the same Row Identity reappears before cancellation, attach the session to its latest row and Row Version and apply normal reconciliation.
+
 Sorting while a cell editor is active must first run the normal parse-and-validation commit gate. An invalid candidate blocks the sort and restores focus to the editor. A valid Batch candidate commits locally before sorting immediately; a valid Immediate candidate begins its identity-keyed save operation before sorting immediately without awaiting its result. Reordering must neither discard edit state nor orphan an operation or notification when its row leaves the mounted viewport.
 
 ## Public export naming
