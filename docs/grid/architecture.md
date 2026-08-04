@@ -175,7 +175,7 @@ Held-key repeat is semantic input, not scroll sampling. Every valid Arrow comman
 
 Do not allocate a placeholder row object or TanStack row for every server index. The virtualizer owns total scroll geometry; the sparse store owns only loaded, loading, retained, or failed slots. Internal window alignment and buffer sizing are transport optimizations, not pagination state.
 
-Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window.
+Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window. A sort change applies this rule to both Client and Server pipelines, preserves horizontal geometry and column layout, clears position-based Active Cell and Linear Cell Range state, and retains identity-keyed drafts and conflicts.
 
 ## Framework-independent core
 
