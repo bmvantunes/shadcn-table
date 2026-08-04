@@ -413,6 +413,12 @@ The filters panel should support:
 - removing individual filters
 - clearing all filters
 
+Each eligible Field Column exposes every operator supported by its Value Type and the View Server contract. Text includes equality, `in`, contains/not-contains, starts/ends-with, blank/not-blank, and case/accent sensitivity. Number, BigInt, and BigDecimal include equality, `in`, ordered comparisons, half-open `inRange`, and blank/not-blank. Boolean and other scalar domains include equality, `in`, and blank/not-blank.
+
+Boolean and Select Field Columns use live Set Filters by default. Text, Number, BigInt, and BigDecimal Field Columns expose `in` but require explicit opt-in before mounting a live distinct-value Set Filter, because their cardinality may be unbounded. Client facets cover the complete processed Client row model. Server facets use their own live whole-result subscription and never derive values or counts from loaded sparse blocks. The open facet applies every other active filter and source constraint while excluding its own column filter; closing it releases the subscription.
+
+Filter changes auto-apply through a 150 ms TanStack Pacer debounce. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
+
 The sorting panel should show sort priority.
 
 ## Table editing capability and modes

@@ -631,14 +631,28 @@ const filters = [
 The filter model must support:
 
 - typed field conditions
-- recursive `AND` and `OR` groups
-- unary `NOT`
+- recursive `AND` and `OR` groups whose leaves all share one Column Identity
+- unary `NOT` within that same-column expression
 - an implicit-AND root array
 - operator and operand types derived from the column value
+
+The type must reject a compound group containing different Column Identities. Cross-column Grid Filter composition is always the implicit root `AND`; Quick Filter owns its separate OR-across-eligible-fields behavior.
 
 For example, `contains` must be rejected for a numeric column and `greaterThan` must be rejected for a nonnumeric column.
 
 `inRange` is half-open in both variants: `filter <= value < filterTo`. Client filtering must install the compiled exact comparator instead of TanStack's inclusive `inNumberRange` helper. Runtime filters retain native typed operands; the Server Adapter changes only Column Identity to Query Field and lets effect-view-server own schema-aware transport encoding.
+
+The built-in filter UI exposes the complete operator vocabulary supported by the column's Value Type and effect-view-server:
+
+- Text: `equals`, `notEqual`, `in`, `contains`, `notContains`, `startsWith`, `endsWith`, `blank`, and `notBlank`, plus case-sensitive and accent-sensitive options.
+- Number, BigInt, and BigDecimal: `equals`, `notEqual`, `in`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, half-open `inRange`, `blank`, and `notBlank`.
+- Boolean and other supported scalars: `equals`, `notEqual`, `in`, `blank`, and `notBlank`.
+
+Boolean and Select Field Columns use a live Set Filter for `in` by default. Text, Number, BigInt, and BigDecimal Field Columns still expose `in`, but live distinct-value faceting requires explicit column opt-in so a high-cardinality field does not silently create an expensive subscription. The exact opt-in property belongs to the final column filter configuration design.
+
+An open Set Filter is a live surface. Client Tables derive its values and counts from the complete locally processed row model. Server Tables acquire a narrow live facet subscription over the complete result domain rather than the loaded viewport window. The facet applies Source Constraints, Feed Route, Quick Filter, and every other active Grid Filter while excluding its own current column filter. Closing the surface releases the subscription. Incoming values and count changes update the open surface immediately without notifying the table root or body.
+
+Filter edits auto-apply through a 150 ms TanStack Pacer debounce and expose no Apply or Reset buttons inside the overlay. Grid Filters from different columns always combine with `AND`. Compound `AND`, `OR`, or `NOT` expressions may combine conditions only within one Column Identity; Quick Filter retains its separate OR-across-eligible-fields semantics. Source Constraints keep their own query-expression model and are not Grid Filters.
 
 TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
 

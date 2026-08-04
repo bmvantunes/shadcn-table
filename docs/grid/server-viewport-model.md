@@ -131,6 +131,8 @@ The public effect-view-server Viewport Source preserves TypeScript row/query typ
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 
+An open Server Set Filter does not facet the sparse viewport cache. It owns a separate narrow live whole-result subscription that carries the current Feed Route, Source Constraints, Quick Filter, and every other active Grid Filter while excluding the filter for its own Column Identity. Boolean and Select columns enable this surface by default; Text, Number, BigInt, and BigDecimal columns require explicit opt-in. Live distinct values and counts remain native and update only the open overlay's compact store. Closing the overlay releases the subscription.
+
 V1 exposes no exceptional computed filter or sort mapping. A Computed Column's `fields` tuple is its complete projection dependency declaration.
 
 ## Internal source seam

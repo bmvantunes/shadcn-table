@@ -60,6 +60,10 @@ _Avoid_: TanStack global filter, Source Constraint, page search
 The optional one-time Grid Filter Expression baseline for a new Table Instance. Valid persisted user filters take precedence when restored; later prop changes do not overwrite user intent. Clearing removes all Grid Filters, while resetting returns to this baseline.
 _Avoid_: Controlled filters, Source Constraint, mandatory filter, reactive prop synchronization
 
+**Set Filter**:
+A Grid Filter surface for choosing one or more exact scalar values through the `in` operator. Boolean and Select Field Columns use it by default; Text, Number, BigInt, and BigDecimal Field Columns require explicit opt-in because their distinct-value cardinality may be unbounded. While open, its values and counts remain live under every other active constraint and filter.
+_Avoid_: Feed Route selector, static option snapshot, loaded-window facet, always-on high-cardinality query
+
 **Query Field**:
 A row field or supported field path understood by a server query language. A Query Field is resolved from a column definition and is never used as persisted Column Identity.
 _Avoid_: Column Identity, column ID
