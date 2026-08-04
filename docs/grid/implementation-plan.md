@@ -166,7 +166,7 @@ Build:
 - visibility
 - pinning
 - right-side tool rail
-- `BrunoTableQuickFilter` with explicit eligible-column semantics
+- `BrunoTableQuickFilter` backed by an explicit non-empty `quickFilterFields` tuple of string-valued Query Fields
 - complete View Server operator parity per built-in Value Type
 - default live Set Filters for Boolean and Select Field Columns, with explicit high-cardinality opt-in for Text, Number, BigInt, and BigDecimal fields
 - complete Client faceting and separate live whole-result Server facet subscriptions that exclude their own column filter
@@ -197,6 +197,7 @@ Success criteria:
 
 - new/removed columns reconcile safely
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
+- Quick Filter fields are never inferred from columns, are not persisted, and compile to `OR`-combined `contains` leaves whose group is `AND`-combined with Source Constraints and Grid Filters
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
 - Text, Number, BigInt, and BigDecimal columns never open an automatic unbounded-cardinality facet without explicit opt-in

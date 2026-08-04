@@ -126,6 +126,7 @@ export function OrdersClientTable() {
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
+      quickFilterFields={["symbol", "status"]}
       clientSource={orders}
     />
   );
@@ -149,6 +150,7 @@ export function OrdersServerTable() {
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
+      quickFilterFields={["symbol", "status"]}
       viewportSource={viewportSource}
     />
   );
@@ -167,8 +169,14 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   getRowId: (row: TRow) => string;
   columns: TColumns;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
+  quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
   children?: React.ReactNode;
 };
+
+type BrunoTableQuickFilterFields<TRow> = readonly [
+  BrunoTableStringQueryField<TRow>,
+  ...BrunoTableStringQueryField<TRow>[],
+];
 
 type BrunoTableClientProps<
   TRow,
@@ -217,6 +225,7 @@ Rules:
 - `getRowId` is mandatory; row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
+- `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
@@ -653,6 +662,8 @@ Boolean and Select Field Columns use a live Set Filter for `in` by default. Text
 An open Set Filter is a live surface. Client Tables derive its values and counts from the complete locally processed row model. Server Tables acquire a narrow live facet subscription over the complete result domain rather than the loaded viewport window. The facet applies Source Constraints, Feed Route, Quick Filter, and every other active Grid Filter while excluding its own current column filter. Closing the surface releases the subscription. Incoming values and count changes update the open surface immediately without notifying the table root or body.
 
 Filter edits auto-apply through a 150 ms TanStack Pacer debounce and expose no Apply or Reset buttons inside the overlay. Grid Filters from different columns always combine with `AND`. Compound `AND`, `OR`, or `NOT` expressions may combine conditions only within one Column Identity; Quick Filter retains its separate OR-across-eligible-fields semantics. Source Constraints keep their own query-expression model and are not Grid Filters.
+
+Quick Filter eligibility comes only from the table's explicit `quickFilterFields` tuple. Every member must be a string-valued Query Field valid for `TRow`; visible columns, hidden columns, Column Identities, and column order do not implicitly change the tuple. The committed search text compiles to one `contains` leaf per configured field, those leaves combine with `OR`, and that group combines with Source Constraints and Grid Filters through `AND`. Client Tables evaluate the expression against their complete resident rows. Server Tables send the field-keyed expression to the View Server; filtering by a field does not require displaying a column for it. The tuple is application configuration and is not persisted, while the committed Quick Filter text is persisted as user intent. A `BrunoTableQuickFilter` rendered without the capability is a development-time configuration error rather than an automatic search over every text column.
 
 TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
 

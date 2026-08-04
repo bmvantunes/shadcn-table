@@ -53,8 +53,8 @@ A filter expression whose leaves refer to Column Identity. It is persisted as us
 _Avoid_: View Server filter, field-keyed persisted filter
 
 **Quick Filter**:
-A grid-owned free-text filter applied across explicitly eligible columns. It is part of grid filter intent, not an application data-scope constraint.
-_Avoid_: TanStack global filter, Source Constraint, page search
+A grid-owned free-text filter applied with `contains` across an explicit non-empty tuple of string-valued Query Fields supplied through `quickFilterFields`. Those fields combine with `OR`; the resulting expression combines with Source Constraints and Grid Filters through `AND`. The field tuple is application configuration and is never persisted, while the committed text is persisted user intent.
+_Avoid_: TanStack global filter, Source Constraint, page search, Column Identity list, automatically inferred text fields
 
 **Initial Grid Filters**:
 The optional one-time Grid Filter Expression baseline for a new Table Instance. Valid persisted user filters take precedence when restored; later prop changes do not overwrite user intent. Clearing removes all Grid Filters, while resetting returns to this baseline.

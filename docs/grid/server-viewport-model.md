@@ -56,6 +56,7 @@ function OrdersTable() {
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
+      quickFilterFields={["symbol"]}
       viewportSource={viewportSource}
     />
   );
@@ -130,6 +131,8 @@ Rules:
 The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Raw columns therefore declare Value Type explicitly, while typed Column Helpers such as `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
+
+Quick Filter uses the caller's explicit non-empty `quickFilterFields` tuple of string-valued Query Fields, never Column Identities or an inference from visible columns. The Adapter emits one `contains` leaf per field, combines those leaves with `OR`, and combines that group with Source Constraints and Grid Filters through `AND`. These fields need not have visible columns and the tuple is not persisted.
 
 An open Server Set Filter does not facet the sparse viewport cache. It owns a separate narrow live whole-result subscription that carries the current Feed Route, Source Constraints, Quick Filter, and every other active Grid Filter while excluding the filter for its own Column Identity. Boolean and Select columns enable this surface by default; Text, Number, BigInt, and BigDecimal columns require explicit opt-in. Live distinct values and counts remain native and update only the open overlay's compact store. Closing the overlay releases the subscription.
 

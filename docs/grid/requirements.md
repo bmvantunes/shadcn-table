@@ -378,7 +378,7 @@ Rules:
 - BrunoTable-owned controls can observe semantic grid state and dispatch typed grid actions from anywhere inside the provider. This includes separately named result-row, loaded-row, selected-row, active-filter, active-sort, dirty-cell, validation, and conflict counts where the control needs them.
 - Each BrunoTable-owned control consumes only the narrow state it renders; adding toolbar content must not subscribe the grid body or table root to broad changing state, and one control's update must not rerender unrelated sibling controls.
 - A command-only control has zero grid-state subscriptions. Event handlers use a stable command dispatcher rather than subscribing to values needed only while handling an event.
-- A search or Quick Filter input owns transient keystroke text locally. It may observe only the committed Quick Filter primitive to reflect an external reset, controlled-state change, or restored view; row-content changes must neither notify nor rerender it.
+- A search or Quick Filter input owns transient keystroke text locally. It may observe only the committed Quick Filter primitive to reflect an external reset or restored view; row-content changes must neither notify nor rerender it.
 - Partition notification sources by capability. Selector equality alone is insufficient if it still causes every unrelated selector to execute for each hot row update.
 - TanStack tables, atoms, stores, subscriptions, and state shapes remain private implementation details. Page-owned children do not receive them through props or context.
 - The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
@@ -418,6 +418,8 @@ Each eligible Field Column exposes every operator supported by its Value Type an
 Boolean and Select Field Columns use live Set Filters by default. Text, Number, BigInt, and BigDecimal Field Columns expose `in` but require explicit opt-in before mounting a live distinct-value Set Filter, because their cardinality may be unbounded. Client facets cover the complete processed Client row model. Server facets use their own live whole-result subscription and never derive values or counts from loaded sparse blocks. The open facet applies every other active filter and source constraint while excluding its own column filter; closing it releases the subscription.
 
 Filter changes auto-apply through a 150 ms TanStack Pacer debounce. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
+
+Quick Filter is an explicit optional capability configured by a non-empty `quickFilterFields` tuple of string-valued Query Fields. BrunoTable never derives that tuple from visible columns and never accepts Column Identities in its place. Each field receives a `contains` condition, the conditions combine with `OR`, and the resulting group combines with Source Constraints and Grid Filters through `AND`. The configured fields are application configuration and are not persisted; the committed Quick Filter text is persisted user intent. Rendering a Quick Filter control without configured fields is a development-time configuration error.
 
 The sorting panel should show sort priority.
 
