@@ -203,6 +203,7 @@ Success criteria:
 - pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry
 - Shift-add appends at lowest priority, Shift-direction toggles preserve priority, plain activation of an existing sorted column toggles it while making it the sole priority-one sort, and Sort panel priority reordering works through both pointer drag and keyboard actions
 - every committed ordering change resets both row models to vertical row zero, preserves horizontal scroll, layout, drafts, and conflicts, clears position-based cell selection, and retains focus on the initiating sort control
+- live sort-key row movement never resets scroll or retargets the old index; it follows stable identity without forced reveal when possible and safely clears unknown Server activation or newly noncontiguous Client ranges
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
 - source JSX and emitted-package consumer type tests prove that `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review

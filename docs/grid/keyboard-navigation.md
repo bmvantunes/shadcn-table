@@ -265,6 +265,8 @@ Support:
 26. Held-arrow navigation preserves every logical move while frame-batching physical reveal work.
 27. Server keyboard reveal changes the active viewport window, never page state.
 28. An unloaded active Server row retains its logical Active Cell until delivery.
+29. Live sort-key movement follows the same Row Identity when its new index is known, never auto-scrolls after it, and never transfers activation to a different row at the old index.
+30. If a moved Server row's new index is unknown, clear the Active Cell while retaining focus on the grid root; if a Client range's identities cease to be contiguous, clear the range.
 
 ## Test matrix
 
@@ -297,6 +299,8 @@ Must include:
 - Shift+Enter commits and moves one logical row up in the same column
 - Enter and Shift+Enter remain in the editor on invalid input and do not wrap at the first or last row
 - accepted Immediate Enter movement occurs before persistence settles; a later rejection does not steal focus back from its new Active Cell
+- live sort-key updates do not reset scroll; they reconcile the Active Cell by Row Identity when possible and never silently retarget the old absolute index
+- a moved active Server row outside the known sparse window clears activation without dropping browser focus, while a reordered Client range survives only when its identity set remains contiguous
 - Tab and Shift+Tab commit and move to the next or previous editable cell
 - Tab crosses pinned-start, centre, and pinned-end in Logical Column Order, wrapping to the next row without a multi-column reveal jump
 - Tab and Shift+Tab skip row-specific non-editable cells and reveal virtualized destinations

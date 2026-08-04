@@ -177,6 +177,8 @@ Do not allocate a placeholder row object or TanStack row for every server index.
 
 Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window. A sort change applies this rule to both Client and Server pipelines, preserves horizontal geometry and column layout, clears position-based Active Cell and Linear Cell Range state, and retains identity-keyed drafts and conflicts.
 
+A live row publication that changes current sort-key values is not a sorting command and never resets scroll. Reconcile navigation by stable Row Identity plus Column Identity rather than retaining an absolute index that may now contain a different row. When the new position is known, update the logical coordinate without auto-revealing it. When a Server row moves outside the known sparse window, clear the Active Cell while keeping DOM focus on the grid root. Client range reconciliation retains only a still-contiguous identity set; otherwise it clears the range.
+
 ## Framework-independent core
 
 The grid engine should not depend directly on React.

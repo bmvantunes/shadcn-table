@@ -348,6 +348,8 @@ The cache may use blocks internally for retention and eviction, but effect-view-
 
 Keyboard reveal follows the same rule. Holding Arrow Down advances the logical Active Cell by absolute row index and causes the virtualizer to reveal it. The range planner should use source overscan to request upcoming rows before the Active Cell reaches the final visible row. When the user outruns delivery, the requested index remains active as a fixed-height loading slot and the latest required contiguous window is sent to the active generation. Do not issue a request per repeated key event, wait for each row before accepting the next event, or model the operation as fetching a next page.
 
+Live View Server publications may move a row when an active sort key changes. Such movement does not restart the generation or reset scroll. If the Active Cell's Row Identity remains in the known sparse window, reconcile its absolute index without automatically scrolling after it. If that identity leaves the known window and the source does not expose its new index, clear the Active Cell and retain browser focus on the grid root; never transfer activation to the different row now occupying the old index.
+
 ## Sink responses
 
 The effect-view-server Viewport Sink writes the exact AG Grid-compatible shape:
