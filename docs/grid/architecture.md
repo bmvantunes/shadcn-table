@@ -352,6 +352,8 @@ Factories and static column arrays live at module scope. Their types must preser
 
 When grouping is active, the ordered Group By region supplies the flat group-key field tuple. An active key column contributes its field value and suppresses its own configured aggregate; every other configured aggregate column contributes its single aggregate result. Client and Viewport Adapters consume this same normalized plan without exposing TanStack aggregation definitions or View Server aggregate objects to the consumer.
 
+The grouped render plan always adds one visible BrunoTable-owned Rows System Column. Its Value Type is exact `bigint` and its value counts filtered source rows in the group. It is not synthesized from `getRowId` and does not require Row Identity to map to a Query Field. The Client Adapter computes it over the complete filtered source; the Viewport Adapter compiles an unconditional native View Server `count` aggregate under a reserved internal alias. Consumer aggregate capability excludes `count`, while field-specific `countDistinct` remains available.
+
 ## Column Value Semantics seam
 
 Every normalized leaf column owns one compiled internal value-semantics plan. It is the single authority for that column's:

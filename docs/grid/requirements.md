@@ -235,9 +235,13 @@ Use `columnId` for all grid state and persistence. Resolve it through the curren
 A direct Field Column may declare two independent grouping capabilities:
 
 - `groupBy: true` makes that column eligible to be dragged into the Group By region. Absence means it cannot become an active group key through BrunoTable UI.
-- `aggFunc` declares the single built-in aggregate the column contributes while another column is actively grouping. V1 accepts exactly one of `count`, `countDistinct`, `sum`, `min`, `max`, or `avg`; an array or consumer callback is not accepted.
+- `aggFunc` declares the single built-in aggregate the column contributes while another column is actively grouping. V1 accepts exactly one of `countDistinct`, `sum`, `min`, `max`, or `avg`; an array or consumer callback is not accepted.
 
 The same column may declare both properties. When it is itself an active group key, the flat grouped row exposes its field value and does not also emit that column's aggregate. If it is not an active key while another eligible column is grouping, its configured `aggFunc` contributes the aggregate value. Two different aggregates over the same source field use two distinct column definitions with distinct Column Identities.
+
+Whenever grouping is active, BrunoTable adds one visible grid-owned System Column with the default header `Rows`. Its value is the exact `bigint` count of source rows that survive current pre-group filters and belong to that flat group. The Client Adapter computes the same count locally; the Viewport Adapter always emits one native View Server `{ aggFunc: "count" }` aggregate. This both makes group size a first-class live feature and satisfies the View Server's non-empty aggregate requirement even when no consumer column declares `aggFunc`.
+
+Row count is group metadata rather than a field aggregation. Consumers cannot declare `aggFunc: "count"`; `countDistinct` remains available because it measures distinct values of a specific field. The automatic Rows column is non-filterable in V1 because the View Server does not support aggregate-result filtering.
 
 A Computed Column declares a non-empty `fields` tuple together with `valueGetter`. Every dependency is a valid row field, the getter receives only the corresponding `Pick` of the row, and a Server Table adds those fields to its explicit projection. It is always non-filterable, non-sortable, and non-editable in V1.
 

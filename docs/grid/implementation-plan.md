@@ -58,6 +58,7 @@ Build:
 - independent Field Column `groupBy: true` eligibility and one capability-derived built-in `aggFunc`
 - support for one column to declare both grouping eligibility and aggregation, with active-group-key precedence
 - rejection of `aggFunc` arrays, arbitrary aggregation callbacks, and unsupported Value Type/function pairs
+- exclusion of field-level `aggFunc: "count"` in favor of the grouped Rows System Column
 - computed columns excluded from filter, sort, and edit capabilities in V1
 - type-level tests
 - emitted-package consumer type tests
@@ -79,6 +80,7 @@ Success criteria:
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
 - two aggregate columns may reference one field only when they have distinct Column Identities, while one column cannot declare multiple aggregate functions
+- `aggFunc: "count"` fails while field-level `countDistinct` remains capability-checked
 - `bigint` filters accept only `bigint` operands and mixed numeric domains receive no automatic ordering capability
 - a consumer fixture imports the root package successfully without Effect installed
 - invalid editor types fail
@@ -475,6 +477,7 @@ Build:
 
 - one BrunoTable-owned typed grouping and aggregation intent
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
+- one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
@@ -490,9 +493,11 @@ Success criteria:
 - grouping and aggregation work in both `BrunoTableClient` and `BrunoTableServer`
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
+- every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
 - the Client Table computes only from its complete source
 - the Server Table delegates over the complete server result and never aggregates loaded sparse blocks
 - grouped Server queries use native `groupBy` plus a non-empty aggregate definition instead of raw-row `select`
+- the Server query always carries one native `count` aggregate, while the Client produces an equal exact `bigint` value
 - Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
 - aggregate aliases and group fields sort through validated View Server query members
 - grouped rows have explicit stable identity semantics appropriate to the chosen presentation shape

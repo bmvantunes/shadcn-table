@@ -661,7 +661,7 @@ Capabilities must remove invalid columns from their state models. A Computed Col
 Grouping eligibility and aggregate behavior are independent opt-in properties on a Field Column:
 
 ```ts
-type BrunoTableAggFunc = "count" | "countDistinct" | "sum" | "min" | "max" | "avg";
+type BrunoTableAggFunc = "countDistinct" | "sum" | "min" | "max" | "avg";
 
 const columns = [
   {
@@ -687,6 +687,10 @@ const columns = [
 A column may provide both capabilities. While that column is an active group key, the flat grouped row contains its group-field value and suppresses its own aggregate output. When another column is grouping and this column is not an active key, its `aggFunc` contributes an aggregate output. The ordered active Group By region determines the ordered field tuple sent to the View Server or evaluated by the Client Adapter.
 
 The exact `aggFunc` union exposed for a concrete column must be capability-derived rather than universally assignable. For example, `sum` and `avg` require compatible numeric aggregation semantics. TypeScript and runtime normalization must reject unsupported column/function combinations before either row pipeline receives them.
+
+Active grouping also installs one BrunoTable-owned System Column whose default header is `Rows`. It is not inferred from or attached to any consumer Field Column. Every flat grouped row contains its exact `bigint` source-row count after current pre-group filters. The Client Adapter calculates it from the complete filtered source; the Viewport Adapter always adds a native `{ aggFunc: "count" }` aggregate under a reserved internal alias.
+
+The visible Rows column is the sole row-count representation. `BrunoTableAggFunc` therefore excludes `count`, avoiding duplicate counts and the false implication that row count belongs to an arbitrary field. `countDistinct` remains a field-level function. Because effect-view-server has no HAVING or aggregate-result filter contract, the System Column cannot participate in Grid Filters in V1.
 
 ## Grid filter expressions
 
