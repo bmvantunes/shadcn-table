@@ -249,6 +249,10 @@ Active grouping creates a temporary derived Logical Column Order:
 active group-key columns in Group By order -> Rows -> participating aggregate columns
 ```
 
+That is also the complete grouped projection. A consumer column participates only while it is an active group key or, when not an active key, when it explicitly declares `aggFunc`. Every other ordinary, action, or presentation-only column is temporarily omitted because a grouped row has no truthful value for it. BrunoTable never invents `first`, `last`, an arbitrary representative source value, or another implicit aggregate. Clearing grouping restores every omitted column and its durable preferences unchanged.
+
+`aggFunc` remains optional. Requiring it on every definition would force meaningless domain choices and make the Server Table maintain unused live aggregates proportional to raw column count. Each Adapter computes or requests only the explicitly participating aggregate columns plus the mandatory Rows count.
+
 Reordering two columns in the Group By region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
 
 V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.

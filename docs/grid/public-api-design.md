@@ -695,6 +695,8 @@ The visible Rows column is the sole row-count representation. `BrunoTableAggFunc
 
 Grouping owns a derived rendered layout rather than mutating persisted column preferences. Its Logical Column Order is the active group-key columns in Group By order, followed by Rows, followed by participating aggregate columns in their normal relative order. Reordering Group By chips changes the group-key tuple and rendered key-column order together.
 
+This sequence is the complete grouped projection. A non-key consumer column appears only when it explicitly declares `aggFunc`; every column without grouped semantics is temporarily omitted and restored unchanged afterward. `aggFunc` is deliberately optional. BrunoTable does not guess a field's domain meaning, expose arbitrary representative source values, or request unused aggregates merely to keep every raw column mounted.
+
 All start/end pinning is suspended in this derived grouped layout, including pinning previously assigned to a group key or aggregate column. The normal order and pinning snapshots remain intact and emit no preference change merely because grouping became active. Removing the last active group key restores them exactly.
 
 While grouped, the ordinary header reorder interaction and command are unavailable. Only Group By chip reordering changes presentation order. Aggregate columns retain their relative durable base `columnOrder`.
