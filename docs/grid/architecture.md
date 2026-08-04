@@ -94,6 +94,8 @@ The private TanStack Adapter may implement TanStack-owned parts with `table.Subs
 
 Quick Filter fields are immutable table configuration, not reactive grid state. The optional explicit non-empty `quickFilterFields` tuple contains string-valued Query Fields rather than Column Identities and is never inferred from current visibility, order, or headers. The row-pipeline Adapter compiles committed text to `OR(contains(field, text), ...)`, then combines that group with Source Constraints and Grid Filters through `AND`. Client and Server pipelines preserve the same semantics without routing the expression through TanStack's global-filter contract.
 
+Preference persistence is an outbound notification seam, not a storage subsystem or React-controlled state path. The preference slice accepts one sanitized `initialPersistedState` snapshot when the Grid Runtime is created. After a committed Grid Filter, sort, order, visibility, width, or pinning command changes semantic preference state, it encodes one complete immutable JSON-safe snapshot and invokes the latest `onPersistChange` callback outside the mutation path. Initial restoration and non-preference commands emit nothing. Pointer and scroll frames never encode or notify; resize and reorder notify once when their gestures commit. The callback return value cannot block, roll back, or replace Grid Runtime state.
+
 Keep the public Module deep:
 
 - compose page-specific UI through children instead of adding feature booleans to table props;

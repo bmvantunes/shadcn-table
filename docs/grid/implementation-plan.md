@@ -178,8 +178,8 @@ Build:
 - reset actions
 - live resize widths applied through frame-batched CSS variables outside React reconciliation
 - isolated reactive state for resize handles and accessibility output
-- local-storage adapter
-- URL adapter
+- one-time `initialPersistedState` restoration supplied by the application
+- complete JSON-safe `onPersistChange` snapshots after committed preference changes
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
 - schema versioning and sanitization
 - tagged, versioned JSON-safe codecs for exact filter operands
@@ -204,6 +204,7 @@ Success criteria:
 - Source Constraints are never serialized as grid preferences or cleared by grid filter reset
 - no ephemeral state is serialized
 - stale, wrong-codec, wrong-column, or invalid exact operands are dropped rather than coerced
+- restoration does not echo `onPersistChange`, one atomic command emits at most one snapshot, and pointer/scroll frames emit none
 - drag commits once
 - live resize does not rerender the mounted body on each pointer frame
 - drag animation stays within frame budget

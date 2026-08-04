@@ -12,6 +12,10 @@ _Avoid_: Table Instance Identity, optional table name, display title, Symbol
 The private transient identity of one mounted table runtime. It distinguishes simultaneous instances without becoming persisted user intent.
 _Avoid_: Table Identity, persistence key
 
+**Persisted Grid Preferences**:
+A versioned, JSON-safe snapshot of one Table Identity's Grid Filter Expressions, sorting, column order, visibility, widths, and pinning. BrunoTable accepts an optional one-time initial snapshot and emits a complete replacement snapshot through `onPersistChange` after every committed preference change. The application owns storage and transport.
+_Avoid_: Quick Filter, Source Constraint, Feed Route, edit state, built-in storage adapter, React-controlled table state
+
 **Column Identity**:
 The required stable, serializable `columnId` that identifies one grid column within a Table Identity. It uses the `COL_ID_${UPPERCASE_NAME}` namespace, is independent of headers and row fields, and is never inferred.
 _Avoid_: Field name as identity, header-derived ID, generated column ID, Symbol

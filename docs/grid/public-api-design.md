@@ -170,6 +170,8 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   columns: TColumns;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+  initialPersistedState?: BrunoTablePersistedState<TRow, TColumns>;
+  onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns>) => void;
   children?: React.ReactNode;
 };
 
@@ -177,6 +179,17 @@ type BrunoTableQuickFilterFields<TRow> = readonly [
   BrunoTableStringQueryField<TRow>,
   ...BrunoTableStringQueryField<TRow>[],
 ];
+
+type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly version: number;
+  readonly tableId: string;
+  readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
+  readonly sorting: BrunoTableSortBy<TColumns>;
+  readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
+  readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
+  readonly columnWidths: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, number>>>;
+  readonly columnPinning: BrunoTablePersistedColumnPinning<TColumns>;
+};
 
 type BrunoTableClientProps<
   TRow,
@@ -226,6 +239,8 @@ Rules:
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
+- `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
+- `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, Source Constraint, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
@@ -239,6 +254,23 @@ Rules:
 - Optional children render inside the grid provider as page-specific toolbar content. When absent, no toolbar region is mounted.
 - Client Row Selection is an explicit opt-in capability and defaults off. Its enabled header checkbox addresses the complete currently filtered Client row model, never only mounted rows. Stable selected Row Identities survive being filtered out, while header-checkbox state reflects only the current filtered set. Select All snapshots the matching identities at that gesture; later inserts are not auto-selected and deleted rows are pruned. The Server interface exposes no corresponding capability.
 - Do not replace children composition with page-specific boolean props or expose TanStack state to custom toolbar components.
+
+Persistence is callback-based rather than storage-adapter based:
+
+```tsx
+<BrunoTableServer
+  tableId="orders"
+  getRowId={getOrderRowId}
+  columns={columns}
+  viewportSource={viewportSource}
+  initialPersistedState={savedPreferences}
+  onPersistChange={(nextPreferences) => {
+    publishPreferences(nextPreferences);
+  }}
+/>
+```
+
+The application may obtain `savedPreferences` from Kafka through View Server, an HTTP request, a database, or any other mechanism. If loading is asynchronous, it should finish loading before mounting the Table Instance. BrunoTable emits a full replacement document rather than a delta so compacted logs and ordinary key-value stores can retain one authoritative value per application-defined user/table key. Multiple mutations committed as one grid command emit one snapshot, and high-frequency pointer frames never call `onPersistChange`; column resize and reorder publish only when the gesture commits.
 
 ## Optional toolbar composition
 

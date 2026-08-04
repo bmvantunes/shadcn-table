@@ -320,7 +320,8 @@ Persisted state must be:
 - versioned
 - sanitised against current column definitions
 - migration-capable
-- storage-adapter based
+- JSON-safe
+- emitted as a complete replacement snapshot through `onPersistChange`
 
 Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
@@ -328,12 +329,9 @@ Quick Filter is the deliberate exception to filter persistence. Neither its appl
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 
-Supported storage targets should include:
+BrunoTable owns no storage adapter, provider, Local Storage access, URL synchronization, network request, Kafka producer, or retry workflow. The application may pass one optional `initialPersistedState` snapshot when mounting the Table Instance and receives the complete current snapshot through `onPersistChange` after every committed Grid Filter, sort, column-order, visibility, width, or pinning change. Restoration does not echo a callback. Quick Filter, Source Constraints, Feed Route, selection, scroll, and edit state never trigger it.
 
-- local storage
-- URL
-- server
-- composed or layered storage
+The callback is a non-blocking notification boundary. BrunoTable neither awaits it nor reacts to its return value or failures. Applications own publication ordering, retries, error reporting, user/tenant keys, authorization, and transport. One atomic grid command emits at most one snapshot. Pointer-move and scroll frames emit none; resize and reorder emit only on gesture commit.
 
 ## Column management
 
