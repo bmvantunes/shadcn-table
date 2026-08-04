@@ -30,7 +30,7 @@ Every public inference guarantee requires source-level type tests and an emitted
 
 Grid Filter state is internally owned in V1. An optional typed `initialFilters` prop supplies the one-time baseline for a new Table Instance; it is not a React-controlled value and later prop changes do not overwrite user intent. Valid persisted filters take precedence during restoration. Clearing produces no Grid Filters, while resetting returns to `initialFilters`. A Server condition that users must not remove is an External Filter rather than an Initial Grid Filter.
 
-Every table requires a non-empty typed `initialOrderBy` keyed by Column Identity. A valid non-empty persisted `orderBy` wins during restoration; otherwise the grid uses the initial baseline. Later prop changes do not control current ordering, and Reset returns to `initialOrderBy`. No table state, command, persistence document, or UI cycle may represent an empty unsorted order.
+Every table requires a non-empty typed `initialOrderBy` keyed by Column Identity. Each `columnId` must be the exact literal union of sortable identities inferred from that table's `columns` tuple, so consumers receive autocomplete and compile-time rejection of unknown, misspelled, computed, or explicitly nonsortable identities. A valid non-empty persisted `orderBy` wins during restoration; otherwise the grid uses the initial baseline. Later prop changes do not control current ordering, and Reset returns to `initialOrderBy`. No table state, command, persistence document, or UI cycle may represent an empty unsorted order.
 
 ## Public export naming
 
