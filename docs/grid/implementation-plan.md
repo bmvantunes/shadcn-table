@@ -214,6 +214,8 @@ Success criteria:
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`
+- invalid typed filter drafts retain the last committed filter, show inline accessible errors, emit no row/query/persistence command, and may be discarded on close without trapping focus
+- JavaScript Number controls use native `type="number" step="any"` plus semantic validation, while BigInt and BigDecimal preserve raw text with input-mode hints and never use `valueAsNumber`
 - Grid Filter, Quick Filter, Clear, and Reset commands reject invalid active editors with focus restored, or commit valid Batch/Immediate work before filtering without awaiting transport
 - existing edit-owned work never blocks filtering or requires hidden-draft confirmation; complete sparse footer, Save, and review projections remain independent of filtered and mounted rows
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
