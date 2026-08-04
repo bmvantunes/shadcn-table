@@ -232,6 +232,13 @@ Keep column identity separate from row data and server query fields:
 
 Use `columnId` for all grid state and persistence. Resolve it through the current column definition to `field` only when reading row data or compiling a server query.
 
+A direct Field Column may declare two independent grouping capabilities:
+
+- `groupBy: true` makes that column eligible to be dragged into the Group By region. Absence means it cannot become an active group key through BrunoTable UI.
+- `aggFunc` declares the single built-in aggregate the column contributes while another column is actively grouping. V1 accepts exactly one of `count`, `countDistinct`, `sum`, `min`, `max`, or `avg`; an array or consumer callback is not accepted.
+
+The same column may declare both properties. When it is itself an active group key, the flat grouped row exposes its field value and does not also emit that column's aggregate. If it is not an active key while another eligible column is grouping, its configured `aggFunc` contributes the aggregate value. Two different aggregates over the same source field use two distinct column definitions with distinct Column Identities.
+
 A Computed Column declares a non-empty `fields` tuple together with `valueGetter`. Every dependency is a valid row field, the getter receives only the corresponding `Pick` of the row, and a Server Table adds those fields to its explicit projection. It is always non-filterable, non-sortable, and non-editable in V1.
 
 A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column cannot opt into filtering, sorting, or editing in V1.

@@ -656,6 +656,38 @@ Having a `field` plus the required Value Type semantics makes a column eligible 
 
 Capabilities must remove invalid columns from their state models. A Computed Column cannot appear in filter, sort, or edit state merely because a caller writes its `columnId`.
 
+## Grouping and aggregation column capabilities
+
+Grouping eligibility and aggregate behavior are independent opt-in properties on a Field Column:
+
+```ts
+type BrunoTableAggFunc = "count" | "countDistinct" | "sum" | "min" | "max" | "avg";
+
+const columns = [
+  {
+    columnId: "COL_ID_REGION",
+    headerName: "Region",
+    field: "region",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_MIN_PRICE",
+    headerName: "Minimum price",
+    field: "price",
+    valueType: "number",
+    groupBy: true,
+    aggFunc: "min",
+  },
+] satisfies BrunoTableColumns<Order>;
+```
+
+`groupBy: true` means the user may drag the column into BrunoTable's Group By region; it does not mean the column starts actively grouped. `aggFunc` is one built-in function, never an array or arbitrary callback. Multiple aggregate presentations over one field are separate columns with separate `columnId` values.
+
+A column may provide both capabilities. While that column is an active group key, the flat grouped row contains its group-field value and suppresses its own aggregate output. When another column is grouping and this column is not an active key, its `aggFunc` contributes an aggregate output. The ordered active Group By region determines the ordered field tuple sent to the View Server or evaluated by the Client Adapter.
+
+The exact `aggFunc` union exposed for a concrete column must be capability-derived rather than universally assignable. For example, `sum` and `avg` require compatible numeric aggregation semantics. TypeScript and runtime normalization must reject unsupported column/function combinations before either row pipeline receives them.
+
 ## Grid filter expressions
 
 Persisted filters express user intent using `columnId`. They do not persist View Server fields or raw TanStack `unknown` values.

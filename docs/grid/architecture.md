@@ -336,7 +336,7 @@ This is a real seam because there are two implementations. Keep source ownership
 
 Raw definitions, built-in Column Helpers, and application Column Presets all converge into the same validated normalized-column representation before TanStack columns or render plans are created. Helpers are construction-time modules, not runtime column kinds: normalized cells do not branch on whether their definition came from `BrunoTableNumberColumn`, `priceColumn`, or a raw object.
 
-A raw value-bearing column declares `valueType`. A built-in helper supplies that Value Type together with coherent presentation and interaction defaults. Application presets specialize helpers for domain conventions without creating a string registry. Every path still requires explicit Column Identity and either one direct `field` or a non-empty `fields` dependency tuple paired with `valueGetter`.
+A raw value-bearing column declares `valueType`. A built-in helper supplies that Value Type together with coherent presentation and interaction defaults. Application presets specialize helpers for domain conventions without creating a string registry. Every path still requires explicit Column Identity and either one direct `field` or a non-empty `fields` dependency tuple paired with `valueGetter`. A normalized Field Column independently records Group By eligibility and at most one built-in aggregate function. These are construction-time capabilities, not per-cell lookups.
 
 Construction-time precedence is fixed:
 
@@ -349,6 +349,8 @@ The normalized column stores direct renderer, editor, formatter, class, comparat
 `valueFormatter`, `cellClassName`, and `cellRenderer` are typed Cell Presentation overrides. The formatter produces visible text, a conditional class changes presentation, and the renderer is the full React escape hatch. They never replace the normalized value-semantics functions. A custom representation used for edit or clipboard round trips must declare the paired parse/exchange capability explicitly.
 
 Factories and static column arrays live at module scope. Their types must preserve literal Column Identity, field/value correlation, computed getter values, and row/value callback parameters without consumer casts or repeated row generics. TanStack helper types may inform the implementation, but BrunoTable's helpers and normalized definitions remain the public interface.
+
+When grouping is active, the ordered Group By region supplies the flat group-key field tuple. An active key column contributes its field value and suppresses its own configured aggregate; every other configured aggregate column contributes its single aggregate result. Client and Viewport Adapters consume this same normalized plan without exposing TanStack aggregation definitions or View Server aggregate objects to the consumer.
 
 ## Column Value Semantics seam
 

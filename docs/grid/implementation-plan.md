@@ -55,6 +55,9 @@ Build:
 - optional-integration type seam that keeps Effect out of root declarations
 - capability derivation for editing, sorting, and filtering
 - default-enabled filtering and sorting for eligible Field Columns, with explicit per-column opt-outs
+- independent Field Column `groupBy: true` eligibility and one capability-derived built-in `aggFunc`
+- support for one column to declare both grouping eligibility and aggregation, with active-group-key precedence
+- rejection of `aggFunc` arrays, arbitrary aggregation callbacks, and unsupported Value Type/function pairs
 - computed columns excluded from filter, sort, and edit capabilities in V1
 - type-level tests
 - emitted-package consumer type tests
@@ -75,6 +78,7 @@ Success criteria:
 - computed values infer correctly
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
+- two aggregate columns may reference one field only when they have distinct Column Identities, while one column cannot declare multiple aggregate functions
 - `bigint` filters accept only `bigint` operands and mixed numeric domains receive no automatic ordering capability
 - a consumer fixture imports the root package successfully without Effect installed
 - invalid editor types fail
@@ -470,6 +474,7 @@ Grouping and aggregation are V1 capabilities for both table variants. V1 uses on
 Build:
 
 - one BrunoTable-owned typed grouping and aggregation intent
+- an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
@@ -483,6 +488,8 @@ Build:
 Success criteria:
 
 - grouping and aggregation work in both `BrunoTableClient` and `BrunoTableServer`
+- `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
+- a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - the Client Table computes only from its complete source
 - the Server Table delegates over the complete server result and never aggregates loaded sparse blocks
 - grouped Server queries use native `groupBy` plus a non-empty aggregate definition instead of raw-row `select`
