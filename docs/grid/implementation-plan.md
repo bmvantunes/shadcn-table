@@ -197,11 +197,11 @@ Success criteria:
 
 - new/removed columns reconcile safely
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
-- Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with Source Constraints and Grid Filters, and neither their configuration nor committed text is persisted
+- Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
 - Text, Number, BigInt, and BigDecimal columns never open an automatic unbounded-cardinality facet without explicit opt-in
-- Source Constraints are never serialized as grid preferences or cleared by grid filter reset
+- External Filters are never serialized as grid preferences, included in BrunoTable's active-filter count, or cleared by grid filter reset
 - no ephemeral state is serialized
 - stale, wrong-codec, wrong-column, or invalid exact operands are dropped rather than coerced
 - restoration does not echo `onPersistChange`, one atomic command emits at most one snapshot, and pointer/scroll frames emit none

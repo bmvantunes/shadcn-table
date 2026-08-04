@@ -180,6 +180,8 @@ type BrunoTableQuickFilterFields<TRow> = readonly [
   ...BrunoTableStringQueryField<TRow>[],
 ];
 
+type BrunoTableExternalFilters<TRow> = readonly BrunoTableExternalFilterExpression<TRow>[];
+
 type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly version: number;
   readonly tableId: string;
@@ -198,6 +200,7 @@ type BrunoTableClientProps<
 > = BrunoTableBaseProps<TRow, TColumns> &
   BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
     clientSource: BrunoTableClientSource<TRow>;
+    externalFilters?: never;
   };
 
 type BrunoTableServerProps<
@@ -206,6 +209,7 @@ type BrunoTableServerProps<
   TViewport = unknown,
 > = BrunoTableBaseProps<TRow, TColumns> & {
   viewportSource: BrunoTableServerSource<TViewport>;
+  externalFilters?: BrunoTableExternalFilters<TRow>;
   editable?: never;
   getRowVersion?: never;
   onSaveEdits?: never;
@@ -240,13 +244,14 @@ Rules:
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
-- `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, Source Constraint, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
+- `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
 - Preserve unchanged row references between source versions and replace only changed rows.
 - `loading` with no rows shows the loading overlay. `stale`, `closed`, or `error` with retained rows keeps those rows visible and adds the appropriate non-destructive status treatment.
 - `viewportSource` is a long-lived source, not a row array copied into React state.
+- `externalFilters` is an optional Server-only application-controlled field-keyed expression. It uses the same value-aware operator vocabulary as View Server `where`, may reference valid fields without visible columns, and is always `AND`-combined with Quick Filter and Grid Filters. It is reactive but never persisted, counted, reviewed, reset, or cleared by BrunoTable. Client Tables reject the prop because their complete `clientSource` already defines the caller's working set.
 - `BrunoTableServer` exposes no Row Selection or Cell Range Selection interface: no checkbox column, selected-row callback/state, Shift-click row selection, Select All, or range operation. Its only cell cursor is the private logical Active Cell used by navigation and single-loaded-cell copy.
 - `BrunoTableClient` Cell Range Selection is permanently limited to zero or one contiguous Linear Cell Range: horizontal `1×N` or vertical `N×1`. No prop, callback, command, or state shape can represent a two-axis target, additive ranges, subtractive holes, or disconnected regions; a new selection replaces the previous range.
 - Both variants expose one continuous virtual row space. Do not add pagination, page-index, page-size, cursor, fetch-next-page, or load-more props.
@@ -297,12 +302,12 @@ Distinguish filter ownership explicitly:
 
 - Grid Filter Expressions are user grid intent, appear in global active-filter UI, and participate in preference persistence.
 - Quick Filter is user grid intent and appears in global active-filter UI, but its field configuration and committed text are session-only and never persisted or included in saved views.
-- Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
+- External Filters define an application-controlled Server working-set condition before Grid Filters, are supplied through `externalFilters`, and are not persisted, counted, reviewed, reset, or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
 For effect-view-server leased topics, keep Feed Route ownership separate from both categories above. The source declaration owns the exact non-empty Route Field tuple. `BrunoTableServer` receives only the current exact `routeBy` value object, inferred conditionally from `viewportSource`: leased sources require all and only their declared fields, while materialized and source-free sources forbid the prop. Do not expose a duplicated `routeByFields` list.
 
-The View Server Adapter snapshots `routeBy` with exact source semantics and carries it unchanged into every `viewport.replace(...)` query. It never derives route values from columns, Grid Filters, Set Filters, loaded rows, or Source Constraints. Route Fields need not be projected or represented by visible columns. A meaningful route change replaces the complete sparse logical row space but does not alter or persist compatible user grid preferences.
+The View Server Adapter snapshots `routeBy` with exact source semantics and carries it unchanged into every `viewport.replace(...)` query. It never derives route values from columns, Grid Filters, Set Filters, External Filters, or loaded rows. Route Fields need not be projected or represented by visible columns. A meaningful route change replaces the complete sparse logical row space but does not alter or persist compatible user grid preferences.
 
 ## Strict editable capability
 
@@ -692,11 +697,11 @@ The built-in filter UI exposes the complete operator vocabulary supported by the
 
 Boolean and Select Field Columns use a live Set Filter for `in` by default. Text, Number, BigInt, and BigDecimal Field Columns still expose `in`, but live distinct-value faceting requires explicit column opt-in so a high-cardinality field does not silently create an expensive subscription. The exact opt-in property belongs to the final column filter configuration design.
 
-An open Set Filter is a live surface. Client Tables derive its values and counts from the complete locally processed row model. Server Tables acquire a narrow live facet subscription over the complete result domain rather than the loaded viewport window. The facet applies Source Constraints, Feed Route, Quick Filter, and every other active Grid Filter while excluding its own current column filter. Closing the surface releases the subscription. Incoming values and count changes update the open surface immediately without notifying the table root or body.
+An open Set Filter is a live surface. Client Tables derive its values and counts from the complete locally processed row model. Server Tables acquire a narrow live facet subscription over the complete result domain rather than the loaded viewport window. The facet applies External Filters, Feed Route, Quick Filter, and every other active Grid Filter while excluding its own current column filter. Closing the surface releases the subscription. Incoming values and count changes update the open surface immediately without notifying the table root or body.
 
-Filter edits auto-apply through a 150 ms TanStack Pacer debounce and expose no Apply or Reset buttons inside the overlay. Grid Filters from different columns always combine with `AND`. Compound `AND`, `OR`, or `NOT` expressions may combine conditions only within one Column Identity; Quick Filter retains its separate OR-across-eligible-fields semantics. Source Constraints keep their own query-expression model and are not Grid Filters.
+Filter edits auto-apply through a 150 ms TanStack Pacer debounce and expose no Apply or Reset buttons inside the overlay. Grid Filters from different columns always combine with `AND`. Compound `AND`, `OR`, or `NOT` expressions may combine conditions only within one Column Identity; Quick Filter retains its separate OR-across-eligible-fields semantics. External Filters keep their field-keyed query-expression model and are not Grid Filters.
 
-Quick Filter eligibility comes only from the table's explicit `quickFilterFields` tuple. Every member must be a string-valued Query Field valid for `TRow`; visible columns, hidden columns, Column Identities, and column order do not implicitly change the tuple. The committed search text compiles to one `contains` leaf per configured field, those leaves combine with `OR`, and that group combines with Source Constraints and Grid Filters through `AND`. Client Tables evaluate the expression against their complete resident rows. Server Tables send the field-keyed expression to the View Server; filtering by a field does not require displaying a column for it. Both the field tuple and committed text are session-only: neither is persisted nor included in a saved view, and every new Table Instance starts with an empty Quick Filter. A `BrunoTableQuickFilter` rendered without the capability is a development-time configuration error rather than an automatic search over every text column.
+Quick Filter eligibility comes only from the table's explicit `quickFilterFields` tuple. Every member must be a string-valued Query Field valid for `TRow`; visible columns, hidden columns, Column Identities, and column order do not implicitly change the tuple. The committed search text compiles to one `contains` leaf per configured field, those leaves combine with `OR`, and that group combines with External Filters and Grid Filters through `AND`. Client Tables evaluate the expression against their complete resident rows. Server Tables send the field-keyed expression to the View Server; filtering by a field does not require displaying a column for it. Both the field tuple and committed text are session-only: neither is persisted nor included in a saved view, and every new Table Instance starts with an empty Quick Filter. A `BrunoTableQuickFilter` rendered without the capability is a development-time configuration error rather than an automatic search over every text column.
 
 TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
 

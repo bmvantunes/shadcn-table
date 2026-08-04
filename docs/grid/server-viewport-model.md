@@ -89,7 +89,7 @@ const viewportSource = useLiveQueryViewport("regionalOrders");
 
 For leased topics, `routeBy` is mandatory and contains all and only the source-declared Route Fields with their exact row-field value types. For materialized or source-free topics it is forbidden. This conditional capability must be inferred without exposing TanStack objects or making Effect mandatory for the root package.
 
-The Feed Route chooses one upstream leased feed. It is not a Grid Filter Expression, Set Filter, Source Constraint, projection declaration, or Column Identity mapping. A Route Field need not appear in `select`, have a visible column, or support filtering. The Adapter forwards the snapshotted route unchanged in every replacement query:
+The Feed Route chooses one upstream leased feed. It is not a Grid Filter Expression, Set Filter, External Filter, projection declaration, or Column Identity mapping. A Route Field need not appear in `select`, have a visible column, or support filtering. The Adapter forwards the snapshotted route unchanged in every replacement query:
 
 ```ts
 viewportSource.viewport.replace({
@@ -107,6 +107,8 @@ viewportSource.viewport.replace({
 Do not add `routeByFields` to BrunoTable. The source declaration is the only field-list authority. Do not infer a Feed Route from a single-choice Set Filter: filtering occurs inside the selected feed and cannot substitute for routing.
 
 When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
+
+`externalFilters` is a separate optional Server-only input containing field-keyed View Server conditions. It defaults to no conditions and may reference valid filter fields that have no visible column. The Adapter combines External Filters, Quick Filter, and compiled Grid Filters through `AND`; it never translates External Filter fields through Column Identity. A semantic External Filter change releases the old query generation, invalidates the sparse indexed cache, clears transient focus/selection/scroll state, and starts at row zero while preserving compatible grid preferences and the current Feed Route. Compare filters through exact query semantics rather than React object identity so an equivalent freshly allocated array does not restart the viewport.
 
 ## View Server Translation Adapter
 
@@ -132,9 +134,9 @@ The public effect-view-server Viewport Source preserves TypeScript row/query typ
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 
-Quick Filter uses the caller's explicit non-empty `quickFilterFields` tuple of string-valued Query Fields, never Column Identities or an inference from visible columns. The Adapter emits one `contains` leaf per field, combines those leaves with `OR`, and combines that group with Source Constraints and Grid Filters through `AND`. These fields need not have visible columns. Neither the tuple nor committed Quick Filter text is persisted.
+Quick Filter uses the caller's explicit non-empty `quickFilterFields` tuple of string-valued Query Fields, never Column Identities or an inference from visible columns. The Adapter emits one `contains` leaf per field, combines those leaves with `OR`, and combines that group with External Filters and Grid Filters through `AND`. These fields need not have visible columns. Neither the tuple nor committed Quick Filter text is persisted.
 
-An open Server Set Filter does not facet the sparse viewport cache. It owns a separate narrow live whole-result subscription that carries the current Feed Route, Source Constraints, Quick Filter, and every other active Grid Filter while excluding the filter for its own Column Identity. Boolean and Select columns enable this surface by default; Text, Number, BigInt, and BigDecimal columns require explicit opt-in. Live distinct values and counts remain native and update only the open overlay's compact store. Closing the overlay releases the subscription.
+An open Server Set Filter does not facet the sparse viewport cache. It owns a separate narrow live whole-result subscription that carries the current Feed Route, External Filters, Quick Filter, and every other active Grid Filter while excluding the filter for its own Column Identity. Boolean and Select columns enable this surface by default; Text, Number, BigInt, and BigDecimal columns require explicit opt-in. Live distinct values and counts remain native and update only the open overlay's compact store. Closing the overlay releases the subscription.
 
 V1 exposes no exceptional computed filter or sort mapping. A Computed Column's `fields` tuple is its complete projection dependency declaration.
 

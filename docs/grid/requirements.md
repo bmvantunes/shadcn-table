@@ -28,7 +28,7 @@ The public interface must:
 
 Every public inference guarantee requires source-level type tests and an emitted-package consumer test.
 
-Grid Filter state is internally owned in V1. An optional typed `initialFilters` prop supplies the one-time baseline for a new Table Instance; it is not a React-controlled value and later prop changes do not overwrite user intent. Valid persisted filters take precedence during restoration. Clearing produces no Grid Filters, while resetting returns to `initialFilters`. A condition that users must not remove is a Source Constraint rather than an Initial Grid Filter.
+Grid Filter state is internally owned in V1. An optional typed `initialFilters` prop supplies the one-time baseline for a new Table Instance; it is not a React-controlled value and later prop changes do not overwrite user intent. Valid persisted filters take precedence during restoration. Clearing produces no Grid Filters, while resetting returns to `initialFilters`. A Server condition that users must not remove is an External Filter rather than an Initial Grid Filter.
 
 ## Public export naming
 
@@ -329,7 +329,7 @@ Quick Filter is the deliberate exception to filter persistence. Neither its appl
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 
-BrunoTable owns no storage adapter, provider, Local Storage access, URL synchronization, network request, Kafka producer, or retry workflow. The application may pass one optional `initialPersistedState` snapshot when mounting the Table Instance and receives the complete current snapshot through `onPersistChange` after every committed Grid Filter, sort, column-order, visibility, width, or pinning change. Restoration does not echo a callback. Quick Filter, Source Constraints, Feed Route, selection, scroll, and edit state never trigger it.
+BrunoTable owns no storage adapter, provider, Local Storage access, URL synchronization, network request, Kafka producer, or retry workflow. The application may pass one optional `initialPersistedState` snapshot when mounting the Table Instance and receives the complete current snapshot through `onPersistChange` after every committed Grid Filter, sort, column-order, visibility, width, or pinning change. Restoration does not echo a callback. Quick Filter, External Filters, Feed Route, selection, scroll, and edit state never trigger it.
 
 The callback is a non-blocking notification boundary. BrunoTable neither awaits it nor reacts to its return value or failures. Applications own publication ordering, retries, error reporting, user/tenant keys, authorization, and transport. One atomic grid command emits at most one snapshot. Pointer-move and scroll frames emit none; resize and reorder emit only on gesture commit.
 
@@ -384,7 +384,7 @@ Rules:
 - Partition notification sources by capability. Selector equality alone is insufficient if it still causes every unrelated selector to execute for each hot row update.
 - TanStack tables, atoms, stores, subscriptions, and state shapes remain private implementation details. Page-owned children do not receive them through props or context.
 - The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
-- A custom control must explicitly choose whether it updates persisted Grid Filter intent or an application-owned, non-persisted Source Constraint. BrunoTable never infers ownership from toolbar placement.
+- A custom control must explicitly choose whether it updates persisted Grid Filter intent or application-controlled, non-persisted External Filters. BrunoTable never infers ownership from toolbar placement.
 
 ## Right-side tool rail
 
@@ -417,11 +417,13 @@ The filters panel should support:
 
 Each eligible Field Column exposes every operator supported by its Value Type and the View Server contract. Text includes equality, `in`, contains/not-contains, starts/ends-with, blank/not-blank, and case/accent sensitivity. Number, BigInt, and BigDecimal include equality, `in`, ordered comparisons, half-open `inRange`, and blank/not-blank. Boolean and other scalar domains include equality, `in`, and blank/not-blank.
 
-Boolean and Select Field Columns use live Set Filters by default. Text, Number, BigInt, and BigDecimal Field Columns expose `in` but require explicit opt-in before mounting a live distinct-value Set Filter, because their cardinality may be unbounded. Client facets cover the complete processed Client row model. Server facets use their own live whole-result subscription and never derive values or counts from loaded sparse blocks. The open facet applies every other active filter and source constraint while excluding its own column filter; closing it releases the subscription.
+Boolean and Select Field Columns use live Set Filters by default. Text, Number, BigInt, and BigDecimal Field Columns expose `in` but require explicit opt-in before mounting a live distinct-value Set Filter, because their cardinality may be unbounded. Client facets cover the complete processed Client row model. Server facets use their own live whole-result subscription and never derive values or counts from loaded sparse blocks. The open facet applies every other active Grid Filter plus External Filters while excluding its own column filter; closing it releases the subscription.
 
 Filter changes auto-apply through a 150 ms TanStack Pacer debounce. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
 
-Quick Filter is an explicit optional capability configured by a non-empty `quickFilterFields` tuple of string-valued Query Fields. BrunoTable never derives that tuple from visible columns and never accepts Column Identities in its place. Each field receives a `contains` condition, the conditions combine with `OR`, and the resulting group combines with Source Constraints and Grid Filters through `AND`. Both the configured fields and committed text are session-only and never persisted; a new Table Instance starts empty. Rendering a Quick Filter control without configured fields is a development-time configuration error.
+Quick Filter is an explicit optional capability configured by a non-empty `quickFilterFields` tuple of string-valued Query Fields. BrunoTable never derives that tuple from visible columns and never accepts Column Identities in its place. Each field receives a `contains` condition, the conditions combine with `OR`, and the resulting group combines with External Filters and Grid Filters through `AND`. Both the configured fields and committed text are session-only and never persisted; a new Table Instance starts empty. Rendering a Quick Filter control without configured fields is a development-time configuration error.
+
+`BrunoTableServer` alone accepts optional `externalFilters`. They are application-controlled, field-keyed View Server conditions and may reference valid fields without visible columns. They are always `AND`-combined with Quick Filter and Grid Filters but never persisted, counted, reviewed, reset, or cleared by BrunoTable. A semantic change starts a new viewport generation at row zero and preserves compatible preferences and Feed Route. Equivalent newly allocated input must not restart the viewport. `BrunoTableClient` rejects this prop because its complete Client Source already reflects application-owned query conditions.
 
 The sorting panel should show sort priority.
 

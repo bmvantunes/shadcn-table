@@ -14,7 +14,7 @@ _Avoid_: Table Identity, persistence key
 
 **Persisted Grid Preferences**:
 A versioned, JSON-safe snapshot of one Table Identity's Grid Filter Expressions, sorting, column order, visibility, widths, and pinning. BrunoTable accepts an optional one-time initial snapshot and emits a complete replacement snapshot through `onPersistChange` after every committed preference change. The application owns storage and transport.
-_Avoid_: Quick Filter, Source Constraint, Feed Route, edit state, built-in storage adapter, React-controlled table state
+_Avoid_: Quick Filter, External Filter, Feed Route, edit state, built-in storage adapter, React-controlled table state
 
 **Column Identity**:
 The required stable, serializable `columnId` that identifies one grid column within a Table Identity. It uses the `COL_ID_${UPPERCASE_NAME}` namespace, is independent of headers and row fields, and is never inferred.
@@ -57,12 +57,12 @@ A filter expression whose leaves refer to Column Identity. It is persisted as us
 _Avoid_: View Server filter, field-keyed persisted filter
 
 **Quick Filter**:
-A grid-owned free-text filter applied with `contains` across an explicit non-empty tuple of string-valued Query Fields supplied through `quickFilterFields`. Those fields combine with `OR`; the resulting expression combines with Source Constraints and Grid Filters through `AND`. Both its field configuration and committed text are session-only and never persisted.
-_Avoid_: TanStack global filter, Source Constraint, page search, Column Identity list, automatically inferred text fields
+A grid-owned free-text filter applied with `contains` across an explicit non-empty tuple of string-valued Query Fields supplied through `quickFilterFields`. Those fields combine with `OR`; the resulting expression combines with External Filters and Grid Filters through `AND`. Both its field configuration and committed text are session-only and never persisted.
+_Avoid_: TanStack global filter, External Filter, page search, Column Identity list, automatically inferred text fields
 
 **Initial Grid Filters**:
 The optional one-time Grid Filter Expression baseline for a new Table Instance. Valid persisted user filters take precedence when restored; later prop changes do not overwrite user intent. Clearing removes all Grid Filters, while resetting returns to this baseline.
-_Avoid_: Controlled filters, Source Constraint, mandatory filter, reactive prop synchronization
+_Avoid_: Controlled filters, External Filter, mandatory filter, reactive prop synchronization
 
 **Set Filter**:
 A Grid Filter surface for choosing one or more exact scalar values through the `in` operator. Boolean and Select Field Columns use it by default; Text, Number, BigInt, and BigDecimal Field Columns require explicit opt-in because their distinct-value cardinality may be unbounded. While open, its values and counts remain live under every other active constraint and filter.
@@ -98,17 +98,17 @@ _Avoid_: Row Version, expected version
 The row-specific token extracted by an Editable Table's mandatory `getRowVersion` function and compared atomically by an Edit Persistence Operation before applying a mutation. It retains its inferred source type and is independent of Query Version.
 _Avoid_: Query Version, viewport version, hard-coded string revision
 
-**Source Constraint**:
-An application-owned condition that defines which rows belong to a table's working set before user grid filters are applied. It is not a persisted grid preference and cannot be cleared by BrunoTable's filter controls.
-_Avoid_: Grid Filter Expression, Quick Filter, security rule
+**External Filter**:
+An application-controlled, field-keyed condition passed through a Server Table's `externalFilters` prop and applied before user Grid Filter Expressions. External Filters are reactive, never persisted, never included in BrunoTable's active-filter count, and cannot be changed or cleared by BrunoTable controls.
+_Avoid_: Grid Filter Expression, Quick Filter, security rule, `externalWhere`
 
 **Route Field**:
 One source-declared row field that participates in the exact address of an upstream leased feed. The complete non-empty Route Field tuple belongs to the source definition.
 _Avoid_: Grid Filter field, visible column, duplicated table configuration
 
 **Feed Route**:
-The application-supplied object containing values for all and only the Route Fields of one leased source. It selects the upstream feed before Source Constraints or Grid Filter Expressions are applied.
-_Avoid_: Grid Filter Expression, Source Constraint, selected column values
+The application-supplied object containing values for all and only the Route Fields of one leased source. It selects the upstream feed before External Filters or Grid Filter Expressions are applied.
+_Avoid_: Grid Filter Expression, External Filter, selected column values
 
 **Continuous Row Space**:
 The uninterrupted vertical row sequence presented by both Client and Server Tables. It may be fully materialized or sparsely loaded, but the user never navigates pages.
