@@ -56,6 +56,10 @@ _Avoid_: View Server filter, field-keyed persisted filter
 A grid-owned free-text filter applied across explicitly eligible columns. It is part of grid filter intent, not an application data-scope constraint.
 _Avoid_: TanStack global filter, Source Constraint, page search
 
+**Initial Grid Filters**:
+The optional one-time Grid Filter Expression baseline for a new Table Instance. Valid persisted user filters take precedence when restored; later prop changes do not overwrite user intent. Clearing removes all Grid Filters, while resetting returns to this baseline.
+_Avoid_: Controlled filters, Source Constraint, mandatory filter, reactive prop synchronization
+
 **Query Field**:
 A row field or supported field path understood by a server query language. A Query Field is resolved from a column definition and is never used as persisted Column Identity.
 _Avoid_: Column Identity, column ID

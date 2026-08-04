@@ -53,6 +53,7 @@ Build:
 - built-in explicit `bigint` semantics without `number` coercion
 - optional-integration type seam that keeps Effect out of root declarations
 - capability derivation for editing, sorting, and filtering
+- default-enabled filtering and sorting for eligible Field Columns, with explicit per-column opt-outs
 - computed columns excluded from automatic filter and sort capabilities
 - type-level tests
 - emitted-package consumer type tests
@@ -175,6 +176,7 @@ Build:
 - isolated reactive state for resize handles and accessibility output
 - local-storage adapter
 - URL adapter
+- one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
 - schema versioning and sanitization
 - tagged, versioned JSON-safe codecs for exact filter operands
 

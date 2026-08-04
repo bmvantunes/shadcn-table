@@ -165,6 +165,7 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   getRowId: (row: TRow) => string;
   columns: TColumns;
+  initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   children?: React.ReactNode;
 };
 
@@ -212,6 +213,7 @@ Rules:
 - `tableId` is mandatory and namespaces persistence and diagnostics.
 - `getRowId` is mandatory; row indexes are never identities.
 - `columns` is a stable typed array.
+- `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
@@ -243,7 +245,7 @@ The toolbar composition seam works with both public variants, while edit control
 
 Names beginning with `PageSpecific...` are illustrative consumer components, not BrunoTable requirements. Library-owned exported components retain the `BrunoTable...` brand.
 
-The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. When a custom control needs to own grid filter state, use the eventual typed controlled-filter interface at the table root rather than a public TanStack table or untyped imperative handle.
+The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. A custom control that needs to change Grid Filter state uses a focused typed BrunoTable command/control surface rather than taking ownership through React-controlled filter props, receiving a public TanStack table, or using an untyped imperative handle.
 
 Controls that only dispatch user intent have no grid-state subscription. `BrunoTableQuickFilter`, for example, keeps transient input text locally and dispatches through a stable command capability. It observes only the committed Quick Filter primitive when external resets or restored views must be reflected; streaming row-content changes are outside its notification domain.
 
@@ -600,7 +602,7 @@ type BrunoTableFilterableColumnId<TColumns> = ...;
 type BrunoTableSortableColumnId<TColumns> = ...;
 ```
 
-Having a `field` makes a column eligible for default field-based query semantics. Whether the filtering or sorting UI is enabled by default is a separate product-default decision and must not be confused with whether a valid mapping exists.
+Having a `field` plus the required Value Type semantics makes a column eligible for default field-based query semantics. Filtering and sorting UI are enabled by default for such a Field Column, with explicit per-column opt-outs. A Computed Column remains excluded unless it declares explicit capability-specific semantics.
 
 Capabilities must remove invalid columns from their state models. A computed or action column without explicit filter semantics cannot appear in the filter model merely because a caller writes its `columnId`.
 
@@ -878,7 +880,6 @@ Also reject:
 
 The following remain deliberately unresolved:
 
-- the product default for enabling filter and sort UI on eligible field columns
 - the names and shapes of explicit computed-column client and server semantics
 - the no-helper correlated type shape for computed-column formatters
 - how computed-column selected dependencies are declared

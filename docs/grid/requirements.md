@@ -28,6 +28,8 @@ The public interface must:
 
 Every public inference guarantee requires source-level type tests and an emitted-package consumer test.
 
+Grid Filter state is internally owned in V1. An optional typed `initialFilters` prop supplies the one-time baseline for a new Table Instance; it is not a React-controlled value and later prop changes do not overwrite user intent. Valid persisted filters take precedence during restoration. Clearing produces no Grid Filters, while resetting returns to `initialFilters`. A condition that users must not remove is a Source Constraint rather than an Initial Grid Filter.
+
 ## Public export naming
 
 Every BrunoTable-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form, including foundational types such as `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`. Separate packages keep their own vocabulary; `@bruno/shadcn/button` exports `Button`.
@@ -205,6 +207,8 @@ Keep column identity separate from row data and server query fields:
 Use `columnId` for all grid state and persistence. Resolve it through the current column definition to `field` only when reading row data or compiling a server query.
 
 A `valueGetter`-only column has no automatic server filter or sort capability because it has no query field.
+
+A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column remains non-filterable and non-sortable until it declares explicit capability-specific semantics.
 
 Indexes are positions under a query, not row identities.
 
