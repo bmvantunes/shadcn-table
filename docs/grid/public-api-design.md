@@ -692,6 +692,10 @@ Active grouping also installs one BrunoTable-owned System Column whose default h
 
 The visible Rows column is the sole row-count representation. `BrunoTableAggFunc` therefore excludes `count`, avoiding duplicate counts and the false implication that row count belongs to an arbitrary field. `countDistinct` remains a field-level function. Because effect-view-server has no HAVING or aggregate-result filter contract, the System Column cannot participate in Grid Filters in V1.
 
+Grouping owns a derived rendered layout rather than mutating persisted column preferences. Its Logical Column Order is the active group-key columns in Group By order, followed by Rows, followed by participating aggregate columns in their normal relative order. Reordering Group By chips changes the group-key tuple and rendered key-column order together.
+
+All start/end pinning is suspended in this derived grouped layout, including pinning previously assigned to a group key or aggregate column. The normal order and pinning snapshots remain intact and emit no preference change merely because grouping became active. Removing the last active group key restores them exactly.
+
 ## Grid filter expressions
 
 Persisted filters express user intent using `columnId`. They do not persist View Server fields or raw TanStack `unknown` values.

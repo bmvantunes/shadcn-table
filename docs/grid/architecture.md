@@ -354,6 +354,10 @@ When grouping is active, the ordered Group By region supplies the flat group-key
 
 The grouped render plan always adds one visible BrunoTable-owned Rows System Column. Its Value Type is exact `bigint` and its value counts filtered source rows in the group. It is not synthesized from `getRowId` and does not require Row Identity to map to a Query Field. The Client Adapter computes it over the complete filtered source; the Viewport Adapter compiles an unconditional native View Server `count` aggregate under a reserved internal alias. Consumer aggregate capability excludes `count`, while field-specific `countDistinct` remains available.
 
+The grouped render plan also owns a derived column-layout snapshot. It places active group keys at logical start in Group By order, then Rows, then participating aggregate columns in their base relative order. Reordering the Group By state regenerates both this snapshot and the Adapter's ordered grouping tuple. It never dispatches a base `columns.reorder` command.
+
+Grouped layout has one unpinned region in V1. The renderer does not apply ordinary start/end pinning until grouping is cleared. Base Column Order and Column Pinning remain immutable inputs to the derivation, so entering, reordering, or leaving grouping neither destroys them nor publishes a false `onPersistChange` column-layout update.
+
 ## Column Value Semantics seam
 
 Every normalized leaf column owns one compiled internal value-semantics plan. It is the single authority for that column's:

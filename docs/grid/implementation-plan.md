@@ -478,6 +478,8 @@ Build:
 - one BrunoTable-owned typed grouping and aggregation intent
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
+- a temporary derived grouped layout ordered as active keys, Rows, then participating aggregates
+- suspension and exact restoration of ordinary Column Pinning without mutating persisted layout state
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
@@ -494,6 +496,9 @@ Success criteria:
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
+- reordering Group By chips reorders the View Server field tuple and rendered key columns together
+- active grouping renders one unpinned logical column region and clearing the final key restores the exact base order and pinning
+- entering, changing, and leaving grouping do not masquerade as user Column Order or Column Pinning preference mutations
 - the Client Table computes only from its complete source
 - the Server Table delegates over the complete server result and never aggregates loaded sparse blocks
 - grouped Server queries use native `groupBy` plus a non-empty aggregate definition instead of raw-row `select`

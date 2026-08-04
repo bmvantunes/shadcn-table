@@ -243,6 +243,16 @@ Whenever grouping is active, BrunoTable adds one visible grid-owned System Colum
 
 Row count is group metadata rather than a field aggregation. Consumers cannot declare `aggFunc: "count"`; `countDistinct` remains available because it measures distinct values of a specific field. The automatic Rows column is non-filterable in V1 because the View Server does not support aggregate-result filtering.
 
+Active grouping creates a temporary derived Logical Column Order:
+
+```text
+active group-key columns in Group By order -> Rows -> participating aggregate columns
+```
+
+Reordering two columns in the Group By region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
+
+V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.
+
 A Computed Column declares a non-empty `fields` tuple together with `valueGetter`. Every dependency is a valid row field, the getter receives only the corresponding `Pick` of the row, and a Server Table adds those fields to its explicit projection. It is always non-filterable, non-sortable, and non-editable in V1.
 
 A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column cannot opt into filtering, sorting, or editing in V1.
