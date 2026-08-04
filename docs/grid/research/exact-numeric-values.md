@@ -402,7 +402,7 @@ effect-view-server compiles schema-derived Topic Row semantics once, uses `Schem
 
 The source's top-level `version` is a query snapshot/delta version, not a per-row optimistic-concurrency token. Snapshot and delta events carry query versions around collections of row operations ([effect-view-server live protocol](../../../../effect-view-server/packages/config/src/live-protocol.ts#L1-L48)). BrunoTable must not use `viewportSource.version` as a row's `expectedVersion`.
 
-Editable tables therefore need an explicit row-version field/capability. That field may itself be `bigint`; the save model should derive and preserve its exact type rather than hard-code `string`. The View Server projection must include it even when no visible column uses it.
+Editable Client Tables therefore require `getRowVersion(row)`. Its inferred return type may itself be `bigint`; the save model derives and preserves that exact type rather than hard-coding `string`. The complete Client Source retains the token even when no visible column uses it.
 
 There is also no compare-and-set argument in effect-view-server's current runtime `patch` API; it accepts `topic`, `key`, and a typed partial row only ([effect-view-server runtime client](../../../../effect-view-server/packages/config/src/runtime-contract.ts#L198-L218)). Source-owned topics reject direct runtime mutations as well. Consequently:
 

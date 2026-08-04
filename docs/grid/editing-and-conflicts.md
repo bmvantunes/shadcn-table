@@ -7,16 +7,18 @@ Only `BrunoTableClient` uses a strict discriminated editing interface:
 ```ts
 type BrunoTableReadOnlyCapability = {
   editable?: false;
+  getRowVersion?: never;
   onSaveEdits?: never;
 };
 
-type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = {
   editable: true;
-  onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
+  getRowVersion: (row: TRow) => TRowVersion;
+  onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
 };
 ```
 
-`editable: true` enables the Editable Table capability and makes `onSaveEdits` mandatory. False or omitted editing makes edit-only props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
+`editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The function's exact return type, including `bigint`, becomes the Row Version type for every draft base, Save Change Set, rejection, conflict, and accepted canonical result. False or omitted editing makes both props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
 
 At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all Client rows to discover the capability or rescan changing data merely to show chrome. Shared definitions may carry these declarations into `BrunoTableServer`, but the Server Table never activates them and its props reject the editing capability.
 
@@ -330,6 +332,8 @@ type BrunoTableRowPatch<TChanges, TRowVersion> = {
 The server is the final concurrency authority.
 
 Row Version is an explicit typed editing capability and may itself be `bigint`. It is independent of the Viewport Source's top-level Query Version. The Query Version describes one live read result; it is not an `expectedVersion` for any row.
+
+`getRowVersion` reads that token from the complete current Client row whenever BrunoTable captures or refreshes a canonical edit base. It is a pure extraction function, not a request, subscription, equality function, or mutation callback. A save uses the base version associated with the submitted draft, not a later token read after the user's edit was based on older data.
 
 The complete editable Client Source must retain the Row Version even when no visible column uses it. `onSaveEdits` must call an application write or RPC seam that performs an atomic compare-and-set. effect-view-server's current runtime `patch` accepts no expected version and must not be used as a convenience save implementation.
 

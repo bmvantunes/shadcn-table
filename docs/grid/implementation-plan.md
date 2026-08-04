@@ -228,7 +228,7 @@ Build:
 - row-level subscriptions
 - range invalidation
 - native exact operands preserved through query translation
-- explicit typed Row Version projection kept separate from Query Version
+- explicit separation between the Server Table's Query Version and the Editable Client Table's `getRowVersion` return type
 - optional Effect BigDecimal semantics with effect-view-server wire-admission and comparator parity
 
 Success criteria:
@@ -332,7 +332,9 @@ Success criteria:
 - selected-range traversal wraps within that one axis; range-navigation Enter moves without opening an editor while F2 and printable text retain editing roles
 - Escape cancels an active editor before a following Escape collapses range traversal; ranges with fewer than two eligible cells fall back to ordinary traversal
 - false or omitted `editable` rejects edit-only props and renders no editing chrome
-- `editable: true` without `onSaveEdits` or a potentially editable column fails type-level tests
+- `editable: true` without `getRowVersion`, `onSaveEdits`, or a potentially editable column fails type-level tests
+- `getRowVersion` infers the exact optimistic-concurrency type without a repeated JSX generic, including `bigint`
+- read-only Client and Server Tables reject `getRowVersion`
 - `editable: true` mounts the mode toggle and footer only in `BrunoTableClient`; `BrunoTableServer` rejects edit-only props and mounts no editing chrome
 - toggle visibility and updates require no all-row predicate evaluation or row-content subscription
 - mode switching is blocked while any edit-owned work or save is active and is never persisted

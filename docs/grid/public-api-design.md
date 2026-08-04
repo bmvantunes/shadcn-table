@@ -170,11 +170,12 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   children?: React.ReactNode;
 };
 
-type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = BrunoTableBaseProps<
+type BrunoTableClientProps<
   TRow,
-  TColumns
-> &
-  BrunoTableEditingCapability<TRow, TColumns> & {
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = never,
+> = BrunoTableBaseProps<TRow, TColumns> &
+  BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
     clientSource: BrunoTableClientSource<TRow>;
   };
 
@@ -185,6 +186,7 @@ type BrunoTableServerProps<
 > = BrunoTableBaseProps<TRow, TColumns> & {
   viewportSource: BrunoTableServerSource<TViewport>;
   editable?: never;
+  getRowVersion?: never;
   onSaveEdits?: never;
 };
 
@@ -265,35 +267,41 @@ The View Server Adapter snapshots `routeBy` with exact source semantics and carr
 Only `BrunoTableClient` accepts the discriminated editing capability, shaped conceptually as:
 
 ```ts
-type BrunoTableSaveChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
-  BrunoTableSaveChange<TRow, TColumns>,
-  ...BrunoTableSaveChange<TRow, TColumns>[],
+type BrunoTableSaveChangeSet<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = readonly [
+  BrunoTableSaveChange<TRow, TColumns, TRowVersion>,
+  ...BrunoTableSaveChange<TRow, TColumns, TRowVersion>[],
 ];
 
-type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>> = (
-  changes: BrunoTableSaveChangeSet<TRow, TColumns>,
-) => PromiseLike<BrunoTableSaveResult<TRow, TColumns>>;
+type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = (
+  changes: BrunoTableSaveChangeSet<TRow, TColumns, TRowVersion>,
+) => PromiseLike<BrunoTableSaveResult<TRow, TColumns, TRowVersion>>;
 
 type BrunoTableReadOnlyCapability = {
   editable?: false;
+  getRowVersion?: never;
   onSaveEdits?: never;
 };
 
-type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>> =
+type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> =
   BrunoTableEditableColumnId<TColumns> extends never
     ? never
     : {
         editable: true;
-        onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns>;
+        getRowVersion: (row: TRow) => TRowVersion;
+        onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
       };
 
-type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>> =
-  BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns>;
+type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> =
+  BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 ```
 
-`editable` is a capability discriminant, not a styling toggle: TypeScript makes `onSaveEdits` mandatory when true and rejects edit-only props otherwise. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable` and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
+`editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` and result-version type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
 
-Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result types remain to be finalized with the optimistic-concurrency field declaration, but they must retain exact row, Column Identity, editable-value, and version correlation without `any` or `unknown` in inference paths.
+Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result discriminants remain to be finalized, but they must retain exact row, Column Identity, editable-value, and `getRowVersion` return-type correlation without `any` or `unknown` in inference paths.
 
 The handler always receives the same non-empty array:
 
@@ -705,7 +713,7 @@ Drop invalid state conservatively. If a backend field is renamed without changin
 effect-view-server raw queries require an explicit non-empty `select`.
 
 - A field column contributes its `field` to the projected fields required for rendering.
-- The Adapter must include infrastructure fields required by `getRowId`, the explicit Row Version capability, and live reconciliation.
+- The Adapter must include infrastructure fields required by canonical row identity and live reconciliation.
 - A Computed Column contributes every member of its explicit non-empty `fields` dependency tuple.
 - Its getter receives only those declared fields at the public TypeScript boundary.
 
@@ -828,8 +836,10 @@ Cover at minimum:
 - sort column IDs and priority
 - `isEditable` callback inference
 - edit and conflict value correlation
-- `editable: true` requires `onSaveEdits` and at least one potentially editable column
+- `editable: true` requires `getRowVersion`, `onSaveEdits`, and at least one potentially editable column
+- `getRowVersion` return inference flows into every expected and returned Row Version without consumer casts or repeated JSX generics
 - read-only capability rejects `onSaveEdits`
+- read-only Client and Server Tables reject `getRowVersion`
 - consumer props cannot set or control Edit Mode; the user-owned session starts Immediate
 - `onSaveEdits` receives a non-empty, value-correlated Save Change Set in both Edit Modes
 - one multi-cell Immediate transaction remains one handler call rather than one call per cell
@@ -872,7 +882,6 @@ Also reject:
 The following remain deliberately unresolved:
 
 - the no-helper correlated type shape for computed-column formatters
-- the exact property shape for declaring and projecting the typed Row Version; the accepted invariant is that it is row-specific and never the Viewport Source Query Version
 - the visual treatment and retry actions for Client Source lifecycle states
 - the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted
 

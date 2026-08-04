@@ -101,7 +101,7 @@ Keep the public Module deep:
 
 ## Editable-table seam
 
-The `editable: true` discriminant installs the Edit Persistence Capability only in the `BrunoTableClient` composition root and causes `BrunoTableView` to mount the top-right Edit Mode toggle and shared Edit Safety Footer. `onSaveEdits` is mandatory in this branch. The toggle and footer are not toolbar children, and pages do not wire their mode, counts, buttons, or modal. `BrunoTableServer` rejects edit-only props and never installs this capability.
+The `editable: true` discriminant installs the Edit Persistence Capability only in the `BrunoTableClient` composition root and causes `BrunoTableView` to mount the top-right Edit Mode toggle and shared Edit Safety Footer. `getRowVersion` and `onSaveEdits` are mandatory in this branch, and the getter's inferred return type flows through the complete optimistic-concurrency contract. The toggle and footer are not toolbar children, and pages do not wire their mode, counts, buttons, or modal. `BrunoTableServer` rejects edit-only props and never installs this capability.
 
 Potential editability is compiled once from column definitions. A declared `isEditable` boolean or predicate makes a column potentially editable; the predicate itself runs only for a concrete Client cell. Never scan changing Client rows to decide whether edit chrome exists. The Server composition may reuse the normalized column's read-only presentation but does not install its editor capability.
 

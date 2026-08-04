@@ -87,7 +87,7 @@ The revision of one live query result stream or snapshot. It describes the read 
 _Avoid_: Row Version, expected version
 
 **Row Version**:
-The row-specific token that an Edit Persistence Operation compares atomically before applying a mutation. It retains its source type and is independent of Query Version.
+The row-specific token extracted by an Editable Table's mandatory `getRowVersion` function and compared atomically by an Edit Persistence Operation before applying a mutation. It retains its inferred source type and is independent of Query Version.
 _Avoid_: Query Version, viewport version, hard-coded string revision
 
 **Source Constraint**:

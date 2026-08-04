@@ -419,8 +419,8 @@ The sorting panel should show sort priority.
 
 Only `BrunoTableClient` exposes the strict discriminated editing interface:
 
-- `editable: true` requires `onSaveEdits` and enables the Editable Table capability;
-- false or omitted `editable` rejects `onSaveEdits` and other edit-only table props;
+- `editable: true` requires `getRowVersion` and `onSaveEdits` and enables the Editable Table capability;
+- false or omitted `editable` rejects `getRowVersion`, `onSaveEdits`, and other edit-only table props;
 - at least one column must be potentially editable through `isEditable: true` or an `isEditable` predicate;
 - column policy remains the authority for exact cell eligibility; the table-level capability never makes a read-only cell editable.
 
@@ -448,7 +448,7 @@ A thrown request, timeout, disconnect, or HTTP failure is not a typed atomic rej
 
 Track convergence against each failed operation's immutable submitted cell set, not global pending-change count. Only when every submitted cell receives a semantically equal live canonical value may the persistent toast change to a non-error `Changes now reflected by the server` state. It still requires explicit dismissal. Reset, undo, or later unrelated edits neither prove nor prevent operation-specific convergence, and reconciliation must not scan the full table or draft repository.
 
-Editable Client Tables also require an explicit Row Version capability. It must preserve the actual version type, including `bigint`, and the complete Client Source must retain the value even when no visible column renders it. A source result's top-level `version` is a Query Version for the complete read result and must never become a row's `expectedVersion`.
+Editable Client Tables also require `getRowVersion`, a pure function from the complete current row to its Row Version. Its return type is inferred exactly, including `bigint`, and flows into expected versions, conflicts, and save results without repeated consumer generics. The complete Client Source must retain the value even when no visible column renders it. A source result's top-level `version` is a Query Version for the complete read result and must never become a row's `expectedVersion`.
 
 `onSaveEdits` must cross an application write or RPC seam that atomically checks the Row Version. Do not implement it by calling effect-view-server's current unconditional runtime `patch`. Successful and conflicting results return decoded canonical values and the next typed Row Version before reconciliation.
 
