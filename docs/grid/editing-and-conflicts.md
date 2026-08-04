@@ -39,6 +39,8 @@ Immediate mode supports multiple concurrent save operations over disjoint Cell I
 
 While an Immediate operation is in flight, lock only its complete owned cell set. While a Batch Save is in flight, install one table-wide edit mutation lock so no cell can begin or commit another mutation. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner; the prototype should compare treatments. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
 
+If an Immediate operation's Row Identity disappears from the live Client Source while the operation is in flight, make no operation-state transition and infer nothing from the disappearance. Await `onSaveEdits`: a typed acceptance completes normally, a typed rejection uses its ordinary explained persistent failure toast, and an invocation or transport failure uses the ordinary not-confirmed notification. Do not cancel, reclassify, retry, create a phantom row, or manufacture special missing-row reconciliation.
+
 An atomic success keeps all accepted canonical values and flashes every currently mounted affected cell green for two seconds. It never emits a success toast; if reordering or scrolling has unmounted an affected cell, that success completes quietly. Rejection reconciliation is mode-specific even though the server outcome remains atomic:
 
 - Immediate rejection restores every operation-owned cell to its latest live canonical server value immediately, marks each with the non-color server-rejected presentation and a red treatment for five seconds, and records one failed operation rather than one failure per cell.
