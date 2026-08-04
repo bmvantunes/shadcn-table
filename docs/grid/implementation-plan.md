@@ -364,7 +364,7 @@ Success criteria:
 - every Save Change Set is atomic: the complete operation is accepted or rejected with no partial-success result
 - disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
 - Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles
-- accepted operations flash all affected cells green for two seconds without React or XState animation-frame events
+- accepted operations flash currently mounted affected cells green for two seconds without React or XState animation-frame events, emit no success toast, and complete quietly when an affected cell is unmounted
 - rejected Immediate operations restore owned cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
 - rejected Batch Save preserves every draft, conflict, validation record, and history command, unlocks editing, and keeps affected cells failed until correction, retry, successful reconciliation, or Reset
 - no XState actor, Effect schedule, transport Adapter, or toast action automatically retries a save; only the current surface's explicit Save control can start a fresh live-preflight operation
