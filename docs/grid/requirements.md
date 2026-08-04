@@ -262,6 +262,8 @@ Grouped presentation derives visibility without mutating the durable Column Visi
 
 Forcing an active key or Rows into the grouped projection emits no visibility preference mutation. Hidden columns must not be surfaced merely because they possess aggregate semantics.
 
+The Column Visibility control remains available while grouped and enumerates the normalized column registry rather than only currently rendered cells. The user may show or hide aggregate-capable columns; each action updates the one durable Column Visibility preference, emits the ordinary committed persistence snapshot, and remains in force after grouping clears. Active group keys are non-hideable until removed from the Group By region, and Rows is never hideable. BrunoTable owns no separate grouped-visibility state.
+
 Reordering two columns in the Group By region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
 
 V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.
