@@ -480,7 +480,7 @@ Success criteria:
 
 ## Phase 10: Grouping and aggregation
 
-Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. Resolve the grouped-result public typing and exact stable identity encoding before implementing this phase.
+Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. The Client Adapter derives private identity from that tuple; the Server Adapter requires effect-view-server's authoritative sparse viewport key from [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405). Neither path adds a consumer `getGroupedRowId`.
 
 Build:
 
@@ -496,6 +496,7 @@ Build:
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
+- atomic sparse grouped row-plus-key ingestion from a compatible effect-view-server Viewport Source, with no reconstructed Server identity fallback
 - separate durable normal and grouped sort contexts, with grouped eligibility derived from the current grouped projection
 - grouped View Server result typing without casting aggregate rows to the raw source row type
 - flat Client result normalization with no hierarchical group rows or expansion state
@@ -527,7 +528,9 @@ Success criteria:
 - aggregate aliases and group fields sort through validated View Server query members
 - grouped sorting accepts only active keys, Rows, and visible participating aggregates; sanitization preserves surviving priorities and falls back to every active key ascending rather than producing an unsorted state
 - clearing grouping restores normal `orderBy` unchanged, and private View Server aggregate aliases never enter public or persisted state
-- grouped rows have explicit stable identity semantics appropriate to the chosen presentation shape
+- Client grouped rows derive stable identity from the complete exact group-key tuple; Server grouped rows use the source-owned viewport key
+- aggregate-only changes and grouped movement retain identity, while key changes create a different logical group
+- `getRowId` receives only raw `TRow`, no `getGroupedRowId` prop exists, and Group Row Identity is not persisted
 - both variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
 - virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination
 

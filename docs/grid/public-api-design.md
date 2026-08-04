@@ -244,7 +244,7 @@ Expose `BrunoTableClient` and `BrunoTableServer`. Do not expose one component wi
 Rules:
 
 - `tableId` is mandatory and namespaces persistence and diagnostics.
-- `getRowId` is mandatory; row indexes are never identities.
+- `getRowId` is mandatory for ordinary `TRow` records; row indexes are never identities. Flat grouped-summary rows use private Adapter-owned identity and never invoke this callback.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline for normal rows. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites this normal baseline or current order.
@@ -736,6 +736,10 @@ The static union provides autocomplete for every potentially valid grouped targe
 
 On first grouping, or when restored `groupOrderBy` has no valid survivor, BrunoTable orders every active group key ascending in Group By order. Otherwise it preserves valid grouped entries and priorities. Removing or reordering group keys or hiding an aggregate sanitizes the grouped order; newly invalid entries are dropped, and the active-key fallback is applied only if the result would be empty. Clearing grouping retains this context dormant for a future compatible grouping and immediately restores the untouched `orderBy`. No `initialGroupOrderBy` prop is required in V1.
 
+Consumers do not supply grouped-row identity. In `BrunoTableClient`, the local grouping plan derives a private identity from the complete ordered group-key tuple through compiled exact-value semantics. In `BrunoTableServer`, the Viewport Adapter consumes the source-owned authoritative row key delivered atomically beside every sparse grouped result. It never reconstructs the View Server's canonical key from projected values. This upstream contract is tracked by [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405); a compatible effect-view-server version is a prerequisite for Server grouping.
+
+`getRowId` remains mandatory because either variant renders raw `TRow` records when grouping is absent, but BrunoTable never calls it with a fabricated grouped result. There is no `getGroupedRowId` prop or public Group Row Identity field. Aggregate values, Rows, sorting, and positions do not define identity, so aggregate-only updates and grouped reordering preserve it. A changed group key produces a different group, while entering, leaving, or changing Group By advances the logical row generation and clears incompatible transient state. Group Row Identity is never persisted.
+
 ## Grid filter expressions
 
 Persisted filters express user intent using `columnId`. They do not persist View Server fields or raw TanStack `unknown` values.
@@ -929,7 +933,7 @@ The Viewport Row Pipeline owns:
 
 Grouping and aggregation are V1 capabilities in both public variants, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. The Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally.
 
-V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result's public type and row-identity contract must still be modeled honestly rather than cast back to the raw `TRow`; logically, identity follows the complete group-key tuple rather than a source row's `getRowId` result.
+V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result is modeled honestly rather than cast back to the raw `TRow`; the Client Adapter derives its private tuple identity and the Viewport Adapter consumes its source-owned key instead of calling the consumer's raw-row `getRowId`.
 
 The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
 

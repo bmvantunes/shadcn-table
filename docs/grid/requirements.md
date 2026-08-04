@@ -193,6 +193,10 @@ Client implementations must match the documented View Server operation and exact
 
 V1 grouping produces a flat grouped-summary table in both variants. A multi-field grouping yields one logical row per distinct ordered group-key tuple, with the group fields and configured aggregate values presented as ordinary columns in that row. V1 has no expandable group hierarchy, group disclosure controls, nested child rows, leaf-row drill-down, or per-group child loading. TanStack's local hierarchical grouped row model must not leak a different Client experience; the Client Adapter normalizes its result to the same flat contract supplied by the View Server.
 
+Grouped-summary identity remains private and requires no consumer callback. `getRowId` is invoked only for ordinary `TRow` records. The Client Adapter derives identity from the complete ordered group-key tuple through compiled exact-value semantics because it owns the complete grouping operation. The Viewport Adapter consumes effect-view-server's authoritative row key delivered beside each sparse grouped result; it must not reverse-engineer that key from returned fields, use a viewport index, or add `getGroupedRowId` to BrunoTable. Upstream key delivery is tracked by [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405), and Server grouping must depend on a compatible source version rather than ship a divergent fallback.
+
+Aggregate values, Rows, sorting, and viewport positions never participate in logical grouped identity. Aggregate-only live updates and reordering retain identity, while a changed group key removes one logical group and creates another. Entering, leaving, or changing the Group By tuple creates a new logical row generation and clears incompatible transient row-space state. Group Row Identity is not persisted.
+
 ## Mandatory identity
 
 Every grid requires:
@@ -204,6 +208,8 @@ type BrunoTableId = string;
 tableId: BrunoTableId;
 getRowId: (row: TRow) => BrunoTableRowId;
 ```
+
+`getRowId` identifies only raw source rows. Grouped summaries are not fabricated `TRow` values and never reach this callback.
 
 `tableId` and `columnId` are durable semantic identities and remain serializable strings. Do not use JavaScript Symbols for either: persisted preferences, diagnostics, SSR boundaries, workers, storage Adapters, and database records must be able to reproduce and inspect the same identity after a reload. Each mounted table runtime may create a private Symbol-backed Table Instance Identity for collision-free in-memory ownership, but that token is transient and never enters public state or persistence.
 
