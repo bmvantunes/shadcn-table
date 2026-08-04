@@ -41,6 +41,7 @@ Build:
 - mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
+- mandatory non-empty Column Identity-keyed `initialOrderBy`
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
@@ -181,13 +182,14 @@ Build:
 - one-time `initialPersistedState` restoration supplied by the application
 - complete JSON-safe `onPersistChange` snapshots after committed preference changes
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
+- mandatory non-empty `initialOrderBy` baseline with valid persisted `orderBy` precedence and no unsorted state
 - schema versioning and sanitization
 - tagged, versioned JSON-safe codecs for exact filter operands
 
 Persist only:
 
 - Grid Filter Expressions
-- sorts
+- non-empty `orderBy`
 - order
 - visibility
 - widths
@@ -196,6 +198,7 @@ Persist only:
 Success criteria:
 
 - new/removed columns reconcile safely
+- restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`

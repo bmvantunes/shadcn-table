@@ -30,6 +30,8 @@ Every public inference guarantee requires source-level type tests and an emitted
 
 Grid Filter state is internally owned in V1. An optional typed `initialFilters` prop supplies the one-time baseline for a new Table Instance; it is not a React-controlled value and later prop changes do not overwrite user intent. Valid persisted filters take precedence during restoration. Clearing produces no Grid Filters, while resetting returns to `initialFilters`. A Server condition that users must not remove is an External Filter rather than an Initial Grid Filter.
 
+Every table requires a non-empty typed `initialOrderBy` keyed by Column Identity. A valid non-empty persisted `orderBy` wins during restoration; otherwise the grid uses the initial baseline. Later prop changes do not control current ordering, and Reset returns to `initialOrderBy`. No table state, command, persistence document, or UI cycle may represent an empty unsorted order.
+
 ## Public export naming
 
 Every BrunoTable-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form, including foundational types such as `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`. Separate packages keep their own vocabulary; `@bruno/shadcn/button` exports `Button`.
@@ -425,7 +427,7 @@ Quick Filter is an explicit optional capability configured by a non-empty `quick
 
 `BrunoTableServer` alone accepts optional `externalFilters`. They are application-controlled, field-keyed View Server conditions and may reference valid fields without visible columns. They are always `AND`-combined with Quick Filter and Grid Filters but never persisted, counted, reviewed, reset, or cleared by BrunoTable. A semantic change starts a new viewport generation at row zero and preserves compatible preferences and Feed Route. Equivalent newly allocated input must not restart the viewport. `BrunoTableClient` rejects this prop because its complete Client Source already reflects application-owned query conditions.
 
-The sorting panel should show sort priority.
+Sorting cycles only between ascending and descending. A plain pointer or keyboard activation on a new column replaces the current order and starts ascending; activating the current column toggles direction. Shift-activation adds a new ascending column or toggles an existing member while preserving the other sort entries. Numeric columns do not default to descending first. Every sorted header and the sorting panel show direction and one-based priority.
 
 ## Table editing capability and modes
 

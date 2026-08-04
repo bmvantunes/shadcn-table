@@ -82,8 +82,8 @@ Persist user intent using `columnId`:
 ```ts
 const preferences = {
   filters: [{ columnId: "COL_ID_PRICE", type: "greaterThanOrEqual", filter: 10 }],
-  sorting: [{ columnId: "COL_ID_PRICE", direction: "desc" }],
-  columnOrder: ["symbol", "price", "quantity"],
+  orderBy: [{ columnId: "COL_ID_PRICE", direction: "desc" }],
+  columnOrder: ["COL_ID_SYMBOL", "COL_ID_PRICE", "COL_ID_QUANTITY"],
 } as const;
 ```
 

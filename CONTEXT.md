@@ -64,6 +64,10 @@ _Avoid_: TanStack global filter, External Filter, page search, Column Identity l
 The optional one-time Grid Filter Expression baseline for a new Table Instance. Valid persisted user filters take precedence when restored; later prop changes do not overwrite user intent. Clearing removes all Grid Filters, while resetting returns to this baseline.
 _Avoid_: Controlled filters, External Filter, mandatory filter, reactive prop synchronization
 
+**Initial Order By**:
+The mandatory non-empty `initialOrderBy` baseline for a Table Instance. Its entries use Column Identity and admit only `asc` or `desc`. A valid non-empty persisted `orderBy` takes precedence during restoration; later prop changes do not overwrite user intent, and resetting sorting returns to this baseline.
+_Avoid_: Empty sorting, Query Field identity, reactive prop synchronization, descending-first inference
+
 **Set Filter**:
 A Grid Filter surface for choosing one or more exact scalar values through the `in` operator. Boolean and Select Field Columns use it by default; Text, Number, BigInt, and BigDecimal Field Columns require explicit opt-in because their distinct-value cardinality may be unbounded. While open, its values and counts remain live under every other active constraint and filter.
 _Avoid_: Feed Route selector, static option snapshot, loaded-window facet, always-on high-cardinality query

@@ -126,6 +126,7 @@ export function OrdersClientTable() {
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
       quickFilterFields={["symbol", "status"]}
       clientSource={orders}
     />
@@ -150,6 +151,7 @@ export function OrdersServerTable() {
       tableId="orders"
       getRowId={getOrderRowId}
       columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
       quickFilterFields={["symbol", "status"]}
       viewportSource={viewportSource}
     />
@@ -169,6 +171,7 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   getRowId: (row: TRow) => string;
   columns: TColumns;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
+  initialOrderBy: BrunoTableSortBy<TColumns>;
   quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
   initialPersistedState?: BrunoTablePersistedState<TRow, TColumns>;
   onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns>) => void;
@@ -186,7 +189,7 @@ type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = 
   readonly version: number;
   readonly tableId: string;
   readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
-  readonly sorting: BrunoTableSortBy<TColumns>;
+  readonly orderBy: BrunoTableSortBy<TColumns>;
   readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
   readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
   readonly columnWidths: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, number>>>;
@@ -242,6 +245,7 @@ Rules:
 - `getRowId` is mandatory; row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
+- `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a table is never unsorted.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
@@ -707,16 +711,18 @@ TanStack Table's column-filter state may coordinate simple header-filter UI inte
 
 ## Sort state
 
-Grid sort state also uses `columnId`:
+Grid order state uses `columnId`, never View Server fields:
 
 ```ts
-const sorting = [
+const orderBy = [
   { columnId: "COL_ID_PRICE", direction: "desc" },
   { columnId: "COL_ID_SYMBOL", direction: "asc" },
 ] satisfies BrunoTableSortBy<typeof columns>;
 ```
 
-Array order is sort priority. A column without valid sort semantics cannot appear in this type.
+`BrunoTableSortBy<TColumns>` is a non-empty tuple. Array order is sort priority, and a column without valid sort semantics cannot appear in the type. Both `initialOrderBy` and persisted `orderBy` use this shape; the View Server Adapter resolves each Column Identity to its current Query Field only when compiling `query.orderBy`.
+
+Sorting has no unsorted state. Activating an unsorted header through pointer or keyboard replaces the current order with that column ascending. Activating the current column toggles `asc` and `desc`. Shift-activation adds a new ascending column or toggles an existing member without clearing the other entries. Every sorted header displays direction and one-based priority. BrunoTable does not infer a descending-first cycle for numeric Value Types.
 
 ## View Server translation
 
