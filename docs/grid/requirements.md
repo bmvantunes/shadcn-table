@@ -34,6 +34,8 @@ Every table requires a non-empty typed `initialOrderBy` keyed by Column Identity
 
 A committed sorting change resets both row models to vertical row zero while preserving horizontal scroll and column layout. It clears position-based Active Cell and Linear Cell Range state, preserves drafts and conflicts by stable Row Identity plus Column Identity, and leaves keyboard focus on the header or Sort panel control that initiated the command.
 
+Sorting while a cell editor is active must first run the normal parse-and-validation commit gate. An invalid candidate blocks the sort and restores focus to the editor. A valid Batch candidate commits locally before sorting immediately; a valid Immediate candidate begins its identity-keyed save operation before sorting immediately without awaiting its result. Reordering must neither discard edit state nor orphan an operation or notification when its row leaves the mounted viewport.
+
 ## Public export naming
 
 Every BrunoTable-owned public export carries the `BrunoTable` brand. Exported types, components, classes, helpers, and constants use the `BrunoTable...` form, including foundational types such as `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`. Separate packages keep their own vocabulary; `@bruno/shadcn/button` exports `Button`.

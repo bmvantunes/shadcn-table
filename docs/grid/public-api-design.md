@@ -726,6 +726,8 @@ Sorting has no unsorted state. Active sorting may contain from one entry through
 
 Every committed ordering change creates a new logical row-position generation and resets vertical scroll to row zero in both Client and Server Tables. Horizontal scroll and column layout remain unchanged. Position-based Active Cell and Linear Cell Range state is cleared because its old indexes no longer describe the reordered row space, while drafts and conflicts survive through stable `rowId + columnId` identity. Keyboard focus stays on the header or Sort panel control that initiated the command rather than jumping into the body.
 
+When an editor is active, a sort request first passes through the ordinary parse-and-validation commit gate. Rejection cancels sorting and returns focus to the invalid editor. A valid Batch candidate commits locally before the immediate reorder; a valid Immediate candidate starts its stable-identity save operation before the immediate reorder and does not make sorting wait for transport settlement. Operation results and failure notifications remain authoritative even if the affected row moves outside the mounted viewport.
+
 ## View Server translation
 
 The View Server Translation Adapter compiles current grid state immediately before replacing the viewport query:
