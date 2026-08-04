@@ -190,6 +190,7 @@ type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = 
   readonly tableId: string;
   readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
   readonly orderBy: BrunoTableSortBy<TColumns>;
+  readonly groupBy: readonly BrunoTableGroupableColumnId<TColumns>[];
   readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
   readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
   readonly columnWidths: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, number>>>;
@@ -248,7 +249,7 @@ Rules:
 - `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a table is never unsorted.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
-- `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
+- `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
@@ -695,6 +696,10 @@ The visible Rows column is the sole row-count representation. `BrunoTableAggFunc
 Grouping owns a derived rendered layout rather than mutating persisted column preferences. Its Logical Column Order is the active group-key columns in Group By order, followed by Rows, followed by participating aggregate columns in their normal relative order. Reordering Group By chips changes the group-key tuple and rendered key-column order together.
 
 All start/end pinning is suspended in this derived grouped layout, including pinning previously assigned to a group key or aggregate column. The normal order and pinning snapshots remain intact and emit no preference change merely because grouping became active. Removing the last active group key restores them exactly.
+
+While grouped, the ordinary header reorder interaction and command are unavailable. Only Group By chip reordering changes presentation order. Aggregate columns retain their relative durable base `columnOrder`.
+
+The persisted `columnOrder` and `columnPinning` always describe the normal ungrouped layout. The persisted ordered `groupBy` list describes current grouping intent. BrunoTable never serializes the derived rendered order or a second `orderBeforeFirstGroupBy` copy. On restoration it sanitizes all three against current capabilities, restores the base layout plus Group By order, and derives the grouped presentation. Clearing grouping after hydration therefore restores the user's expected normal layout without a browser-only backup.
 
 ## Grid filter expressions
 

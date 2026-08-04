@@ -79,6 +79,7 @@ The grid must support:
 5. Persist user preferences only:
    - filters
    - sorting
+   - ordered grouping
    - column order
    - column visibility
    - column widths

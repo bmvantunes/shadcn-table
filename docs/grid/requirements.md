@@ -253,6 +253,10 @@ Reordering two columns in the Group By region immediately reorders both the quer
 
 V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.
 
+Ordinary header-column rearrangement is disabled while grouping is active. The user may reorder only the chips in the Group By region. Participating aggregate columns therefore retain their relative durable base order, and no grouped drag can ambiguously mutate both a temporary layout and the normal layout.
+
+Persistence stores that durable base `columnOrder`, the durable base `columnPinning`, and the ordered active `groupBy` Column Identities. It never stores the temporary rendered grouped order and needs no `currentOrder`, `orderBeforeFirstGroupBy`, or equivalent duplicate snapshot. Restoring a grouped table first restores the base layout and ordered grouping intent, then derives the grouped presentation. Removing the final group key after a refresh therefore reveals the exact normal order and pinning the user had before grouping.
+
 A Computed Column declares a non-empty `fields` tuple together with `valueGetter`. Every dependency is a valid row field, the getter receives only the corresponding `Pick` of the row, and a Server Table adds those fields to its explicit projection. It is always non-filterable, non-sortable, and non-editable in V1.
 
 A Field Column with valid Value Type semantics enables filtering and sorting by default. Consumers may opt either capability out explicitly per column. A Computed Column cannot opt into filtering, sorting, or editing in V1.
@@ -341,6 +345,7 @@ Persist only intentional user preferences:
 
 - Grid Filter Expressions
 - sorting
+- ordered grouping
 - column order
 - column visibility
 - column widths
@@ -370,13 +375,13 @@ Persisted state must be:
 - JSON-safe
 - emitted as a complete replacement snapshot through `onPersistChange`
 
-Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
+Persisted filters, sorts, grouping, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
 Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 
-BrunoTable owns no storage adapter, provider, Local Storage access, URL synchronization, network request, Kafka producer, or retry workflow. The application may pass one optional `initialPersistedState` snapshot when mounting the Table Instance and receives the complete current snapshot through `onPersistChange` after every committed Grid Filter, sort, column-order, visibility, width, or pinning change. Restoration does not echo a callback. Quick Filter, External Filters, Feed Route, selection, scroll, and edit state never trigger it.
+BrunoTable owns no storage adapter, provider, Local Storage access, URL synchronization, network request, Kafka producer, or retry workflow. The application may pass one optional `initialPersistedState` snapshot when mounting the Table Instance and receives the complete current snapshot through `onPersistChange` after every committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. Restoration does not echo a callback. Quick Filter, External Filters, Feed Route, selection, scroll, and edit state never trigger it.
 
 The callback is a non-blocking notification boundary. BrunoTable neither awaits it nor reacts to its return value or failures. Applications own publication ordering, retries, error reporting, user/tenant keys, authorization, and transport. One atomic grid command emits at most one snapshot. Pointer-move and scroll frames emit none; resize and reorder emit only on gesture commit.
 
@@ -395,6 +400,8 @@ Users must be able to:
 - reset visibility
 - reset pinning
 - reset the entire layout
+
+While Group By is active, ordinary column reordering is temporarily unavailable; only Group By chip reordering remains enabled. This lock does not affect the durable base order or the other column-management preferences restored when grouping clears.
 
 Column dragging should use a projected layout and transform animation rather than rewriting committed order on every pointer move.
 

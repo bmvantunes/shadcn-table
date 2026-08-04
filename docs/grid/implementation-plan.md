@@ -187,6 +187,7 @@ Build:
 - isolated reactive state for resize handles and accessibility output
 - one-time `initialPersistedState` restoration supplied by the application
 - complete JSON-safe `onPersistChange` snapshots after committed preference changes
+- ordered Group By persistence beside one durable base Column Order and Column Pinning snapshot
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
 - mandatory non-empty `initialOrderBy` baseline with valid persisted `orderBy` precedence and no unsorted state
 - schema versioning and sanitization
@@ -480,6 +481,7 @@ Build:
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - a temporary derived grouped layout ordered as active keys, Rows, then participating aggregates
 - suspension and exact restoration of ordinary Column Pinning without mutating persisted layout state
+- ordinary column-reorder lock while grouped, with Group By chip reorder as the sole ordering interaction
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
@@ -499,6 +501,8 @@ Success criteria:
 - reordering Group By chips reorders the View Server field tuple and rendered key columns together
 - active grouping renders one unpinned logical column region and clearing the final key restores the exact base order and pinning
 - entering, changing, and leaving grouping do not masquerade as user Column Order or Column Pinning preference mutations
+- persisted ordered `groupBy` plus one base layout recreates the grouped view after SSR/refresh and restores the exact base layout when grouping clears
+- no persisted current rendered order, `orderBeforeFirstGroupBy`, or other duplicate layout authority exists
 - the Client Table computes only from its complete source
 - the Server Table delegates over the complete server result and never aggregates loaded sparse blocks
 - grouped Server queries use native `groupBy` plus a non-empty aggregate definition instead of raw-row `select`
