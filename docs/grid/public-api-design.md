@@ -697,6 +697,8 @@ Grouping owns a derived rendered layout rather than mutating persisted column pr
 
 This sequence is the complete grouped projection. A non-key consumer column appears only when it explicitly declares `aggFunc`; every column without grouped semantics is temporarily omitted and restored unchanged afterward. `aggFunc` is deliberately optional. BrunoTable does not guess a field's domain meaning, expose arbitrary representative source values, or request unused aggregates merely to keep every raw column mounted.
 
+The grouped projection applies Column Visibility asymmetrically and deliberately. Active group keys and Rows are forced visible as required grouped structure without changing the persisted visibility map. Aggregate columns continue to respect their normal visibility preference, so an aggregate-capable hidden column does not unexpectedly surface. Clearing grouping removes the forced presentation and reveals the unchanged normal visibility state.
+
 All start/end pinning is suspended in this derived grouped layout, including pinning previously assigned to a group key or aggregate column. The normal order and pinning snapshots remain intact and emit no preference change merely because grouping became active. Removing the last active group key restores them exactly.
 
 While grouped, the ordinary header reorder interaction and command are unavailable. Only Group By chip reordering changes presentation order. Aggregate columns retain their relative durable base `columnOrder`.

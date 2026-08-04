@@ -253,6 +253,15 @@ That is also the complete grouped projection. A consumer column participates onl
 
 `aggFunc` remains optional. Requiring it on every definition would force meaningless domain choices and make the Server Table maintain unused live aggregates proportional to raw column count. Each Adapter computes or requests only the explicitly participating aggregate columns plus the mandatory Rows count.
 
+Grouped presentation derives visibility without mutating the durable Column Visibility preference:
+
+- every active group key is forced visible while active, even if its normal visibility is false;
+- Rows is always visible while grouping is active;
+- an aggregate column is rendered only when its normal visibility is not false;
+- a hidden aggregate column remains hidden, and every temporary override disappears when grouping clears.
+
+Forcing an active key or Rows into the grouped projection emits no visibility preference mutation. Hidden columns must not be surfaced merely because they possess aggregate semantics.
+
 Reordering two columns in the Group By region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
 
 V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.

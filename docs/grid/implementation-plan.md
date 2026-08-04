@@ -481,6 +481,7 @@ Build:
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - a temporary derived grouped layout ordered as active keys, Rows, then participating aggregates
 - temporary omission and exact restoration of columns with neither active-key nor explicit aggregate semantics
+- derived grouped visibility that force-shows active keys and Rows while respecting aggregate-column visibility
 - suspension and exact restoration of ordinary Column Pinning without mutating persisted layout state
 - ordinary column-reorder lock while grouped, with Group By chip reorder as the sole ordering interaction
 - capability-safe aggregate definitions derived from compiled Value Type semantics
@@ -501,6 +502,7 @@ Success criteria:
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
 - `aggFunc` remains optional; grouped output includes no arbitrary representative values or implicit per-field aggregates
 - Server aggregate work scales with explicit participating aggregates rather than every raw column definition
+- grouping never surfaces a normally hidden aggregate column, while forced active-key and Rows visibility never mutates the persisted visibility map
 - reordering Group By chips reorders the View Server field tuple and rendered key columns together
 - active grouping renders one unpinned logical column region and clearing the final key restores the exact base order and pinning
 - entering, changing, and leaving grouping do not masquerade as user Column Order or Column Pinning preference mutations
