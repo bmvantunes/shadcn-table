@@ -270,7 +270,7 @@ Persistence is callback-based rather than storage-adapter based:
 />
 ```
 
-The application may obtain `savedPreferences` from Kafka through View Server, an HTTP request, a database, or any other mechanism. If loading is asynchronous, it should finish loading before mounting the Table Instance. BrunoTable emits a full replacement document rather than a delta so compacted logs and ordinary key-value stores can retain one authoritative value per application-defined user/table key. Multiple mutations committed as one grid command emit one snapshot, and high-frequency pointer frames never call `onPersistChange`; column resize and reorder publish only when the gesture commits.
+The application may obtain `savedPreferences` from Kafka through View Server, an HTTP request, a database, SSR, or any other mechanism. If loading is asynchronous, it should finish loading before mounting the Table Instance. Because the snapshot is JSON-safe, an SSR application may pass it directly into the first server render and hydrate with the identical value. BrunoTable performs no browser-storage read, does not reapply the snapshot after hydration, and does not emit `onPersistChange` merely because the server-rendered Table Instance hydrated. BrunoTable emits a full replacement document rather than a delta so compacted logs and ordinary key-value stores can retain one authoritative value per application-defined user/table key. Multiple mutations committed as one grid command emit one snapshot, and high-frequency pointer frames never call `onPersistChange`; column resize and reorder publish only when the gesture commits.
 
 ## Optional toolbar composition
 

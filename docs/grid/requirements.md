@@ -333,6 +333,8 @@ BrunoTable owns no storage adapter, provider, Local Storage access, URL synchron
 
 The callback is a non-blocking notification boundary. BrunoTable neither awaits it nor reacts to its return value or failures. Applications own publication ordering, retries, error reporting, user/tenant keys, authorization, and transport. One atomic grid command emits at most one snapshot. Pointer-move and scroll frames emit none; resize and reorder emit only on gesture commit.
 
+`initialPersistedState` is SSR-safe. An application may load the JSON-safe snapshot on the server and pass the identical value to the first server and client renders. Sanitization is deterministic from the snapshot and current column definitions. Hydration must neither reapply the snapshot, visually jump from defaults to restored layout, access browser storage, nor invoke `onPersistChange`.
+
 ## Column management
 
 Users must be able to:

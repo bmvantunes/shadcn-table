@@ -205,6 +205,7 @@ Success criteria:
 - no ephemeral state is serialized
 - stale, wrong-codec, wrong-column, or invalid exact operands are dropped rather than coerced
 - restoration does not echo `onPersistChange`, one atomic command emits at most one snapshot, and pointer/scroll frames emit none
+- the same server-provided `initialPersistedState` produces hydration parity without browser storage access or a default-layout frame
 - drag commits once
 - live resize does not rerender the mounted body on each pointer frame
 - drag animation stays within frame budget
