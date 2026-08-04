@@ -293,7 +293,6 @@ Exact input parsing is an untrusted boundary. Apply bounded text and bulk-operat
 Persist only intentional user preferences:
 
 - Grid Filter Expressions
-- committed Quick Filter text
 - sorting
 - column order
 - column visibility
@@ -325,7 +324,7 @@ Persisted state must be:
 
 Persisted filters, sorts, and layouts refer to `columnId`, never directly to backend fields. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
-Quick Filter persistence stores only its committed text. The application-provided `quickFilterFields` tuple remains current table configuration and is never restored from storage. If the current table has no Quick Filter capability, discard stale saved Quick Filter text during sanitization.
+Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
 
@@ -381,7 +380,7 @@ Rules:
 - BrunoTable-owned controls can observe semantic grid state and dispatch typed grid actions from anywhere inside the provider. This includes separately named result-row, loaded-row, selected-row, active-filter, active-sort, dirty-cell, validation, and conflict counts where the control needs them.
 - Each BrunoTable-owned control consumes only the narrow state it renders; adding toolbar content must not subscribe the grid body or table root to broad changing state, and one control's update must not rerender unrelated sibling controls.
 - A command-only control has zero grid-state subscriptions. Event handlers use a stable command dispatcher rather than subscribing to values needed only while handling an event.
-- A search or Quick Filter input owns transient keystroke text locally. It may observe only the committed Quick Filter primitive to reflect an external reset or restored view; row-content changes must neither notify nor rerender it.
+- A search or Quick Filter input owns transient keystroke text locally. It may observe only the committed Quick Filter primitive to reflect an external reset; row-content changes must neither notify nor rerender it.
 - Partition notification sources by capability. Selector equality alone is insufficient if it still causes every unrelated selector to execute for each hot row update.
 - TanStack tables, atoms, stores, subscriptions, and state shapes remain private implementation details. Page-owned children do not receive them through props or context.
 - The optional toolbar augments rather than replaces required overlays, the right-side tool rail, or the editable safety footer.
@@ -422,7 +421,7 @@ Boolean and Select Field Columns use live Set Filters by default. Text, Number, 
 
 Filter changes auto-apply through a 150 ms TanStack Pacer debounce. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
 
-Quick Filter is an explicit optional capability configured by a non-empty `quickFilterFields` tuple of string-valued Query Fields. BrunoTable never derives that tuple from visible columns and never accepts Column Identities in its place. Each field receives a `contains` condition, the conditions combine with `OR`, and the resulting group combines with Source Constraints and Grid Filters through `AND`. The configured fields are application configuration and are not persisted; the committed Quick Filter text is persisted user intent. Rendering a Quick Filter control without configured fields is a development-time configuration error.
+Quick Filter is an explicit optional capability configured by a non-empty `quickFilterFields` tuple of string-valued Query Fields. BrunoTable never derives that tuple from visible columns and never accepts Column Identities in its place. Each field receives a `contains` condition, the conditions combine with `OR`, and the resulting group combines with Source Constraints and Grid Filters through `AND`. Both the configured fields and committed text are session-only and never persisted; a new Table Instance starts empty. Rendering a Quick Filter control without configured fields is a development-time configuration error.
 
 The sorting panel should show sort priority.
 

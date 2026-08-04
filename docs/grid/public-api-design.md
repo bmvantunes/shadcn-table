@@ -259,11 +259,12 @@ Names beginning with `PageSpecific...` are illustrative consumer components, not
 
 The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. A custom control that needs to change Grid Filter state uses a focused typed BrunoTable command/control surface rather than taking ownership through React-controlled filter props, receiving a public TanStack table, or using an untyped imperative handle.
 
-Controls that only dispatch user intent have no grid-state subscription. `BrunoTableQuickFilter`, for example, keeps transient input text locally and dispatches through a stable command capability. It observes only the committed Quick Filter primitive when external resets or restored views must be reflected; streaming row-content changes are outside its notification domain.
+Controls that only dispatch user intent have no grid-state subscription. `BrunoTableQuickFilter`, for example, keeps transient input text locally and dispatches through a stable command capability. It observes only the committed Quick Filter primitive when an external reset must be reflected; streaming row-content changes are outside its notification domain.
 
 Distinguish filter ownership explicitly:
 
-- Grid Filter Expressions and the Quick Filter are user grid intent, appear in global active-filter UI, and participate in filter persistence.
+- Grid Filter Expressions are user grid intent, appear in global active-filter UI, and participate in preference persistence.
+- Quick Filter is user grid intent and appears in global active-filter UI, but its field configuration and committed text are session-only and never persisted or included in saved views.
 - Source Constraints define the page's working set before grid filters, are supplied by the application/source integration, and are not persisted or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
@@ -663,7 +664,7 @@ An open Set Filter is a live surface. Client Tables derive its values and counts
 
 Filter edits auto-apply through a 150 ms TanStack Pacer debounce and expose no Apply or Reset buttons inside the overlay. Grid Filters from different columns always combine with `AND`. Compound `AND`, `OR`, or `NOT` expressions may combine conditions only within one Column Identity; Quick Filter retains its separate OR-across-eligible-fields semantics. Source Constraints keep their own query-expression model and are not Grid Filters.
 
-Quick Filter eligibility comes only from the table's explicit `quickFilterFields` tuple. Every member must be a string-valued Query Field valid for `TRow`; visible columns, hidden columns, Column Identities, and column order do not implicitly change the tuple. The committed search text compiles to one `contains` leaf per configured field, those leaves combine with `OR`, and that group combines with Source Constraints and Grid Filters through `AND`. Client Tables evaluate the expression against their complete resident rows. Server Tables send the field-keyed expression to the View Server; filtering by a field does not require displaying a column for it. The tuple is application configuration and is not persisted, while the committed Quick Filter text is persisted as user intent. A `BrunoTableQuickFilter` rendered without the capability is a development-time configuration error rather than an automatic search over every text column.
+Quick Filter eligibility comes only from the table's explicit `quickFilterFields` tuple. Every member must be a string-valued Query Field valid for `TRow`; visible columns, hidden columns, Column Identities, and column order do not implicitly change the tuple. The committed search text compiles to one `contains` leaf per configured field, those leaves combine with `OR`, and that group combines with Source Constraints and Grid Filters through `AND`. Client Tables evaluate the expression against their complete resident rows. Server Tables send the field-keyed expression to the View Server; filtering by a field does not require displaying a column for it. Both the field tuple and committed text are session-only: neither is persisted nor included in a saved view, and every new Table Instance starts with an empty Quick Filter. A `BrunoTableQuickFilter` rendered without the capability is a development-time configuration error rather than an automatic search over every text column.
 
 TanStack Table's column-filter state may coordinate simple header-filter UI internally, but it is not BrunoTable's persisted filter contract.
 
