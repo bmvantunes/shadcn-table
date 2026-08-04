@@ -19,8 +19,8 @@ Grid Core
 └── diagnostics
 
 Row Pipelines
-├── ClientRowPipelineAdapter
-└── ViewportRowPipelineAdapter
+├── ClientRowPipelineAdapter (complete-data local processing)
+└── ViewportRowPipelineAdapter (server processing and sparse windows)
 
 Interaction
 ├── navigation engine
@@ -73,6 +73,8 @@ BrunoTableServer    -> Viewport Row Pipeline --+
 `BrunoTableView` owns common rendering and interaction. It dispatches grid commands and consumes fine-grained runtime subscriptions; it does not import client or View Server implementations and does not branch on a mode flag.
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, and optional message. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store.
+
+Grouping and aggregation are V1 capabilities of both row pipelines. BrunoTable owns one shared intent and presentation contract, but execution follows data ownership: the Client Adapter processes the complete resident source locally, while the Viewport Adapter delegates to effect-view-server and consumes the indexed grouped result. The Viewport Adapter never aggregates its sparse cache. TanStack's local grouped row model and the View Server's flat grouped output are implementation inputs, not permission to leak different public semantics from the two variants.
 
 ## Toolbar composition seam
 

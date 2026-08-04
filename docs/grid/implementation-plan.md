@@ -463,7 +463,34 @@ Success criteria:
 - large operations do not emit one event per cell
 - undo remains transaction-level
 
-## Phase 10: Advanced capabilities
+## Phase 10: Grouping and aggregation
+
+Grouping and aggregation are V1 capabilities for both table variants. Resolve the grouped-row presentation and identity decision before implementing this phase.
+
+Build:
+
+- one BrunoTable-owned typed grouping and aggregation intent
+- capability-safe aggregate definitions derived from compiled Value Type semantics
+- local Client grouping and aggregation over the complete resident source
+- native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
+- grouped View Server result typing without casting aggregate rows to the raw source row type
+- shared formatting, sorting controls, keyboard behavior, and accessibility for grouped results
+- exact operation and result-domain parity between Client and Server built-in aggregates
+- query-generation and stale-response handling for grouped Server viewports
+- behavioural, type-level, cross-adapter parity, and realistic performance tests
+
+Success criteria:
+
+- grouping and aggregation work in both `BrunoTableClient` and `BrunoTableServer`
+- the Client Table computes only from its complete source
+- the Server Table delegates over the complete server result and never aggregates loaded sparse blocks
+- grouped Server queries use native `groupBy` plus a non-empty aggregate definition instead of raw-row `select`
+- Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
+- aggregate aliases and group fields sort through validated View Server query members
+- grouped rows have explicit stable identity semantics appropriate to the chosen presentation shape
+- virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination
+
+## Phase 11: Advanced capabilities
 
 Potential later work:
 
@@ -471,8 +498,6 @@ Potential later work:
 - named views
 - shared views
 - group headers
-- row grouping
-- aggregation
 - tree data
 - detail rows
 - variable row heights

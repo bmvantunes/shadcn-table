@@ -829,15 +829,19 @@ The Client Row Pipeline owns:
 
 - complete Client Source and lifecycle-state ingestion
 - local filtering and sorting
-- local grouping and aggregation when enabled
+- local grouping and aggregation over the complete resident dataset when configured
 - client transactions and the final processed row sequence
 
 The Viewport Row Pipeline owns:
 
 - the sparse indexed row store and loaded ranges
-- View Server filter, sort, and projection translation
+- View Server filter, sort, grouping, aggregation, and projection translation
 - query generations and stale-response rejection
 - total-row state, range requests, block caching, and eviction
+
+Grouping and aggregation are V1 capabilities in both public variants, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. The Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally.
+
+The grouped result's public type and row-identity contract must be modeled honestly rather than cast back to the raw `TRow`. Its exact presentation shape is still open: flat grouped-summary rows and expandable hierarchical group rows have materially different identity, loading, virtualization, and query lifecycles.
 
 The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
 
@@ -861,7 +865,8 @@ TanStack Table v9 is an implementation detail behind BrunoTable's interface:
 - `field` maps to its direct accessor semantics.
 - BrunoTable never accepts TanStack's header- or accessor-derived identity fallbacks.
 - The client variant installs client filtered and sorted row models.
-- The viewport variant keeps filtering and sorting state/UI features but uses manual processing; the Viewport Source supplies already processed sparse rows.
+- The client variant executes configured grouping and aggregation over the complete resident source.
+- The viewport variant keeps filtering, sorting, grouping, and aggregation state/UI features but uses manual processing; the Viewport Source supplies already processed sparse raw or grouped rows.
 - Filter and sort state may use external atoms for fine-grained ownership and query generation.
 
 Consumers should not need to register TanStack features or manipulate its table instance for the common grid path.

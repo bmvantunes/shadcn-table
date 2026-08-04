@@ -125,7 +125,7 @@ The grid performs locally:
 
 - filtering
 - sorting
-- optional grouping and aggregation
+- grouping and aggregation when configured
 - virtualization
 - editing
 - undo and redo
@@ -167,6 +167,7 @@ The server owns:
 
 - filtering
 - sorting
+- grouping and aggregation when configured
 - row count
 - range loading
 - global row position
@@ -176,6 +177,19 @@ The server owns:
 The UI presents the same continuous infinite-scrolling surface as the Client Table. There is no visible or public page navigation.
 
 The grid internally requests indexed ranges based on the visible viewport and overscan.
+
+## Grouping and aggregation execution
+
+Grouping and aggregation are V1 capabilities of both public variants. They share BrunoTable-owned intent, column semantics, controls, formatting, and accessibility, while their row-pipeline Adapters execute that intent differently:
+
+- `BrunoTableClient` groups and aggregates the complete resident Client Source locally.
+- `BrunoTableServer` compiles grouping and aggregation into the effect-view-server query and consumes the resulting indexed grouped rows.
+
+The Server Table must never derive a grouped result or aggregate from its loaded sparse blocks. Loaded blocks are a viewport cache, not the complete result set. A grouped Server query uses the View Server's native `groupBy` and `aggregates` contract rather than pretending grouped output is an ordinary raw-row `select` projection.
+
+Client implementations must match the documented View Server operation and exact-value semantics for the shared built-in aggregate operations. Any capability that cannot preserve that semantic contract must fail during configuration instead of silently producing different Client and Server answers.
+
+The exact V1 presentation shape—flat grouped-summary rows or expandable hierarchical group rows—remains an explicit product decision. Do not infer that choice from TanStack Table's local grouped row model or from the View Server's flat grouped output.
 
 ## Mandatory identity
 
