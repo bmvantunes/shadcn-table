@@ -199,6 +199,7 @@ Success criteria:
 
 - new/removed columns reconcile safely
 - restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
+- duplicate sort identities normalize quietly by retaining the first, highest-priority occurrence rather than requiring complex tuple-uniqueness typing
 - pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry
 - source JSX and emitted-package consumer type tests prove that `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
