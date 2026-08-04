@@ -722,7 +722,7 @@ const orderBy = [
 
 `BrunoTableSortBy<TColumns>` is a non-empty tuple. Array order is sort priority, and a column without valid sort semantics cannot appear in the type. Both `initialOrderBy` and persisted `orderBy` use this shape; the View Server Adapter resolves each Column Identity to its current Query Field only when compiling `query.orderBy`.
 
-Sorting has no unsorted state. Activating an unsorted header through pointer or keyboard replaces the current order with that column ascending. Activating the current column toggles `asc` and `desc`. Shift-activation adds a new ascending column or toggles an existing member without clearing the other entries. Every sorted header displays direction and one-based priority. BrunoTable does not infer a descending-first cycle for numeric Value Types.
+Sorting has no unsorted state. Activating an unsorted header through pointer or keyboard replaces the current order with that column ascending. Activating the current column toggles `asc` and `desc`. Shift-activation adds a new ascending column or toggles an existing member without clearing the other entries; it never removes a member. No sequence of pointer, Shift-pointer, or keyboard activations can produce an empty order. Every other command surface, restoration sanitizer, and reset path enforces the same non-empty invariant. Every sorted header displays direction and one-based priority. BrunoTable does not infer a descending-first cycle for numeric Value Types.
 
 ## View Server translation
 

@@ -199,6 +199,7 @@ Success criteria:
 
 - new/removed columns reconcile safely
 - restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
+- pointer, Shift-pointer, keyboard, panel, command, and reset paths always retain at least one active sort
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`

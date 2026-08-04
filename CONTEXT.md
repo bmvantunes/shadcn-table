@@ -65,7 +65,7 @@ The optional one-time Grid Filter Expression baseline for a new Table Instance. 
 _Avoid_: Controlled filters, External Filter, mandatory filter, reactive prop synchronization
 
 **Initial Order By**:
-The mandatory non-empty `initialOrderBy` baseline for a Table Instance. Its entries use Column Identity and admit only `asc` or `desc`. A valid non-empty persisted `orderBy` takes precedence during restoration; later prop changes do not overwrite user intent, and resetting sorting returns to this baseline.
+The mandatory non-empty `initialOrderBy` baseline for a Table Instance. Its entries use Column Identity and admit only `asc` or `desc`. A valid non-empty persisted `orderBy` takes precedence during restoration; later prop changes do not overwrite user intent, and resetting sorting returns to this baseline. Every sort command and sanitization path preserves at least one active entry.
 _Avoid_: Empty sorting, Query Field identity, reactive prop synchronization, descending-first inference
 
 **Set Filter**:
