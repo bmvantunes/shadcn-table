@@ -96,6 +96,8 @@ Grid Filter, Quick Filter, Clear, and Reset commands enter the same editor commi
 
 Each typed filter overlay owns an ephemeral raw candidate outside persisted filter state. Exact Value Type parsing precedes Pacer publication. Parse failure updates only that overlay's compact validation snapshot; the last committed filter atom and row pipeline remain untouched. Closing discards the candidate. This validation state never enters table-root React state, query compilation, or `onPersistChange`.
 
+Pacer sits only on continuous text and numeric candidate publication. Discrete checkbox and valid operator commands bypass it. Bulk Set Filter actions calculate one normalized include/exclude result and dispatch one command, so preference encoding and row-pipeline generation happen at most once regardless of facet cardinality.
+
 The built-in numeric-control adapter uses native Number input only for the JavaScript Number Value Type and still routes native validity plus the raw candidate through compiled semantics. BigInt and BigDecimal controls remain string-valued text inputs with input-mode hints until their exact parser succeeds; the adapter never calls `valueAsNumber` for exact domains. This keeps browser assistance behind the same private semantic seam rather than making DOM control behavior the trusted value model.
 
 After the editor gate is clear, filtering does not query or gate on global edit cleanliness. Sparse edit selectors derive footer counts, Save Change Sets, and review projections independently from the filtered row pipeline, so hidden dirty rows remain represented without forcing body subscriptions or a confirmation workflow. Filter Clear and Reset dispatch no edit-store command.

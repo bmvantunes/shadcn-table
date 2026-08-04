@@ -221,6 +221,7 @@ Success criteria:
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
 - explicit Set Filter include/exclude values survive facet disappearance as reversible zero-count entries and recover live counts if they return; absent values with no explicit intent may be dropped
 - Select All and manually selecting the final available value both normalize to no filter, partial state preserves include/exclude intent for future values, and passive facet updates never rewrite that intent
+- continuous filter input debounces for 150 ms, discrete valid choices apply immediately, and Select All/Clear All each produce one atomic command, query generation, and persistence snapshot
 - Server Set Filters may use value checkboxes and value Select All without installing or implying forbidden Server Row Selection
 - Text, Number, BigInt, and BigDecimal columns never open an automatic unbounded-cardinality facet without explicit opt-in
 - External Filters are never serialized as grid preferences, included in BrunoTable's active-filter count, or cleared by grid filter reset
