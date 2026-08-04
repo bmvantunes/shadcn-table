@@ -465,7 +465,7 @@ Success criteria:
 
 ## Phase 10: Grouping and aggregation
 
-Grouping and aggregation are V1 capabilities for both table variants. Resolve the grouped-row presentation and identity decision before implementing this phase.
+Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. Resolve the grouped-result public typing and exact stable identity encoding before implementing this phase.
 
 Build:
 
@@ -474,6 +474,7 @@ Build:
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
 - grouped View Server result typing without casting aggregate rows to the raw source row type
+- flat Client result normalization with no hierarchical group rows or expansion state
 - shared formatting, sorting controls, keyboard behavior, and accessibility for grouped results
 - exact operation and result-domain parity between Client and Server built-in aggregates
 - query-generation and stale-response handling for grouped Server viewports
@@ -488,6 +489,7 @@ Success criteria:
 - Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
 - aggregate aliases and group fields sort through validated View Server query members
 - grouped rows have explicit stable identity semantics appropriate to the chosen presentation shape
+- both variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
 - virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination
 
 ## Phase 11: Advanced capabilities
@@ -498,6 +500,7 @@ Potential later work:
 - named views
 - shared views
 - group headers
+- expandable grouped hierarchies and leaf-row drill-down
 - tree data
 - detail rows
 - variable row heights

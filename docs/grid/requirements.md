@@ -189,7 +189,7 @@ The Server Table must never derive a grouped result or aggregate from its loaded
 
 Client implementations must match the documented View Server operation and exact-value semantics for the shared built-in aggregate operations. Any capability that cannot preserve that semantic contract must fail during configuration instead of silently producing different Client and Server answers.
 
-The exact V1 presentation shape—flat grouped-summary rows or expandable hierarchical group rows—remains an explicit product decision. Do not infer that choice from TanStack Table's local grouped row model or from the View Server's flat grouped output.
+V1 grouping produces a flat grouped-summary table in both variants. A multi-field grouping yields one logical row per distinct ordered group-key tuple, with the group fields and configured aggregate values presented as ordinary columns in that row. V1 has no expandable group hierarchy, group disclosure controls, nested child rows, leaf-row drill-down, or per-group child loading. TanStack's local hierarchical grouped row model must not leak a different Client experience; the Client Adapter normalizes its result to the same flat contract supplied by the View Server.
 
 ## Mandatory identity
 

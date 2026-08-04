@@ -841,7 +841,7 @@ The Viewport Row Pipeline owns:
 
 Grouping and aggregation are V1 capabilities in both public variants, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. The Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally.
 
-The grouped result's public type and row-identity contract must be modeled honestly rather than cast back to the raw `TRow`. Its exact presentation shape is still open: flat grouped-summary rows and expandable hierarchical group rows have materially different identity, loading, virtualization, and query lifecycles.
+V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result's public type and row-identity contract must still be modeled honestly rather than cast back to the raw `TRow`; logically, identity follows the complete group-key tuple rather than a source row's `getRowId` result.
 
 The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
 

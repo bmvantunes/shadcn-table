@@ -74,7 +74,7 @@ BrunoTableServer    -> Viewport Row Pipeline --+
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, and optional message. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store.
 
-Grouping and aggregation are V1 capabilities of both row pipelines. BrunoTable owns one shared intent and presentation contract, but execution follows data ownership: the Client Adapter processes the complete resident source locally, while the Viewport Adapter delegates to effect-view-server and consumes the indexed grouped result. The Viewport Adapter never aggregates its sparse cache. TanStack's local grouped row model and the View Server's flat grouped output are implementation inputs, not permission to leak different public semantics from the two variants.
+Grouping and aggregation are V1 capabilities of both row pipelines. BrunoTable owns one shared flat grouped-summary contract, but execution follows data ownership: the Client Adapter processes the complete resident source locally, while the Viewport Adapter delegates to effect-view-server and consumes the indexed grouped result. The Viewport Adapter never aggregates its sparse cache. The Client Adapter must normalize any TanStack grouping machinery to the same one-row-per-group-key-tuple shape returned by the View Server; it must not expose a private hierarchical row model, expansion state, or child rows through the shared view.
 
 ## Toolbar composition seam
 
