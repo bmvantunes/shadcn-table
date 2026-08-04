@@ -219,6 +219,7 @@ Success criteria:
 - Grid Filter, Quick Filter, Clear, and Reset commands reject invalid active editors with focus restored, or commit valid Batch/Immediate work before filtering without awaiting transport
 - existing edit-owned work never blocks filtering or requires hidden-draft confirmation; complete sparse footer, Save, and review projections remain independent of filtered and mounted rows
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
+- selected Set Filter values survive facet disappearance as deselectable zero-count entries and recover live counts if they return; unselected absent values may be dropped
 - Text, Number, BigInt, and BigDecimal columns never open an automatic unbounded-cardinality facet without explicit opt-in
 - External Filters are never serialized as grid preferences, included in BrunoTable's active-filter count, or cleared by grid filter reset
 - no ephemeral state is serialized
