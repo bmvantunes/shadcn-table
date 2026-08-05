@@ -204,6 +204,10 @@ _Avoid_: Cell Edit Session, Save Change Set
 A non-empty atomic request that groups net cell changes by their source rows. It may contain one or many rows and cells in either Edit Mode.
 _Avoid_: Raw edit history, one-change-only callback
 
+**Batch History Command**:
+A reversible user gesture within the current unsaved Batch that retains every affected cell's complete before-and-after editing state. Value changes and conflict resolutions each remain one undo unit regardless of cell count.
+_Avoid_: Value-only undo entry, source-row snapshot, save payload
+
 **Save Operation**:
 The application-provided asynchronous operation that accepts one Save Change Set and resolves or rejects as a whole. Current canonical values and Row Versions arrive through the live Client Source rather than an operation result.
 _Avoid_: Preference persistence, Save-button click handler, Cell Edit Commit

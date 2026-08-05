@@ -149,6 +149,9 @@ The grid must support:
 61. Save preflight may rebase a dirty row to the latest live Row Version only after every edited field remains semantically equal to its recorded base. Any edited-field divergence enters Conflict Review; the application compare-and-set remains the final race authority.
 62. Promise resolution creates Accepted Overlays and a two-second success flash but no canonical result. An overlay has no timeout and yields when its submitted value converges, its opaque Row Version differs from `expectedVersion`, or the row authoritatively disappears. Promise rejection uses an ordinary safe `Error` explanation; later complete live convergence supersedes the ambiguous failure.
 63. Immediate mode deliberately permits concurrent operations over disjoint Cell Identities, locks only operation-owned cells, and accepts same-row compare-and-set rejection as the cost of aggressive editing. Resolved Immediate cells unlock per row as live confirmation arrives. Batch Save globally locks edit mutations until every submitted row reconciles after resolution; rejection unlocks while preserving unconverged drafts and history. Non-editing interactions remain enabled in both modes.
+64. XState actors are private workflow brains, never React subscription sources. Every actor decision publishes one coherent observable projection through BrunoTable-owned TanStack Store state; renderers subscribe only to the smallest store projection they need and never combine actor and store snapshots.
+65. Batch undo/redo records one bounded command per user gesture using reversible sparse cell-state patches that include Draft and Conflict evidence, not value-only pairs or full-row snapshots. Live convergence prunes that Cell Identity from both history stacks, and mode switching remains blocked while either stack contains edit-owned work.
+66. Save-operation records are bounded. Pending, awaiting-source, and rejected operations retain only the immutable submitted evidence needed for reconciliation; completed records are removed after their flash or notification lifecycle rather than accumulating for the Table Instance lifetime.
 
 ## Preferred technology split
 
@@ -174,6 +177,7 @@ The grid must support:
   - sparse drafts
   - sparse conflicts
   - validation state
+  - bounded sparse Batch history and save-operation evidence
 - Effect:
   - optional data-source/RPC adapter
   - schemas and transport boundaries

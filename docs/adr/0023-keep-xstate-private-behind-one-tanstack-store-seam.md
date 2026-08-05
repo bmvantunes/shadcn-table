@@ -1,0 +1,3 @@
+# Keep XState private behind one TanStack Store seam
+
+XState core privately decides legal edit and save workflow transitions, while BrunoTable-owned TanStack Store state is the single observable memory seam for React. Renderers never subscribe directly to actors or combine actor and store snapshots; one command publishes coherent compact projections, bounded operation evidence, and reversible sparse Batch History Commands whose patches retain complete Draft and Conflict state rather than value-only pairs. This avoids transient cross-runtime UI states and keeps workflow churn out of hot cell subscriptions while preserving undoable conflict rebasing.

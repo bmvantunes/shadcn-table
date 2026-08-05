@@ -431,7 +431,11 @@ Success criteria:
 - rejection-to-convergence handling is operation-specific: complete live convergence removes the operation failure and uses ordinary success presentation, while partial convergence prunes only matching cells; never infer confirmation from global pending-change count
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
+- every Batch History Command stores reversible sparse before/after Draft and Conflict state per affected Cell Identity, so Mine rebasing and Server discard remain undoable without copying canonical rows or whole-store snapshots
+- Edit Mode switching remains blocked while either bounded Batch history stack is non-empty, including zero-draft states that still retain Redo intent
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value
+- XState actors remain private decision owners; React subscribes only to coherent BrunoTable-owned TanStack Store projections and never joins independently observed actor and store snapshots
+- the identity-indexed operation repository retains pending, awaiting-source, and rejected evidence only while reconciliation or notification needs it, then removes completed records after bounded presentation cleanup
 - a live `isEditable` transition to false preserves the dirty cell and history, blocks editing and Batch Save with an accessible explanation, and clears only when permission returns, semantic convergence occurs, or Reset is confirmed
 - Blocked Changes Review supports explicit selected-row `Discard Selected Changes` as one local undoable Batch command and never calls `onSaveEdits`
 - no-edit state keeps the footer mounted with Reset and Save disabled
