@@ -681,6 +681,7 @@ const columns = [
     groupBy: true,
     aggFunc: "min",
     aggregateValueFormatter: ({ value }) => value.toFixed(2),
+    aggregateCellClassName: ({ value }) => (value < 0 ? "text-destructive" : undefined),
   },
   {
     columnId: "COL_ID_MAX_PRICE",
@@ -702,7 +703,7 @@ The exact `aggFunc` union exposed for a concrete column must be capability-deriv
 Grouped presentation is also capability-derived. Its conceptual shape is:
 
 ```ts
-type BrunoTableGroupKeyValueFormatterParams<
+type BrunoTableGroupKeyCellParams<
   TColumns,
   TColumnId extends BrunoTableGroupableColumnId<TColumns>,
 > = {
@@ -714,12 +715,16 @@ type BrunoTableGroupKeyValueFormatterParams<
 
 type BrunoTableGroupKeyPresentation<TColumns, TColumnId> = {
   readonly groupKeyValueFormatter?: (
-    params: BrunoTableGroupKeyValueFormatterParams<TColumns, TColumnId>,
+    params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>,
   ) => string;
-  readonly groupKeyCellRenderer?: BrunoTableGroupKeyCellRenderer<TColumns, TColumnId>;
+  readonly groupKeyCellClassName?:
+    string | ((params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>) => string | undefined);
+  readonly groupKeyCellRenderer?: (
+    params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>,
+  ) => React.ReactNode;
 };
 
-type BrunoTableAggregateValueFormatterParams<
+type BrunoTableAggregateCellParams<
   TColumns,
   TColumnId extends BrunoTableAggregatedColumnId<TColumns>,
 > = {
@@ -732,17 +737,23 @@ type BrunoTableAggregateValueFormatterParams<
 
 type BrunoTableAggregatePresentation<TColumns, TColumnId> = {
   readonly aggregateValueFormatter?: (
-    params: BrunoTableAggregateValueFormatterParams<TColumns, TColumnId>,
+    params: BrunoTableAggregateCellParams<TColumns, TColumnId>,
   ) => string;
-  readonly aggregateCellRenderer?: BrunoTableAggregateCellRenderer<TColumns, TColumnId>;
+  readonly aggregateCellClassName?:
+    string | ((params: BrunoTableAggregateCellParams<TColumns, TColumnId>) => string | undefined);
+  readonly aggregateCellRenderer?: (
+    params: BrunoTableAggregateCellParams<TColumns, TColumnId>,
+  ) => React.ReactNode;
 };
 ```
 
 A Group Key Cell's `value` retains the exact field value type, but its presentation context intentionally omits `row: TRow` because the cell identifies a complete group rather than one representative source row. Without an override, BrunoTable formats it through the field's compiled Value Type presentation.
 
-The exact aggregate result type follows the compiled Value Type and selected `aggFunc`; it is not assumed to equal the raw field type. Aggregate callbacks also omit `row: TRow`. Without an override, BrunoTable formats the aggregate through its compiled aggregate-result Value Type presentation. Ordinary raw-row `valueFormatter` and `cellRenderer` callbacks are never invoked with fabricated grouped data.
+The exact aggregate result type follows the compiled Value Type and selected `aggFunc`; it is not assumed to equal the raw field type. Aggregate callbacks also omit `row: TRow`. Without an override, BrunoTable formats the aggregate through its compiled aggregate-result Value Type presentation. Ordinary raw-row `valueFormatter`, conditional `cellClassName`, and `cellRenderer` callbacks are never invoked with fabricated grouped data.
 
-If one definition declares both grouping eligibility and aggregation, its active role selects the callback family. An active key uses `groupKeyValueFormatter` or `groupKeyCellRenderer` and suppresses its aggregate; under another active grouping it uses `aggregateValueFormatter` or `aggregateCellRenderer` for its aggregate result.
+If one definition declares both grouping eligibility and aggregation, its active role selects the presentation family. An active key uses only its `groupKey...` overrides and suppresses its aggregate; under another active grouping it uses only its `aggregate...` overrides for the aggregate result.
+
+The matching `groupKeyCellClassName` and `aggregateCellClassName` properties accept either a static class or a conditional function using the same honest context as their formatter and renderer. This keeps common styling such as negative aggregate values in `text-destructive` out of a custom React renderer. Grouped class names affect presentation only, run only for mounted cells, and do not create grid subscriptions.
 
 The Viewport Adapter may compile `COL_ID_MIN_PRICE` and `COL_ID_MAX_PRICE` to distinct private aliases required by effect-view-server, but it maps each response value directly back to its Column Identity. The public column definitions, renderer, callbacks, sort state, and persistence never observe names such as `minimumPrice`, `maximumPrice`, or a generated aggregate alias.
 
