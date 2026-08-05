@@ -119,7 +119,11 @@ const orders = useLiveQuery("orders", completeQuery);
 <BrunoTableClient clientSource={orders} {...commonProps} />;
 ```
 
-The Client Source contains `rows`, `totalRows`, `version`, `status`, optional `statusCode`, and optional `message`. Do not spread these into separate required table props. The lifecycle fields match the Viewport Source chrome so the shared view can render loading, stale, closed, and error states consistently.
+The Client Source contains `rows`, `totalRows`, `version`, `status`, optional `statusCode`, optional `message`, and an optional source-owned Source Retry Capability. Do not spread these into separate required table props. The lifecycle fields match the Viewport Source chrome so the shared view can render loading, stale, closed, and error states consistently. The optional capability contains `run: () => void` plus source-authoritative `pending: boolean`; ordinary effect-view-server hook results remain directly assignable without it.
+
+The shared lifecycle UI uses components from `@bruno/shadcn`. Loading without authoritative rows renders fixed-height `Skeleton` rows. Stale results retain their coherent rows, including valid empty results, under a compact persistent warning `Alert` titled `Live data delayed`. Closed results retain rows under `Live updates stopped`, or show a full-body `Empty` state when none are available. Error results retain rows under a destructive `Live data error` Alert, or show a full-body destructive Empty state without rows. Supporting status codes and messages are bounded plain text. These states are source-authoritative and non-dismissible; recovery removes them only through a later source snapshot.
+
+Closed and error states render a shared `Retry` Button only when the source supplies the Source Retry Capability. Each explicit activation invokes `run` once. `pending` disables the button and displays the shared Spinner. BrunoTable never invents a retry, schedules automatic attempts, awaits or interprets the callback, changes lifecycle status optimistically, or reuses the control for save persistence. Stale state has no Retry control because its still-live source owns recovery. Lifecycle chrome subscribes only to the compact source fields it renders and must not replace the Grid Runtime or rerender unrelated cells.
 
 Queries used as Client Sources must not use `limit` or `offset`. When a ready or stale source reports `rows.length !== totalRows`, treat it as incomplete configuration rather than silently claiming whole-dataset client operations.
 

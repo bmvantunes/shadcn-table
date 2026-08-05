@@ -106,7 +106,8 @@ Build:
 
 - `<BrunoTableClient tableId getRowId columns clientSource />`
 - structurally typed Client Source integration, including direct `useLiveQuery(...)` results
-- loading, stale, closed, and error lifecycle overlays without discarding retained rows
+- shared shadcn lifecycle presentation: fixed-height Skeleton rows while loading, compact persistent Alerts over retained coherent stale/closed/error rows, and full-body Empty states for terminal states without rows
+- optional source-owned Retry capability for closed/error presentation, with source-authoritative pending state, one invocation per explicit activation, and no table-owned automatic retry or lifecycle transition
 - incomplete-source detection for ready/stale results
 - the shared Grid Runtime and `BrunoTableView`
 - semantic `<th>` rendering whose default visible and accessible label comes from `headerName`
@@ -135,6 +136,9 @@ Success criteria:
 
 - a complete effect-view-server `useLiveQuery` result passes directly as `clientSource` without an Adapter or Effect dependency in BrunoTable
 - loading/error lifecycle changes do not replace the Grid Runtime or rerender unrelated mounted cells
+- a lifecycle Alert/Empty subscribes only to compact source chrome; row-only publications do not rerender it, and retry-pending changes do not notify unrelated cells
+- a plain effect-view-server `useLiveQuery` result remains directly assignable without Retry; a source wrapper may add Retry, its Button is absent for stale/loading/ready, and pending disables it with the shared Spinner
+- Retry activation invokes the current source command exactly once, performs no automatic repeat, does not synthesize lifecycle status, and never enters the edit Save Workflow
 - arbitrary toolbar children do not subscribe or rerender the grid body
 - under a 20 Hz row-update fixture, a command-only toolbar control receives no grid notifications or React renders, and a Quick Filter control does not render unless its committed filter value changes
 - row-record updates that preserve counts do not notify row-metric, filter, sort, preference, selection, source-status, or edit-summary channels

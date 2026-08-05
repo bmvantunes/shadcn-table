@@ -233,12 +233,18 @@ type BrunoTableServerProps<
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
+type BrunoTableSourceRetry = {
+  readonly run: () => void;
+  readonly pending: boolean;
+};
+
 type BrunoTableSourceChrome = {
   readonly totalRows: number;
   readonly version: number;
   readonly status: BrunoTableSourceStatus;
   readonly statusCode?: string | undefined;
   readonly message?: string | undefined;
+  readonly retry?: BrunoTableSourceRetry | undefined;
 };
 
 type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
@@ -264,9 +270,15 @@ Rules:
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
+- `retry` is an optional source-owned manual recovery capability. Its `run` callback begins one source recovery attempt, while its `pending` flag is the sole authority for disabling and decorating the control. BrunoTable calls `run` once per explicit activation but never awaits it, interprets its result, changes source status optimistically, schedules another attempt, or reuses this capability for edit persistence. A plain effect-view-server hook result remains directly assignable because the capability is optional; an application that can reconnect may add it at its source-Adapter boundary without making Effect part of BrunoTable's public contract.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
 - Preserve unchanged row references between source versions and replace only changed rows.
-- `loading` with no rows shows the loading overlay. `stale`, `closed`, or `error` with retained rows keeps those rows visible and adds the appropriate non-destructive status treatment.
+- `loading` without authoritative rows renders fixed-height `Skeleton` rows from `@bruno/shadcn/skeleton` so virtual geometry remains stable. It does not render a fake Retry action.
+- `stale` retains every coherent row, including a valid empty result, and adds one compact non-dismissible warning `Alert` titled `Live data delayed`. It never offers Retry because the source remains live and may recover itself.
+- `closed` retains coherent rows with a compact non-dismissible warning `Alert` titled `Live updates stopped`; without rows it uses a full-body `Empty` state with the same title.
+- `error` retains coherent rows with a compact non-dismissible destructive `Alert` titled `Live data error`; without rows it uses a full-body destructive `Empty` state. `statusCode` and bounded plain-text `message` may appear as supporting diagnostics, never as markup.
+- Closed and error presentation includes a `Button` titled `Retry` only while `retry` exists. The button is disabled while `retry.pending` is true and then includes the shared `Spinner`. Recovery removes the presentation only when a later source snapshot says so; the lifecycle chrome is not dismissible and a click never fabricates a `loading` or `ready` state. Source-level Retry is unrelated to the edit Save Workflow, whose notifications continue to expose no Retry action.
+- Lifecycle components subscribe only to the compact source chrome they render, not row contents. They use appropriate status/alert semantics, preserve focus across source publications, and never replace the Grid Runtime or force unrelated mounted cells to rerender.
 - `viewportSource` is a long-lived source, not a row array copied into React state.
 - A semantic Server query change—Feed Route, projection, filters, sorting, Group By, or aggregates—creates a clean private Query Generation. Old rows and `totalRows` are never shown under the new semantics; fixed-height loading rows cover the required viewport until authoritative delivery. Window-only movement retains overlapping slots, and lifecycle retention is permitted only for coherent rows from the same generation. No generation or loading-policy prop enters the public API.
 - `externalFilters` is an optional Server-only application-controlled field-keyed expression. It uses the same value-aware operator vocabulary as View Server `where`, may reference valid fields without visible columns, and is always `AND`-combined with Quick Filter and Grid Filters. It is reactive but never persisted, counted, reviewed, reset, or cleared by BrunoTable. Client Tables reject the prop because their complete `clientSource` already defines the caller's working set.
@@ -1195,7 +1207,6 @@ Also reject:
 The following remain deliberately unresolved:
 
 - the no-helper correlated type shape for computed-column formatters
-- the visual treatment and retry actions for Client Source lifecycle states
 - the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted
 
 These decisions must extend the accepted small interface rather than restoring an intermediate grid-definition object.

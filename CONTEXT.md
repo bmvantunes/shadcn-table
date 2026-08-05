@@ -102,6 +102,10 @@ _Avoid_: Client mode, local flag
 The current complete row collection together with its loading, freshness, failure, row-count, and version state.
 _Avoid_: Row array, individual lifecycle props, Effect result
 
+**Source Retry Capability**:
+An optional source-owned manual recovery command together with its current pending state. A table may present this capability while the source is closed or errored, but never invents, schedules, or interprets reconnect work.
+_Avoid_: Automatic retry, save retry, table-owned reconnect policy
+
 **Server Table**:
 The read-only `BrunoTableServer` variant that represents a sparse indexed row space while a server owns filtering, sorting, grouping, and row position. It exposes one Active Cell rather than Cell Range Selection.
 _Avoid_: Viewport Table, server mode, viewport flag, paginated table
