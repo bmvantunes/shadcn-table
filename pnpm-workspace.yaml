@@ -1,9 +1,14 @@
 packages:
   - "packages/*"
 
+allowBuilds:
+  msgpackr-extract: false
+
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.7
   vite-plus: 0.2.7
+minimumReleaseAgeExclude:
+  - effect-view-server@2.1.0
 overrides:
   vite: "catalog:"
 peerDependencyRules:
