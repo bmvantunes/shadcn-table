@@ -1,0 +1,69 @@
+@import "@bruno/shadcn/styles.css";
+@source "./**/*.{ts,tsx}";
+
+html {
+  background: var(--background);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+[data-cell-state="dirty"] {
+  background: color-mix(in oklab, var(--muted) 76%, transparent);
+  box-shadow: inset 0 -2px var(--muted-foreground);
+}
+
+[data-cell-state="conflict"] {
+  background: color-mix(in oklab, var(--destructive) 10%, transparent);
+  box-shadow: inset 0 -2px var(--destructive);
+}
+
+[data-cell-state="success"] {
+  animation: cell-success 2s ease-out both;
+}
+
+[data-cell-state="pending"]::after {
+  position: absolute;
+  inset: 1px;
+  z-index: 1;
+  pointer-events: none;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(var(--background), var(--background)) padding-box,
+    conic-gradient(from var(--pending-angle), transparent 25%, var(--primary), transparent 75%)
+      border-box;
+  content: "";
+  animation: pending-cell 0.9s linear infinite;
+}
+
+@property --pending-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes pending-cell {
+  to {
+    --pending-angle: 360deg;
+  }
+}
+
+@keyframes cell-success {
+  0% {
+    background: color-mix(in oklab, var(--chart-2) 32%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-cell-state="pending"]::after,
+  [data-cell-state="success"] {
+    animation: none;
+  }
+}
