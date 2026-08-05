@@ -26,6 +26,7 @@
   "scripts": {
     "build": "vp pack",
     "dev": "vp pack --watch",
+    "prototype:edit-save": "node --experimental-strip-types packages/table/src/__prototype__/edit-save-reconciliation/cli.ts",
     "test": "vp test",
     "check": "vp check",
     "prepublishOnly": "vp run build",
