@@ -321,6 +321,7 @@ Build:
 - Client header checkbox selection over the complete currently filtered row model rather than mounted rows
 - Client inclusive Shift-click Row Selection in current logical display order
 - Client logical one-axis range selection
+- exact ordered-identity span capture and structural reconciliation for Client ranges
 - Client drag selection
 - autoscroll
 - capability engine
@@ -336,6 +337,7 @@ Success criteria:
 - Row Selection and Cell Range Selection remain separate capabilities and state models
 - Client Cell Range Selection owns at most one contiguous horizontal `1×N` or vertical `N×1` Linear Cell Range; new gestures replace it and Ctrl/Cmd never creates two-axis, additive, subtractive, or disconnected ranges
 - grouped read-only Client results retain fresh one-axis Cell Range Selection and canonical Copy, while grouped Server results remain Active-Cell-only
+- value-only publications preserve a Client range without per-update enumeration; structural changes retain it only when its endpoints and complete ordered identity span remain exact, while any mismatch clears it before Copy without silent corner retargeting
 - public types and private normalized state contain one optional discriminated horizontal-or-vertical range rather than a general rectangle, `ranges[]`, or include/exclude operations
 - the first accepted range extension locks one axis; pointer drag slop publishes no range, greater absolute displacement wins after the threshold, an exact tie stays `1×1`, parallel movement may resize through the anchor, and perpendicular movement is projected away until collapse
 - drag autoscroll remains off before axis acquisition and enables only the matching horizontal or vertical channel afterward; perpendicular and pinned-region edge proximity cannot scroll the other axis
@@ -504,6 +506,7 @@ Build:
 - grouped capability suppression for row checkboxes, Select All, selected-row counts, row actions, and selection commands
 - every Group By add, remove, or reorder cancels an active Cell Range gesture and clears its old range before changing logical shape
 - grouped read-only Client range selection and canonical Copy across Group Key, Aggregate, and Rows cells, with Paste, fill, and editing rejected
+- grouped value-only publications preserve an exact range, while grouped structural reconciliation uses the same ordered-identity span contract as ordinary Client rows
 - post-projection Active Cell reset to row zero and the first visible navigable new-projection column after every Group By shape change
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active

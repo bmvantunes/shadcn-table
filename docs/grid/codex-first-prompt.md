@@ -42,6 +42,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - grouping and aggregation only on Read-only Table Instances: always available to eligible Server Tables and available to Client Tables only when `editable` is false or omitted
 - Row Selection only for ordinary ungrouped Client rows; entering Group By clears selected Row Identities and the Shift anchor, and grouped summaries never acquire row checkboxes, Select All, or implicit leaf selection
 - one-axis Cell Range Selection and copy remain available over complete resident grouped Client results, with every Group By shape change clearing the previous range first; Server Tables remain Active-Cell-only
+- Client Cell Ranges preserve their exact ordered identity span across value-only publications and survive structural changes only when that full span remains equal; stale corners clear before Copy instead of silently selecting different cells
 - deterministic Active Cell reset after every Group By add, remove, or reorder: row zero and the first visible column in the new projection, with no raw/group focus mapping or DOM-focus theft
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves

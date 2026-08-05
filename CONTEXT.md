@@ -153,7 +153,7 @@ An optional Client Table intent keyed to ordinary source Row Identities. It neve
 _Avoid_: Group selection, Cell Range Selection, Active Cell
 
 **Cell Range Selection**:
-One contiguous one-axis cell intent used for multi-cell clipboard and, in an Editable Table, editing operations. It may contain ordinary or grouped Client cells and is either horizontal (`1×N`) or vertical (`N×1`); a Server Table never creates it from its Active Cell.
+One contiguous one-axis cell intent used for multi-cell clipboard and, in an Editable Table, editing operations. It owns the exact ordered Row and Column Identity span selected by the user, may contain ordinary or grouped Client cells, and is either horizontal (`1×N`) or vertical (`N×1`). Value-only change does not retarget it, and a Server Table never creates it from its Active Cell.
 _Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection
 
 **Drag Fill**:

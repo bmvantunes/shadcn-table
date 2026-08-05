@@ -254,7 +254,7 @@ Support:
 9. Cell selection owns at most one contiguous Linear Cell Range; its first accepted extension locks one axis until collapse or replacement, diagonal pointer movement projects onto that axis, and no keyboard or pointer command creates a two-axis, additive, subtractive, or disconnected range even transiently.
 10. Editable Client Tab traversal skips non-editable cells, wraps across logical rows, and crosses pinned regions without jumping.
 11. Editor cursor behaviour is preserved.
-12. Sorting/filtering clears or reconciles focus safely.
+12. Sorting/filtering reconciles focus safely; a Client Linear Cell Range survives only while its exact ordered identity span remains unchanged and never retargets stable corners across different intervening cells.
 13. Focus never falls to the document body because a cell unmounted.
 14. One horizontal navigation command moves to exactly one adjacent navigable column.
 15. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
