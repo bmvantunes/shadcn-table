@@ -132,6 +132,8 @@ The grid must support:
 44. Raw-row-aware `valueFormatter`, conditional `cellClassName`, and `cellRenderer` callbacks never receive fabricated grouped rows. Aggregate Cells use compiled aggregate-result Value Type presentation by default and optional typed `aggregateValueFormatter`, `aggregateCellClassName`, and `aggregateCellRenderer` overrides whose context contains no raw `TRow`.
 45. Group Key Cells use compiled field Value Type presentation by default and optional typed `groupKeyValueFormatter`, `groupKeyCellClassName`, and `groupKeyCellRenderer` overrides. Their context contains the exact field value, Column Identity, ordered group-key values, and row count, but no raw `TRow`.
 46. Group Key presentation overrides require `groupBy: true`; Aggregate presentation overrides require a valid `aggFunc`. Helpers and presets preserve their exact callback types without widening to `unknown`.
+47. The Rows System Column has fixed identity `COL_ID_BRUNO_TABLE_ROWS`, exact `bigint` value semantics, and no field, filter, hide, or edit capability. Optional `groupRowsColumn` configuration changes only its label, baseline width, and presentation.
+48. A committed user resize of Rows persists under its reserved identity and remains dormant while ungrouped. A valid persisted width wins over the `groupRowsColumn` baseline, while Rows never enters base column order, visibility, or pinning preferences.
 
 ## Preferred technology split
 

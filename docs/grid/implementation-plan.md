@@ -43,6 +43,8 @@ Build:
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
 - mandatory non-empty Column Identity-keyed `initialOrderBy`
 - separate typed `BrunoTableGroupSortBy` persistence for grouped summaries, including the reserved Rows System Column Identity
+- optional typed `BrunoTableGroupRowsColumnOptions` for the fixed Rows label, baseline width, and exact-`bigint` presentation
+- Rows-aware persisted-width typing that admits the reserved identity only in `columnWidths`
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
@@ -62,6 +64,7 @@ Build:
 - support for one column to declare both grouping eligibility and aggregation, with active-group-key precedence
 - rejection of `aggFunc` arrays, arbitrary aggregation callbacks, and unsupported Value Type/function pairs
 - exclusion of field-level `aggFunc: "count"` in favor of the grouped Rows System Column
+- rejection of Rows configuration that attempts to redefine identity or structural column capabilities
 - computed columns excluded from filter, sort, and edit capabilities in V1
 - type-level tests
 - emitted-package consumer type tests
@@ -492,6 +495,8 @@ Build:
 - one BrunoTable-owned typed grouping and aggregation intent
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
+- normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
+- committed Rows-width persistence under its reserved identity, including dormant ungrouped restoration and capability-aware sanitization
 - a temporary derived grouped layout ordered as active keys, Rows, then participating aggregates
 - temporary omission and exact restoration of columns with neither active-key nor explicit aggregate semantics
 - derived grouped visibility that force-shows active keys and Rows while respecting aggregate-column visibility
@@ -519,6 +524,9 @@ Success criteria:
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
+- omitted Rows configuration uses the `Rows` label, compiled `bigint` presentation, and implementation default width in both Adapters
+- Rows customization cannot alter its identity, semantics, or non-filterable, non-hideable, non-editable status
+- a valid persisted Rows width wins over its configured baseline, survives an ungrouped period, and never enters column order, visibility, or pinning
 - `aggFunc` remains optional; grouped output includes no arbitrary representative values or implicit per-field aggregates
 - Server aggregate work scales with explicit participating aggregates rather than every raw column definition
 - grouping never surfaces a normally hidden aggregate column, while forced active-key and Rows visibility never mutates the persisted visibility map

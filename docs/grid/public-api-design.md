@@ -168,6 +168,7 @@ The base properties and explicit source variants have this conceptual shape. The
 type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   columns: TColumns;
+  groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TColumns>;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   initialOrderBy: BrunoTableSortBy<TColumns>;
   quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
@@ -192,7 +193,9 @@ type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = 
   readonly groupBy: readonly BrunoTableGroupableColumnId<TColumns>[];
   readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
   readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
-  readonly columnWidths: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, number>>>;
+  readonly columnWidths: Readonly<
+    Partial<Record<BrunoTableColumnIdOf<TColumns> | BrunoTableRowsColumnId, number>>
+  >;
   readonly columnPinning: BrunoTablePersistedColumnPinning<TColumns>;
 };
 
@@ -763,6 +766,48 @@ The visible Rows column is the sole row-count representation. `BrunoTableAggFunc
 
 Rows uses the reserved System Column Identity `COL_ID_BRUNO_TABLE_ROWS` in BrunoTable commands and persisted grouped sort state. Its exported type name is `BrunoTableRowsColumnId`; consumers cannot declare a column with that reserved identity. The Viewport Adapter maps it to its private `count` aggregate alias only while compiling a grouped query.
 
+Consumers may customize this System Column through one optional base-table property without defining a fake Field Column:
+
+```ts
+type BrunoTableRowsColumnId = "COL_ID_BRUNO_TABLE_ROWS";
+
+type BrunoTableRowsCellParams<TColumns> = {
+  readonly columnId: BrunoTableRowsColumnId;
+  readonly value: bigint;
+  readonly groupKeys: BrunoTableGroupKeyValues<TColumns>;
+};
+
+type BrunoTableGroupRowsColumnOptions<TColumns> = {
+  readonly headerName?: string;
+  readonly width?: number;
+  readonly valueFormatter?: (params: BrunoTableRowsCellParams<TColumns>) => string;
+  readonly cellClassName?:
+    string | ((params: BrunoTableRowsCellParams<TColumns>) => string | undefined);
+  readonly cellRenderer?: (params: BrunoTableRowsCellParams<TColumns>) => React.ReactNode;
+};
+```
+
+`headerName` defaults to `Rows` and must be non-empty when supplied. `width` is a numeric baseline in the same sizing domain as ordinary columns. The normal compiled `bigint` presentation and implementation-owned default width apply when their overrides are absent. The scoped formatter, class, and renderer receive the exact row count and ordered group keys, but no raw `TRow`, field, aggregate alias, or configurable identity.
+
+```tsx
+<BrunoTableServer
+  tableId="regional-orders"
+  columns={columns}
+  initialOrderBy={initialOrderBy}
+  viewportSource={viewportSource}
+  groupRowsColumn={{
+    headerName: "Orders",
+    width: 112,
+    valueFormatter: ({ value }) => value.toLocaleString(),
+    cellClassName: "font-mono tabular-nums",
+  }}
+/>
+```
+
+The property is static definition input shared by Client and Server Tables. It cannot configure `columnId`, `field`, `valueType`, grouping, aggregation, filtering, hiding, editing, pinning, or sorting capability. Changing the visible label never changes the reserved Column Identity or row-count meaning.
+
+A committed user resize is the sole durable Rows layout preference. It is stored in `columnWidths` under `COL_ID_BRUNO_TABLE_ROWS`; a valid restored width wins over `groupRowsColumn.width`, remains dormant while grouping is inactive, and reappears when grouping resumes. Sanitization retains it while current definitions still expose grouping capability and drops it when they do not. Rows never appears in persisted `columnOrder`, `columnVisibility`, or `columnPinning`.
+
 Grouping owns a derived rendered layout rather than mutating persisted column preferences. Its Logical Column Order is the active group-key columns in Group By order, followed by Rows, followed by participating aggregate columns in their normal relative order. Reordering Group By chips changes the group-key tuple and rendered key-column order together.
 
 This sequence is the complete grouped projection. A non-key consumer column appears only when it explicitly declares `aggFunc`; every column without grouped semantics is temporarily omitted and restored unchanged afterward. `aggFunc` is deliberately optional. BrunoTable does not guess a field's domain meaning, expose arbitrary representative source values, or request unused aggregates merely to keep every raw column mounted.
@@ -780,8 +825,6 @@ The persisted `columnOrder` and `columnPinning` always describe the normal ungro
 Grouped-summary sorting is a second durable context rather than a reinterpretation of raw-row `orderBy`. Its conceptual public types are:
 
 ```ts
-type BrunoTableRowsColumnId = "COL_ID_BRUNO_TABLE_ROWS";
-
 type BrunoTableGroupedSortableColumnId<TColumns> =
   | BrunoTableGroupableColumnId<TColumns>
   | BrunoTableAggregatedColumnId<TColumns>

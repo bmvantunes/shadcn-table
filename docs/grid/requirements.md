@@ -273,6 +273,10 @@ Row count is group metadata rather than a field aggregation. Consumers cannot de
 
 Rows has the reserved persisted System Column Identity `COL_ID_BRUNO_TABLE_ROWS`. Consumer definitions cannot claim that identity. Grouped sorting may target an active group key, Rows, or a visible participating aggregate column even when the corresponding raw Field Column opted out of normal-row sorting. The Viewport Adapter translates active-key identities to group fields and Rows or aggregate-column identities to private aggregate aliases immediately before query replacement; those View Server details never enter persisted state.
 
+Both public table variants accept optional `groupRowsColumn` configuration for this BrunoTable-owned column. It may provide a non-empty `headerName`, a numeric baseline `width`, an exact-`bigint` `valueFormatter`, a static or conditional `cellClassName`, and a `cellRenderer`. The presentation callbacks receive the fixed Rows Column Identity, exact count value, and ordered group-key values without a raw `TRow`. Omitted properties use the `Rows` label, compiled `bigint` presentation, and implementation-owned default width.
+
+`groupRowsColumn` never turns Rows into a consumer definition. It cannot change the reserved identity or configure a field, Value Type, aggregate, grouping, filter, hide, edit, pin, or sort capability. Its conditional presentation executes only for mounted Rows cells and creates no subscription.
+
 Active grouping creates a temporary derived Logical Column Order:
 
 ```text
@@ -421,6 +425,8 @@ Persisted state must be:
 - emitted as a complete replacement snapshot through `onPersistChange`
 
 Persisted filters, both sort contexts, grouping, and layouts refer to `columnId`, never directly to backend fields or aggregate aliases. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
+
+Rows participates only in the persisted column-width map. A committed user resize is keyed by `COL_ID_BRUNO_TABLE_ROWS`, wins over the `groupRowsColumn.width` baseline, remains dormant while grouping is inactive, and is restored when grouping resumes. Sanitization retains that width while current definitions still provide grouping capability and otherwise drops it. The reserved identity never enters persisted column order, visibility, or pinning.
 
 Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
 

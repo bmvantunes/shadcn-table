@@ -38,6 +38,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - client and server viewport row models
 - explicit compiled Column Value Semantics for exact `bigint` and optional Effect BigDecimal support, with no `number` coercion or row sampling
 - Column Identity-keyed Group Key and Aggregate Cells that never fabricate raw rows; Aggregate Cells may share a source field, never expose private aliases, and both cell kinds provide typed grouped-presentation escape hatches
+- one fixed-identity exact-`bigint` Rows System Column while grouped, with optional `groupRowsColumn` label, baseline-width, and presentation configuration plus reserved-identity width persistence
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout

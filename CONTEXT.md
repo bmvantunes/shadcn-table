@@ -36,6 +36,10 @@ _Avoid_: Raw row cell, representative row, fabricated source row
 A grouped-summary cell produced by one Field Column's `aggFunc`. It retains that column's Column Identity and source-field meaning while presenting the aggregate result; multiple Aggregate Cells may use one source field when their Column Identities differ.
 _Avoid_: Renamed result field, public aggregate alias, fabricated source row
 
+**Rows System Column**:
+The BrunoTable-owned grouped-summary column whose exact `bigint` value is the count of filtered source rows represented by one group. Its reserved Column Identity remains stable when callers customize its label or presentation.
+_Avoid_: Consumer Field Column, aggregate alias, configurable identity, ordinary row-count field
+
 **Value Type**:
 The explicit runtime category or custom descriptor that selects one column's value behavior. A raw value-bearing column declares it directly, while a Column Helper supplies it.
 _Avoid_: Sampled data type, TypeScript-only field type, column style
