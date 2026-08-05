@@ -136,6 +136,7 @@ The grid must support:
 48. A committed user resize of Rows persists under its reserved identity and remains dormant while ungrouped. A valid persisted width wins over the `groupRowsColumn` baseline, while Rows never enters base column order, visibility, or pinning preferences.
 49. Grouping and aggregation are Read-only Table capabilities. `BrunoTableServer` always qualifies; `BrunoTableClient` qualifies only when `editable` is false or omitted. An Editable Table installs no grouping feature, UI, command, grouped row model, or aggregate execution.
 50. Shared columns may declare `isEditable`, `groupBy`, and `aggFunc` for reuse across Table Instances, but one instance never activates editing and grouping together. Editable Client props reject `groupRowsColumn`, and restoration drops Group By state, grouped sorting, and Rows width conservatively.
+51. Row Selection represents ordinary Client source Row Identities only. Activating the first Group By key atomically clears selected IDs and the Shift anchor; grouped views expose no row checkbox, header Select All, group-selection command, selected-row count, or hidden dormant selection. Ungrouping restores an empty Row Selection capability.
 
 ## Preferred technology split
 

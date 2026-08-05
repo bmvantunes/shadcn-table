@@ -344,6 +344,7 @@ Success criteria:
 - filtering preserves selected Client Row Identities while the header checkbox computes its state against only the current filtered set
 - Client Select All snapshots matching identities at the gesture; later inserts remain unselected and deletions prune removed identities
 - Client Shift-click Row Selection includes the complete current display-order interval
+- entering Group By clears selected Client Row Identities and the Shift anchor atomically; grouped summaries expose no Row Selection capability and ungrouping returns empty
 - Server mounts no row checkbox, selected-row state, Shift-click row interval, Select All command, or cell range; it copies only its loaded Active Cell
 - Server cell interaction exposes no paste, fill, or editing; V1 exposes no destructive cell Clear/Delete command in either row model
 - no partial silent copy/fill/edit
@@ -498,6 +499,8 @@ Build:
 - one BrunoTable-owned typed grouping and aggregation intent
 - read-only Client and Server capability composition that omits grouping and aggregation entirely from Editable Clients
 - conservative Editable Client restoration that drops `groupBy`, `groupOrderBy`, and reserved Rows width
+- first-key Group By transition that clears ordinary Client Row Selection and its Shift anchor before publishing grouped rows
+- grouped capability suppression for row checkboxes, Select All, selected-row counts, row actions, and selection commands
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
@@ -529,6 +532,8 @@ Success criteria:
 - `editable: true` rejects `groupRowsColumn`, mounts no Group By UI, admits no grouped command, and executes no grouping or aggregate work
 - shared definitions may contain both edit and grouping metadata without activating both capabilities in one Table Instance
 - Editable Client restoration drops grouping, grouped sorting, and Rows width before initialization and never briefly renders a grouped view
+- entering grouping clears any ordinary Client Row Selection in one transaction, retains no dormant IDs, and emits no selection-owned persistence event
+- grouped summaries cannot be row-selected and clearing the final group key restores an empty ungrouped Row Selection capability
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
