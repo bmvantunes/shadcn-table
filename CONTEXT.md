@@ -221,8 +221,8 @@ The temporary submitted-value projection retained after a Save Operation resolve
 _Avoid_: Optimistic draft, save result, server row
 
 **Edit Safety Footer**:
-The persistent editing surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
-_Avoid_: Page toolbar, layout reset controls
+The persistent full-width bottom safety rail that exposes compact pending-edit, conflict, validation, blocked, and Save Operation status together with Reset and Save intentions. Complete sparse collections open in on-demand reviews so the footer never becomes a permanent side ledger or bottom inspector.
+_Avoid_: Page toolbar, layout reset controls, permanent change ledger
 
 **Conflict Review**:
 The read-only comparison workflow where the user reviews Base, Server Now, and Yours for each genuine conflict and chooses a resolution.

@@ -388,6 +388,7 @@ Build:
 - one `PromiseLike<void>` Save handler shared by both modes, with no canonical result payload
 - non-empty row-grouped Save Change Sets containing safely rebased `baseRow`, exact `expectedVersion`, and non-empty `columnId`/`field`/`before`/`after` Cell Change Sets
 - persistent Edit Safety Footer with status-left and Reset/Save-right layout
+- no permanent edit side ledger or docked inspector; complete sparse collections open in on-demand live reviews
 - unsaved count
 - validation count
 - blocked-change count and live Blocked Changes Review
@@ -434,6 +435,7 @@ Success criteria:
 - a resolved Batch awaiting source rows shows one compact footer confirmation status and remaining-row count while Reset and Save stay disabled
 - a value match, a Row Version difference, or authoritative row disappearance reconciles an Accepted Overlay; Row Versions are opaque and never assumed to increase
 - rejected Immediate operations restore owned cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
+- persistent save-failure toast exposes a named, focusable, assistive-technology-visible Close control and no Retry mutation action
 - rejected Batch Save preserves every unconverged draft, conflict, validation record, and history patch, unlocks editing, and keeps affected cells failed until correction, retry, live reconciliation, or Reset
 - no XState actor, Effect schedule, transport Adapter, or toast action automatically retries a save; only the current surface's explicit Save control can start a fresh live-preflight operation
 - a failed Conflict Review save leaves the modal open, while a failed Footer save with no conflicts leaves it closed; the next Save may open it only after current live conflict detection

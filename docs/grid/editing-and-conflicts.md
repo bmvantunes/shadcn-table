@@ -60,6 +60,10 @@ Atomicity is an application contract for the complete Save Change Set. It does n
 
 The table owns one persistent failure notification workflow. Concurrent Immediate rejections aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its unconverged drafts. The toast never auto-dismisses merely with time; the user may close it. It contains no Retry, Save, or other mutation action. A rejected request, timeout, disconnect, HTTP failure, or ordinary application error says that the call was not confirmed; it does not claim that authoritative data remained unchanged. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal privately, while BrunoTable-owned TanStack Store state owns observable per-cell operation references and presentation state. React subscribes only to compact store projections, never directly to actors or a joined actor/store snapshot. Neither the actor nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
+Because the notification persists until explicit dismissal, its Close control must remain named,
+focusable, and exposed to assistive technology. A visually present control marked `aria-hidden` does
+not satisfy this contract. Verify the exact imported Base UI toast behavior in browser tests.
+
 A rejected operation retains the compact immutable submitted cell set already owned by it. Live reconciliation emits operation-specific convergence events when affected canonical values become semantically equal. If every submitted value converges, authoritative live evidence supersedes the ambiguous rejection: clear its failure notification, drafts, locks, and Batch history evidence, then use the ordinary success presentation. If only some values independently converge, prune those cells normally while retaining the operation failure and remaining Batch work. Never infer complete convergence from global `changes.length === 0`: Reset can make that count zero without source confirmation, and unrelated later edits can keep it nonzero after the rejected operation fully converges.
 
 ## Cell edit lifecycle
@@ -256,6 +260,13 @@ Setting `editable: true` on `BrunoTableClient` mounts a persistent bottom footer
 ```text
 3 conflicts · 2 blocked · 2 invalid · 12 unsaved changes             Reset | Save
 ```
+
+The footer is a full-width safety rail attached to the grid rather than a permanent side ledger or
+docked change inspector. This preserves horizontal space for wide and column-virtualized tables and
+vertical space for the virtual row window. Complete sparse collections remain available through
+on-demand live reviews. A future opt-in inspector may augment this surface, but it cannot replace
+the footer's conflict, Reset, or Save intentions. This layout is validated by the
+[editable safety UI prototype](research/editable-safety-ui-prototype.md).
 
 The left side contains status controls and the right side contains exactly two default actions: Reset and Save. Use `Reset edits` as the accessible name when the visible label is shortened to `Reset`.
 

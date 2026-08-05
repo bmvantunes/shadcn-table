@@ -619,7 +619,7 @@ When a row with committed Batch drafts disappears from the Client Source, retain
 
 Resolved operations flash every currently mounted affected cell green for two seconds and never emit a success toast; an affected cell outside the mounted viewport completes quietly. Immediate rejection restores every unconverged operation-owned cell to its latest live server value immediately and retains a red non-color-accessible rejected treatment for five seconds. Batch rejection preserves all unconverged drafts, conflicts, validation evidence, and undo/redo history; it unlocks editing and keeps affected cells marked until correction, retry, live reconciliation, or Reset. Both modes enter one table-scoped persistent failure notification workflow. Aggregate concurrent Immediate failures into one manually dismissed toast with operation-level details; do not stack a persistent toast per cell or per failure. Promise rejection never authorizes BrunoTable to discard a Batch or claim that canonical data remained unchanged.
 
-Never retry a save automatically through XState, Effect, transport policy, or a toast action. The persistent toast is explanatory and dismissible but exposes no Retry or Save mutation. Only explicit activation of the current authoritative Save button begins another attempt, and every activation performs a fresh preflight against live values, current Row Versions, validation, and conflicts before constructing a new Save Change Set. Failure preserves the initiating surface: Conflict Review stays open when it initiated Save, while a Footer attempt that had no conflicts keeps the modal closed. A later Footer Save may open it if live reconciliation now discovers conflicts.
+Never retry a save automatically through XState, Effect, transport policy, or a toast action. The persistent toast is explanatory and dismissible but exposes no Retry or Save mutation. Its Close control must remain named, focusable, and visible to assistive technology. Only explicit activation of the current authoritative Save button begins another attempt, and every activation performs a fresh preflight against live values, current Row Versions, validation, and conflicts before constructing a new Save Change Set. Failure preserves the initiating surface: Conflict Review stays open when it initiated Save, while a Footer attempt that had no conflicts keeps the modal closed. A later Footer Save may open it if live reconciliation now discovers conflicts.
 
 A rejected request, timeout, disconnect, HTTP failure, or ordinary application error must not make the toast claim that canonical data remained unchanged. Preserve unconverged Batch work and let live View Server publications reconcile the real outcome. Values that arrive equal to drafts converge and disappear from pending changes and history; different values become conflicts; absent confirmation leaves the drafts available for a later explicit Save. This live reconciliation is the authority, so BrunoTable needs no durable user-facing `unconfirmed` state.
 
@@ -632,6 +632,10 @@ Editable Client Tables also require `getRowVersion`, a pure function from the co
 ## Edit safety footer
 
 An Editable Client Table mounts a persistent bottom Edit Safety Footer. `BrunoTableServer` never renders the Batch switch, footer, conflict workflow, or any edit-owned notification.
+
+The footer spans the grid width and preserves both the centre-column and virtual-row viewport. Do
+not install a permanent edit side ledger or docked bottom inspector. Complete sparse collections
+open through on-demand live Conflict, Blocked, Reset, or operation-detail reviews.
 
 The left side shows conditional status controls:
 
