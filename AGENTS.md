@@ -130,6 +130,8 @@ The grid must support:
 42. effect-view-server is a first-party collaborating module. When BrunoTable needs missing source-owned semantics, change the upstream contract and require the compatible release; do not add consumer props, duplicate schema logic, reconstruct canonical values or keys, or ship weaker local fallbacks.
 43. Aggregate Cells remain keyed by their originating Column Identity and retain their source `field`; private View Server aliases never cross the Adapter seam. Distinct columns may aggregate the same field when their `columnId` values differ.
 44. Raw-row-aware `valueFormatter` and `cellRenderer` callbacks never receive fabricated grouped rows. Aggregate Cells use compiled aggregate-result Value Type presentation by default and optional typed `aggregateValueFormatter` and `aggregateCellRenderer` callbacks whose context contains no raw `TRow`.
+45. Group Key Cells use compiled field Value Type presentation by default and optional typed `groupKeyValueFormatter` and `groupKeyCellRenderer` callbacks. Their context contains the exact field value, Column Identity, ordered group-key values, and row count, but no raw `TRow`.
+46. Group Key presentation overrides require `groupBy: true`; Aggregate presentation overrides require a valid `aggFunc`. Helpers and presets preserve their exact callback types without widening to `unknown`.
 
 ## Preferred technology split
 

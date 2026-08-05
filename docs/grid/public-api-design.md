@@ -671,6 +671,7 @@ const columns = [
     field: "region",
     valueType: "text",
     groupBy: true,
+    groupKeyValueFormatter: ({ value }) => value.toUpperCase(),
   },
   {
     columnId: "COL_ID_MIN_PRICE",
@@ -698,9 +699,26 @@ A column may provide both capabilities. While that column is an active group key
 
 The exact `aggFunc` union exposed for a concrete column must be capability-derived rather than universally assignable. For example, `sum` and `avg` require compatible numeric aggregation semantics. TypeScript and runtime normalization must reject unsupported column/function combinations before either row pipeline receives them.
 
-Aggregate presentation is also capability-derived. Its conceptual shape is:
+Grouped presentation is also capability-derived. Its conceptual shape is:
 
 ```ts
+type BrunoTableGroupKeyValueFormatterParams<
+  TColumns,
+  TColumnId extends BrunoTableGroupableColumnId<TColumns>,
+> = {
+  readonly columnId: TColumnId;
+  readonly value: BrunoTableColumnValue<TColumns, TColumnId>;
+  readonly groupKeys: BrunoTableGroupKeyValues<TColumns>;
+  readonly rowCount: bigint;
+};
+
+type BrunoTableGroupKeyPresentation<TColumns, TColumnId> = {
+  readonly groupKeyValueFormatter?: (
+    params: BrunoTableGroupKeyValueFormatterParams<TColumns, TColumnId>,
+  ) => string;
+  readonly groupKeyCellRenderer?: BrunoTableGroupKeyCellRenderer<TColumns, TColumnId>;
+};
+
 type BrunoTableAggregateValueFormatterParams<
   TColumns,
   TColumnId extends BrunoTableAggregatedColumnId<TColumns>,
@@ -720,7 +738,11 @@ type BrunoTableAggregatePresentation<TColumns, TColumnId> = {
 };
 ```
 
-The exact aggregate result type follows the compiled Value Type and selected `aggFunc`; it is not assumed to equal the raw field type. Neither callback receives `row: TRow`, because a grouped summary is not a source row. Without an override, BrunoTable formats the aggregate through its compiled aggregate-result Value Type presentation. Ordinary raw-row `valueFormatter` and `cellRenderer` callbacks are never invoked with fabricated grouped data.
+A Group Key Cell's `value` retains the exact field value type, but its presentation context intentionally omits `row: TRow` because the cell identifies a complete group rather than one representative source row. Without an override, BrunoTable formats it through the field's compiled Value Type presentation.
+
+The exact aggregate result type follows the compiled Value Type and selected `aggFunc`; it is not assumed to equal the raw field type. Aggregate callbacks also omit `row: TRow`. Without an override, BrunoTable formats the aggregate through its compiled aggregate-result Value Type presentation. Ordinary raw-row `valueFormatter` and `cellRenderer` callbacks are never invoked with fabricated grouped data.
+
+If one definition declares both grouping eligibility and aggregation, its active role selects the callback family. An active key uses `groupKeyValueFormatter` or `groupKeyCellRenderer` and suppresses its aggregate; under another active grouping it uses `aggregateValueFormatter` or `aggregateCellRenderer` for its aggregate result.
 
 The Viewport Adapter may compile `COL_ID_MIN_PRICE` and `COL_ID_MAX_PRICE` to distinct private aliases required by effect-view-server, but it maps each response value directly back to its Column Identity. The public column definitions, renderer, callbacks, sort state, and persistence never observe names such as `minimumPrice`, `maximumPrice`, or a generated aggregate alias.
 

@@ -28,6 +28,10 @@ _Avoid_: Accessor column, field ID
 A column whose value is produced by `valueGetter` from an explicit non-empty `fields` dependency tuple rather than one direct row field. The tuple limits what the getter can read and supplies Server Table projection dependencies. A Computed Column is never filterable, sortable, or editable in V1.
 _Avoid_: Field column, implicit dependency discovery, queryable column, editable derived value
 
+**Group Key Cell**:
+A grouped-summary cell that presents one active Group By field's exact value through its originating Column Identity. It represents a group key rather than any source row.
+_Avoid_: Raw row cell, representative row, fabricated source row
+
 **Aggregate Cell**:
 A grouped-summary cell produced by one Field Column's `aggFunc`. It retains that column's Column Identity and source-field meaning while presenting the aggregate result; multiple Aggregate Cells may use one source field when their Column Identities differ.
 _Avoid_: Renamed result field, public aggregate alias, fabricated source row

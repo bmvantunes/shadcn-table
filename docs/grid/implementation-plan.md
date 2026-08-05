@@ -51,6 +51,7 @@ Build:
 - reusable `withDefaults` Column Presets with built-in, preset, then individual-option precedence
 - optional Effect entry-point `BrunoTableBigDecimalColumn`
 - typed `valueFormatter`, conditional cell-class, and cell-renderer presentation overrides on raw, helper, and preset columns
+- typed `groupKeyValueFormatter` and `groupKeyCellRenderer` overrides with exact field values and no fabricated raw-row context
 - capability-derived typed `aggregateValueFormatter` and `aggregateCellRenderer` overrides with no fabricated raw-row context
 - compiled Column Value Semantics with capability-derived filter operands
 - built-in explicit `bigint` semantics without `number` coercion
@@ -82,6 +83,7 @@ Success criteria:
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
 - two aggregate columns may reference one field only when they have distinct Column Identities, while one column cannot declare multiple aggregate functions
+- group-key callbacks infer the exact field value and cannot access `row: TRow`
 - aggregate callbacks infer the selected function's exact result domain and cannot access `row: TRow`
 - `aggFunc: "count"` fails while field-level `countDistinct` remains capability-checked
 - `bigint` filters accept only `bigint` operands and mixed numeric domains receive no automatic ordering capability
@@ -502,6 +504,7 @@ Build:
 - separate durable normal and grouped sort contexts, with grouped eligibility derived from the current grouped projection
 - grouped View Server result typing without casting aggregate rows to the raw source row type
 - Column Identity-keyed aggregate result normalization, allowing distinct columns over one source field without exposing private View Server aliases
+- default field Value Type presentation plus typed per-column Group Key Cell formatter and renderer overrides
 - default aggregate-result Value Type presentation plus typed per-column aggregate formatter and renderer overrides
 - flat Client result normalization with no hierarchical group rows or expansion state
 - shared formatting, sorting controls, keyboard behavior, and accessibility for grouped results
@@ -531,7 +534,9 @@ Success criteria:
 - Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
 - aggregate aliases and group fields sort through validated View Server query members
 - two aggregate columns over one source field render, format, and sort independently through their distinct Column Identities
+- Group Key Cell callbacks receive exact field values, ordered group keys, and row count without a fabricated `TRow`
 - aggregate callbacks receive typed values, ordered group keys, and row count without a fabricated `TRow`, and private aliases never enter their context
+- a column declaring both capabilities selects only its group-key presentation while active as a key and only its aggregate presentation while participating as an aggregate
 - grouped sorting accepts only active keys, Rows, and visible participating aggregates; sanitization preserves surviving priorities and falls back to every active key ascending rather than producing an unsorted state
 - clearing grouping restores normal `orderBy` unchanged, and private View Server aggregate aliases never enter public or persisted state
 - Client raw rows use `getRowId` and grouped rows derive stable identity from the complete exact group-key tuple; all Server rows use the source-owned viewport key
