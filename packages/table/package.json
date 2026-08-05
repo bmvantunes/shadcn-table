@@ -25,6 +25,7 @@
     "check": "vp check",
     "check:build": "node scripts/assert-build-output.mjs",
     "dev": "vp pack --watch",
+    "prototype:column-api": "vp check src/__prototype__/column-api && node src/__prototype__/column-api/cli.ts",
     "test": "vp test",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json",
     "prepublishOnly": "vp run check && vp run test && vp run build && vp run check:build && vp run test:types:emitted"
