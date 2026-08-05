@@ -156,6 +156,10 @@ _Avoid_: Group selection, Cell Range Selection, Active Cell
 One contiguous one-axis cell intent used for multi-cell clipboard and, in an Editable Table, editing operations. It owns the exact ordered Row and Column Identity span selected by the user, may contain ordinary or grouped Client cells, and is either horizontal (`1×N`) or vertical (`N×1`). Value-only change does not retarget it, and a Server Table never creates it from its Active Cell.
 _Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection
 
+**Clipboard Snapshot**:
+The immutable identities and canonical cell values captured by one accepted Copy command. One snapshot produces one internally consistent clipboard payload even while live table values continue changing.
+_Avoid_: Live clipboard view, streaming copy
+
 **Drag Fill**:
 A Client gesture that extends an Active Cell or Linear Cell Range along one axis by repeating its exact source sequence. It never infers increments, trends, dates, or arithmetic series.
 _Avoid_: Autofill, series fill, increment fill

@@ -456,6 +456,7 @@ Success criteria:
 Build:
 
 - Client TSV copy/paste
+- one immutable Clipboard Snapshot per accepted Copy command, captured from a coherent structural and value projection before serialization
 - immediate rejection with one explanatory toast when clipboard row and column counts both exceed one
 - exact orientation-and-length matching for direct `1×N` or `N×1` paste, with 1×1 as the only no-confirmation broadcast source
 - an XState-owned Base UI AlertDialog for every supported linear mismatch, including one Active Cell or an opposite-axis selection, proposing exactly one source-oriented range from the Active Cell or the selected range's logical start
@@ -473,6 +474,7 @@ Build:
 Success criteria:
 
 - no accidental partial operations
+- live publications during Copy serialization or the browser write never mix value versions in one payload; the finalized TSV comes exclusively from the command's retained Clipboard Snapshot
 - no paste tiling, repetition, transposition, clipping, two-dimensional target, or equal-cell-count coercion, including after confirmation
 - a two-dimensional clipboard source is rejected before target parsing; 1×1 broadcasts along the selected Linear Cell Range; a supported linear mismatch opens confirmation and can apply only to one explicitly described source-oriented range
 - confirmation displays copied, selected, and proposed orientations and lengths plus proposed start/end coordinates; Cancel/Escape applies nothing and restores grid focus
