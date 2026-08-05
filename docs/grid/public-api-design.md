@@ -270,7 +270,7 @@ Rules:
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
 - `clientSource` is one coherent rows-and-lifecycle value; do not spread its fields into individual table props.
 - Client and Viewport Sources expose the same lifecycle chrome. The shared view owns loading, stale, closed, and error presentation; the row-pipeline Adapters own only their different payloads and lifecycles.
-- `retry` is an optional source-owned manual recovery capability. Its `run` callback begins one source recovery attempt, while its `pending` flag is the sole authority for disabling and decorating the control. BrunoTable calls `run` once per explicit activation but never awaits it, interprets its result, changes source status optimistically, schedules another attempt, or reuses this capability for edit persistence. A plain effect-view-server hook result remains directly assignable because the capability is optional; an application that can reconnect may add it at its source-Adapter boundary without making Effect part of BrunoTable's public contract.
+- `retry` is an optional source-owned manual recovery capability. Its `run` callback begins one source recovery attempt, while its `pending` flag is the sole authority for disabling and decorating the control. BrunoTable calls `run` once per explicit activation but never awaits it, interprets its result, changes source status optimistically, schedules another attempt, or reuses this capability for Save Operations. A plain effect-view-server hook result remains directly assignable because the capability is optional; an application that can reconnect may add it at its source-Adapter boundary without making Effect part of BrunoTable's public contract.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
 - Preserve unchanged row references between source versions and replace only changed rows.
 - `loading` without authoritative rows renders fixed-height `Skeleton` rows from `@bruno/shadcn/skeleton` so virtual geometry remains stable. It does not render a fake Retry action.
@@ -348,18 +348,39 @@ The View Server Adapter snapshots `routeBy` with exact source semantics and carr
 Only `BrunoTableClient` accepts the discriminated editing capability, shaped conceptually as:
 
 ```ts
+type BrunoTableSaveCellChange<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly [TColumnId in BrunoTableEditableColumnId<TColumns>]: {
+    readonly columnId: TColumnId;
+    readonly field: BrunoTableColumnField<TColumns, TColumnId>;
+    readonly before: BrunoTableColumnValue<TRow, TColumns, TColumnId>;
+    readonly after: BrunoTableColumnValue<TRow, TColumns, TColumnId>;
+  };
+}[BrunoTableEditableColumnId<TColumns>];
+
+type BrunoTableSaveCellChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
+  BrunoTableSaveCellChange<TRow, TColumns>,
+  ...BrunoTableSaveCellChange<TRow, TColumns>[],
+];
+
+type BrunoTableSaveRowChange<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = {
+  readonly rowId: BrunoTableRowId;
+  readonly baseRow: TRow;
+  readonly expectedVersion: TRowVersion;
+  readonly changes: BrunoTableSaveCellChangeSet<TRow, TColumns>;
+};
+
 type BrunoTableSaveChangeSet<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TRowVersion,
 > = readonly [
-  BrunoTableSaveChange<TRow, TColumns, TRowVersion>,
-  ...BrunoTableSaveChange<TRow, TColumns, TRowVersion>[],
+  BrunoTableSaveRowChange<TRow, TColumns, TRowVersion>,
+  ...BrunoTableSaveRowChange<TRow, TColumns, TRowVersion>[],
 ];
 
 type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = (
   changes: BrunoTableSaveChangeSet<TRow, TColumns, TRowVersion>,
-) => PromiseLike<BrunoTableSaveResult<TRow, TColumns, TRowVersion>>;
+) => PromiseLike<void>;
 
 type BrunoTableReadOnlyCapability<TColumns> = BrunoTableGroupingCapability<TColumns> & {
   editable?: false;
@@ -381,11 +402,17 @@ type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>,
   | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 ```
 
-`editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. It also rejects `groupRowsColumn` on the editable branch. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` and result-version type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
+`editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. It also rejects `groupRowsColumn` on the editable branch. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
 
 Grouping and editing are mutually exclusive Table Instance capabilities. `BrunoTableServer` always installs the read-only branch. `BrunoTableClient` installs grouping and aggregation only when `editable` is false or omitted; when true, its composition root does not register grouping or aggregation features, expose a Group By Region, accept grouped commands, or execute aggregate work. Shared definitions may still declare `isEditable`, `groupBy`, and `aggFunc` because the same tuple may serve different Table Instances. A restored editable instance conservatively drops `groupBy`, `groupOrderBy`, and the reserved Rows width rather than retaining unreachable grouping intent.
 
-Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result discriminants remain to be finalized, but they must retain exact row, Column Identity, editable-value, and `getRowVersion` return-type correlation without `any` or `unknown` in inference paths.
+Use `onSaveEdits`, not `onEditSaveClick`: the operation saves one atomic Change Set regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. It returns `PromiseLike<void>` rather than canonical rows or a result discriminant. Resolution says the application accepted the Save Operation; rejection enters the failure workflow. Only the live Client Source supplies canonical values and Row Versions.
+
+The outer Save Change Set groups changes by Row Identity because optimistic concurrency is row-scoped. Each row entry contains one safely rebased `baseRow`, its exact `expectedVersion`, and a non-empty typed Cell Change Set. Each cell entry contains both the grid-owned Column Identity used by BrunoTable and the exact source `field` used by the application write boundary, together with exact correlated `before` and `after` values. Editable Computed Columns remain impossible, so BrunoTable never asks consumers to reverse-map Column Identity to a field. The payload contains no projected `afterRow`, Edit Mode, gesture, initiating surface, or other UI metadata.
+
+`baseRow` is the latest immutable canonical source-row snapshot that passed Save preflight, not a deep clone and not the row as first edited. Preflight may safely rebase all changes for one row to its latest Row Version only when every edited field remains semantically equal to its recorded base. It then refreshes `baseRow`, `expectedVersion`, and each semantically equal `before` value together. Any edited-field divergence enters Conflict Review instead. This produces one coherent row patch even when its cells were edited across several source versions, while the application's atomic compare-and-set still closes the race after preflight.
+
+Promise rejection has no exported error protocol. A non-empty ordinary `Error.message` becomes the persistent user explanation; an unknown or unsafe rejection receives a bounded generic `The save could not be confirmed` message. Effect-based applications translate typed failures at their Adapter boundary and run the Effect there; Effect is not part of the handler type.
 
 The handler always receives the same non-empty array:
 
@@ -395,7 +422,7 @@ The handler always receives the same non-empty array:
 
 `editable: true` automatically renders BrunoTable's top-right Edit Mode toggle and persistent Edit Safety Footer in `BrunoTableClient`. Static column capability controls toggle visibility; never scan rows or execute row predicates globally. The footer owns Reset and Save, conflict/validation presentation, progress, and entry into conflict resolution; pages do not receive drafts or reproduce the workflow with toolbar children. `BrunoTableServer` renders none of this chrome even when shared columns declare potential editability.
 
-Edit Mode belongs to the end user, not the consumer interface. Do not expose default or controlled Edit Mode props. Each table session starts in Immediate mode; the top-right switch changes internal session state only. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-persist transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
+Edit Mode belongs to the end user, not the consumer interface. Do not expose default or controlled Edit Mode props. Each table session starts in Immediate mode; the top-right switch changes internal session state only. Switching is blocked while edit-owned work or saving is active. Reset is internal grid intent and requires no consumer callback. Only a ready-to-save transition invokes `onSaveEdits`; unresolved conflicts and blocking validation enter their BrunoTable-owned review UI first.
 
 ## Mandatory column identity
 
@@ -680,6 +707,7 @@ The exact column tuple should derive:
 ```ts
 type BrunoTableColumnIdOf<TColumns> = ...;
 type BrunoTableColumnValue<TColumns, TColumnId> = ...;
+type BrunoTableColumnField<TColumns, TColumnId> = ...;
 type BrunoTableEditableColumnId<TColumns> = ...;
 type BrunoTableFilterableColumnId<TColumns> = ...;
 type BrunoTableSortableColumnId<TColumns> = ...;
@@ -1124,20 +1152,20 @@ Consumers should not need to register TanStack features or manipulate its table 
 
 ## Typed edits and conflicts
 
-Edit and conflict models remain discriminated by exact `columnId`:
+Edit and conflict models remain discriminated by exact `columnId`. Save cells additionally retain the correlated source field:
 
 ```ts
-type BrunoTableCellChange<TColumns> = {
-  [TColumnId in BrunoTableColumnIdOf<TColumns>]: {
-    rowId: BrunoTableRowId;
+type BrunoTableSaveCellChange<TColumns> = {
+  [TColumnId in BrunoTableEditableColumnId<TColumns>]: {
     columnId: TColumnId;
+    field: BrunoTableColumnField<TColumns, TColumnId>;
     before: BrunoTableColumnValue<TColumns, TColumnId>;
     after: BrunoTableColumnValue<TColumns, TColumnId>;
   };
-}[BrunoTableColumnIdOf<TColumns>];
+}[BrunoTableEditableColumnId<TColumns>];
 ```
 
-The same correlation applies to `baseValue`, `serverValue`, and `userValue` in conflicts. Avoid public `columnId: string` plus `unknown` value shapes.
+The same value correlation applies to `baseValue`, `serverValue`, and `userValue` in conflicts. Avoid public `columnId: string`, `field: string`, plus `unknown` value shapes.
 
 ## Runtime decoding
 
@@ -1162,11 +1190,14 @@ Cover at minimum:
 - `isEditable` callback inference
 - edit and conflict value correlation
 - `editable: true` requires `getRowVersion`, `onSaveEdits`, and at least one potentially editable column
-- `getRowVersion` return inference flows into every expected and returned Row Version without consumer casts or repeated JSX generics
+- `getRowVersion` return inference flows into every expected Row Version and Accepted Overlay without consumer casts or repeated JSX generics
 - read-only capability rejects `onSaveEdits`
 - read-only Client and Server Tables reject `getRowVersion`
 - consumer props cannot set or control Edit Mode; the user-owned session starts Immediate
 - `onSaveEdits` receives a non-empty, value-correlated Save Change Set in both Edit Modes
+- Save Cell Changes preserve exact `columnId` to `field` to `before`/`after` correlation and reject mismatched fields or values
+- Save Row Changes require exact `baseRow` and inferred `expectedVersion`, while omitting either and adding `afterRow` or UI-origin metadata fail representative exact-shape tests
+- `onSaveEdits` accepts `PromiseLike<void>` and no `BrunoTableSaveResult` export or result payload exists
 - one multi-cell Immediate transaction remains one handler call rather than one call per cell
 - Viewport Source topic/row compatibility
 - `BrunoTableClient` accepts only a complete `clientSource`
@@ -1207,6 +1238,5 @@ Also reject:
 The following remain deliberately unresolved:
 
 - the no-helper correlated type shape for computed-column formatters
-- the exact `BrunoTableSaveChange` and `BrunoTableSaveResult` shapes after optimistic-concurrency fields are declared; the non-empty change-set handler, strict `editable` capability, two Edit Modes, owned mode toggle, and footer behaviour are accepted
 
 These decisions must extend the accepted small interface rather than restoring an intermediate grid-definition object.

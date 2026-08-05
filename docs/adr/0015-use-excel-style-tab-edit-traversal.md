@@ -6,7 +6,7 @@ status: superseded by ADR-0020
 
 In an Editable `BrunoTableClient` body, Tab advances the Active Cell to the next currently editable cell and Shift+Tab moves to the previous one. The traversal follows one Logical Column Order across pinned-start, virtualized-centre, and pinned-end columns, skips cells whose current column/row policy is not editable, and wraps from the last eligible cell in one logical row to the first eligible cell in the next row. Reverse traversal wraps symmetrically into the previous row.
 
-When a Cell Edit Session is active, Tab or Shift+Tab first attempts a local Cell Edit Commit and moves only after parsing and synchronous validation accept it. Movement does not wait for Immediate persistence to settle. Invalid input retains the editor and Active Cell. In Navigation Mode, the same keys traverse without fabricating a commit.
+When a Cell Edit Session is active, Tab or Shift+Tab first attempts a local Cell Edit Commit and moves only after parsing and synchronous validation accept it. Movement does not wait for an Immediate Save Operation to settle. Invalid input retains the editor and Active Cell. In Navigation Mode, the same keys traverse without fabricating a commit.
 
 The destination may be horizontally or vertically virtualized. BrunoTable resolves its stable Row and Column Identities, updates logical focus, and performs the same minimum scroll-to-reveal used by arrow navigation. Pinned boundaries never cause a multi-column jump.
 

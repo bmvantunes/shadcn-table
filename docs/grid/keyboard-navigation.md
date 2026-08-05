@@ -197,7 +197,7 @@ Keyboard behaviour changes by mode.
 - Escape cancels
 - Enter performs a Cell Edit Commit and, when locally accepted, moves one logical body row down in the same column
 - Shift+Enter performs a Cell Edit Commit and, when locally accepted, moves one logical body row up in the same column
-- Enter movement does not wait for Immediate persistence, reveals virtualized destinations, and does not wrap at row boundaries
+- Enter movement does not wait for an Immediate Save Operation, reveals virtualized destinations, and does not wrap at row boundaries
 - Tab performs a Cell Edit Commit and moves to the next editable cell
 - Shift+Tab performs a Cell Edit Commit and moves to the previous editable cell
 - inside a Linear Cell Range, accepted Enter and Tab commits advance along its axis while shifted forms reverse it
@@ -270,7 +270,7 @@ Support:
 17. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
 18. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
 19. Without active range traversal, Enter commits and moves one logical row down while Shift+Enter commits and moves one logical row up.
-20. Rejected local commit stays in the editor, while accepted Enter movement does not wait for Immediate persistence and never wraps at a row boundary.
+20. Rejected local commit stays in the editor, while accepted Enter movement does not wait for an Immediate Save Operation and never wraps at a row boundary.
 21. A multi-cell Linear Cell Range with at least two editable cells remains selected while both Tab and Enter cycle its Active Cell forward along the one axis; shifted forms reverse that order.
 22. Range-navigation Enter does not start an editor; F2 and printable text retain their edit-entry roles.
 23. Escape collapses range traversal to the Active Cell; editor Escape cancels first and range Escape requires the following press.
@@ -312,7 +312,7 @@ Must include:
 - Enter commits and moves one logical row down in the same column, including to an off-screen virtualized row
 - Shift+Enter commits and moves one logical row up in the same column
 - Enter and Shift+Enter remain in the editor on invalid input and do not wrap at the first or last row
-- accepted Immediate Enter movement occurs before persistence settles; a later rejection does not steal focus back from its new Active Cell
+- accepted Immediate Enter movement occurs before the Save Operation settles; a later rejection does not steal focus back from its new Active Cell
 - live sort-key updates do not reset scroll; they reconcile the Active Cell by Row Identity when possible and never silently retarget the old absolute index
 - an active Client editor row that moves under live sorting remains at the same visual Y-coordinate through frame-coalesced fixed-height scroll anchoring while surrounding rows reorder normally
 - an active Client editor row filtered out by a live update remains as one anchored, accessible edit-owned exception until commit or Escape; its raw candidate is never discarded or auto-committed
@@ -334,7 +334,7 @@ Must include:
 - no selection state, visuals, copy, paste, fill, or traversal path accepts a two-axis shape, disconnected ranges, or range holes
 - selected-range traversal wraps last-to-first and first-to-last, including across pinned and virtualized coordinates
 - Enter in selected-range Navigation Mode advances without editing; F2 edits the current value and printable text replaces it
-- accepted Enter or Tab from an editor advances along the selected axis without waiting for Immediate persistence; invalid input stays in place
+- accepted Enter or Tab from an editor advances along the selected axis without waiting for an Immediate Save Operation; invalid input stays in place
 - a selected Linear Cell Range with zero or one currently editable cell falls back to ordinary body traversal rather than trapping Tab
 - the first Escape from an active editor cancels editing without collapsing its range; the next Escape collapses the range to the Active Cell
 - outside-cell and outside-grid pointer commits before focus transfer

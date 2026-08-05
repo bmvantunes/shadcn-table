@@ -21,6 +21,6 @@ paste requested
             -> invalid: remain open with one accessible inline reason
 ```
 
-XState owns the discrete dialog lifecycle, cancellation, confirmation, and legal transition into the existing atomic paste command. The external clipboard command retains only the bounded raw text vector, orientation, length, and immutable start metadata required for that user gesture. Opening the dialog creates no draft, Batch history, save actor, or persistence call.
+XState owns the discrete dialog lifecycle, cancellation, confirmation, and legal transition into the existing atomic paste command. The external clipboard command retains only the bounded raw text vector, orientation, length, and immutable start metadata required for that user gesture. Opening the dialog creates no draft, Batch history, save actor, or Save Operation.
 
 Confirmation never trusts the opening preflight. It resolves the complete destination again against current rows, visible Logical Column Order, editability, locks, and validation before application. If that revalidation fails, the AlertDialog stays open and uses the shared `Alert` presentation for the specific inline reason; it does not also emit a redundant toast. The user cancels, corrects the grid state, and explicitly pastes again. A successful or cancelled workflow releases the retained clipboard vector.

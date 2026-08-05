@@ -16,12 +16,12 @@ The recommendation is provisional only where post-save undo semantics remain a p
 
 Use the tools for different jobs rather than choosing one global state system:
 
-| Owner                                       | Responsibility                                                                                                                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TanStack Table and its TanStack Store atoms | Table-owned state: cell selection, sorting, filtering, column order, visibility, sizing, and pinning. Keep these implementation details private behind BrunoTable.        |
-| XState Store                                | BrunoTable-owned, pure, sparse edit data: drafts, validation results, conflicts, and atomic edit commands with bounded undo/redo history.                                 |
-| XState core                                 | Discrete workflows: editor lifecycle, Immediate or Batch save legality, asynchronous save, retry, conflict resolution, dialog state, and persistent failure notification. |
-| Imperative geometry engine                  | Scroll, measurement, hit testing, live resize geometry, and pointer/drag previews. These do not belong in either store's React render path.                               |
+| Owner                                       | Responsibility                                                                                                                                                                                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TanStack Table and its TanStack Store atoms | Table-owned state: cell selection, sorting, filtering, column order, visibility, sizing, and pinning. Keep these implementation details private behind BrunoTable.                                                     |
+| XState Store                                | BrunoTable-owned, pure, sparse edit data: drafts, validation results, conflicts, and atomic edit commands with bounded undo/redo history.                                                                              |
+| XState core                                 | Discrete workflows: editor lifecycle, Immediate or Batch save legality, asynchronous Promise settlement, live reconciliation, explicit resave, conflict resolution, dialog state, and persistent failure notification. |
+| Imperative geometry engine                  | Scroll, measurement, hit testing, live resize geometry, and pointer/drag previews. These do not belong in either store's React render path.                                                                            |
 
 Do not add a second BrunoTable-owned TanStack Store merely to imitate TanStack's spreadsheet history example. TanStack Table already owns its table-state atoms. XState Store is a better semantic fit for BrunoTable edit commands because it is event based and has a first-party undo/redo extension. Full XState remains necessary because XState Store's own documentation directs complex state and orchestration to XState core ([XState Store overview](https://stately.ai/docs/xstate-store)).
 
@@ -58,7 +58,7 @@ XState Store transitions are still synchronous. Effects may perform asynchronous
 
 ### XState core
 
-Full XState models states, actors, and lifecycle. An invoked Promise actor has explicit success and error transitions, is stopped with the state that invoked it, and discards a result that arrives after that state is exited ([XState invoke documentation](https://stately.ai/docs/invoke)). Those are the required semantics for `saving`, `saveFailed`, `conflicted`, retry, dialog visibility, and similar workflows. A flat reactive store alone does not make illegal workflow combinations impossible.
+Full XState models states, actors, and lifecycle. An invoked Promise actor has explicit resolution and rejection transitions, is stopped with the state that invoked it, and discards a settlement that arrives after that state is exited ([XState invoke documentation](https://stately.ai/docs/invoke)). Those are the required semantics for `saving`, Accepted Overlays awaiting live reconciliation, `saveFailed`, `conflicted`, explicit resave, dialog visibility, and similar workflows. A flat reactive store alone does not make illegal workflow combinations impossible.
 
 ## React Compiler and performance implications
 
@@ -88,15 +88,8 @@ The initial design should therefore preserve TanStack's explicit command patches
 
 Regardless of storage strategy, undo equality and patch coalescing must use the normalized column's Value Semantics. Formatted display text must never decide whether a draft or undo command is a no-op.
 
-## Provisional post-save undo semantics
+## Accepted save-boundary undo semantics
 
-Batch mode is straightforward before Save: undo and redo change the local accumulated net draft, and Save submits the remaining non-empty Save Change Set.
+Batch mode owns undo and redo only inside the current unsaved batch. Save submits the remaining non-empty row-grouped Save Change Set. Promise resolution clears both history stacks immediately and converts submitted values to Accepted Overlays until the live Client Source reconciles them; a rejected Promise preserves every unconverged draft and history patch.
 
-Immediate mode has an unresolved boundary. Once an edit has saved successfully, a purely local undo would lie: the server has already accepted the new value. There are only two coherent policies:
-
-1. **Save boundary:** successful save commits the command and prevents undo from crossing that boundary.
-2. **Compensating command:** undo creates a new Save Change Set that restores the prior semantic value using the latest accepted Row Version. It uses the ordinary optimistic-concurrency save path and can fail or produce a conflict. Redo is another new save, not a resurrection of the old response.
-
-The provisional recommendation is the compensating-command policy because the product requirement calls for real undo/redo rather than a local visual illusion. It must remain a named decision ticket before implementation, especially for in-flight Immediate saves, server canonicalization, validation, and conflict resolution. Until that decision is accepted, do not expose a guarantee that history crosses a successful save boundary.
-
-This caveat is also why edit history and save orchestration need separate owners. The XState Store can apply or reverse a pure command; the XState machine decides whether that reversal is locally legal, must invoke `onSaveEdits`, is waiting for a response, failed, or entered conflict resolution.
+Immediate mode exposes no undo or redo. Once its Save Operation resolves, reversing that application-accepted mutation would require another explicit Save Operation rather than local history. This boundary keeps edit history and save orchestration under separate owners: XState Store applies or reverses pure Batch commands, while XState core owns Promise settlement, locks, Accepted Overlays, live reconciliation, failure notification, and explicit later Save attempts.

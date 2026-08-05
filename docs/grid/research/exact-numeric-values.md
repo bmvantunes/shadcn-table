@@ -16,7 +16,7 @@ This document defines the recommended exact-numeric direction. It does not make 
 
 BrunoTable should support native `bigint` as a built-in exact numeric value kind. Effect `BigDecimal` should be supported through an optional Effect integration that supplies the same value-semantics contract without being imported by the core package.
 
-An exact numeric value must stay exact from row ingestion to rendering, editing, filtering, sorting, clipboard, persistence, save results, and conflict reconciliation. It must never pass through JavaScript `number`. Effect explicitly calls its conversion `toNumberUnsafe` because it can lose integer or fractional precision or become `Infinity` ([Effect `BigDecimal.ts`](../../../.repos/effect/packages/effect/src/BigDecimal.ts#L1451-L1478)).
+An exact numeric value must stay exact from row ingestion to rendering, editing, filtering, sorting, clipboard, preference persistence, Save Change Sets, live-source reconciliation, and conflicts. It must never pass through JavaScript `number`. Effect explicitly calls its conversion `toNumberUnsafe` because it can lose integer or fractional precision or become `Infinity` ([Effect `BigDecimal.ts`](../../../.repos/effect/packages/effect/src/BigDecimal.ts#L1451-L1478)).
 
 The central implementation rule is:
 
@@ -32,19 +32,19 @@ Effect `BigDecimal` is an object containing a `bigint` coefficient and numeric s
 
 One value kind affects all of these capabilities:
 
-| Capability         | Exact-numeric requirement                                                  |
-| ------------------ | -------------------------------------------------------------------------- |
-| Cell rendering     | Produce text without React attempting to render a `BigDecimal` object.     |
-| Editor             | Keep transient input as text and produce the exact value only on commit.   |
-| Draft dirtiness    | Compare the base and draft semantically.                                   |
-| Conflict detection | Compare base, server, and user values with the same equivalence.           |
-| Client filtering   | Use exact operands and exact comparisons.                                  |
-| Client sorting     | Use a safe total comparator, not object or `number` comparison.            |
-| Server filtering   | Send the native typed operand to effect-view-server.                       |
-| Clipboard          | Copy lossless canonical text and parse it back for the destination column. |
-| Preferences        | Encode filter operands into tagged, versioned, JSON-safe data.             |
-| Save operation     | Preserve the exact native value in the typed change set.                   |
-| Save result        | Decode canonical server values before they enter row/draft stores.         |
+| Capability          | Exact-numeric requirement                                                  |
+| ------------------- | -------------------------------------------------------------------------- |
+| Cell rendering      | Produce text without React attempting to render a `BigDecimal` object.     |
+| Editor              | Keep transient input as text and produce the exact value only on commit.   |
+| Draft dirtiness     | Compare the base and draft semantically.                                   |
+| Conflict detection  | Compare base, server, and user values with the same equivalence.           |
+| Client filtering    | Use exact operands and exact comparisons.                                  |
+| Client sorting      | Use a safe total comparator, not object or `number` comparison.            |
+| Server filtering    | Send the native typed operand to effect-view-server.                       |
+| Clipboard           | Copy lossless canonical text and parse it back for the destination column. |
+| Preferences         | Encode filter operands into tagged, versioned, JSON-safe data.             |
+| Save Operation      | Preserve the exact native value in the typed change set.                   |
+| Live reconciliation | Decode canonical source values before they enter row/draft stores.         |
 
 AG Grid reaches the same broad architectural conclusion with its cell data types: a data type coordinates rendering, editing, filtering, sorting, and import/export ([AG Grid cell data types](../../../.repos/ag-grid/documentation/ag-grid-docs/src/content/docs/cell-data-types/index.mdoc#L5-L15)). BrunoTable needs a stricter, typed, non-inferred version of that seam.
 
@@ -409,31 +409,24 @@ There is also no compare-and-set argument in effect-view-server's current runtim
 - `onSaveEdits` must call an application write/RPC boundary that enforces optimistic concurrency;
 - the read-side viewport version cannot provide that guarantee;
 - a convenience Effect adapter must not implement saves by blindly calling `runtime.client.patch`;
-- the persistence service remains the final authority and returns canonical values plus new row versions, as required by the existing save workflow ([editing and conflicts](../editing-and-conflicts.md#L220-L256)).
+- the application write authority resolves or rejects the atomic Save Operation, while canonical values and new Row Versions arrive only through the live Client Source as required by the save workflow.
 
 ## Save and conflict workflows
 
-`BrunoTableCellChange` already correlates `before` and `after` with the exact Column Identity value type ([current `public-types.ts`](../../../packages/table/src/public-types.ts#L207-L223)). Preserve that strength in the final non-empty Save Change Set.
+`BrunoTableCellChange` already correlates `before` and `after` with the exact Column Identity value type ([current `public-types.ts`](../../../packages/table/src/public-types.ts#L207-L223)). Preserve that strength while adding exact source `field` correlation inside the final non-empty row-grouped Save Change Set.
 
 The handler receives native exact values, not persisted strings:
 
 ```ts
 type ExampleChange = {
-  readonly rowId: BrunoTableRowId;
-  readonly expectedVersion: bigint;
   readonly columnId: "COL_ID_PRICE";
+  readonly field: "price";
   readonly before: BigDecimal.BigDecimal;
   readonly after: BigDecimal.BigDecimal;
 };
 ```
 
-Serialization belongs to the application Adapter/RPC boundary. The save result must be decoded before it enters trusted grid state and should return:
-
-- applied row identities;
-- canonical server values in their native exact types;
-- new exact row-version tokens;
-- typed conflict values;
-- validation, permission, and transient failures.
+Each enclosing row change carries `rowId`, the latest safely rebased `baseRow`, and its exact `expectedVersion`. Serialization belongs to the application Adapter/RPC boundary. `onSaveEdits` returns only `PromiseLike<void>`; canonical exact values and Row Versions are decoded by the live Client Source before they enter trusted grid state. Application validation, permission, and transient failures reject with an ordinary user-safe `Error` rather than a typed result payload.
 
 If a server canonicalizes `1.50` to `1.5`, semantic equality marks the successful edit clean. If a newer server value differs semantically, the grid uses the same three-way conflict workflow. Immediate and Batch modes continue to call the same handler shape; exact numeric support adds no mode branch.
 
@@ -461,7 +454,7 @@ Run hostile-input decoding for:
 - restored preferences;
 - editor and clipboard text;
 - generic/untrusted source ingestion;
-- save results.
+- live-source save reconciliation.
 
 Official effect-view-server rows have already crossed its schema/protocol boundary. The Adapter may assert its contract once when ingesting a batch; mounted cells should not repeatedly reflect over object prototypes.
 
@@ -482,7 +475,7 @@ Value-semantics work belongs in normalized columns, row pipelines, edit transact
 
 ## Security and failure policy
 
-Editor input, clipboard text, persisted preferences, generic source values, and save responses are untrusted boundaries. Treat parser and decoder failures as data, not exceptions escaping through React event handlers.
+Editor input, clipboard text, persisted preferences, generic source values, and Save Operation rejection values are untrusted boundaries. Treat parser, decoder, and error-normalization failures as data, not exceptions escaping through React event handlers.
 
 Rules:
 
@@ -505,7 +498,7 @@ effect-view-server's hostile BigDecimal inspection verifies the prototype brand,
 - Rejection of `number` operands for `bigint`/BigDecimal columns.
 - Rejection of automatic ordered semantics for mixed numeric domains.
 - Nullable clear-policy requirements.
-- Exact edit, validation, conflict, save, and save-result correlation by Column Identity.
+- Exact edit, validation, conflict, Save Change Set, and Accepted Overlay correlation by Column Identity.
 - Exact row-version inference, including `bigint` versions.
 - No Effect import requirement from `@bruno/table` root declarations.
 
@@ -524,7 +517,7 @@ effect-view-server's hostile BigDecimal inspection verifies the prototype brand,
 - Tampered, stale-version, wrong-codec, and wrong-column persisted operands are dropped.
 - Canonical clipboard copy/paste and atomic multi-cell failure.
 - Conflict truth table with differently scaled but equivalent BigDecimals.
-- Save canonicalization clears equivalent drafts.
+- Live canonical convergence clears semantically equivalent drafts.
 
 ### Cross-repository contract tests
 
@@ -555,7 +548,7 @@ Include pathological safe scales and large coefficients, not only ordinary curre
 4. Add tagged, versioned persistence encoding for exact filter operands.
 5. Install custom TanStack client sort/filter functions, including half-open range semantics.
 6. Route draft dirtiness and conflict reconciliation through column equivalence.
-7. Finalize exact row-version typing and the decoded save-result boundary.
+7. Finalize exact row-version typing, the void Save Operation boundary, and live-source reconciliation.
 8. Expose or reproduce effect-view-server's wire-safe BigDecimal semantics with parity tests.
 9. Ship the optional Effect BigDecimal adapter only after the safe-comparator and wire-admission tests pass.
 10. Add realistic exact-numeric performance gates before enabling the feature by default.

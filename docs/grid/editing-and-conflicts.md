@@ -22,7 +22,7 @@ type BrunoTableEditableCapability<
 };
 ```
 
-`editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The function's exact return type, including `bigint`, becomes the Row Version type for every draft base, Save Change Set, rejection, conflict, and accepted canonical result. False or omitted editing makes both props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
+`editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The function's exact return type, including `bigint`, becomes the Row Version type for every draft base, safely rebased Save Change Set, conflict, and Accepted Overlay. False or omitted editing makes both props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
 
 Editing and grouping are mutually exclusive Table Instance capabilities. The editable branch rejects `groupRowsColumn`, installs no grouping or aggregation feature, exposes no Group By UI or command, and discards restored `groupBy`, `groupOrderBy`, and Rows width during preference sanitization. Shared columns may retain `groupBy` and `aggFunc` declarations for a separate read-only Client or Server Table; those declarations are dormant here.
 
@@ -30,33 +30,37 @@ At least one column must declare `isEditable: true` or an `isEditable` predicate
 
 An Editable Table owns a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. The end user owns this choice; consumers cannot provide a default or controlled Edit Mode prop. The switch starts off for each table session, is visible because the column definitions declare potential editability, subscribes only to the Edit Mode and a compact `canChangeEditMode` boolean, and never subscribes to row contents. Edit Mode is session state, not a persisted grid preference.
 
-Changing Edit Mode while an editor, drafts, validation, conflicts, or a save operation are active is blocked. The user completes or cancels the editor and uses Save or Reset before switching; BrunoTable must not silently persist, discard, or reinterpret pending work during a mode change.
+Changing Edit Mode while an editor, drafts, validation, conflicts, or a Save Operation are active is blocked. The user completes or cancels the editor and uses Save or Reset before switching; BrunoTable must not silently save, discard, or reinterpret pending work during a mode change.
 
-`onSaveEdits` receives a non-empty Save Change Set and returns the typed optimistic-concurrency result. The exact item/result shapes must preserve row, column, value, and Row Version correlation. Effect may implement a consumer Adapter, but the public handler does not require Effect.
+`onSaveEdits` receives a non-empty row-grouped Save Change Set and returns `PromiseLike<void>`. Resolution means the application accepted the complete Save Operation; rejection means the call failed and enters the ordinary failure workflow. The callback returns no canonical rows, Row Versions, conflicts, validation details, or result discriminant. The live Client Source is the sole canonical outcome authority. Effect may implement a consumer Adapter, but the public handler does not require Effect.
 
 - Immediate mode invokes `onSaveEdits` once per committed edit transaction. A normal cell commit usually produces one change; paste and drag fill produce one atomic call containing every change in that transaction.
 - Batch mode accumulates drafts and invokes the same handler only after Save. Coalesce repeated edits to the same cell into one net change from its accepted base to its latest draft; do not send raw undo history.
 
 The handler never changes shape based on Edit Mode and is never called once per cell for a multi-cell transaction.
 
-Every Save Change Set is atomic. The complete immutable set succeeds or fails together; there is no public partial-success outcome. A rejection may carry per-cell or per-row diagnostic details, canonical latest server values, and conflicts for review, but it never reports that a valid prefix was persisted. Consumers that require several writes must provide a transactional application seam behind `onSaveEdits`.
+Every Save Change Set is atomic. The complete immutable set is accepted or rejected together; there is no public partial-success outcome. Consumers that require several writes must provide one transactional application seam behind `onSaveEdits`. Promise rejection should use an ordinary `Error` with a non-empty user-safe message. BrunoTable safely normalizes unknown rejection values to `The save could not be confirmed` and defines no exported save-error or save-result protocol.
 
-Immediate mode supports multiple concurrent save operations over disjoint Cell Identities. Each operation owns a unique Operation Identity and one immutable Save Change Set, which may itself contain many cells from one paste or fill gesture. Maintain an operation registry plus a reverse Cell Identity-to-operation index: a cell belongs to at most one active operation, while unrelated cells may commit new operations without waiting. Do not model Immediate persistence with one table-level `isSaving` boolean.
+Immediate mode supports multiple concurrent Save Operations over disjoint Cell Identities. Each operation owns a unique Operation Identity and one immutable Save Change Set, which may itself contain many cells from one paste or fill gesture. Maintain an operation registry plus a reverse Cell Identity-to-operation index: a cell belongs to at most one active operation, while unrelated cells may commit new operations without waiting. Do not model Immediate saving with one table-level `isSaving` boolean.
 
-While an Immediate operation is in flight, lock only its complete owned cell set. While a Batch Save is in flight, install one table-wide edit mutation lock so no cell can begin or commit another mutation. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner; the prototype should compare treatments. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
+Immediate mode deliberately remains aggressive: while an operation is pending or awaiting live confirmation, lock only its complete owned cell set. Other cells, including different cells in the same row, may start concurrent operations. Two operations that race from the same Row Version may cause one compare-and-set rejection; BrunoTable accepts that server-authoritative outcome rather than secretly queuing or serializing Immediate edits. A saving cell uses a distinct non-color presentation plus an accessible progress state and a small compositor-driven border tracer or spinner. Do not drive the animation through React or XState frame events, and respect reduced-motion preferences.
 
-If an Immediate operation's Row Identity disappears from the live Client Source while the operation is in flight, make no operation-state transition and infer nothing from the disappearance. Await `onSaveEdits`: a typed acceptance completes normally, a typed rejection uses its ordinary explained persistent failure toast, and an invocation or transport failure uses the ordinary not-confirmed notification. Do not cancel, reclassify, retry, create a phantom row, or manufacture special missing-row reconciliation.
+Batch Save installs one table-wide edit mutation lock from invocation until rejection or complete post-resolution live reconciliation. No cell may begin or commit another mutation while it is held. Sorting, filtering, scrolling, navigation, menus, inspection, and Copy remain enabled in both Edit Modes; the locks constrain only edit mutations.
 
-An atomic success keeps all accepted canonical values and flashes every currently mounted affected cell green for two seconds. It never emits a success toast; if reordering or scrolling has unmounted an affected cell, that success completes quietly. Rejection reconciliation is mode-specific even though the server outcome remains atomic:
+If an Immediate operation's Row Identity disappears from the live Client Source before its Promise settles, make no operation-state transition and infer nothing from the disappearance. Await `onSaveEdits`; do not cancel, retry, create a phantom row, or manufacture a special missing-row failure. After resolution, disappearance from a complete ready or stale Client Source is authoritative reconciliation: remove that row's overlays, release its Immediate cell locks, and count it as reconciled for Batch global-lock release.
+
+Promise resolution converts submitted values to Accepted Overlays, removes Batch drafts/conflicts/validation/history immediately, and flashes every currently mounted affected cell green for two seconds. The overlay is not a draft and has no arbitrary timeout. It retains the submitted value until the live field becomes semantically equal, the opaque Row Version differs from `expectedVersion`, or the row authoritatively disappears. At that point the latest live row wins even when the application normalized the value or a later update already superseded it. Immediate cells release independently as each affected row reconciles; Batch releases its global edit lock only after every submitted row reconciles. A source lifecycle delay may therefore retain locks, with ordinary stale/closed/error chrome explaining why. Resolution never emits a success toast, and unmounted affected cells complete quietly.
+
+Promise rejection reconciliation is mode-specific even though the Save Change Set remains atomic:
 
 - Immediate rejection restores every operation-owned cell to its latest live canonical server value immediately, marks each with the non-color server-rejected presentation and a red treatment for five seconds, and records one failed operation rather than one failure per cell.
-- Batch rejection preserves the complete submitted draft set, conflicts, validation evidence, and both history stacks. Release the table-wide mutation lock, mark the diagnosed cells or complete submitted set as failed, and allow the user to correct, retry, inspect conflicts, or open Reset Review. The Batch failure presentation remains until the relevant user action, retry, successful reconciliation, or Reset rather than disappearing while rejected drafts remain.
+- Batch rejection preserves every unconverged draft, conflict, validation record, and history patch. Release the table-wide mutation lock, mark the remaining submitted set as failed, and allow the user to correct, retry, inspect conflicts, or open Reset Review. The Batch failure presentation remains until the relevant user action, retry, live convergence, or Reset rather than disappearing while rejected drafts remain.
 
-Atomicity means the application persisted every submitted change or none of them. It does not authorize BrunoTable to discard a rejected Batch.
+Atomicity is an application contract for the complete Save Change Set. It does not authorize BrunoTable to discard a rejected Batch or claim that a rejected Promise proves the authoritative data did not change.
 
-The table owns one persistent failure notification workflow. Concurrent Immediate failures aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected or transport-failed Batch enters that same workflow as one operation without losing its drafts. The toast never auto-dismisses; the user explicitly closes it. It contains no Retry, Save, or other mutation action. A thrown request, timeout, disconnect, or HTTP failure says that the call was not confirmed; the toast must not claim that nothing committed merely because no typed result arrived. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
+The table owns one persistent failure notification workflow. Concurrent Immediate rejections aggregate into a single table-scoped toast such as `10 save operations failed`, with expandable operation details; a rejected Batch enters that same workflow as one operation without losing its unconverged drafts. The toast never auto-dismisses merely with time; the user may close it. It contains no Retry, Save, or other mutation action. A rejected request, timeout, disconnect, HTTP failure, or ordinary application error says that the call was not confirmed; it does not claim that authoritative data remained unchanged. XState coordinates operation lifecycles, legal locks, aggregation, and dismissal, while the sparse external edit store owns per-cell operation references and presentation state. Neither XState nor the toast subscribes to row contents or participates in scroll, geometry, or animation frames.
 
-A transport-failure notification retains the compact immutable submitted cell set already owned by that operation. Live reconciliation emits operation-specific convergence events when an affected canonical server value becomes semantically equal to its submitted value. When every cell from that operation converges, update its persistent notification from error to a non-error `Changes now reflected by the server` presentation; it remains mounted until explicit dismissal. Never infer this from global `changes.length === 0`: Reset can make that count zero without server confirmation, and unrelated later edits can keep it nonzero after the failed operation fully converges. Editing, undoing, or resetting a submitted cell does not count as server convergence.
+A rejected operation retains the compact immutable submitted cell set already owned by it. Live reconciliation emits operation-specific convergence events when affected canonical values become semantically equal. If every submitted value converges, authoritative live evidence supersedes the ambiguous rejection: clear its failure notification, drafts, locks, and Batch history evidence, then use the ordinary success presentation. If only some values independently converge, prune those cells normally while retaining the operation failure and remaining Batch work. Never infer complete convergence from global `changes.length === 0`: Reset can make that count zero without source confirmation, and unrelated later edits can keep it nonzero after the rejected operation fully converges.
 
 ## Cell edit lifecycle
 
@@ -80,7 +84,7 @@ Escape cancels the active editor without committing its candidate value and rest
 
 A Cell Edit Commit parses and validates the candidate, then records it in the sparse draft model. It does not necessarily send a server mutation: Immediate and Batch Edit Modes decide when committed changes enter the Save Workflow.
 
-Tab commits and moves to the next currently editable body cell; Shift+Tab commits and moves to the previous one. Traversal follows Logical Column Order across pinned regions, skips non-editable cells, and wraps across logical rows. At the first or last eligible table cell it leaves the grid through normal backward or forward browser focus instead of cycling into a keyboard trap. An active multi-cell Linear Cell Range with at least two currently editable cells is the selected-range exception: retain the range and cycle its Active Cell through eligible cells along the range's one axis. Tab and Enter move forward; Shift+Tab and Shift+Enter move backward. Escape after editing has closed collapses that range to the Active Cell and restores ordinary body traversal. Without that range, a locally accepted Enter commit moves the Active Cell one logical body row down in the same column and Shift+Enter moves it one logical body row up. Movement happens after local parsing, validation, and transaction creation; Immediate mode does not wait for the persistence operation to settle. The virtualizers reveal an off-screen destination. Ordinary Enter movement does not wrap at the first or last logical row, and rejected parsing or validation leaves the editor and Active Cell in place.
+Tab commits and moves to the next currently editable body cell; Shift+Tab commits and moves to the previous one. Traversal follows Logical Column Order across pinned regions, skips non-editable cells, and wraps across logical rows. At the first or last eligible table cell it leaves the grid through normal backward or forward browser focus instead of cycling into a keyboard trap. An active multi-cell Linear Cell Range with at least two currently editable cells is the selected-range exception: retain the range and cycle its Active Cell through eligible cells along the range's one axis. Tab and Enter move forward; Shift+Tab and Shift+Enter move backward. Escape after editing has closed collapses that range to the Active Cell and restores ordinary body traversal. Without that range, a locally accepted Enter commit moves the Active Cell one logical body row down in the same column and Shift+Enter moves it one logical body row up. Movement happens after local parsing, validation, and transaction creation; Immediate mode does not wait for the Save Operation to settle. The virtualizers reveal an off-screen destination. Ordinary Enter movement does not wrap at the first or last logical row, and rejected parsing or validation leaves the editor and Active Cell in place.
 
 A pointer press outside the editor attempts to commit before logical focus moves or the clicked action runs. If parsing or validation rejects the candidate, the editor remains active and the candidate is preserved rather than being discarded by blur.
 
@@ -216,7 +220,7 @@ Evaluate `isEditable` for a concrete dirty Client cell when a live row update ch
 
 If a row with committed Batch drafts disappears from the Client Source after its editor has closed, preserve every affected sparse draft and history patch as blocked missing-row work. Do not project a phantom body row. Include those cells in the footer's blocked count and Blocked Changes Review, disable Batch Save, and identify the missing Row Identity plus affected columns. Gesture undo, targeted discard, or Reset may explicitly remove the work. If the same Row Identity returns first, reconnect to its latest row and Row Version and run ordinary semantic convergence and conflict detection.
 
-If the predicate becomes true again, remove the block without changing the draft. If the live canonical value becomes semantically equal to Mine, normal convergence removes the draft and its history. Reset remains the only explicit discard path. An Immediate operation already in flight keeps its operation lock and settles through its normal accepted, rejected, or invocation-failed reconciliation; a mid-flight predicate change does not pretend to cancel an application write.
+If the predicate becomes true again, remove the block without changing the draft. If the live canonical value becomes semantically equal to Mine, normal convergence removes the draft and its history. Reset remains the only explicit discard path. An Immediate operation already in flight keeps its operation lock and follows its normal Promise-settlement and live-reconciliation path; a mid-flight predicate change does not pretend to cancel an application write.
 
 Re-evaluate only affected dirty cells through narrow row-update dependencies. Do not scan the complete dataset, all editable columns, or every draft on each publication.
 
@@ -259,7 +263,7 @@ Render conflict and blocked controls only when their counts are greater than zer
 
 Reset is disabled when no edit-owned work exists. When work is pending, activating Reset opens the Reset Review dialog rather than discarding anything immediately. Confirming Reset discards the active edit candidate, sparse drafts, edit-owned validation, conflict resolutions, and current-batch undo/redo history back to the latest canonical server snapshots. It begins a new clean batch context and does not reset filters, sorting, layout, selection, or other grid preferences.
 
-The footer remains mounted when no edits exist, with Reset and Save disabled. In Immediate mode this is normally the clean state after successful persistence; pending failures or conflicts remain accessible through the same safety surface. During saving, prevent duplicate Save and Reset activation and expose progress accessibly.
+The footer remains mounted when no edits exist, with Reset and Save disabled. In Immediate mode this is normally the clean state after resolved Save Operations and live reconciliation; pending failures or conflicts remain accessible through the same safety surface. While a resolved Batch is still awaiting one or more authoritative rows, its left status reads `Save accepted · waiting for live confirmation` with a compact remaining-row count, and Reset and Save stay disabled under the global edit lock. During a pending Promise, prevent duplicate Save and Reset activation and expose progress accessibly.
 
 The footer shell never subscribes to rows or the complete edit store. Status controls subscribe independently to compact counts; buttons subscribe only to the booleans and progress state they render. Streaming row updates that do not change those projections must neither notify nor rerender the footer.
 
@@ -330,9 +334,9 @@ After conflict choices are applied, the user may continue editing or save.
 
 Every Save activation performs a fresh preflight against the latest live canonical values and Row Versions: commit or reject the active editor, reconcile converged drafts, evaluate local and retained server validation, derive current conflicts, and only then construct one new immutable Save Change Set. BrunoTable, XState, Effect integration, and the transport Adapter never schedule an automatic save retry or blindly replay a previous request. A retry exists only when the user explicitly activates the authoritative Save control again.
 
-The Save Workflow records its initiating surface:
+The Save Workflow records its initiating surface internally without adding it to the Save Change Set:
 
-- A Save started inside Conflict Review keeps that modal mounted throughout the attempt. Success closes it; rejection or transport failure leaves it open with all drafts, resolutions, live Server-now values, and diagnostics intact.
+- A Save started inside Conflict Review keeps that modal mounted throughout the attempt. Promise resolution closes it; rejection leaves it open with all drafts, resolutions, live Server-now values, and diagnostics intact.
 - A Save started from the Edit Safety Footer with no conflicts keeps Conflict Review closed if the attempt fails. The next explicit Footer Save runs the complete live preflight again and opens Conflict Review only when conflicts exist at that later moment.
 
 The persistent toast explains the failure but never becomes a second Save surface. This keeps every attempt on one state-machine path and prevents a stale notification action from bypassing current conflict and validation checks.
@@ -341,13 +345,14 @@ The persistent toast explains the failure but never becomes a second Save surfac
 
 The client sends expected versions.
 
-Example row patch:
+Conceptual row patch:
 
 ```ts
-type BrunoTableRowPatch<TChanges, TRowVersion> = {
-  rowId: BrunoTableRowId;
-  expectedVersion: TRowVersion;
-  changes: TChanges;
+type BrunoTableSaveRowChange<TRow, TChanges, TRowVersion> = {
+  readonly rowId: BrunoTableRowId;
+  readonly baseRow: TRow;
+  readonly expectedVersion: TRowVersion;
+  readonly changes: TChanges;
 };
 ```
 
@@ -355,7 +360,9 @@ The server is the final concurrency authority.
 
 Row Version is an explicit typed editing capability and may itself be `bigint`. It is independent of the Viewport Source's top-level Query Version. The Query Version describes one live read result; it is not an `expectedVersion` for any row.
 
-`getRowVersion` reads that token from the complete current Client row whenever BrunoTable captures or refreshes a canonical edit base. It is a pure extraction function, not a request, subscription, equality function, or mutation callback. A save uses the base version associated with the submitted draft, not a later token read after the user's edit was based on older data.
+`getRowVersion` reads that token from the complete current Client row whenever BrunoTable captures or refreshes a canonical edit base. It is a pure extraction function, not a request, subscription, equality function, or mutation callback. Row Versions are opaque equality tokens: BrunoTable checks whether one differs and never assumes it numerically increases.
+
+Every Save activation safely rebases each dirty row to one coherent latest source snapshot before constructing its row-grouped payload. For every edited field, compare latest live value with the draft's recorded Base through compiled semantic equality. When all edited fields remain equal, refresh `baseRow`, `expectedVersion`, and the exact `before` values together from that latest row, even when individual cells were first edited under different versions. When any edited field differs, do not rebase or call the application; enter Conflict Review. The application's atomic compare-and-set remains the authority for a race after this preflight.
 
 The complete editable Client Source must retain the Row Version even when no visible column uses it. `onSaveEdits` must call an application write or RPC seam that performs an atomic compare-and-set. effect-view-server's current runtime `patch` accepts no expected version and must not be used as a convenience save implementation.
 
@@ -369,22 +376,15 @@ Even after local conflict resolution, a newer server version may arrive before s
 
 Do not silently force unconditional last-write-wins.
 
-## Save results
+## Promise settlement and live reconciliation
 
-One operation has exactly one atomic outcome:
-
-- accepted: every change was applied, with decoded canonical values and new typed Row Versions for the complete set;
-- rejected: no change was applied, with a typed conflict, validation, permission, or transient failure and the latest canonical server evidence needed for reconciliation.
-
-A rejected result may describe several affected rows or cells without becoming a partial-success result. Semantic equivalence decides whether canonical accepted values clear submitted drafts.
-
-The asynchronous invocation may itself fail before BrunoTable receives either typed outcome. Do not introduce a durable user-facing `unconfirmed` edit state or guess whether the server committed. Apply the mode-specific failure presentation, preserve Batch drafts, and let the live View Server remain the reconciliation authority:
+One Save Operation has one Promise settlement: resolve with `void` or reject with an ordinary error. Neither settlement contains canonical row data. Do not introduce a durable user-facing `unconfirmed` edit state or guess canonical values from the Promise. Apply the mode-specific presentation and let the live View Server remain the reconciliation authority:
 
 - if live canonical values become semantically equal to the drafts, convergence removes those changes and their history as though they were never locally pending;
 - if live canonical values differ, normal conflict detection records the divergence;
 - if no confirming update arrives, the drafts remain available for review and a later explicit fresh-preflight Save.
 
-An Immediate operation still reverts to the latest currently known server values on call failure; a later View Server publication is rendered and reconciled normally.
+An Immediate operation still reverts to the latest currently known server values on Promise rejection; a later View Server publication is rendered and reconciled normally. Complete operation-specific live convergence suppresses or clears the failure because authoritative source state is stronger evidence than a failed response path.
 
 ## XState actors
 
@@ -431,11 +431,11 @@ Drag Fill publishes no preview or autoscroll inside drag slop. After crossing th
 
 Value generation is repetition-only. One source cell repeats; a multi-cell source repeats its exact logical sequence cyclically along that source range's existing axis, phase-aligned through Euclidean modulo so filling before the source continues the same pattern. Preview generation maps source canonical exchange text through each destination column's parser and never performs arithmetic, increment/decrement, date progression, suffix inference, or trend extrapolation. No modifier changes the algorithm.
 
-Escape or browser `pointercancel` transitions the actor to `cancelled`, stops autoscroll, releases its preview, and returns to `idle` without applying. Cancellation creates no candidate validation, draft, edit transaction, history command, save actor, or persistence invocation. Pointer release is the only gesture completion that may preflight and atomically apply the current preview.
+Escape or browser `pointercancel` transitions the actor to `cancelled`, stops autoscroll, releases its preview, and returns to `idle` without applying. Cancellation creates no candidate validation, draft, edit transaction, history command, save actor, or Save Operation. Pointer release is the only gesture completion that may preflight and atomically apply the current preview.
 
 The actor owns pointer capture, so an ordinary release outside the grid still completes the last visible projected preview. Completion reruns current target, lock, parsing, and validation preflight before creating one atomic transaction. If no axis was acquired, no non-empty preview exists, or the extension has returned to its source bounds, release is a silent no-op with no transaction, history, save actor, or notification.
 
-If any preflight target is unavailable, stale, non-editable, save-locked, unparseable, or invalid, transition to `rejected`, remove the preview, and apply nothing. Publish one bounded `Fill rejected` diagnostic containing the first deterministic user-facing row/column reason and an additional failure count, then return to `idle`. The Base UI toast from `@bruno/shadcn/toast` renders it with error presentation, description, and Close; it has no Retry or mutation action, persists until dismissal or the next accepted fill, and a later rejection replaces it. No rejected fill creates a draft, edit transaction, Batch history command, save actor, persistence invocation, or save-failure toast.
+If any preflight target is unavailable, stale, non-editable, save-locked, unparseable, or invalid, transition to `rejected`, remove the preview, and apply nothing. Publish one bounded `Fill rejected` diagnostic containing the first deterministic user-facing row/column reason and an additional failure count, then return to `idle`. The Base UI toast from `@bruno/shadcn/toast` renders it with error presentation, description, and Close; it has no Retry or mutation action, persists until dismissal or the next accepted fill, and a later rejection replaces it. No rejected fill creates a draft, edit transaction, Batch history command, save actor, Save Operation, or save-failure toast.
 
 ### Conflict actor
 
@@ -453,7 +453,7 @@ Use sparse active edit state.
 
 ### Save operation manager
 
-The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set and reports accepted, typed rejected, or invocation-failed. Invocation failure is an orchestration event, not a claim about the server's atomic outcome. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates failed-operation notification details, and removes settled operations after their cell presentation deadlines expire. Per-cell progress and flash presentation remains sparse store state selected directly by affected cells. A failed actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
+The Save Workflow owns a bounded dynamic set of Immediate operation actors and at most one Batch operation. Each operation receives an immutable Save Change Set, observes resolved or rejected Promise settlement, and then remains only while its live reconciliation evidence requires it. The manager maintains cell ownership, derives the Batch global mutation lock, records the initiating surface, aggregates rejected-operation notification details, and removes accepted operations after every submitted row reconciles. Per-cell progress, Accepted Overlay, and flash presentation remain sparse store state selected directly by affected cells. A rejected actor waits for no retry timer; a later explicit Save creates a new operation after fresh preflight.
 
 The notification actor retains only the compact failed-operation evidence needed after the cell presentation deadline: Operation Identity, affected Cell Identities, submitted typed values or their existing immutable change references, and unresolved convergence count. A canonical update performs the column's compiled semantic equality for the affected cell and emits one narrow event; do not rescan the complete draft store or grid after every source publication.
 
@@ -478,7 +478,7 @@ Generate large fill/paste changes imperatively, then submit one meaningful actor
 
 Undo and redo exist only in Batch mode. History begins empty at the current accepted server baseline. One user gesture creates one history command regardless of its cell count: five separate edits require five undo operations, while one 500-cell paste requires one. Undo may travel only to the beginning of the current unsaved batch, and redo may travel only within that batch.
 
-A successful Batch Save establishes a new baseline and clears both history stacks. A rejected save preserves the complete batch and its history. The first edit after a successful Save therefore creates exactly one available undo command. Immediate mode exposes no undo or redo because reversing an already-persisted mutation would require a new server operation rather than local history.
+A resolved Batch Save establishes a new local baseline and clears both history stacks immediately while Accepted Overlays retain submitted values through live confirmation. A rejected save preserves every unconverged part of the batch and its history. The first edit after a resolved Save therefore creates exactly one available undo command. Immediate mode exposes no undo or redo because reversing an already-accepted mutation would require a new Save Operation rather than local history.
 
 Live semantic convergence erases the converged Cell Identity as though the user had never changed that cell in the current batch. Remove its draft, conflict, validation, and every patch for that cell from both undo and redo history. If pruning makes a multi-cell history command empty, remove the command; otherwise it remains one gesture over its surviving cells. Undo must never resurrect a user value after the latest server value has already converged with it.
 
@@ -489,7 +489,7 @@ Column definitions may provide:
 - parser
 - synchronous local validator
 
-Parsing and local validation run once at Cell Edit Commit or once over the complete one-axis candidate vector before an atomic multi-cell gesture. They never run as an asynchronous per-cell workflow or on every keystroke. Business, permission, cross-row, and other asynchronous validation belongs to the atomic `onSaveEdits` application seam and returns a typed rejected result without partially persisting the Save Change Set.
+Parsing and local validation run once at Cell Edit Commit or once over the complete one-axis candidate vector before an atomic multi-cell gesture. They never run as an asynchronous per-cell workflow or on every keystroke. Business, permission, cross-row, and other asynchronous authority belongs to the atomic `onSaveEdits` application seam and rejects its Promise with a user-safe `Error` without weakening all-or-nothing semantics.
 
 Do not conflate validation with conflict detection.
 

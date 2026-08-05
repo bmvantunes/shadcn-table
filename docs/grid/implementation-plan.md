@@ -238,7 +238,7 @@ Success criteria:
 - a live-filtered active editor row survives as one anchored presentation exception with accessible status and full reconciliation until valid commit or Escape, without changing filter state or row counts
 - deletion of the active editor row creates a recoverable anchored tombstone that cannot save, supports Escape and accessible cancellation, and reconnects only if the same Row Identity returns before cancellation
 - deletion of a row with committed Batch drafts preserves sparse history as blocked missing-row work, projects no phantom body row, disables Save, and exposes explicit review, undo, discard, Reset, or same-identity reconnection
-- disappearance of a row with an in-flight Immediate operation causes no special transition; only the ordinary accepted, rejected, or invocation-failed result settles it
+- disappearance of a row with a pending Immediate operation causes no special transition; after Promise resolution, authoritative absence reconciles that row and releases its owned cell locks
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
 - source JSX and emitted-package consumer type tests prove that `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
@@ -375,13 +375,14 @@ Build:
 - undo/redo
 - strict `editable` capability union that requires `onSaveEdits` and at least one potentially editable column
 - Immediate/Batch mode source and top-right toggle with clean-state transition guard
-- one non-empty Save Change Set handler shared by both modes
+- one `PromiseLike<void>` Save handler shared by both modes, with no canonical result payload
+- non-empty row-grouped Save Change Sets containing safely rebased `baseRow`, exact `expectedVersion`, and non-empty `columnId`/`field`/`before`/`after` Cell Change Sets
 - persistent Edit Safety Footer with status-left and Reset/Save-right layout
 - unsaved count
 - validation count
 - blocked-change count and live Blocked Changes Review
 - client-row editing only
-- exact semantic equality for dirtiness, convergence, and canonical save results
+- exact semantic equality for dirtiness, safe row-level preflight rebase, convergence, and Accepted Overlays
 - explicit nullable clear policy so blank exact input never becomes zero
 
 Success criteria:
@@ -395,7 +396,7 @@ Success criteria:
 - printable text over an eligible focused Client cell starts a replace-mode editor seeded with only the produced text, while Enter/F2 preserve the current pre-session value
 - replace-on-type targets only the Active Cell, ignores non-text commands, `Delete`, and `Backspace`, and preserves AltGr/Option/IME/dead-key produced text exactly once
 - Escape after replace-on-type restores the pre-session value or Batch draft without creating a transaction
-- a locally accepted Enter commit moves one logical body row down and Shift+Enter moves one row up in the same column without waiting for Immediate persistence
+- a locally accepted Enter commit moves one logical body row down and Shift+Enter moves one row up in the same column without waiting for an Immediate Save Operation
 - Enter movement reveals virtualized destinations, never wraps at the first or last logical row, and invalid input never moves
 - Editable Client Tab and Shift+Tab traverse currently editable cells across one pinned-aware Logical Column Order, skip ineligible cells, wrap across rows, and reveal virtualized destinations
 - terminal Tab movement leaves the grid through browser focus order; read-only Client and Server Tables never trap Tab for internal navigation
@@ -410,19 +411,24 @@ Success criteria:
 - toggle visibility and updates require no all-row predicate evaluation or row-content subscription
 - mode switching is blocked while any edit-owned work or save is active and is never persisted
 - no consumer prop can initialize or control Edit Mode; each session starts Immediate and only the end-user toggle changes it
-- Immediate single-cell commit calls `onSaveEdits` with a one-element array
+- Immediate single-cell commit calls `onSaveEdits` with one row change containing one cell change
 - Immediate paste and drag fill each call `onSaveEdits` once with the full transaction
 - V1 exposes no cell Clear/Delete command, menu item, public capability, or `Delete`/`Backspace` shortcut; a value changes only through an editor, an explicit paste transaction, or repetition-only Drag Fill
-- every Save Change Set is atomic: the complete operation is accepted or rejected with no partial-success result
-- disjoint Immediate operations may run concurrently; each operation locks only its owned cell set and one operation may own many cells
-- Batch Save installs one grid-wide edit mutation lock until its single atomic operation settles
-- accepted operations flash currently mounted affected cells green for two seconds without React or XState animation-frame events, emit no success toast, and complete quietly when an affected cell is unmounted
+- every Save Change Set is atomic at the application seam; `onSaveEdits` resolves with `void` or rejects with an ordinary error and never returns canonical rows or a result discriminant
+- Save preflight safely rebases one row group to the latest `baseRow` and Row Version only when every edited field remains semantically equal to Base; an edited-field divergence opens Conflict Review
+- disjoint-cell Immediate operations may run concurrently, including across the same row; each operation locks only its owned cell set and accepts compare-and-set rejection rather than installing a hidden queue
+- Batch Save installs one grid-wide edit mutation lock from invocation until rejection or reconciliation of every submitted row after resolution
+- non-editing sorting, filtering, scrolling, navigation, menus, inspection, and Copy remain available while edit locks are active
+- resolved operations create no canonical result; they clear submitted Batch drafts/history, retain submitted values as timeout-free Accepted Overlays until live reconciliation, and flash mounted cells green for two seconds without React or XState animation-frame events
+- Immediate cells unlock independently per reconciled row, while Batch releases its global edit lock only after every submitted row reconciles
+- a resolved Batch awaiting source rows shows one compact footer confirmation status and remaining-row count while Reset and Save stay disabled
+- a value match, a Row Version difference, or authoritative row disappearance reconciles an Accepted Overlay; Row Versions are opaque and never assumed to increase
 - rejected Immediate operations restore owned cells to their latest live server values, retain an accessible red rejection treatment for five seconds, and aggregate into one manually dismissed table-scoped toast
-- rejected Batch Save preserves every draft, conflict, validation record, and history command, unlocks editing, and keeps affected cells failed until correction, retry, successful reconciliation, or Reset
+- rejected Batch Save preserves every unconverged draft, conflict, validation record, and history patch, unlocks editing, and keeps affected cells failed until correction, retry, live reconciliation, or Reset
 - no XState actor, Effect schedule, transport Adapter, or toast action automatically retries a save; only the current surface's explicit Save control can start a fresh live-preflight operation
 - a failed Conflict Review save leaves the modal open, while a failed Footer save with no conflicts leaves it closed; the next Save may open it only after current live conflict detection
-- a thrown request or transport failure never claims that nothing committed; Batch drafts remain until live View Server reconciliation converges them, conflicts them, or the user resets them
-- transport-failure toast resolution is operation-specific: every submitted cell must converge semantically through live canonical data; never infer confirmation from global pending-change count
+- Promise rejection never claims that canonical data remained unchanged; Batch drafts remain until live View Server reconciliation converges them, conflicts them, or the user resets them
+- rejection-to-convergence handling is operation-specific: complete live convergence removes the operation failure and uses ordinary success presentation, while partial convergence prunes only matching cells; never infer confirmation from global pending-change count
 - Batch Save coalesces repeated cell edits and calls the same handler with current net dirty cells
 - undo/redo exists only inside the current unsaved Batch session, records one command per user gesture regardless of cell count, clears after accepted Save, and survives rejected Save
 - semantic server convergence removes the cell from drafts, conflicts, validation, and every undo/redo patch; empty history commands are pruned so undo cannot resurrect a converged value
@@ -432,7 +438,7 @@ Success criteria:
 - Reset with pending work opens a read-only Reset Review table over every pending changed cell and performs no mutation until `Reset All Changes` is confirmed
 - Reset Review exposes only `Keep Editing` and `Reset All Changes`; confirmation clears edit-owned state and current-batch undo/redo history together while preserving grid preferences
 - stable row updates do not notify or rerender footer controls when their compact projections are unchanged
-- exact `bigint`, BigDecimal, and Row Version types survive editor, draft, transaction, handler, and result inference
+- exact `bigint`, BigDecimal, and Row Version types survive editor, draft, transaction, safely rebased handler input, and live-source reconciliation
 
 ## Phase 8: Conflicts and server save
 
@@ -445,8 +451,8 @@ Build:
 - merge-style modal
 - explicit selected-row Mine or Server resolution
 - optimistic concurrency
-- save results
-- canonical server reconciliation
+- Promise settlement without a save-result payload
+- canonical live-source reconciliation and Accepted Overlays
 - explicit fresh-preflight resubmission after conflict resolution
 
 Success criteria:
@@ -488,7 +494,7 @@ Success criteria:
 - confirmation displays copied, selected, and proposed orientations and lengths plus proposed start/end coordinates; Cancel/Escape applies nothing and restores grid focus
 - confirm reruns current preflight; out-of-bounds, unavailable, read-only, locked, invalid, or stale destinations keep the dialog open with one inline reason
 - direct rejected paste reports the first deterministic failing row/column plus a bounded additional count; repeated failures never stack per-cell toasts
-- paste rejection creates no draft, history, save actor, or persistence call, and its toast does not subscribe to row updates
+- paste rejection creates no draft, history, save actor, or Save Operation, and its toast does not subscribe to row updates
 - browser clipboard success can never trigger implicit destructive clearing
 - an invalid exact operand or missing clear policy aborts the whole paste/fill transaction
 - one-cell fill repeats that value and multi-cell fill repeats the exact source sequence cyclically in both directions, phase-aligned to the source's logical start
@@ -496,9 +502,9 @@ Success criteria:
 - repeated values pass through canonical exchange text, destination parsing, and whole-vector validation, so incompatible heterogeneous targets reject atomically
 - Drag Fill publishes no preview inside drag slop, uses the same dominant-displacement and exact-tie rule to acquire an axis, projects later diagonal movement onto it, and cannot switch axes or publish a two-dimensional intermediate target
 - Drag Fill autoscroll is inactive before axis acquisition and parallel-only afterward
-- Escape and `pointercancel` discard the Drag Fill preview, stop autoscroll, and create no candidate validation, draft, transaction, history, save actor, or persistence call
+- Escape and `pointercancel` discard the Drag Fill preview, stop autoscroll, and create no candidate validation, draft, transaction, history, save actor, or Save Operation
 - ordinary pointer release outside the grid reruns preflight and applies the last valid projected fill preview atomically; no acquired axis or non-empty preview is a silent no-op
-- rejected Drag Fill preflight removes its preview, applies nothing, reports the first deterministic row/column failure plus a bounded additional count, and creates no edit, history, save, or persistence state
+- rejected Drag Fill preflight removes its preview, applies nothing, reports the first deterministic row/column failure plus a bounded additional count, and creates no edit, history, actor, or Save Operation
 - later fill rejection replaces the existing fill toast, accepted fill clears it, and row updates never notify its rendering subscriber
 - large operations do not emit one event per cell
 - undo remains transaction-level

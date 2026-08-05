@@ -123,7 +123,7 @@ One logical indexed row space produced by one semantically stable View Server qu
 _Avoid_: Query Version, viewport window, page
 
 **Row Version**:
-The row-specific token extracted by an Editable Table's mandatory `getRowVersion` function and compared atomically by an Edit Persistence Operation before applying a mutation. It retains its inferred source type and is independent of Query Version.
+The row-specific token extracted by an Editable Table's mandatory `getRowVersion` function and compared atomically by a Save Operation before applying a mutation. It retains its inferred source type and is independent of Query Version.
 _Avoid_: Query Version, viewport version, hard-coded string revision
 
 **External Filter**:
@@ -185,7 +185,7 @@ Acceptance of the active editor's parsed and validated value into BrunoTable's s
 _Avoid_: Submit, server save, blur side effect
 
 **Save Workflow**:
-The process that sends committed drafts to the server, applies optimistic-concurrency results, and enters conflict resolution when canonical server values diverge.
+The process that sends committed drafts through a Save Operation, coordinates Promise settlement and live-source reconciliation, and enters conflict resolution when canonical server values diverge.
 _Avoid_: Cell Edit Commit, editor close
 
 **Editable Table**:
@@ -197,16 +197,20 @@ A Table Instance without the Editable Table capability. It is the only Table Ins
 _Avoid_: Server Table, disabled cell, read-only column
 
 **Edit Mode**:
-The current persistence timing policy for an Editable Table: Immediate saves each committed edit transaction, while Batch accumulates net changes until Save.
+The current save-timing policy for an Editable Table: Immediate saves each committed edit transaction, while Batch accumulates net changes until Save.
 _Avoid_: Cell Edit Session, Save Change Set
 
 **Save Change Set**:
-A non-empty collection of net cell changes submitted as one persistence unit. It may contain one or many changes in either Edit Mode.
+A non-empty atomic request that groups net cell changes by their source rows. It may contain one or many rows and cells in either Edit Mode.
 _Avoid_: Raw edit history, one-change-only callback
 
-**Edit Persistence Operation**:
-The consumer-provided operation that accepts a Save Change Set and reconciles its typed optimistic-concurrency result.
-_Avoid_: Save-button click handler, Cell Edit Commit
+**Save Operation**:
+The application-provided asynchronous operation that accepts one Save Change Set and resolves or rejects as a whole. Current canonical values and Row Versions arrive through the live Client Source rather than an operation result.
+_Avoid_: Preference persistence, Save-button click handler, Cell Edit Commit
+
+**Accepted Overlay**:
+The temporary submitted-value projection retained after a Save Operation resolves and before the live Client Source reconciles that row. It is presentation evidence, not a draft or canonical server state.
+_Avoid_: Optimistic draft, save result, server row
 
 **Edit Safety Footer**:
 The persistent editing surface that exposes pending edits, conflicts, and validation state together with Reset and Save intentions.
