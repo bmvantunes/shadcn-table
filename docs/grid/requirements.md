@@ -164,6 +164,10 @@ The View Server Adapter snapshots the Feed Route and includes it unchanged in ev
 
 A meaningful Feed Route change selects a new logical indexed row space. Release the previous generation, clear sparse blocks and transient focus/selection/scroll state, and begin the new route at row zero while retaining compatible user preferences. Route comparison and snapshotting belong to the effect-view-server Adapter and must preserve native exact values; do not use React object identity, generic `JSON.stringify`, or numeric coercion.
 
+Every semantic View Server query change starts a new Query Generation. Semantic inputs are the normalized Feed Route, `select`, combined `where`, `orderBy`, `groupBy`, and `aggregates`; an equivalent freshly allocated value must not restart the source. Release the old generation, invalidate all old sparse rows, identity/index mappings, and `totalRows`, reset vertical row-space state as required by the initiating command, and render fixed-height loading rows for the new required window until its first authoritative count and row deliveries arrive. Do not retain old rows beneath new filter, sort, grouping, routing, projection, or aggregate semantics, and ignore every late old-generation sink write.
+
+Viewport `setWindow` changes caused by scroll, overscan, or keyboard reveal are not semantic query changes. They retain overlapping loaded slots and stable references within the active generation, render loading rows only for newly required missing indexes, and do not reset scroll or Active Cell. If one unchanged generation later becomes `stale`, `closed`, or `error` after it has published coherent rows, retain those rows under the shared non-destructive lifecycle treatment. A new generation with no accepted rows shows loading or terminal lifecycle presentation rather than reviving the previous generation. Before authoritative `totalRows` arrives, provisional loading geometry covers only the required fixed-height viewport and never claims the old count.
+
 The server owns:
 
 - filtering

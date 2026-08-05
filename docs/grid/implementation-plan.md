@@ -275,6 +275,7 @@ Build:
 - long-lived datasource session
 - sink
 - query generations
+- clean loading-row presentation for every semantic View Server query generation, with no old-row or old-count retention across the boundary
 - effect-view-server `replace` and generation `setWindow` lifecycle
 - indexed block cache
 - stable identity store
@@ -296,6 +297,9 @@ Success criteria:
 - every leased `viewport.replace(...)` includes the exact application-owned Feed Route, while materialized and source-free topics reject it
 - Route Fields do not require visible columns, projection, or filter capability, and Feed Routes are never inferred from Set Filters
 - a meaningful Feed Route change releases the old generation, clears sparse and transient row-space state, and retains compatible user preferences
+- Feed Route, projection, filter, sort, Group By, or aggregate semantic changes invalidate the complete old indexed result and show the new generation's loading rows; equivalent normalized queries do not restart
+- window-only movement stays inside one generation, retains overlapping loaded slots, and renders loading only for absent required indexes
+- stale, closed, or error lifecycle may retain coherent rows only from the same generation; late deliveries from released generations never appear
 - server scrolling exposes no pagination state or controls and can jump directly to an arbitrary indexed window
 - client and viewport tables render the same header, filter, sort, cell, and navigation Modules
 - common UI contains no client-versus-viewport conditionals
@@ -534,6 +538,7 @@ Build:
 - shared formatting, sorting controls, keyboard behavior, and accessibility for grouped results
 - exact operation and result-domain parity between Client and Server built-in aggregates
 - query-generation and stale-response handling for grouped Server viewports
+- grouped Query Generation changes immediately replace old grouped rows with loading rows for the new projection, while same-tuple live and lifecycle updates retain only same-generation data
 - behavioural, type-level, cross-adapter parity, and realistic performance tests
 
 Success criteria:

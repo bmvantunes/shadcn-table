@@ -110,6 +110,10 @@ _Avoid_: Row array, page datasource, paginated result
 The revision of one live query result stream or snapshot. It describes the read model as a whole and is not a concurrency token for any row.
 _Avoid_: Row Version, expected version
 
+**Query Generation**:
+One logical indexed row space produced by one semantically stable View Server query. Changing routing, projection, filtering, ordering, grouping, or aggregation creates a new generation, while moving its viewport window does not.
+_Avoid_: Query Version, viewport window, page
+
 **Row Version**:
 The row-specific token extracted by an Editable Table's mandatory `getRowVersion` function and compared atomically by an Edit Persistence Operation before applying a mutation. It retains its inferred source type and is independent of Query Version.
 _Avoid_: Query Version, viewport version, hard-coded string revision

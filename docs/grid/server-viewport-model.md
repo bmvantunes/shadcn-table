@@ -301,7 +301,7 @@ Add cell-level subscriptions only if realistic profiling proves row-level update
 
 ## Query generation
 
-Every filter or sort change creates a new logical index space.
+Every semantic View Server query change creates a new logical index space. Compare the normalized Feed Route, `select`, combined `where`, `orderBy`, `groupBy`, and `aggregates` by the Adapter's exact query semantics; equivalent newly allocated inputs do not create work.
 
 Use a generation number:
 
@@ -313,13 +313,18 @@ On query change:
 
 1. increment generation
 2. abort or obsolete old requests
-3. clear incompatible index mappings
-4. reset the viewport to the top
-5. replace the source query with the initial required window
+3. clear every old sparse row, identity/index mapping, and authoritative row count
+4. reset the viewport to the top when required by the initiating semantic command
+5. expose provisional fixed-height loading rows for the required viewport
+6. replace the source query with the initial required window
 
 Bind each sink instance to its query generation. The public effect-view-server sink messages do not need an extra generation field; the Adapter ignores writes from a sink whose generation is no longer active.
 
 Ignore stale responses.
+
+Do not use the previous generation's `totalRows` to manufacture new scrollbar authority. Before the first new row-count delivery, provisional loading geometry covers the current required fixed-height window. A terminal new-generation error with no accepted rows replaces loading presentation with error chrome; it never revives old rows.
+
+A window-only `setWindow` call stays inside the active Query Generation. It keeps overlapping loaded slots and their references, requests the newly required range, and renders stable loading slots only for missing indexes. A same-generation lifecycle transition to stale, closed, or error may retain its last coherent rows with shared status treatment. Row retention never crosses a semantic query boundary.
 
 The source `version` used by snapshot/delta delivery is a Query Version for this logical index space. It may reject stale read publications, but it must never be copied into a cell draft or save request as Row Version.
 
