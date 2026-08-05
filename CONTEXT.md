@@ -141,7 +141,7 @@ The single navigable order formed by pinned-start columns, centre columns, and p
 _Avoid_: DOM order, separate pinned navigation loops
 
 **Active Cell**:
-The single logical body cell in the current row-and-column projection that receives keyboard navigation and single-cell commands. It is never translated between ordinary and grouped row domains and does not imply Cell Range Selection or Row Selection.
+The single logical body cell in the current row-and-column projection that receives keyboard navigation and single-cell commands. Within one row domain it follows a surviving Row Identity and uses a deterministic display-position fallback only when that identity disappears; it is never translated between ordinary and grouped row domains and does not imply Cell Range Selection or Row Selection.
 _Avoid_: Selected range, selected row
 
 **Active Cell Reveal**:

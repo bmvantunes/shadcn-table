@@ -510,6 +510,7 @@ Build:
 - grouped read-only Client range selection and canonical Copy across Group Key, Aggregate, and Rows cells, with Paste, fill, and editing rejected
 - grouped value-only publications preserve an exact range, while grouped structural reconciliation uses the same ordered-identity span contract as ordinary Client rows
 - post-projection Active Cell reset to row zero and the first visible navigable new-projection column after every Group By shape change
+- identity-first Active Cell reconciliation for live grouped updates within an unchanged Group By tuple, with clamped previous-index fallback when the active group disappears
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
@@ -548,6 +549,7 @@ Success criteria:
 - grouped ranges expose no Paste, Drag Fill, or edit command, and grouped Server Tables remain limited to their loaded Active Cell
 - every Group By add, remove, or reorder resets Active Cell deterministically instead of translating raw/group identity; grouped uses the first key, ungrouped uses the first restored visible navigable column, and an empty result has none
 - Active Cell reset can target a Server row-zero loading slot, does not steal DOM focus from the initiating control, and emits no extra persistence event
+- a live grouped move follows surviving Group Row Identity without auto-reveal; disappearance uses the same clamped previous display index and valid column in Client and sparse Server projections, clearing only for zero rows
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists

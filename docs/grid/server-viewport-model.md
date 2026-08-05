@@ -403,7 +403,7 @@ Explicit row moves can be added later if benchmarks justify the complexity.
 
 The Server Table maintains one logical Active Cell for keyboard navigation across pinned, virtualized, and temporarily unloaded coordinates. Cell Range Selection is disabled. Copy is available only when the Active Cell is loaded and serializes that one value; it never claims to copy an unloaded range, row, or column.
 
-Live updates may move a row or remove it from the current server-filtered and sorted result. Reconcile focus by stable Row Identity when still present, otherwise move to the safe logical fallback defined by keyboard navigation. There are no local dirty rows to preserve or reposition.
+Live updates may move a row or remove it from the current server-filtered and sorted result. Reconcile focus by stable Row Identity when authoritative sparse delivery resolves its new index. In an unchanged grouped projection, an unresolved or removed active identity falls back to the row at its previous display index, clamped to the new final row, while retaining its valid column; the destination may remain a loading slot. Clear only when the authoritative result is empty. Never reconstruct identity from displayed values. There are no local dirty rows to preserve or reposition.
 
 ## Fixed row height
 

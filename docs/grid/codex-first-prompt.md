@@ -45,6 +45,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - Client Cell Ranges preserve their exact ordered identity span across value-only publications and survive structural changes only when that full span remains equal; stale corners clear before Copy instead of silently selecting different cells
 - every Copy command captures one immutable Clipboard Snapshot and serializes only that version, so live updates can never produce a half-old/half-new payload
 - deterministic Active Cell reset after every Group By add, remove, or reorder: row zero and the first visible column in the new projection, with no raw/group focus mapping or DOM-focus theft
+- identity-first Active Cell reconciliation for live grouped updates inside an unchanged Group By tuple, with no auto-reveal and a clamped previous-index fallback only when the active group disappears
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout

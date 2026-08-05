@@ -204,6 +204,10 @@ Every Group By add, remove, or reorder resets the logical Active Cell only after
 
 Do not derive raw-row-to-group correspondence from the previously active row, preserve a matching field opportunistically, or translate between old and reordered group-key tuples. Client and Server use the same deterministic reset. The command resets vertical geometry to row zero and reveals the destination when the body owns focus, but never steals DOM focus from the Group By chip, panel, or other control that initiated the change. The coordinate and reveal remain transient and emit no persistence event beyond the ordinary Group By preference commit. Initial persisted grouping creates no synthetic focus during SSR or hydration; the first body-focus interaction establishes the ordinary initial Active Cell.
 
+Live grouped publications with an unchanged Group By tuple use identity-first Active Cell reconciliation rather than the shape-reset rule. If the active Group Row Identity survives, update its logical row index and retain its valid Column Identity without auto-revealing the move. If that group disappears, target the row now occupying its previous display index; when removal was at the end, clamp to the new final row. Preserve the same grouped Column Identity when it remains visible and navigable, otherwise use the first visible navigable grouped column. Clear Active Cell only when the authoritative grouped result has no rows. The fallback creates no toast, persistence event, or row-zero jump, and a later keyboard command performs ordinary reveal if needed.
+
+The complete Client grouped model can resolve Group Row Identity directly. The sparse Server Adapter follows an identity when the authoritative viewport delivery resolves its new index; when the active identity is no longer resolvable in the current sparse projection, it applies the same clamped previous-index fallback, which may be a stable loading slot. It never scans loaded values or reconstructs identity from group fields.
+
 ## Mandatory identity
 
 Every grid requires a durable Table Identity. Client Tables additionally require a raw Row Identity function:

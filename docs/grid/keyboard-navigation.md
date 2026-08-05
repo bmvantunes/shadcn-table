@@ -79,6 +79,10 @@ Every Group By add, remove, or reorder replaces the logical row-and-column proje
 
 If the new result is empty, clear the Active Cell. A Server generation may retain row zero as a loading-slot destination until authoritative `totalRows` proves the result empty. Reset vertical geometry to the start and reveal the new destination only when the body owns focus. A pointer or keyboard Group By control retains DOM focus; updating the private logical body destination must not pull focus back into the grid. Persisted grouping restored during SSR or hydration starts with no Active Cell because focus is transient and never persisted.
 
+## Live grouped reconciliation
+
+When the Group By tuple itself is unchanged, a live publication never invokes the grouping-shape reset. Follow a surviving active Group Row Identity to its new logical index while retaining the same valid Column Identity, and do not auto-reveal the move. If the group disappears, target the group now at its previous display index, clamped to the new last row, using the same column when still navigable or the first visible navigable grouped column otherwise. Clear Active Cell only when no grouped row remains. A sparse Server destination may remain a loading slot; do not infer its identity from displayed group values.
+
 ## Header and body navigation
 
 Without filter headers:

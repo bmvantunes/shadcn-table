@@ -141,6 +141,7 @@ The grid must support:
 53. Every Group By add, remove, or reorder resets the logical Active Cell after deriving the new projection: row zero plus its first visible navigable Logical Column, or no Active Cell for an empty result. Never infer raw-to-group focus correspondence, persist the coordinate, or steal DOM focus from the initiating Group By control.
 54. A Client Cell Range retains the exact ordered Row and Column Identity span selected by the user. Value-only publications preserve it. Sorting, filtering, live data, or column-structure changes clear it before Copy only when an endpoint disappears or the identities covered between its endpoints change; never silently retarget stable corners across a different span.
 55. Copy is atomic. One Copy command captures one immutable Clipboard Snapshot containing its validated identities and canonical values, finishes serialization from only that snapshot, and submits the already-finalized payload to the browser. Live publications during serialization or the asynchronous clipboard write may update the grid but never mix versions inside the payload.
+56. With an unchanged Group By tuple, live grouped updates reconcile Active Cell by Group Row Identity first and do not auto-reveal moves. If that identity disappears, target the new row at its previous display index, clamped to the last row, and retain its Column Identity when valid; clear only when no grouped rows remain.
 
 ## Preferred technology split
 
