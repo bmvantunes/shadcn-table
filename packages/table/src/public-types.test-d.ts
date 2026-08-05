@@ -99,12 +99,12 @@ describe("BrunoTable public types", () => {
   it("accepts direct client and opaque server viewport source envelopes", () => {
     const common = {
       tableId: "orders",
-      getRowId: (row: Order) => row.id,
       columns,
     } as const;
 
     const clientProps = {
       ...common,
+      getRowId: (row: Order) => row.id,
       children: "Page-specific toolbar content",
       clientSource: {
         rows: [] as readonly Order[],
@@ -207,7 +207,6 @@ const invalidPaginatedClient = {
 
 const invalidPaginatedServer = {
   tableId: "orders",
-  getRowId: (row: Order) => row.id,
   columns,
   viewportSource: {
     viewport: {},
@@ -219,6 +218,33 @@ const invalidPaginatedServer = {
   pageIndex: 0,
 } satisfies BrunoTableServerProps<Order, Columns>;
 
+const clientWithoutRowId = {
+  tableId: "orders",
+  columns,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const;
+
+// @ts-expect-error Client identity must be derived from the complete resident rows.
+const invalidClientWithoutRowId: BrunoTableClientProps<Order, Columns> = clientWithoutRowId;
+
+const invalidServerWithRowId = {
+  tableId: "orders",
+  columns,
+  // @ts-expect-error Server identity is supplied by the Viewport Source, not the consumer.
+  getRowId: (row: Order) => row.id,
+  viewportSource: {
+    viewport: {},
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} satisfies BrunoTableServerProps<Order, Columns>;
+
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
@@ -228,3 +254,5 @@ void invalidComputedFilter;
 void invalidSort;
 void invalidPaginatedClient;
 void invalidPaginatedServer;
+void invalidClientWithoutRowId;
+void invalidServerWithRowId;

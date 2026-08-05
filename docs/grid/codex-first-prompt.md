@@ -23,7 +23,7 @@ Treat the documents as the current product direction, not infallible implementat
 Challenge details where necessary, but preserve these hard requirements:
 
 - mandatory `tableId`
-- mandatory `getRowId`
+- mandatory Client `getRowId`; Server rejects it and consumes authoritative raw and grouped row keys from its Viewport Source
 - mandatory explicit `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, with no inferred identities
 - mandatory explicit non-empty `headerName` on every leaf column, used as the default visible and accessible label but never as identity or query mapping
 - mandatory explicit runtime `valueType` for raw value-bearing columns, with no row sampling
@@ -45,3 +45,4 @@ Challenge details where necessary, but preserve these hard requirements:
 - strong TypeScript inference without public `any`
 - full strict TypeScript checks, including exact optional properties and unchecked indexed access
 - positive and negative type tests plus emitted-package consumer tests for every public inference guarantee
+- if BrunoTable needs source-owned semantics missing from effect-view-server, fix the upstream contract and require the compatible release instead of adding a consumer workaround or reconstructing canonical source data

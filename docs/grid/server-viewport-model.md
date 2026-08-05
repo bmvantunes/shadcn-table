@@ -46,15 +46,12 @@ const columns = [
   }),
 ] satisfies BrunoTableColumns<Order>;
 
-const getOrderRowId = (row: Order) => row.id;
-
 function OrdersTable() {
   const viewportSource = useLiveQueryViewport("orders");
 
   return (
     <BrunoTableServer
       tableId="orders"
-      getRowId={getOrderRowId}
       columns={columns}
       quickFilterFields={["symbol"]}
       viewportSource={viewportSource}
@@ -80,7 +77,6 @@ const viewportSource = useLiveQueryViewport("regionalOrders");
 
 <BrunoTableServer
   tableId="TABLE_ID_REGIONAL_ORDERS"
-  getRowId={getOrderRowId}
   columns={columns}
   viewportSource={viewportSource}
   routeBy={{ region: selectedRegion, desk: selectedDesk }}
@@ -128,11 +124,13 @@ Rules:
 - Filter and sort mappings are separate capabilities because View Server supports nested filter paths but only top-level raw sort fields.
 - Persisted grid state never stores backend fields as identity.
 - Invalid or stale mappings are dropped conservatively during preference restoration and rejected if they reach query compilation.
-- The Adapter must include row-identity and optimistic-concurrency fields required by grid infrastructure.
+- Server Row Identity never forces a field into projection; the Viewport Source delivers its authoritative key out of band beside each row.
 
 The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Raw columns therefore declare Value Type explicitly, while typed Column Helpers such as `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
 
-Grouped Viewport identity is source-owned. BrunoTable requires the additive key-delivery contract tracked by [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405): every changed sparse row map is accompanied atomically by an authoritative sparse row-key map over exactly the same absolute indexes. The Adapter stores the grouped row and key together. It does not call raw-row `getRowId`, reconstruct a key from group fields, use an aggregate alias, or treat an index as identity. Server grouping must fail its compatibility check clearly when the source cannot provide keys rather than silently installing weaker identity semantics.
+All Server row identity is source-owned. BrunoTable requires the additive key-delivery contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407): every changed sparse raw or grouped row map is accompanied atomically by an authoritative sparse row-key map over exactly the same absolute indexes. The Adapter stores each row and key together. `BrunoTableServer` rejects `getRowId`; the Adapter does not reconstruct a key from selected fields, group fields, or aggregate aliases and never treats an index as identity. The Server variant must fail its compatibility check clearly when the source cannot provide keys rather than silently installing weaker identity semantics.
+
+effect-view-server is a first-party collaborating module at this seam. If BrunoTable needs another missing source-owned semantic, change the upstream contract and require the compatible release. Do not add a compensating consumer prop, duplicate schema semantics, reconstruct canonical source values or keys, or ship a weaker local fallback.
 
 Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
 
@@ -354,16 +352,21 @@ Live View Server publications may move a row when an active sort key changes. Su
 
 ## Sink responses
 
-The effect-view-server Viewport Sink writes the exact AG Grid-compatible shape:
+The effect-view-server Viewport Sink writes the AG Grid-compatible sparse row map plus its additive aligned authoritative-key map:
 
 ```ts
 sink.setRowCount(totalRows, keepRenderedRows);
-sink.setRowData({
-  [absoluteRowIndex]: row,
-});
+sink.setRowData(
+  {
+    [absoluteRowIndex]: row,
+  },
+  {
+    [absoluteRowIndex]: rowKey,
+  },
+);
 ```
 
-The Adapter accepts that sparse absolute-index map, rejects invalid or out-of-range indexes, groups contiguous entries for efficient internal writes, and updates only affected row-slot subscribers. Identity-based live updates remain a separate internal operation so position and identity are never conflated.
+The Adapter accepts those sparse absolute-index maps only when they contain exactly the same index set. It rejects missing, extra, invalid, or out-of-range key entries, stores each row/key pair atomically, groups contiguous entries for efficient internal writes, and updates only affected row-slot subscribers. Position and identity remain separate even though they arrive in one delivery.
 
 This shape is a deliberate fast path: each own key is already the absolute logical row index. The Adapter does not append an array, reconstruct indexes from a page offset, or replace the complete loaded window. It validates each key, resolves the corresponding sparse slot directly, preserves every unchanged row reference, and publishes one batched notification to only the affected mounted slots. A delivery containing `k` rows therefore performs work proportional to that delivery rather than `totalRows` or the retained cache size.
 

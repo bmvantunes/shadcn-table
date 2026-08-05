@@ -57,8 +57,15 @@ const source = {
 
 const props = {
   tableId: "orders",
-  getRowId: (row: Order) => row.id,
   columns,
+  viewportSource: source,
+} satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+
+const invalidProps = {
+  tableId: "orders",
+  columns,
+  // @ts-expect-error emitted Server props preserve source-owned row identity.
+  getRowId: (row: Order) => row.id,
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
@@ -89,6 +96,7 @@ void (0 as unknown as DoubleQuantity);
 void (0 as unknown as Filterable);
 void filters;
 void props;
+void invalidProps;
 void invalidColumn;
 void missingHeaderName;
 void invalidFilter;

@@ -224,7 +224,6 @@ export type BrunoTableCellChange<TRow, TColumns extends BrunoTableColumns<TRow>>
 
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
-  readonly getRowId: (row: TRow) => BrunoTableRowId;
   readonly columns: TColumns;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
@@ -234,6 +233,7 @@ export type BrunoTableClientProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
 > = BrunoTableCommonProps<TRow, TColumns> & {
+  readonly getRowId: (row: TRow) => BrunoTableRowId;
   readonly clientSource: BrunoTableClientSource<TRow>;
   readonly viewportSource?: never;
 };
@@ -243,6 +243,8 @@ export type BrunoTableServerProps<
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
 > = BrunoTableCommonProps<TRow, TColumns> & {
+  /** Server row identity is supplied authoritatively by the Viewport Source. */
+  readonly getRowId?: never;
   readonly viewportSource: BrunoTableServerSource<TViewport>;
   readonly clientSource?: never;
 };

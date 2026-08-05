@@ -105,7 +105,7 @@ const columns = [
 const getOrderRowId = (row: Order) => row.id;
 ```
 
-The same `columns` and `getOrderRowId` are accepted by both public variants.
+The same `columns` are accepted by both public variants. `getOrderRowId` belongs only to `BrunoTableClient`; `BrunoTableServer` receives authoritative identity from its Viewport Source.
 
 Static columns, Column Helpers, and Column Presets should normally live at module scope. Consumers should not need `useMemo` or a `defineGrid` call. Helpers are optional constructors for ordinary column definitions, not a prerequisite for using BrunoTable.
 
@@ -149,7 +149,6 @@ export function OrdersServerTable() {
   return (
     <BrunoTableServer
       tableId="orders"
-      getRowId={getOrderRowId}
       columns={columns}
       initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
       quickFilterFields={["symbol", "status"]}
@@ -168,7 +167,6 @@ The base properties and explicit source variants have this conceptual shape. The
 ```ts
 type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
-  getRowId: (row: TRow) => string;
   columns: TColumns;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   initialOrderBy: BrunoTableSortBy<TColumns>;
@@ -204,6 +202,7 @@ type BrunoTableClientProps<
   TRowVersion = never,
 > = BrunoTableBaseProps<TRow, TColumns> &
   BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
+    getRowId: (row: TRow) => BrunoTableRowId;
     clientSource: BrunoTableClientSource<TRow>;
     externalFilters?: never;
   };
@@ -213,6 +212,7 @@ type BrunoTableServerProps<
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
 > = BrunoTableBaseProps<TRow, TColumns> & {
+  getRowId?: never;
   viewportSource: BrunoTableServerSource<TViewport>;
   externalFilters?: BrunoTableExternalFilters<TRow>;
   editable?: never;
@@ -244,7 +244,7 @@ Expose `BrunoTableClient` and `BrunoTableServer`. Do not expose one component wi
 Rules:
 
 - `tableId` is mandatory and namespaces persistence and diagnostics.
-- `getRowId` is mandatory for ordinary `TRow` records; row indexes are never identities. Flat grouped-summary rows use private Adapter-owned identity and never invoke this callback.
+- `getRowId` is mandatory only for `BrunoTableClient`, where it identifies ordinary `TRow` records. Client flat grouped-summary rows use private Adapter-owned identity and never invoke this callback. `BrunoTableServer` rejects the prop and receives authoritative raw and grouped row keys from its Viewport Source. Row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline for normal rows. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites this normal baseline or current order.
@@ -271,7 +271,6 @@ Persistence is callback-based rather than storage-adapter based:
 ```tsx
 <BrunoTableServer
   tableId="orders"
-  getRowId={getOrderRowId}
   columns={columns}
   viewportSource={viewportSource}
   initialPersistedState={savedPreferences}
@@ -736,9 +735,11 @@ The static union provides autocomplete for every potentially valid grouped targe
 
 On first grouping, or when restored `groupOrderBy` has no valid survivor, BrunoTable orders every active group key ascending in Group By order. Otherwise it preserves valid grouped entries and priorities. Removing or reordering group keys or hiding an aggregate sanitizes the grouped order; newly invalid entries are dropped, and the active-key fallback is applied only if the result would be empty. Clearing grouping retains this context dormant for a future compatible grouping and immediately restores the untouched `orderBy`. No `initialGroupOrderBy` prop is required in V1.
 
-Consumers do not supply grouped-row identity. In `BrunoTableClient`, the local grouping plan derives a private identity from the complete ordered group-key tuple through compiled exact-value semantics. In `BrunoTableServer`, the Viewport Adapter consumes the source-owned authoritative row key delivered atomically beside every sparse grouped result. It never reconstructs the View Server's canonical key from projected values. This upstream contract is tracked by [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405); a compatible effect-view-server version is a prerequisite for Server grouping.
+Consumers do not supply grouped-row identity. In `BrunoTableClient`, the local grouping plan derives a private identity from the complete ordered group-key tuple through compiled exact-value semantics. In `BrunoTableServer`, the Viewport Adapter consumes the source-owned authoritative row key delivered atomically beside every sparse raw or grouped result. It never reconstructs the View Server's canonical key from projected values. This upstream contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407); a compatible effect-view-server release containing it is a prerequisite for the Server variant.
 
-`getRowId` remains mandatory because either variant renders raw `TRow` records when grouping is absent, but BrunoTable never calls it with a fabricated grouped result. There is no `getGroupedRowId` prop or public Group Row Identity field. Aggregate values, Rows, sorting, and positions do not define identity, so aggregate-only updates and grouped reordering preserve it. A changed group key produces a different group, while entering, leaving, or changing Group By advances the logical row generation and clears incompatible transient state. Group Row Identity is never persisted.
+`getRowId` remains mandatory for `BrunoTableClient` because it owns its complete raw `TRow` collection, but BrunoTable never calls it with a fabricated grouped result. `BrunoTableServer` rejects `getRowId` because the Viewport Source owns identity for both raw and grouped rows. There is no `getGroupedRowId` prop or public Group Row Identity field. Aggregate values, Rows, sorting, and positions do not define identity, so aggregate-only updates and grouped reordering preserve it. A changed group key produces a different group, while entering, leaving, or changing Group By advances the logical row generation and clears incompatible transient state. Group Row Identity is never persisted.
+
+effect-view-server is a first-party collaborating module at the Server source seam. If BrunoTable needs missing source-owned semantics, change the upstream contract and require the compatible release. Do not enlarge BrunoTable's consumer interface, duplicate schema semantics, reconstruct canonical values or keys, or ship a weaker local fallback to avoid that change.
 
 ## Grid filter expressions
 
@@ -890,11 +891,11 @@ Drop invalid state conservatively. If a backend field is renamed without changin
 effect-view-server raw queries require an explicit non-empty `select`.
 
 - A field column contributes its `field` to the projected fields required for rendering.
-- The Adapter must include infrastructure fields required by canonical row identity and live reconciliation.
 - A Computed Column contributes every member of its explicit non-empty `fields` dependency tuple.
 - Its getter receives only those declared fields at the public TypeScript boundary.
+- Server Row Identity never forces a field into `select`; the Viewport Source delivers its authoritative key out of band beside each sparse row.
 
-Do not invoke `getRowId` or `valueGetter` against fabricated rows to guess projection dependencies.
+Client `getRowId` is not a Server projection declaration. Do not invoke `valueGetter` against fabricated rows to guess projection dependencies.
 
 ## Shared runtime and renderer
 
@@ -933,7 +934,7 @@ The Viewport Row Pipeline owns:
 
 Grouping and aggregation are V1 capabilities in both public variants, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. The Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally.
 
-V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result is modeled honestly rather than cast back to the raw `TRow`; the Client Adapter derives its private tuple identity and the Viewport Adapter consumes its source-owned key instead of calling the consumer's raw-row `getRowId`.
+V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result is modeled honestly rather than cast back to the raw `TRow`; the Client Adapter derives its private tuple identity and the Viewport Adapter consumes the same source-owned key channel used for raw Server rows. No Server consumer identity callback exists.
 
 The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
 

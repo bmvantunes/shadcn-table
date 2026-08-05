@@ -73,7 +73,7 @@ The grid must support:
 ## Non-negotiable constraints
 
 1. `tableId` is mandatory.
-2. `getRowId` is mandatory.
+2. `getRowId` is mandatory for `BrunoTableClient` and forbidden for `BrunoTableServer`; every Server row identity comes authoritatively from the Viewport Source.
 3. Every column has a stable explicit identity.
 4. Row indexes are positions, never identities.
 5. Persist user preferences only:
@@ -126,7 +126,8 @@ The grid must support:
 38. Column customization precedence is built-in helper defaults, then reusable preset defaults, then individual column options. Typed `valueFormatter`, conditional cell styling, and custom cell rendering remain available at the individual column level.
 39. Display formatting and styling never redefine value equality, ordering, parsing, clipboard exchange, persistence, conflicts, or server query operands. Round-trippable custom text requires an explicit paired parser/exchange capability or custom Value Type.
 40. Normal rows and grouped summaries own separate durable `orderBy` and `groupOrderBy` contexts. Grouping never rewrites normal sorting; grouped sorting admits only active keys, the reserved `COL_ID_BRUNO_TABLE_ROWS` System Column, and visible participating aggregates, and compiles aggregate targets through private aliases.
-41. `getRowId` identifies raw `TRow` records only. Client grouped summaries derive private identity from the complete group-key tuple; Server grouped summaries consume effect-view-server's authoritative viewport row key. Do not expose `getGroupedRowId`, use row indexes, or reconstruct Server grouped identity from result values.
+41. Client `getRowId` identifies raw `TRow` records only, while Client grouped summaries derive private identity from the complete group-key tuple. Server raw rows and grouped summaries both consume effect-view-server's authoritative viewport row key. Do not expose Server `getRowId`, expose `getGroupedRowId`, use row indexes, or reconstruct Server identity from result values.
+42. effect-view-server is a first-party collaborating module. When BrunoTable needs missing source-owned semantics, change the upstream contract and require the compatible release; do not add consumer props, duplicate schema logic, reconstruct canonical values or keys, or ship weaker local fallbacks.
 
 ## Preferred technology split
 

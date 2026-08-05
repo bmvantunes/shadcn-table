@@ -37,7 +37,7 @@ Build:
 - the shared table-props interface
 - explicit `BrunoTableClient` and `BrunoTableServer` prop interfaces
 - mandatory `tableId`
-- mandatory `getRowId`
+- mandatory Client `getRowId` and a Server type-level prohibition on that prop
 - mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
@@ -252,7 +252,7 @@ Success criteria:
 
 Build:
 
-- `<BrunoTableServer tableId getRowId columns viewportSource />`
+- `<BrunoTableServer tableId columns viewportSource />`
 - `viewportSource` support compatible with effect-view-server's Live Query Viewport
 - conditional exact `routeBy` values inferred from the Viewport Source: required for leased topics and forbidden otherwise
 - source-owned Route Field tuples with no duplicated `routeByFields` table configuration
@@ -260,7 +260,7 @@ Build:
 - Column Identity to Query Field translation
 - typed recursive grid-filter compilation into View Server `where`
 - typed grid-sort compilation into View Server `orderBy`
-- explicit `select` projection from field columns plus infrastructure requirements
+- explicit `select` projection from field columns and declared computed dependencies, with Row Identity delivered out of band
 - long-lived datasource session
 - sink
 - query generations
@@ -281,7 +281,7 @@ Build:
 
 Success criteria:
 
-- consumers render `BrunoTableServer` with `columns`, `getRowId`, and `viewportSource` without an intermediate grid definition
+- consumers render `BrunoTableServer` with `columns` and `viewportSource` without an intermediate grid definition or duplicated identity callback
 - every leased `viewport.replace(...)` includes the exact application-owned Feed Route, while materialized and source-free topics reject it
 - Route Fields do not require visible columns, projection, or filter capability, and Feed Routes are never inferred from Set Filters
 - a meaningful Feed Route change releases the old generation, clears sparse and transient row-space state, and retains compatible user preferences
@@ -480,7 +480,7 @@ Success criteria:
 
 ## Phase 10: Grouping and aggregation
 
-Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. The Client Adapter derives private identity from that tuple; the Server Adapter requires effect-view-server's authoritative sparse viewport key from [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405). Neither path adds a consumer `getGroupedRowId`.
+Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. The Client Adapter derives private identity from that tuple; the Server Adapter requires effect-view-server's authoritative sparse viewport key contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407). Neither path adds a consumer `getGroupedRowId`.
 
 Build:
 
@@ -496,7 +496,7 @@ Build:
 - capability-safe aggregate definitions derived from compiled Value Type semantics
 - local Client grouping and aggregation over the complete resident source
 - native effect-view-server `groupBy` and `aggregates` compilation for the Server Table
-- atomic sparse grouped row-plus-key ingestion from a compatible effect-view-server Viewport Source, with no reconstructed Server identity fallback
+- atomic sparse raw-and-grouped row-plus-key ingestion from a compatible effect-view-server Viewport Source, with no consumer callback or reconstructed Server identity fallback
 - separate durable normal and grouped sort contexts, with grouped eligibility derived from the current grouped projection
 - grouped View Server result typing without casting aggregate rows to the raw source row type
 - flat Client result normalization with no hierarchical group rows or expansion state
@@ -528,9 +528,9 @@ Success criteria:
 - aggregate aliases and group fields sort through validated View Server query members
 - grouped sorting accepts only active keys, Rows, and visible participating aggregates; sanitization preserves surviving priorities and falls back to every active key ascending rather than producing an unsorted state
 - clearing grouping restores normal `orderBy` unchanged, and private View Server aggregate aliases never enter public or persisted state
-- Client grouped rows derive stable identity from the complete exact group-key tuple; Server grouped rows use the source-owned viewport key
+- Client raw rows use `getRowId` and grouped rows derive stable identity from the complete exact group-key tuple; all Server rows use the source-owned viewport key
 - aggregate-only changes and grouped movement retain identity, while key changes create a different logical group
-- `getRowId` receives only raw `TRow`, no `getGroupedRowId` prop exists, and Group Row Identity is not persisted
+- Client `getRowId` receives only raw `TRow`; Server rejects `getRowId`, no `getGroupedRowId` prop exists, and Group Row Identity is not persisted
 - both variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
 - virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination
 

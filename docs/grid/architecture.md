@@ -57,7 +57,7 @@ Expose two public React composition roots:
 
 ```tsx
 <BrunoTableClient tableId={...} getRowId={...} columns={...} clientSource={...} />
-<BrunoTableServer tableId={...} getRowId={...} columns={...} viewportSource={...} />
+<BrunoTableServer tableId={...} columns={...} viewportSource={...} />
 ```
 
 Do not expose one component with a row-model flag or incompatible source union. The two variants have materially different data ownership and lifecycles, so the public seam should make that difference explicit.
@@ -352,7 +352,9 @@ Factories and static column arrays live at module scope. Their types must preser
 
 When grouping is active, the ordered Group By region supplies the flat group-key field tuple. An active key column contributes its field value and suppresses its own configured aggregate; every other configured aggregate column contributes its single aggregate result. Client and Viewport Adapters consume this same normalized plan without exposing TanStack aggregation definitions or View Server aggregate objects to the consumer.
 
-Grouped Row Identity deliberately differs behind the two row-pipeline Adapters while preserving one private runtime contract. The Client Adapter derives a stable key from its complete ordered group-key tuple using compiled exact-value semantics. The Viewport Adapter receives effect-view-server's authoritative key in the same sparse indexed delivery as the grouped row and stores both atomically. It does not reconstruct source identity, invoke raw `getRowId`, or key a row by viewport position. Server grouping has no fallback for source versions that predate [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405).
+Row Identity deliberately differs behind the two row-pipeline Adapters while preserving one private runtime contract. The Client Adapter invokes the mandatory consumer `getRowId` for raw `TRow` records and derives a stable key for grouped summaries from the complete ordered group-key tuple using compiled exact-value semantics. The Viewport Adapter receives effect-view-server's authoritative key beside every raw or grouped row in the same sparse indexed delivery and stores the pair atomically. `BrunoTableServer` rejects `getRowId`: the Adapter never reconstructs source identity or keys a row by viewport position. The key-delivery contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407); Server support requires a compatible release containing it.
+
+effect-view-server is treated as a first-party collaborating module at this seam. If BrunoTable needs another missing source-owned semantic, the design must change effect-view-server upstream and raise BrunoTable's compatible-version requirement. It must not compensate with another consumer prop, duplicated schema semantics, reconstructed canonical values or keys, or a weaker local fallback.
 
 Aggregate aliases, aggregate values, Rows, sort state, and positions are excluded from logical grouped identity. A grouped record can therefore update or move without retargeting identity-owned state. A group-key change removes the old identity and creates a new one. Changing the Group By tuple advances the complete logical generation and clears incompatible position-based state rather than attempting cross-shape reconciliation.
 
