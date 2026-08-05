@@ -5,13 +5,17 @@
 Only `BrunoTableClient` uses a strict discriminated editing interface:
 
 ```ts
-type BrunoTableReadOnlyCapability = {
+type BrunoTableReadOnlyCapability<TColumns> = BrunoTableGroupingCapability<TColumns> & {
   editable?: false;
   getRowVersion?: never;
   onSaveEdits?: never;
 };
 
-type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = {
+type BrunoTableEditableCapability<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = BrunoTableNoGroupingCapability & {
   editable: true;
   getRowVersion: (row: TRow) => TRowVersion;
   onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
@@ -19,6 +23,8 @@ type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>
 ```
 
 `editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The function's exact return type, including `bigint`, becomes the Row Version type for every draft base, Save Change Set, rejection, conflict, and accepted canonical result. False or omitted editing makes both props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
+
+Editing and grouping are mutually exclusive Table Instance capabilities. The editable branch rejects `groupRowsColumn`, installs no grouping or aggregation feature, exposes no Group By UI or command, and discards restored `groupBy`, `groupOrderBy`, and Rows width during preference sanitization. Shared columns may retain `groupBy` and `aggFunc` declarations for a separate read-only Client or Server Table; those declarations are dormant here.
 
 At least one column must declare `isEditable: true` or an `isEditable` predicate. Reject `editable: true` at compile time when the literal columns prove that no column is potentially editable, and diagnose it at runtime when widened input prevents static proof. Do not evaluate predicates across all Client rows to discover the capability or rescan changing data merely to show chrome. Shared definitions may carry these declarations into `BrunoTableServer`, but the Server Table never activates them and its props reject the editing capability.
 

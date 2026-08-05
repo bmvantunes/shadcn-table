@@ -169,8 +169,12 @@ The process that sends committed drafts to the server, applies optimistic-concur
 _Avoid_: Cell Edit Commit, editor close
 
 **Editable Table**:
-A Client Table whose grid-level editing capability is enabled and whose definitions include at least one potentially editable column. Individual cell eligibility remains subject to its column policy; a Server Table is always read-only.
+A Client Table whose grid-level editing capability is enabled and whose definitions include at least one potentially editable column. Individual cell eligibility remains subject to its column policy, and grouping is unavailable for the complete Table Instance.
 _Avoid_: Editable column, always-editable table
+
+**Read-only Table**:
+A Table Instance without the Editable Table capability. It is the only Table Instance that may activate grouping and aggregation; every Server Table is read-only, while a Client Table is read-only when `editable` is false or omitted.
+_Avoid_: Server Table, disabled cell, read-only column
 
 **Edit Mode**:
 The current persistence timing policy for an Editable Table: Immediate saves each committed edit transaction, while Batch accumulates net changes until Save.

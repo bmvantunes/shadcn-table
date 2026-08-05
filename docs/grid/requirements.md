@@ -127,7 +127,7 @@ The grid performs locally:
 
 - filtering
 - sorting
-- grouping and aggregation when configured
+- grouping and aggregation when configured on a read-only Client Table
 - virtualization
 - editing
 - undo and redo
@@ -181,18 +181,22 @@ The grid internally requests indexed ranges based on the visible viewport and ov
 
 ## Grouping and aggregation execution
 
-Grouping and aggregation are V1 capabilities of both public variants. They share BrunoTable-owned intent, column semantics, controls, formatting, and accessibility, while their row-pipeline Adapters execute that intent differently:
+Grouping and aggregation are V1 capabilities only for Read-only Table Instances. They are available behind both public components because every Server Table is read-only and a Client Table is read-only when `editable` is false or omitted. An Editable Client Table exposes neither capability.
 
-- `BrunoTableClient` groups and aggregates the complete resident Client Source locally.
+Read-only Tables share BrunoTable-owned intent, column semantics, controls, formatting, and accessibility, while their row-pipeline Adapters execute that intent differently:
+
+- a read-only `BrunoTableClient` groups and aggregates the complete resident Client Source locally;
 - `BrunoTableServer` compiles grouping and aggregation into the effect-view-server query and consumes the resulting indexed grouped rows.
+
+An Editable Client composition does not register grouping or aggregation features, render the Group By region, admit grouped commands, or execute local aggregates. Shared column definitions may still contain `isEditable`, `groupBy`, and `aggFunc` metadata so one tuple can be reused by different Table Instances; static metadata does not activate both capabilities together.
 
 The Server Table must never derive a grouped result or aggregate from its loaded sparse blocks. Loaded blocks are a viewport cache, not the complete result set. A grouped Server query uses the View Server's native `groupBy` and `aggregates` contract rather than pretending grouped output is an ordinary raw-row `select` projection.
 
 Client implementations must match the documented View Server operation and exact-value semantics for the shared built-in aggregate operations. Any capability that cannot preserve that semantic contract must fail during configuration instead of silently producing different Client and Server answers.
 
-V1 grouping produces a flat grouped-summary table in both variants. A multi-field grouping yields one logical row per distinct ordered group-key tuple, with the group fields and configured aggregate values presented as ordinary columns in that row. V1 has no expandable group hierarchy, group disclosure controls, nested child rows, leaf-row drill-down, or per-group child loading. TanStack's local hierarchical grouped row model must not leak a different Client experience; the Client Adapter normalizes its result to the same flat contract supplied by the View Server.
+V1 grouping produces a flat grouped-summary table in Server and read-only Client Tables. A multi-field grouping yields one logical row per distinct ordered group-key tuple, with the group fields and configured aggregate values presented as ordinary columns in that row. V1 has no expandable group hierarchy, group disclosure controls, nested child rows, leaf-row drill-down, or per-group child loading. TanStack's local hierarchical grouped row model must not leak a different read-only Client experience; its Adapter normalizes the result to the same flat contract supplied by the View Server.
 
-Grouped-summary identity remains private and requires no consumer callback. `BrunoTableClient` invokes its mandatory `getRowId` only for ordinary `TRow` records, then derives grouped identity from the complete ordered group-key tuple through compiled exact-value semantics because it owns the complete grouping operation. `BrunoTableServer` rejects `getRowId`; its Viewport Adapter consumes effect-view-server's authoritative row key beside every sparse raw or grouped result. It must not reverse-engineer that key from returned fields, use a viewport index, or add `getGroupedRowId` to BrunoTable. The key-delivery contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407), so Server support depends on a compatible release containing it rather than a divergent fallback.
+Grouped-summary identity remains private and requires no consumer callback. A read-only `BrunoTableClient` invokes its mandatory `getRowId` only for ordinary `TRow` records, then derives grouped identity from the complete ordered group-key tuple through compiled exact-value semantics because it owns the complete grouping operation. `BrunoTableServer` rejects `getRowId`; its Viewport Adapter consumes effect-view-server's authoritative row key beside every sparse raw or grouped result. It must not reverse-engineer that key from returned fields, use a viewport index, or add `getGroupedRowId` to BrunoTable. The key-delivery contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407), so Server support depends on a compatible release containing it rather than a divergent fallback.
 
 Aggregate values, Rows, sorting, and viewport positions never participate in logical grouped identity. Aggregate-only live updates and reordering retain identity, while a changed group key removes one logical group and creates another. Entering, leaving, or changing the Group By tuple creates a new logical row generation and clears incompatible transient row-space state. Group Row Identity is not persisted.
 
@@ -273,7 +277,7 @@ Row count is group metadata rather than a field aggregation. Consumers cannot de
 
 Rows has the reserved persisted System Column Identity `COL_ID_BRUNO_TABLE_ROWS`. Consumer definitions cannot claim that identity. Grouped sorting may target an active group key, Rows, or a visible participating aggregate column even when the corresponding raw Field Column opted out of normal-row sorting. The Viewport Adapter translates active-key identities to group fields and Rows or aggregate-column identities to private aggregate aliases immediately before query replacement; those View Server details never enter persisted state.
 
-Both public table variants accept optional `groupRowsColumn` configuration for this BrunoTable-owned column. It may provide a non-empty `headerName`, a numeric baseline `width`, an exact-`bigint` `valueFormatter`, a static or conditional `cellClassName`, and a `cellRenderer`. The presentation callbacks receive the fixed Rows Column Identity, exact count value, and ordered group-key values without a raw `TRow`. Omitted properties use the `Rows` label, compiled `bigint` presentation, and implementation-owned default width.
+`BrunoTableServer` and the read-only `BrunoTableClient` branch accept optional `groupRowsColumn` configuration for this BrunoTable-owned column; Editable Client props reject it. It may provide a non-empty `headerName`, a numeric baseline `width`, an exact-`bigint` `valueFormatter`, a static or conditional `cellClassName`, and a `cellRenderer`. The presentation callbacks receive the fixed Rows Column Identity, exact count value, and ordered group-key values without a raw `TRow`. Omitted properties use the `Rows` label, compiled `bigint` presentation, and implementation-owned default width.
 
 `groupRowsColumn` never turns Rows into a consumer definition. It cannot change the reserved identity or configure a field, Value Type, aggregate, grouping, filter, hide, edit, pin, or sort capability. Its conditional presentation executes only for mounted Rows cells and creates no subscription.
 
@@ -428,6 +432,8 @@ Persisted filters, both sort contexts, grouping, and layouts refer to `columnId`
 
 Rows participates only in the persisted column-width map. A committed user resize is keyed by `COL_ID_BRUNO_TABLE_ROWS`, wins over the `groupRowsColumn.width` baseline, remains dormant while grouping is inactive, and is restored when grouping resumes. Sanitization retains that width while current definitions still provide grouping capability and otherwise drops it. The reserved identity never enters persisted column order, visibility, or pinning.
 
+An Editable Client Table has no grouping capability, so restoration also drops every persisted `groupBy` entry, `groupOrderBy`, and reserved Rows width. Restoration never installs grouping transiently, opens a review, or emits `onPersistChange`; the next committed preference notification contains the sanitized non-grouped snapshot.
+
 Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
 
 Runtime filters retain native exact operands. Persisted exact numeric operands use a tagged codec ID, codec version, and JSON-safe canonical string. Restoration must require the current Column Identity, value-semantics codec, operator capability, and server mapping to agree; otherwise drop that filter leaf conservatively. Never stringify a native `bigint`, use a BigDecimal object's diagnostic `toJSON`, or guess a stale numeric domain from its text.
@@ -552,6 +558,8 @@ Only `BrunoTableClient` exposes the strict discriminated editing interface:
 - false or omitted `editable` rejects `getRowVersion`, `onSaveEdits`, and other edit-only table props;
 - at least one column must be potentially editable through `isEditable: true` or an `isEditable` predicate;
 - column policy remains the authority for exact cell eligibility; the table-level capability never makes a read-only cell editable.
+
+`editable: true` also selects the no-grouping branch. TypeScript rejects `groupRowsColumn`; the composition root installs no grouping or aggregation machinery; and restored Group By preferences are sanitized away. Column definitions may retain dormant grouping metadata for reuse by a different read-only Table Instance.
 
 An Editable Client Table renders a compact `Batch editing` switch in its top-right grid chrome: off is Immediate and on is Batch. Determine its visibility from static column capability, not by evaluating predicates over the complete client dataset. The toggle subscribes only to Edit Mode and whether switching is currently legal.
 

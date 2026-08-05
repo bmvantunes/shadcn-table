@@ -45,6 +45,7 @@ Build:
 - separate typed `BrunoTableGroupSortBy` persistence for grouped summaries, including the reserved Rows System Column Identity
 - optional typed `BrunoTableGroupRowsColumnOptions` for the fixed Rows label, baseline width, and exact-`bigint` presentation
 - Rows-aware persisted-width typing that admits the reserved identity only in `columnWidths`
+- a strict Read-only Table grouping capability that makes `groupRowsColumn` invalid when Client `editable: true`
 - mutually exclusive field and computed columns
 - direct `field` value inference
 - computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
@@ -86,6 +87,8 @@ Success criteria:
 - simultaneous `field` and `valueGetter` fails compilation
 - invalid filter operators fail
 - two aggregate columns may reference one field only when they have distinct Column Identities, while one column cannot declare multiple aggregate functions
+- `editable: true` together with `groupRowsColumn` fails compilation
+- one columns tuple containing edit and grouping metadata remains reusable by separate Editable and Read-only Table Instances
 - group-key callbacks infer the exact field value and cannot access `row: TRow`
 - aggregate callbacks infer the selected function's exact result domain and cannot access `row: TRow`
 - grouped conditional class hooks share their role's exact context, return `string | undefined`, and do not install subscriptions
@@ -488,11 +491,13 @@ Success criteria:
 
 ## Phase 10: Grouping and aggregation
 
-Grouping and aggregation are V1 capabilities for both table variants. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. The Client Adapter derives private identity from that tuple; the Server Adapter requires effect-view-server's authoritative sparse viewport key contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407). Neither path adds a consumer `getGroupedRowId`.
+Grouping and aggregation are V1 capabilities for Read-only Table Instances behind both public components. Every Server Table is read-only; a Client Table participates only when `editable` is false or omitted. V1 uses one flat grouped-summary row per distinct ordered group-key tuple. The read-only Client Adapter derives private identity from that tuple; the Server Adapter requires effect-view-server's authoritative sparse viewport key contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407). Neither path adds a consumer `getGroupedRowId`.
 
 Build:
 
 - one BrunoTable-owned typed grouping and aggregation intent
+- read-only Client and Server capability composition that omits grouping and aggregation entirely from Editable Clients
+- conservative Editable Client restoration that drops `groupBy`, `groupOrderBy`, and reserved Rows width
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
@@ -520,7 +525,10 @@ Build:
 
 Success criteria:
 
-- grouping and aggregation work in both `BrunoTableClient` and `BrunoTableServer`
+- grouping and aggregation work in read-only `BrunoTableClient` and every `BrunoTableServer`
+- `editable: true` rejects `groupRowsColumn`, mounts no Group By UI, admits no grouped command, and executes no grouping or aggregate work
+- shared definitions may contain both edit and grouping metadata without activating both capabilities in one Table Instance
+- Editable Client restoration drops grouping, grouped sorting, and Rows width before initialization and never briefly renders a grouped view
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists
@@ -552,7 +560,7 @@ Success criteria:
 - Client raw rows use `getRowId` and grouped rows derive stable identity from the complete exact group-key tuple; all Server rows use the source-owned viewport key
 - aggregate-only changes and grouped movement retain identity, while key changes create a different logical group
 - Client `getRowId` receives only raw `TRow`; Server rejects `getRowId`, no `getGroupedRowId` prop exists, and Group Row Identity is not persisted
-- both variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
+- both read-only variants render one flat row per group-key tuple with no disclosure controls, nested children, or leaf-row drill-down
 - virtualization and keyboard navigation operate on the chosen logical grouped-row space without introducing pagination
 
 ## Phase 11: Advanced capabilities

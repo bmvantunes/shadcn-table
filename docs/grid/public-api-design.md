@@ -168,7 +168,6 @@ The base properties and explicit source variants have this conceptual shape. The
 type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
   columns: TColumns;
-  groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TColumns>;
   initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   initialOrderBy: BrunoTableSortBy<TColumns>;
   quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
@@ -183,6 +182,14 @@ type BrunoTableQuickFilterFields<TRow> = readonly [
 ];
 
 type BrunoTableExternalFilters<TRow> = readonly BrunoTableExternalFilterExpression<TRow>[];
+
+type BrunoTableGroupingCapability<TColumns> = {
+  groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TColumns>;
+};
+
+type BrunoTableNoGroupingCapability = {
+  groupRowsColumn?: never;
+};
 
 type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly version: number;
@@ -214,14 +221,15 @@ type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = BrunoTableBaseProps<TRow, TColumns> & {
-  getRowId?: never;
-  viewportSource: BrunoTableServerSource<TViewport>;
-  externalFilters?: BrunoTableExternalFilters<TRow>;
-  editable?: never;
-  getRowVersion?: never;
-  onSaveEdits?: never;
-};
+> = BrunoTableBaseProps<TRow, TColumns> &
+  BrunoTableGroupingCapability<TColumns> & {
+    getRowId?: never;
+    viewportSource: BrunoTableServerSource<TViewport>;
+    externalFilters?: BrunoTableExternalFilters<TRow>;
+    editable?: never;
+    getRowVersion?: never;
+    onSaveEdits?: never;
+  };
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -247,7 +255,7 @@ Expose `BrunoTableClient` and `BrunoTableServer`. Do not expose one component wi
 Rules:
 
 - `tableId` is mandatory and namespaces persistence and diagnostics.
-- `getRowId` is mandatory only for `BrunoTableClient`, where it identifies ordinary `TRow` records. Client flat grouped-summary rows use private Adapter-owned identity and never invoke this callback. `BrunoTableServer` rejects the prop and receives authoritative raw and grouped row keys from its Viewport Source. Row indexes are never identities.
+- `getRowId` is mandatory only for `BrunoTableClient`, where it identifies ordinary `TRow` records. Read-only Client flat grouped-summary rows use private Adapter-owned identity and never invoke this callback. `BrunoTableServer` rejects the prop and receives authoritative raw and grouped row keys from its Viewport Source. Row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
 - `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline for normal rows. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites this normal baseline or current order.
@@ -335,7 +343,7 @@ type BrunoTableSaveEditsHandler<TRow, TColumns extends BrunoTableColumns<TRow>, 
   changes: BrunoTableSaveChangeSet<TRow, TColumns, TRowVersion>,
 ) => PromiseLike<BrunoTableSaveResult<TRow, TColumns, TRowVersion>>;
 
-type BrunoTableReadOnlyCapability = {
+type BrunoTableReadOnlyCapability<TColumns> = BrunoTableGroupingCapability<TColumns> & {
   editable?: false;
   getRowVersion?: never;
   onSaveEdits?: never;
@@ -344,17 +352,20 @@ type BrunoTableReadOnlyCapability = {
 type BrunoTableEditableCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> =
   BrunoTableEditableColumnId<TColumns> extends never
     ? never
-    : {
+    : BrunoTableNoGroupingCapability & {
         editable: true;
         getRowVersion: (row: TRow) => TRowVersion;
         onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
       };
 
 type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> =
-  BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
+  | BrunoTableReadOnlyCapability<TColumns>
+  | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 ```
 
-`editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` and result-version type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
+`editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. It also rejects `groupRowsColumn` on the editable branch. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` and result-version type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
+
+Grouping and editing are mutually exclusive Table Instance capabilities. `BrunoTableServer` always installs the read-only branch. `BrunoTableClient` installs grouping and aggregation only when `editable` is false or omitted; when true, its composition root does not register grouping or aggregation features, expose a Group By region, accept grouped commands, or execute aggregate work. Shared definitions may still declare `isEditable`, `groupBy`, and `aggFunc` because the same tuple may serve different Table Instances. A restored editable instance conservatively drops `groupBy`, `groupOrderBy`, and the reserved Rows width rather than retaining unreachable grouping intent.
 
 Use `onSaveEdits`, not `onEditSaveClick`: the operation represents persistence regardless of whether the Save Workflow came from a pointer, keyboard, accessibility activation, Immediate transaction, Batch Save, or retry. The exact save-item and result discriminants remain to be finalized, but they must retain exact row, Column Identity, editable-value, and `getRowVersion` return-type correlation without `any` or `unknown` in inference paths.
 
@@ -804,7 +815,7 @@ type BrunoTableGroupRowsColumnOptions<TColumns> = {
 />
 ```
 
-The property is static definition input shared by Client and Server Tables. It cannot configure `columnId`, `field`, `valueType`, grouping, aggregation, filtering, hiding, editing, pinning, or sorting capability. Changing the visible label never changes the reserved Column Identity or row-count meaning.
+The property is static definition input shared by Server and read-only Client Tables. Editable Client props reject it. It cannot configure `columnId`, `field`, `valueType`, grouping, aggregation, filtering, hiding, editing, pinning, or sorting capability. Changing the visible label never changes the reserved Column Identity or row-count meaning.
 
 A committed user resize is the sole durable Rows layout preference. It is stored in `columnWidths` under `COL_ID_BRUNO_TABLE_ROWS`; a valid restored width wins over `groupRowsColumn.width`, remains dormant while grouping is inactive, and reappears when grouping resumes. Sanitization retains it while current definitions still expose grouping capability and drops it when they do not. Rows never appears in persisted `columnOrder`, `columnVisibility`, or `columnPinning`.
 
@@ -846,7 +857,7 @@ The static union provides autocomplete for every potentially valid grouped targe
 
 On first grouping, or when restored `groupOrderBy` has no valid survivor, BrunoTable orders every active group key ascending in Group By order. Otherwise it preserves valid grouped entries and priorities. Removing or reordering group keys or hiding an aggregate sanitizes the grouped order; newly invalid entries are dropped, and the active-key fallback is applied only if the result would be empty. Clearing grouping retains this context dormant for a future compatible grouping and immediately restores the untouched `orderBy`. No `initialGroupOrderBy` prop is required in V1.
 
-Consumers do not supply grouped-row identity. In `BrunoTableClient`, the local grouping plan derives a private identity from the complete ordered group-key tuple through compiled exact-value semantics. In `BrunoTableServer`, the Viewport Adapter consumes the source-owned authoritative row key delivered atomically beside every sparse raw or grouped result. It never reconstructs the View Server's canonical key from projected values. This upstream contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407); a compatible effect-view-server release containing it is a prerequisite for the Server variant.
+Consumers do not supply grouped-row identity. In a read-only `BrunoTableClient`, the local grouping plan derives a private identity from the complete ordered group-key tuple through compiled exact-value semantics. In `BrunoTableServer`, the Viewport Adapter consumes the source-owned authoritative row key delivered atomically beside every sparse raw or grouped result. It never reconstructs the View Server's canonical key from projected values. This upstream contract was specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407); a compatible effect-view-server release containing it is a prerequisite for the Server variant.
 
 `getRowId` remains mandatory for `BrunoTableClient` because it owns its complete raw `TRow` collection, but BrunoTable never calls it with a fabricated grouped result. `BrunoTableServer` rejects `getRowId` because the Viewport Source owns identity for both raw and grouped rows. There is no `getGroupedRowId` prop or public Group Row Identity field. Aggregate values, Rows, sorting, and positions do not define identity, so aggregate-only updates and grouped reordering preserve it. A changed group key produces a different group, while entering, leaving, or changing Group By advances the logical row generation and clears incompatible transient state. Group Row Identity is never persisted.
 
@@ -1043,9 +1054,9 @@ The Viewport Row Pipeline owns:
 - query generations and stale-response rejection
 - total-row state, range requests, block caching, and eviction
 
-Grouping and aggregation are V1 capabilities in both public variants, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. The Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally.
+Grouping and aggregation are V1 Read-only Table capabilities available behind both public components, not a Server-only extension. The public intent and column semantics remain BrunoTable-owned; consumers do not configure TanStack grouping APIs or effect-view-server query objects directly. A read-only Client Adapter executes the intent over its complete source. The Viewport Adapter sends native `groupBy` and `aggregates` query members and consumes the View Server's grouped result type. It must never aggregate sparse loaded blocks locally. An Editable Client Adapter installs neither execution path.
 
-V1 exposes grouping as a flat grouped-summary result in both variants. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result is modeled honestly rather than cast back to the raw `TRow`; the Client Adapter derives its private tuple identity and the Viewport Adapter consumes the same source-owned key channel used for raw Server rows. No Server consumer identity callback exists.
+V1 exposes grouping as a flat grouped-summary result in Server and read-only Client Tables. Each distinct ordered group-key tuple produces one logical row containing the grouped fields and configured aggregate outputs. There are no expandable group rows, child-row fetches, or hidden leaf collections. The grouped result is modeled honestly rather than cast back to the raw `TRow`; the read-only Client Adapter derives its private tuple identity and the Viewport Adapter consumes the same source-owned key channel used for raw Server rows. No Server consumer identity callback exists.
 
 The shared filter and sort UI dispatches the same grid commands in both variants. For example, a header never checks the row-model kind:
 

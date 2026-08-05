@@ -134,6 +134,8 @@ The grid must support:
 46. Group Key presentation overrides require `groupBy: true`; Aggregate presentation overrides require a valid `aggFunc`. Helpers and presets preserve their exact callback types without widening to `unknown`.
 47. The Rows System Column has fixed identity `COL_ID_BRUNO_TABLE_ROWS`, exact `bigint` value semantics, and no field, filter, hide, or edit capability. Optional `groupRowsColumn` configuration changes only its label, baseline width, and presentation.
 48. A committed user resize of Rows persists under its reserved identity and remains dormant while ungrouped. A valid persisted width wins over the `groupRowsColumn` baseline, while Rows never enters base column order, visibility, or pinning preferences.
+49. Grouping and aggregation are Read-only Table capabilities. `BrunoTableServer` always qualifies; `BrunoTableClient` qualifies only when `editable` is false or omitted. An Editable Table installs no grouping feature, UI, command, grouped row model, or aggregate execution.
+50. Shared columns may declare `isEditable`, `groupBy`, and `aggFunc` for reuse across Table Instances, but one instance never activates editing and grouping together. Editable Client props reject `groupRowsColumn`, and restoration drops Group By state, grouped sorting, and Rows width conservatively.
 
 ## Preferred technology split
 
