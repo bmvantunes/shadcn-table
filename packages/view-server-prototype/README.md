@@ -68,3 +68,13 @@ Interactive browser validation produced these results:
 The roughly 805 kB prototype bundle is not representative of the grid library: it intentionally
 ships the complete in-browser View Server runtime, React test provider, and seeded engine so the
 contract can be tested without Kafka or a second process.
+
+## Upstream lifecycle issue
+
+Unmounting an active published viewport currently makes React 19.2.6 report
+`useInsertionEffect must not schedule updates`. View Server uninstalls its stable viewport binding
+inside an insertion-effect cleanup; deactivation then synchronously invokes the consumer sink's
+`setRowCount` cleanup, which can publish an external-store snapshot. This is tracked upstream as
+[effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408). BrunoTable
+must not hide the warning or defer its sink artificially; the React lifecycle boundary belongs in
+View Server.
