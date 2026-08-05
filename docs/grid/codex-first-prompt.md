@@ -37,6 +37,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - first-class keyboard navigation
 - client and server viewport row models
 - explicit compiled Column Value Semantics for exact `bigint` and optional Effect BigDecimal support, with no `number` coercion or row sampling
+- Column Identity-keyed Aggregate Cells that may share a source field, never expose private aggregate aliases, and use typed aggregate presentation callbacks without fabricated raw rows
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout

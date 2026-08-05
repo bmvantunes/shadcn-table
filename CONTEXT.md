@@ -28,6 +28,10 @@ _Avoid_: Accessor column, field ID
 A column whose value is produced by `valueGetter` from an explicit non-empty `fields` dependency tuple rather than one direct row field. The tuple limits what the getter can read and supplies Server Table projection dependencies. A Computed Column is never filterable, sortable, or editable in V1.
 _Avoid_: Field column, implicit dependency discovery, queryable column, editable derived value
 
+**Aggregate Cell**:
+A grouped-summary cell produced by one Field Column's `aggFunc`. It retains that column's Column Identity and source-field meaning while presenting the aggregate result; multiple Aggregate Cells may use one source field when their Column Identities differ.
+_Avoid_: Renamed result field, public aggregate alias, fabricated source row
+
 **Value Type**:
 The explicit runtime category or custom descriptor that selects one column's value behavior. A raw value-bearing column declares it directly, while a Column Helper supplies it.
 _Avoid_: Sampled data type, TypeScript-only field type, column style

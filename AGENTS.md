@@ -128,6 +128,8 @@ The grid must support:
 40. Normal rows and grouped summaries own separate durable `orderBy` and `groupOrderBy` contexts. Grouping never rewrites normal sorting; grouped sorting admits only active keys, the reserved `COL_ID_BRUNO_TABLE_ROWS` System Column, and visible participating aggregates, and compiles aggregate targets through private aliases.
 41. Client `getRowId` identifies raw `TRow` records only, while Client grouped summaries derive private identity from the complete group-key tuple. Server raw rows and grouped summaries both consume effect-view-server's authoritative viewport row key. Do not expose Server `getRowId`, expose `getGroupedRowId`, use row indexes, or reconstruct Server identity from result values.
 42. effect-view-server is a first-party collaborating module. When BrunoTable needs missing source-owned semantics, change the upstream contract and require the compatible release; do not add consumer props, duplicate schema logic, reconstruct canonical values or keys, or ship weaker local fallbacks.
+43. Aggregate Cells remain keyed by their originating Column Identity and retain their source `field`; private View Server aliases never cross the Adapter seam. Distinct columns may aggregate the same field when their `columnId` values differ.
+44. Raw-row-aware `valueFormatter` and `cellRenderer` callbacks never receive fabricated grouped rows. Aggregate Cells use compiled aggregate-result Value Type presentation by default and optional typed `aggregateValueFormatter` and `aggregateCellRenderer` callbacks whose context contains no raw `TRow`.
 
 ## Preferred technology split
 

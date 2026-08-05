@@ -679,15 +679,50 @@ const columns = [
     valueType: "number",
     groupBy: true,
     aggFunc: "min",
+    aggregateValueFormatter: ({ value }) => value.toFixed(2),
+  },
+  {
+    columnId: "COL_ID_MAX_PRICE",
+    headerName: "Maximum price",
+    field: "price",
+    valueType: "number",
+    aggFunc: "max",
+    aggregateValueFormatter: ({ value }) => value.toFixed(2),
   },
 ] satisfies BrunoTableColumns<Order>;
 ```
 
-`groupBy: true` means the user may drag the column into BrunoTable's Group By region; it does not mean the column starts actively grouped. `aggFunc` is one built-in function, never an array or arbitrary callback. Multiple aggregate presentations over one field are separate columns with separate `columnId` values.
+`groupBy: true` means the user may drag the column into BrunoTable's Group By region; it does not mean the column starts actively grouped. `aggFunc` is one built-in function, never an array or arbitrary callback. Multiple aggregate presentations over one field are ordinary separate columns with separate `columnId` values. Supporting them requires no public renamed fields: both definitions above retain `field: "price"`, while their Column Identities distinguish their logical cells.
 
 A column may provide both capabilities. While that column is an active group key, the flat grouped row contains its group-field value and suppresses its own aggregate output. When another column is grouping and this column is not an active key, its `aggFunc` contributes an aggregate output. The ordered active Group By region determines the ordered field tuple sent to the View Server or evaluated by the Client Adapter.
 
 The exact `aggFunc` union exposed for a concrete column must be capability-derived rather than universally assignable. For example, `sum` and `avg` require compatible numeric aggregation semantics. TypeScript and runtime normalization must reject unsupported column/function combinations before either row pipeline receives them.
+
+Aggregate presentation is also capability-derived. Its conceptual shape is:
+
+```ts
+type BrunoTableAggregateValueFormatterParams<
+  TColumns,
+  TColumnId extends BrunoTableAggregatedColumnId<TColumns>,
+> = {
+  readonly columnId: TColumnId;
+  readonly aggFunc: BrunoTableAggFuncFor<TColumns, TColumnId>;
+  readonly value: BrunoTableAggregateValue<TColumns, TColumnId>;
+  readonly groupKeys: BrunoTableGroupKeyValues<TColumns>;
+  readonly rowCount: bigint;
+};
+
+type BrunoTableAggregatePresentation<TColumns, TColumnId> = {
+  readonly aggregateValueFormatter?: (
+    params: BrunoTableAggregateValueFormatterParams<TColumns, TColumnId>,
+  ) => string;
+  readonly aggregateCellRenderer?: BrunoTableAggregateCellRenderer<TColumns, TColumnId>;
+};
+```
+
+The exact aggregate result type follows the compiled Value Type and selected `aggFunc`; it is not assumed to equal the raw field type. Neither callback receives `row: TRow`, because a grouped summary is not a source row. Without an override, BrunoTable formats the aggregate through its compiled aggregate-result Value Type presentation. Ordinary raw-row `valueFormatter` and `cellRenderer` callbacks are never invoked with fabricated grouped data.
+
+The Viewport Adapter may compile `COL_ID_MIN_PRICE` and `COL_ID_MAX_PRICE` to distinct private aliases required by effect-view-server, but it maps each response value directly back to its Column Identity. The public column definitions, renderer, callbacks, sort state, and persistence never observe names such as `minimumPrice`, `maximumPrice`, or a generated aggregate alias.
 
 Active grouping also installs one BrunoTable-owned System Column whose default header is `Rows`. It is not inferred from or attached to any consumer Field Column. Every flat grouped row contains its exact `bigint` source-row count after current pre-group filters. The Client Adapter calculates it from the complete filtered source; the Viewport Adapter always adds a native `{ aggFunc: "count" }` aggregate under a reserved internal alias.
 
