@@ -32,6 +32,10 @@ _Avoid_: Field column, implicit dependency discovery, queryable column, editable
 A grouped-summary cell that presents one active Group By field's exact value through its originating Column Identity. It represents a group key rather than any source row.
 _Avoid_: Raw row cell, representative row, fabricated source row
 
+**Group By Region**:
+The accessible table-owned control surface containing the ordered active Group Key columns. Its add, remove, and reorder commands are authoritative; drag-and-drop is only one optional way to invoke them.
+_Avoid_: Drop zone, drag-only grouping, grouped column order
+
 **Aggregate Cell**:
 A grouped-summary cell produced by one Field Column's `aggFunc`. It retains that column's Column Identity and source-field meaning while presenting the aggregate result; multiple Aggregate Cells may use one source field when their Column Identities differ.
 _Avoid_: Renamed result field, public aggregate alias, fabricated source row

@@ -515,7 +515,10 @@ Build:
 - grouped value-only publications preserve an exact range, while grouped structural reconciliation uses the same ordered-identity span contract as ordinary Client rows
 - post-projection Active Cell reset to row zero and the first visible navigable new-projection column after every Group By shape change
 - identity-first Active Cell reconciliation for live grouped updates within an unchanged Group By tuple, with clamped previous-index fallback when the active group disappears
-- an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
+- an accessible ordered Group By Region containing only columns whose definitions declare `groupBy: true`
+- non-drag Add Group combobox and eligible column-menu add/remove commands
+- active Group By chips with explicit Remove, scoped `Alt+ArrowLeft/Right` one-position reorder, retained focus, and polite position announcements
+- pointer header addition and chip reordering adapted onto the same add/remove/move Grid Commands, with no keyboard pickup/drop mode
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
 - committed Rows-width persistence under its reserved identity, including dormant ungrouped restoration and capability-aware sanitization
@@ -549,6 +552,7 @@ Success criteria:
 - Editable Client restoration drops grouping, grouped sorting, and Rows width before initialization and never briefly renders a grouped view
 - entering grouping clears any ordinary Client Row Selection in one transaction, retains no dormant IDs, and emits no selection-owned persistence event
 - grouped summaries cannot be row-selected and clearing the final group key restores an empty ungrouped Row Selection capability
+- every grouping operation is available without drag-and-drop; add, remove, and reorder commands are accessible, announce position changes, retain predictable focus, and publish one grouping/query transition
 - a grouped read-only Client may select and copy one horizontal or vertical range across mounted or virtualized grouped cells without display-text or private-alias leakage
 - Group By shape changes never reinterpret an old range's identity corners; they cancel gesture/autoscroll and clear the range before publishing the new projection
 - grouped ranges expose no Paste, Drag Fill, or edit command, and grouped Server Tables remain limited to their loaded Active Cell

@@ -192,7 +192,7 @@ Read-only Tables share BrunoTable-owned intent, column semantics, controls, form
 - a read-only `BrunoTableClient` groups and aggregates the complete resident Client Source locally;
 - `BrunoTableServer` compiles grouping and aggregation into the effect-view-server query and consumes the resulting indexed grouped rows.
 
-An Editable Client composition does not register grouping or aggregation features, render the Group By region, admit grouped commands, or execute local aggregates. Shared column definitions may still contain `isEditable`, `groupBy`, and `aggFunc` metadata so one tuple can be reused by different Table Instances; static metadata does not activate both capabilities together.
+An Editable Client composition does not register grouping or aggregation features, render the Group By Region, admit grouped commands, or execute local aggregates. Shared column definitions may still contain `isEditable`, `groupBy`, and `aggFunc` metadata so one tuple can be reused by different Table Instances; static metadata does not activate both capabilities together.
 
 The Server Table must never derive a grouped result or aggregate from its loaded sparse blocks. Loaded blocks are a viewport cache, not the complete result set. A grouped Server query uses the View Server's native `groupBy` and `aggregates` contract rather than pretending grouped output is an ordinary raw-row `select` projection.
 
@@ -266,7 +266,7 @@ Use `columnId` for all grid state and persistence. Resolve it through the curren
 
 A direct Field Column may declare two independent grouping capabilities:
 
-- `groupBy: true` makes that column eligible to be dragged into the Group By region. Absence means it cannot become an active group key through BrunoTable UI.
+- `groupBy: true` makes that column eligible to be added to the Group By Region. Absence means it cannot become an active group key through BrunoTable UI.
 - `aggFunc` declares the single built-in aggregate the column contributes while another column is actively grouping. V1 accepts exactly one of `countDistinct`, `sum`, `min`, `max`, or `avg`; an array or consumer callback is not accepted.
 
 The same column may declare both properties. When it is itself an active group key, the flat grouped row exposes its field value and does not also emit that column's aggregate. If it is not an active key while another eligible column is grouping, its configured `aggFunc` contributes the aggregate value. Two different aggregates over the same source field use two distinct column definitions with distinct Column Identities. This is a supported column-centric case, not an exceptional compatibility mode.
@@ -312,13 +312,19 @@ Grouped presentation derives visibility without mutating the durable Column Visi
 
 Forcing an active key or Rows into the grouped projection emits no visibility preference mutation. Hidden columns must not be surfaced merely because they possess aggregate semantics.
 
-The Column Visibility control remains available while grouped and enumerates the normalized column registry rather than only currently rendered cells. The user may show or hide aggregate-capable columns; each action updates the one durable Column Visibility preference, emits the ordinary committed persistence snapshot, and remains in force after grouping clears. Active group keys are non-hideable until removed from the Group By region, and Rows is never hideable. BrunoTable owns no separate grouped-visibility state.
+The Column Visibility control remains available while grouped and enumerates the normalized column registry rather than only currently rendered cells. The user may show or hide aggregate-capable columns; each action updates the one durable Column Visibility preference, emits the ordinary committed persistence snapshot, and remains in force after grouping clears. Active group keys are non-hideable until removed from the Group By Region, and Rows is never hideable. BrunoTable owns no separate grouped-visibility state.
 
-Reordering two columns in the Group By region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
+Reordering two columns in the Group By Region immediately reorders both the query's ordered `groupBy` field tuple and the corresponding rendered columns. This does not rewrite the user's normal Column Order.
+
+The Group By Region is an accessible ordered control surface, not a drag-only drop target. An Add Group combobox lists inactive columns whose definitions declare `groupBy: true`, displaying `headerName` while dispatching stable Column Identity. Each eligible column menu exposes `Group by {headerName}` while inactive and `Remove {headerName} from grouping` while active. Each active chip presents its label, position, pointer drag handle, and explicit Remove action.
+
+When an active chip owns focus, scoped `Alt+ArrowLeft` or `Alt+ArrowRight` moves it exactly one position in the corresponding direction and retains focus on that chip. Boundary commands are no-ops. A polite live announcement reports outcomes such as `Price moved to position 2 of 3`; removal reports the label and remaining count, then focuses the nearest surviving chip or Add Group when the tuple becomes empty. Do not implement a keyboard pickup/drop mode or require a drag gesture for any grouping operation. Visible instructions and accessible descriptions disclose the reorder keys.
+
+Pointer header-to-region addition and chip reordering dispatch the same add/move commands as the non-drag controls. Every accepted add, remove, or move replaces the ordered tuple once, produces one Group By preference commit, and creates at most one Server Query Generation. Rejection caused by stale eligibility or a no-longer-valid target leaves state unchanged and uses the initiating control's ordinary disabled/status presentation rather than a row-level toast. Grouping controls subscribe only to eligible identities and the active tuple; live row and aggregate publications never notify them.
 
 V1 suspends all ordinary start/end Column Pinning while grouping is active. A previously pinned-start, pinned-end, or centre column participates in the single unpinned grouped order above. Entering grouping must not clear, mutate, or persist this suspension as a preference change; clearing the final group key restores the exact normal Column Order and Column Pinning state.
 
-Ordinary header-column rearrangement is disabled while grouping is active. The user may reorder only the chips in the Group By region. Participating aggregate columns therefore retain their relative durable base order, and no grouped drag can ambiguously mutate both a temporary layout and the normal layout.
+Ordinary header-column rearrangement is disabled while grouping is active. The user may reorder only the chips in the Group By Region. Participating aggregate columns therefore retain their relative durable base order, and no grouped drag can ambiguously mutate both a temporary layout and the normal layout.
 
 Persistence stores that durable base `columnOrder`, the durable base `columnPinning`, and the ordered active `groupBy` Column Identities. It never stores the temporary rendered grouped order and needs no `currentOrder`, `orderBeforeFirstGroupBy`, or equivalent duplicate snapshot. Restoring a grouped table first restores the base layout and ordered grouping intent, then derives the grouped presentation. Removing the final group key after a refresh therefore reveals the exact normal order and pinning the user had before grouping.
 

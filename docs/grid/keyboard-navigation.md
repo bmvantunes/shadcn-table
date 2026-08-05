@@ -83,6 +83,10 @@ If the new result is empty, clear the Active Cell. A Server generation may retai
 
 When the Group By tuple itself is unchanged, a live publication never invokes the grouping-shape reset. Follow a surviving active Group Row Identity to its new logical index while retaining the same valid Column Identity, and do not auto-reveal the move. If the group disappears, target the group now at its previous display index, clamped to the new last row, using the same column when still navigable or the first visible navigable grouped column otherwise. Clear Active Cell only when no grouped row remains. A sparse Server destination may remain a loading slot; do not infer its identity from displayed group values.
 
+## Group By Region
+
+Grouping never requires drag-and-drop. Keyboard users add an eligible inactive column through Add Group or its column-menu command and remove it through the chip's explicit Remove action or the active column-menu command. When the chip itself owns focus, `Alt+ArrowLeft` and `Alt+ArrowRight` move it one position, keep focus on it, and announce its label plus new position through a polite live region. A boundary command does nothing. Removing a chip focuses the nearest survivor, or Add Group after removing the final chip. Do not introduce Space/Enter pickup mode, hidden drag state, or document-global shortcuts.
+
 ## Header and body navigation
 
 Without filter headers:

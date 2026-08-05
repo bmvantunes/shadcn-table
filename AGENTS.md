@@ -143,6 +143,7 @@ The grid must support:
 55. Copy is atomic. One Copy command captures one immutable Clipboard Snapshot containing its validated identities and canonical values, finishes serialization from only that snapshot, and submits the already-finalized payload to the browser. Live publications during serialization or the asynchronous clipboard write may update the grid but never mix versions inside the payload.
 56. With an unchanged Group By tuple, live grouped updates reconcile Active Cell by Group Row Identity first and do not auto-reveal moves. If that identity disappears, target the new row at its previous display index, clamped to the last row, and retain its Column Identity when valid; clear only when no grouped rows remain.
 57. A semantic View Server query change starts a clean Query Generation: release the old generation, invalidate its rows and total, render fixed-height loading rows for the new projection, and ignore late old deliveries. Window-only movement stays inside the generation, retains overlapping slots, and loads only missing indexes. Same-generation stale/error lifecycle may retain its last coherent rows.
+58. Group By never requires drag-and-drop. Eligible inactive columns are addable through an Add Group combobox and column-menu command; active chips expose Remove and scoped `Alt+ArrowLeft/Right` reorder commands with accessible position announcements. Pointer drag dispatches the same commands, and no keyboard pickup/drop mode exists.
 
 ## Preferred technology split
 

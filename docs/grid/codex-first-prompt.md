@@ -47,6 +47,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - deterministic Active Cell reset after every Group By add, remove, or reorder: row zero and the first visible column in the new projection, with no raw/group focus mapping or DOM-focus theft
 - identity-first Active Cell reconciliation for live grouped updates inside an unchanged Group By tuple, with no auto-reveal and a clamped previous-index fallback only when the active group disappears
 - clean loading rows for every semantic View Server Query Generation change, never old rows under new route/filter/sort/projection/group/aggregate semantics; window-only movement retains overlapping slots and same-generation lifecycle may retain coherent rows
+- Group By is fully operable without drag-and-drop through Add Group, column-menu actions, explicit chip removal, and scoped `Alt+ArrowLeft/Right` reorder with focus retention and accessible position announcements; pointer drag dispatches the same commands
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout
