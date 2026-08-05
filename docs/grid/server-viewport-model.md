@@ -138,6 +138,8 @@ Quick Filter uses the caller's explicit non-empty `quickFilterFields` tuple of s
 
 An open Server Set Filter does not facet the sparse viewport cache. It owns a separate narrow live whole-result subscription that carries the current Feed Route, External Filters, Quick Filter, and every other active Grid Filter while excluding the filter for its own Column Identity. Boolean and Select columns enable this surface by default; Text, Number, BigInt, and BigDecimal columns require explicit opt-in. Live distinct values and counts remain native and update only the open overlay's compact store. Closing the overlay releases the subscription.
 
+An empty Set Filter inclusion set is a committed Match-None Filter Expression, not no filter. It must exclude current and future values without enumerating the facet domain. The Adapter requires the explicit source-native semantic tracked in [effect-view-server#409](https://github.com/bmvantunes/effect-view-server/issues/409); it must not send an empty `in` condition that View Server normalizes away or emulate Match None with `NOT(in(currentFacetValues))`.
+
 V1 exposes no exceptional computed filter or sort mapping. A Computed Column's `fields` tuple is its complete projection dependency declaration.
 
 ## Internal source seam
@@ -156,6 +158,10 @@ generation.release();
 ```
 
 `replace` is used when filter, sort, or projection semantics change. `setWindow` moves the active indexed window as the user scrolls. `release` runs on replacement or unmount. This is an internal Adapter seam, not an object the ordinary `BrunoTableServer` consumer constructs.
+
+The Adapter, not the source callback flags, owns the Query Generation token. It allocates one token before `replace`, closes that token over the sink, and rejects every delivery after release or replacement. The optional `keepRenderedRows` argument passed to `setRowCount` is a delivery hint inside the current source controller; it never authorizes old-row retention across a semantic generation boundary.
+
+The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. The published `2.1.0` package currently warns on active viewport unmount because insertion-effect cleanup reaches `sink.setRowCount`; [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) tracks the upstream lifecycle fix. BrunoTable must not hide it with deferred sink publication or warning suppression.
 
 ## Why a long-lived object
 
@@ -326,6 +332,8 @@ Do not use the previous generation's `totalRows` to manufacture new scrollbar au
 
 A window-only `setWindow` call stays inside the active Query Generation. It keeps overlapping loaded slots and their references, requests the newly required range, and renders stable loading slots only for missing indexes. A same-generation lifecycle transition to stale, closed, or error may retain its last coherent rows with shared status treatment. Row retention never crosses a semantic query boundary.
 
+This distinction was exercised against `effect-view-server@2.1.0`: moving a 20-row window by five rows retained one generation, reused all 15 overlapping records, and wrote only five new slots. Three rapid Quick Filter drafts produced one debounced replacement and one new generation.
+
 The source `version` used by snapshot/delta delivery is a Query Version for this logical index space. It may reject stale read publications, but it must never be copied into a cell draft or save request as Row Version.
 
 ## Viewport requests
@@ -370,6 +378,8 @@ sink.setRowData(
   },
 );
 ```
+
+`keepRenderedRows` does not participate in Adapter generation logic. Only the Adapter's accepted semantic command decides whether rows belong to the current logical space.
 
 The Adapter accepts those sparse absolute-index maps only when they contain exactly the same index set. It rejects missing, extra, invalid, or out-of-range key entries, stores each row/key pair atomically, groups contiguous entries for efficient internal writes, and updates only affected row-slot subscribers. Position and identity remain separate even though they arrive in one delivery.
 

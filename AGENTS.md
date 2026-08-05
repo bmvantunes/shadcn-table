@@ -29,7 +29,7 @@ Source repositories used for implementation research live under `.repos/` as Git
 - `.repos/ag-grid` contains the AG Grid source from `git@github.com:ag-grid/ag-grid.git`.
 - `.repos/table` contains the TanStack Table source from `git@github.com:TanStack/table.git`.
 
-TanStack Table is tracking v9, which is still in beta. Do not rely on remembered APIs or make assumptions based on earlier versions. Before designing or changing table behavior, verify the relevant implementation, types, tests, and recommended patterns in `.repos/table`, including its examples. Treat those examples as a primary implementation reference.
+TanStack Table is pinned to v9 stable. Do not rely on remembered APIs or make assumptions based on earlier versions. Before designing or changing table behavior, verify the relevant implementation, types, tests, and recommended patterns in `.repos/table`, including its examples. Treat those examples as a primary implementation reference.
 
 <!--VITE PLUS START-->
 
@@ -154,6 +154,8 @@ The grid must support:
 66. Save-operation records are bounded. Pending, awaiting-source, and rejected operations retain only the immutable submitted evidence needed for reconciliation; completed records are removed after their flash or notification lifecycle rather than accumulating for the Table Instance lifetime.
 67. Keep columns as one plain array checked with `satisfies BrunoTableColumns<TRow>`. Global `BrunoTable...Column` helpers infer the row from that outer context; do not add a row-bound helper factory or repeated row generic. Raw Field Columns remain valid, while strict Computed Columns use a global Value Type helper or equivalently typed custom constructor so their non-empty `fields` tuple restricts `valueGetter.row` to the corresponding `Pick`.
 68. The renderer has one native two-axis scroll owner. Virtualize rows and centre columns, keep start/end columns in separate mounted sticky regions, and reveal a keyboard destination with the minimum geometry delta after pinned/header insets; do not use nearest-index scrolling or a second Scroll Area viewport.
+69. The View Server Adapter owns semantic Query Generation. Use `viewport.replace` only for meaningful Feed Route, projection, filter, sort, grouping, or aggregate changes; use `generation.setWindow` for scroll/reveal movement, retain only same-generation overlap, and never treat `setRowCount` lifecycle hints as generation authority.
+70. Empty Set Filter inclusion intent means Match None for current and future values. Compile it through a source-native Match-None Filter Expression; do not enumerate or negate the current facet domain and do not rely on an empty `in` form that the source normalizes away.
 
 ## Preferred technology split
 

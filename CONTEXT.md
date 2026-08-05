@@ -88,6 +88,10 @@ _Avoid_: Empty sorting, Query Field identity, reactive prop synchronization, des
 A Grid Filter surface for choosing one or more exact scalar values through the `in` operator. Boolean and Select Field Columns use it by default; Text, Number, BigInt, and BigDecimal Field Columns require explicit opt-in because their distinct-value cardinality may be unbounded. While open, its values and counts remain live under every other active constraint and filter.
 _Avoid_: Feed Route selector, static option snapshot, loaded-window facet, always-on high-cardinality query
 
+**Match-None Filter Expression**:
+The exact server-query meaning of explicit Set Filter inclusion intent containing no values. It matches no current or future row until the user changes that filter intent.
+_Avoid_: Empty `in` no-op, negation of current facet values, enumerated future domain
+
 **Query Field**:
 A row field or supported field path understood by a server query language. A Query Field is resolved from a column definition and is never used as persisted Column Identity.
 _Avoid_: Column Identity, column ID

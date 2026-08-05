@@ -258,6 +258,7 @@ Success criteria:
 - an open Server Set Filter remains live over the complete result rather than loaded blocks and releases its subscription on close
 - explicit Set Filter include/exclude values survive facet disappearance as reversible zero-count entries and recover live counts if they return; absent values with no explicit intent may be dropped
 - Select All and manually selecting the final available value both normalize to no filter, partial state preserves include/exclude intent for future values, and passive facet updates never rewrite that intent
+- Clear All compiles empty inclusion intent to an explicit Client false predicate and the View Server source-native Match-None Filter Expression, never an empty `in` no-op or negated current facet
 - continuous filter input debounces for 150 ms, discrete valid choices apply immediately, and Select All/Clear All each produce one atomic command, query generation, and persistence snapshot
 - Server Set Filters may use value checkboxes and value Select All without installing or implying forbidden Server Row Selection
 - Text, Number, BigInt, and BigDecimal columns never open an automatic unbounded-cardinality facet without explicit opt-in
@@ -288,6 +289,7 @@ Build:
 - query generations
 - clean loading-row presentation for every semantic View Server query generation, with no old-row or old-count retention across the boundary
 - effect-view-server `replace` and generation `setWindow` lifecycle
+- Adapter-owned semantic generation tokens; source `setRowCount` hints never bridge generations
 - indexed block cache
 - stable identity store
 - range loading
@@ -310,6 +312,7 @@ Success criteria:
 - a meaningful Feed Route change releases the old generation, clears sparse and transient row-space state, and retains compatible user preferences
 - Feed Route, projection, filter, sort, Group By, or aggregate semantic changes invalidate the complete old indexed result and show the new generation's loading rows; equivalent normalized queries do not restart
 - window-only movement stays inside one generation, retains overlapping loaded slots, and renders loading only for absent required indexes
+- active View Server unmount or controller replacement invokes no consumer sink update from `useInsertionEffect`
 - stale, closed, or error lifecycle may retain coherent rows only from the same generation; late deliveries from released generations never appear
 - server scrolling exposes no pagination state or controls and can jump directly to an arbitrary indexed window
 - client and viewport tables render the same header, filter, sort, cell, and navigation Modules
