@@ -10,7 +10,7 @@ This note compares three different tools that are easy to conflate:
 - XState Store, the small event-based store from the XState project; and
 - XState core, the state-machine and actor runtime for discrete workflows and asynchronous orchestration.
 
-TanStack Table is pinned to [`9.0.0-beta.74` at `1b70a17`](https://github.com/TanStack/table/tree/1b70a17ce2ec6a88869e04d587dc6f5dee877ce7). The locally installed TanStack Store is `0.11.0`; the current XState Store documentation describes v4 and npm publishes `4.2.2` ([TanStack Store npm](https://www.npmjs.com/package/@tanstack/store), [XState Store npm](https://www.npmjs.com/package/@xstate/store)). The final ownership decision was exercised by the throwaway [edit/save reconciliation prototype](https://github.com/bmvantunes/shadcn-table/tree/8d3f734/packages/table/src/__prototype__/edit-save-reconciliation).
+TanStack Table is pinned to stable [`9.0.0` at `d4d91a6`](https://github.com/TanStack/table/tree/d4d91a6cd6caa96b8d3bdb327b894b6125605350). The locally installed TanStack Store is `0.11.0`; the current XState Store documentation describes v4 and npm publishes `4.2.2` ([TanStack Store npm](https://www.npmjs.com/package/@tanstack/store), [XState Store npm](https://www.npmjs.com/package/@xstate/store)). The final ownership decision was exercised by the throwaway [edit/save reconciliation prototype](https://github.com/bmvantunes/shadcn-table/tree/8d3f734/packages/table/src/__prototype__/edit-save-reconciliation).
 
 ## Executive recommendation
 

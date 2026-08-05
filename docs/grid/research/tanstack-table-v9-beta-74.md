@@ -2,6 +2,8 @@
 
 Research snapshot: 2026-08-02.
 
+> Historical snapshot. TanStack Table v9 became stable on 2026-08-05 and this repository now pins `9.0.0`. See [TanStack Table v9 stable update](./tanstack-table-v9-stable.md).
+
 ## Version status
 
 The npm `latest` tag still points to TanStack Table v8 (`8.21.3`). The v9 `beta` tag now points to `9.0.0-beta.74`; npm does not publish an untagged `9.0.0` package yet. The vendored source tracks commit [`1b70a17`](https://github.com/TanStack/table/tree/1b70a17ce2ec6a88869e04d587dc6f5dee877ce7), and `@bruno/table` pins that exact beta.

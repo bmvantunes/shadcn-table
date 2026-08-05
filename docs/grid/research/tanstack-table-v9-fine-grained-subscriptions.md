@@ -4,7 +4,7 @@ Research snapshot: 2026-08-02.
 
 ## Conclusion
 
-TanStack Table v9's fine-grained subscription model is real and relevant to BrunoTable, but the React API is **`table.Subscribe`** (capital `S`) or the standalone React **`Subscribe`** component. There is no lowercase React `table.subscribe` render API in beta.74. Lowercase `table.subscribe` is a Lit template helper. The other lowercase forms in React are imperative TanStack Store subscriptions: `table.store.subscribe(...)` and `table.atoms.<slice>.subscribe(...)`.
+TanStack Table v9's fine-grained subscription model is real and relevant to BrunoTable, but the React API is **`table.Subscribe`** (capital `S`) or the standalone React **`Subscribe`** component. There is no lowercase React `table.subscribe` render API in stable v9.0.0. Lowercase `table.subscribe` is a Lit template helper. The other lowercase forms in React are imperative TanStack Store subscriptions: `table.store.subscribe(...)` and `table.atoms.<slice>.subscribe(...)`.
 
 BrunoTable should use narrow reactive islands throughout its private renderer, not only in cells. That does **not** mean mechanically mounting one TanStack subscription for every cell. The appropriate boundary depends on the invalidation shape:
 
@@ -16,7 +16,7 @@ BrunoTable should use narrow reactive islands throughout its private renderer, n
 
 TanStack itself recommends starting with the default `useTable` selector and adding fine-grained boundaries where render cost matters. BrunoTable has stronger requirements than a general-purpose example—React Compiler correctness, nested renderer components, and a 120 Hz target—so these boundaries should be designed in from the first vertical slice and then measured. Selectors must encode every state dependency used by the rendered island; an underspecified selector produces stale UI.
 
-Primary upstream snapshot: TanStack Table [`9.0.0-beta.74` at `1b70a17`](https://github.com/TanStack/table/tree/1b70a17ce2ec6a88869e04d587dc6f5dee877ce7). The subscription implementation, tests, and cited examples are unchanged from the previously audited beta.71 snapshot.
+Primary upstream snapshot: stable TanStack Table [`9.0.0` at `d4d91a6`](https://github.com/TanStack/table/tree/d4d91a6cd6caa96b8d3bdb327b894b6125605350). The React subscription implementation, table-state guide, and adapter tests are unchanged from the previously audited beta.74 snapshot.
 
 ## The four different APIs
 
@@ -205,17 +205,17 @@ Sources:
 
 The internal adapter should centralize these mappings so public BrunoTable renderers never import TanStack atoms, stores, or `Subscribe`.
 
-## Maturity and beta caveat
+## Maturity and stable-version boundary
 
-This architecture arrived with the v9 TanStack Store rewrite on 2026-01-07. The subscription API then changed materially in April and May: the table store was split into feature atoms, the prop became `source`, and the default `useTable` selection changed to the full state. Beta.74 remains a prerelease; `@tanstack/react-table` is pinned to `9.0.0-beta.74` in this repository.
+This architecture arrived with the v9 TanStack Store rewrite on 2026-01-07. The subscription API then changed materially in April and May: the table store was split into feature atoms, the prop became `source`, and the default `useTable` selection changed to the full state. TanStack Table v9 is now stable, and `@tanstack/react-table` is pinned to exact version `9.0.0` in this repository. The stable release did not change the React subscription implementation or guidance audited here.
 
 The implementation has targeted React tests for selection isolation, controlled-state publication, unmount cleanup, and concurrent rendering. That is enough to treat it as a serious private implementation candidate, not enough to freeze it into BrunoTable's public API. BrunoTable should:
 
 - keep the TanStack subscription types and components private;
-- pin the exact beta and review subscription behavior on each upgrade;
+- pin the exact stable version and review subscription behavior on each upgrade;
 - add BrunoTable-owned render-count and React Compiler behavioral tests;
 - benchmark the actual virtualized workload instead of assuming more subscriptions are always faster;
-- preserve an adapter seam so a v9 beta API change does not affect consumers.
+- preserve an adapter seam so a future v9 API change does not affect consumers.
 
 History references:
 

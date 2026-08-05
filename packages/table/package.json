@@ -30,7 +30,7 @@
     "prepublishOnly": "vp run check && vp run test && vp run build && vp run check:build && vp run test:types:emitted"
   },
   "dependencies": {
-    "@tanstack/react-table": "9.0.0-beta.74"
+    "@tanstack/react-table": "9.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
