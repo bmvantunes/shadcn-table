@@ -153,6 +153,7 @@ The grid must support:
 65. Batch undo/redo records one bounded command per user gesture using reversible sparse cell-state patches that include Draft and Conflict evidence, not value-only pairs or full-row snapshots. Live convergence prunes that Cell Identity from both history stacks, and mode switching remains blocked while either stack contains edit-owned work.
 66. Save-operation records are bounded. Pending, awaiting-source, and rejected operations retain only the immutable submitted evidence needed for reconciliation; completed records are removed after their flash or notification lifecycle rather than accumulating for the Table Instance lifetime.
 67. Keep columns as one plain array checked with `satisfies BrunoTableColumns<TRow>`. Global `BrunoTable...Column` helpers infer the row from that outer context; do not add a row-bound helper factory or repeated row generic. Raw Field Columns remain valid, while strict Computed Columns use a global Value Type helper or equivalently typed custom constructor so their non-empty `fields` tuple restricts `valueGetter.row` to the corresponding `Pick`.
+68. The renderer has one native two-axis scroll owner. Virtualize rows and centre columns, keep start/end columns in separate mounted sticky regions, and reveal a keyboard destination with the minimum geometry delta after pinned/header insets; do not use nearest-index scrolling or a second Scroll Area viewport.
 
 ## Preferred technology split
 

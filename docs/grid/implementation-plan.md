@@ -124,6 +124,8 @@ Build:
 - vertical virtualization
 - horizontal centre-column virtualization
 - pinned start and end columns
+- one native two-axis scroll owner; Scroll Area styling may decorate only that viewport
+- separate continuously mounted sticky start/end regions around the virtual centre window
 - one shared immutable centre-column window for header and body
 - basic headers and cells
 - helper-owned semantic layout defaults for start-aligned text, end-aligned numbers, centered checkboxes, and full-width select editors
@@ -149,6 +151,9 @@ Success criteria:
 - 1,000 columns in stress fixture
 - bounded mounted cells
 - a 150-column fixture mounts only pinned columns plus the visible and overscanned centre window for each mounted row
+- held-arrow reveal advances by one logical cell and the smallest geometry delta across centre and pinned boundaries; it never delegates to nearest-index alignment
+- end-pinned columns render inside a sticky end region rather than collapsing beside start-pinned cells
+- one-time Active Cell initialization does not replay after row or column virtual-window renders
 - header and body render identical centre-column identities, widths, and virtual padding after resize, reorder, visibility, and pinning changes
 - the full processed client row model remains continuously scrollable without page state or row slicing
 - no full-grid rerender on a single row replacement

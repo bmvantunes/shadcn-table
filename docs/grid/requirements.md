@@ -96,14 +96,16 @@ Both variants present one uninterrupted virtual row space. There are no paginati
 
 Do not register TanStack Table's row-pagination feature in either variant. `Page Up` and `Page Down` are viewport-relative keyboard navigation commands, not pagination operations.
 
-The shared renderer owns one vertical scroll container and virtualizer:
+The shared renderer owns one native two-axis scroll container as the sole authority for offsets, viewport dimensions, measurement, hit testing, row virtualization, and centre-column virtualization. A styled Scroll Area may decorate or expose that exact viewport but must not add another scrolling element or geometry owner:
 
 - The Client Table virtualizes the complete locally filtered and sorted row model.
 - The Server Table virtualizes the exact `totalRows` reported by the Viewport Source, renders sparse placeholders for unloaded indexes, and sends the visible range plus overscan to the source as one indexed window.
 
 Virtualization is mandatory for both variants. Keyboard navigation addresses logical row and column coordinates independently of which cells are mounted. When a held Arrow key moves beyond the visible boundary, the renderer minimally scrolls to reveal the new Active Cell. Client reveal mounts an already resident row; Server reveal updates the active viewport window and may temporarily focus a stable loading slot until the row arrives. Neither path creates page state.
 
-Horizontal virtualization is equally mandatory. A table with 150 centre columns must not mount all 150 cells for every visible row merely because its rows are virtualized. One grid-level horizontal virtualizer windows the currently visible centre columns; pinned-start and pinned-end columns remain mounted outside that window and participate in the same Logical Column Order. Header and body consume the same immutable column-window snapshot so widths, virtual padding, hit testing, and keyboard reveal cannot drift.
+Horizontal virtualization is equally mandatory. A table with 150 centre columns must not mount all 150 cells for every visible row merely because its rows are virtualized. One grid-level horizontal virtualizer windows the currently visible centre columns; pinned-start and pinned-end columns remain mounted in separate sticky regions outside that window and participate in the same Logical Column Order. Header and body consume the same immutable column-window snapshot so widths, virtual padding, hit testing, and keyboard reveal cannot drift.
+
+Fixed-geometry keyboard reveal compares the destination bounds with the visible band after sticky header, pinned-start, and pinned-end insets, then applies only the smallest clamped scroll delta needed to expose the target. Do not use a virtualizer's nearest-index alignment for Cell navigation. A fully visible or pinned destination causes no scroll. Initial Active Cell installation is one-shot and must not replay when a virtual window rerenders.
 
 Internal range alignment, buffering, and transport `offset`/`limit` values must remain invisible implementation details. They must not become persisted state or public pagination vocabulary.
 
