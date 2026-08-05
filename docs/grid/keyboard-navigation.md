@@ -73,6 +73,12 @@ function navigate(command: NavigationCommand) {
 
 Navigation never waits for a DOM node or a network response before accepting the next command. The logical Active Cell is authoritative; mounted DOM focus is only its current projection.
 
+## Grouping shape reset
+
+Every Group By add, remove, or reorder replaces the logical row-and-column projection. After cancelling any active range gesture and deriving that projection, reset the Active Cell to row zero and its first visible navigable Logical Column. While grouped, that column is the first active group key. After clearing the final key, it is the first visible navigable column in restored base Logical Column Order. Do not translate the previous raw row into a group, preserve a coincidentally matching column, or carry a group coordinate across a reordered key tuple.
+
+If the new result is empty, clear the Active Cell. A Server generation may retain row zero as a loading-slot destination until authoritative `totalRows` proves the result empty. Reset vertical geometry to the start and reveal the new destination only when the body owns focus. A pointer or keyboard Group By control retains DOM focus; updating the private logical body destination must not pull focus back into the grid. Persisted grouping restored during SSR or hydration starts with no Active Cell because focus is transient and never persisted.
+
 ## Header and body navigation
 
 Without filter headers:

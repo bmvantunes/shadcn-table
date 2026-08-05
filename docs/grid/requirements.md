@@ -200,6 +200,10 @@ Grouped-summary identity remains private and requires no consumer callback. A re
 
 Aggregate values, Rows, sorting, and viewport positions never participate in logical grouped identity. Aggregate-only live updates and reordering retain identity, while a changed group key removes one logical group and creates another. Entering, leaving, or changing the Group By tuple creates a new logical row generation and clears incompatible transient row-space state. Group Row Identity is not persisted.
 
+Every Group By add, remove, or reorder resets the logical Active Cell only after deriving the new row-and-column projection. When the new projection has at least one logical row, the destination is row zero plus its first visible navigable Logical Column: the first active group-key column while grouped, or the first visible navigable column in restored base order after clearing the final key. When the authoritative result is empty, Active Cell is absent. A Server Table may target the new generation's row-zero loading slot before its data arrives, but clears the coordinate if that generation reports `totalRows === 0`.
+
+Do not derive raw-row-to-group correspondence from the previously active row, preserve a matching field opportunistically, or translate between old and reordered group-key tuples. Client and Server use the same deterministic reset. The command resets vertical geometry to row zero and reveals the destination when the body owns focus, but never steals DOM focus from the Group By chip, panel, or other control that initiated the change. The coordinate and reveal remain transient and emit no persistence event beyond the ordinary Group By preference commit. Initial persisted grouping creates no synthetic focus during SSR or hydration; the first body-focus interaction establishes the ordinary initial Active Cell.
+
 ## Mandatory identity
 
 Every grid requires a durable Table Identity. Client Tables additionally require a raw Row Identity function:
