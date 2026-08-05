@@ -152,6 +152,7 @@ The grid must support:
 64. XState actors are private workflow brains, never React subscription sources. Every actor decision publishes one coherent observable projection through BrunoTable-owned TanStack Store state; renderers subscribe only to the smallest store projection they need and never combine actor and store snapshots.
 65. Batch undo/redo records one bounded command per user gesture using reversible sparse cell-state patches that include Draft and Conflict evidence, not value-only pairs or full-row snapshots. Live convergence prunes that Cell Identity from both history stacks, and mode switching remains blocked while either stack contains edit-owned work.
 66. Save-operation records are bounded. Pending, awaiting-source, and rejected operations retain only the immutable submitted evidence needed for reconciliation; completed records are removed after their flash or notification lifecycle rather than accumulating for the Table Instance lifetime.
+67. Keep columns as one plain array checked with `satisfies BrunoTableColumns<TRow>`. Global `BrunoTable...Column` helpers infer the row from that outer context; do not add a row-bound helper factory or repeated row generic. Raw Field Columns remain valid, while strict Computed Columns use a global Value Type helper or equivalently typed custom constructor so their non-empty `fields` tuple restricts `valueGetter.row` to the corresponding `Pick`.
 
 ## Preferred technology split
 

@@ -48,7 +48,7 @@ Build:
 - a strict Read-only Table grouping capability that makes `groupRowsColumn` invalid when Client `editable: true`
 - mutually exclusive field and computed columns
 - direct `field` value inference
-- computed non-empty `fields` dependency tuples, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
+- computed non-empty `fields` dependency tuples captured through global Value Type helpers or equivalent typed custom constructors, `Pick`-restricted getter inputs, projection compilation, and `valueGetter` return inference
 - typed formatters
 - optional typed `BrunoTableTextColumn`, `BrunoTableNumberColumn`, `BrunoTableBigIntColumn`, `BrunoTableBooleanColumn`, and `BrunoTableSelectColumn` helpers that return ordinary definitions
 - reusable `withDefaults` Column Presets with built-in, preset, then individual-option precedence
@@ -74,7 +74,7 @@ No rendering sophistication yet.
 
 Success criteria:
 
-- no `defineGrid`, required column helper, `definition`, or `rowModel` prop
+- no `defineGrid`, row-bound column-helper factory, `definition`, or `rowModel` prop; raw Field Columns remain valid while strict Computed Columns use their global typed constructor
 - no single public component with a client/viewport mode flag or source union
 - lowercase and unprefixed column identities fail compilation
 - missing header names fail compilation, while dynamic missing, non-string, or blank names fail runtime normalization
@@ -99,6 +99,8 @@ Success criteria:
 - no repeated generic annotation at JSX usage
 - no `any` in exported declarations or representative inference paths
 - no consumer casts for valid column, source, edit, filter, or sort usage
+
+Prototype evidence: [`77e8ce4`](https://github.com/bmvantunes/shadcn-table/tree/77e8ce4/packages/table/src/__prototype__/column-api) proves the global helper, computed dependency, preset precedence, and Save Change Set inference seams before production implementation.
 
 ## Phase 2: Client read-only vertical slice
 

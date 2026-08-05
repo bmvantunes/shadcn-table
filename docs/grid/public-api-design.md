@@ -552,7 +552,7 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 ```
 
-The target `withDefaults` interface must preserve literal identity, exact field/value correlation, computed getter return types, and typed callbacks without casts or repeated row generics. Prove those properties with source and emitted-package type tests before exporting the helpers.
+The [strict column API prototype](./research/strict-column-api-prototype.md) proved that `withDefaults` can preserve literal identity, exact field/value correlation, computed getter return types, and typed callbacks without casts or repeated row generics. Production keeps the same global-helper shape and adds source and emitted-package type tests before exporting it.
 
 Configuration precedence is deterministic:
 
@@ -681,18 +681,17 @@ const columns = [
 A Computed Column has `valueGetter` plus an explicit non-empty `fields` dependency tuple instead of `field`:
 
 ```ts
-{
+BrunoTableBigIntColumn({
   columnId: "COL_ID_DOUBLE_QUANTITY",
   headerName: "Double quantity",
-  valueType: "bigint",
   fields: ["quantity"],
   valueGetter: ({ row }) => row.quantity * 2n,
-}
+});
 ```
 
 The return type of `valueGetter` is the column value type. Every dependency must be a valid row field, and the getter's `row` parameter is restricted to `Pick<TRow, TFields[number]>`; accessing an undeclared field must fail TypeScript. The Server Table unions this tuple into its explicit `select` projection, while the Client Table uses the same declaration over its complete resident row.
 
-Computed raw columns and typed Column Helpers must preserve the getter's inferred return type in `valueFormatter`, `cellClassName`, and `cellRenderer` without exposing `unknown`. The exact plain-object type machinery must be proven before export; do not weaken any presentation callback merely to accept the property.
+Strict Computed Columns use a global Value Type helper, or an equivalently typed custom Value Type constructor, because the generic call boundary captures the exact per-column dependency tuple before contextually typing `valueGetter`. A plain structural array target cannot capture an arbitrary tuple from its own element closely enough to enforce the `Pick` restriction. Raw Field Columns remain valid and may coexist with helper and preset results. Every Computed constructor preserves the getter's inferred return type in `valueFormatter`, `cellClassName`, and `cellRenderer` without exposing `unknown`.
 
 A Computed Column is presentation-only in V1. It is always excluded from `BrunoTableFilterableColumnId<TColumns>`, `BrunoTableSortableColumnId<TColumns>`, and `BrunoTableEditableColumnId<TColumns>`. BrunoTable never executes, inspects, or reverse-engineers arbitrary JavaScript to manufacture query or mutation semantics.
 

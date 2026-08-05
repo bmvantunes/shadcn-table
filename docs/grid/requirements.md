@@ -363,13 +363,13 @@ BrunoTable also provides optional typed Column Helpers as the recommended constr
 - `BrunoTableSelectColumn` makes its editable control fill the available cell width;
 - `BrunoTableBigDecimalColumn` is exported only from `@bruno/table/effect` and preserves exact values.
 
-Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a direct server field, and never introduce a string-keyed registry or per-cell dispatch. A helper-created Computed Column still declares every projection dependency through its non-empty `fields` tuple.
+Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw Field Columns and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a direct server field, and never introduce a string-keyed registry or per-cell dispatch. Strict Computed Columns use a global Value Type helper or equivalently typed custom constructor as the generic boundary that captures their non-empty `fields` tuple and restricts the getter row to its exact `Pick`.
 
 Applications may specialize a helper with `withDefaults` into a reusable Column Preset for domain conventions such as Price title, fraction digits, width, alignment, editor, filter, and validation policy. Merge order is built-in helper defaults, then preset defaults, then individual column options. Presets and final columns live at module scope.
 
 Every helper and preset retains typed per-column `valueFormatter`, `cellClassName`, and `cellRenderer` overrides. `valueFormatter` changes visible text only; conditional classes and custom rendering change Cell Presentation only. None may redefine equality, ordering, parsing, clipboard exchange, preference codecs, draft/conflict reconciliation, or server query operands. A custom display representation that must round-trip requires an explicit paired parser/exchange capability or custom Value Type.
 
-Type tests must prove that helpers and presets preserve literal Column Identity, field/value compatibility, computed getter return values, exact callback row/value types, and individual override precedence without casts or repeated row generics. Applying a number helper to a string, bigint, or BigDecimal field must fail compilation.
+Type tests must prove that helpers and presets preserve literal Column Identity, field/value compatibility, computed getter return values, exact callback row/value types, and individual override precedence without casts or repeated row generics. They must also prove that a Computed getter cannot read an undeclared dependency. Applying a number helper to a string, bigint, or BigDecimal field must fail compilation.
 
 ## Column value semantics and exact numeric values
 
