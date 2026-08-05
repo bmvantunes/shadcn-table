@@ -335,6 +335,7 @@ Success criteria:
 
 - Row Selection and Cell Range Selection remain separate capabilities and state models
 - Client Cell Range Selection owns at most one contiguous horizontal `1×N` or vertical `N×1` Linear Cell Range; new gestures replace it and Ctrl/Cmd never creates two-axis, additive, subtractive, or disconnected ranges
+- grouped read-only Client results retain fresh one-axis Cell Range Selection and canonical Copy, while grouped Server results remain Active-Cell-only
 - public types and private normalized state contain one optional discriminated horizontal-or-vertical range rather than a general rectangle, `ranges[]`, or include/exclude operations
 - the first accepted range extension locks one axis; pointer drag slop publishes no range, greater absolute displacement wins after the threshold, an exact tie stays `1×1`, parallel movement may resize through the anchor, and perpendicular movement is projected away until collapse
 - drag autoscroll remains off before axis acquisition and enables only the matching horizontal or vertical channel afterward; perpendicular and pinned-region edge proximity cannot scroll the other axis
@@ -501,6 +502,8 @@ Build:
 - conservative Editable Client restoration that drops `groupBy`, `groupOrderBy`, and reserved Rows width
 - first-key Group By transition that clears ordinary Client Row Selection and its Shift anchor before publishing grouped rows
 - grouped capability suppression for row checkboxes, Select All, selected-row counts, row actions, and selection commands
+- every Group By add, remove, or reorder cancels an active Cell Range gesture and clears its old range before changing logical shape
+- grouped read-only Client range selection and canonical Copy across Group Key, Aggregate, and Rows cells, with Paste, fill, and editing rejected
 - an ordered Group By drop region containing only columns whose definitions declare `groupBy: true`
 - one always-visible Rows System Column backed by exact `bigint` row count whenever grouping is active
 - normalization of optional `groupRowsColumn` label, baseline width, formatter, conditional class, and renderer onto the fixed System Column
@@ -534,6 +537,9 @@ Success criteria:
 - Editable Client restoration drops grouping, grouped sorting, and Rows width before initialization and never briefly renders a grouped view
 - entering grouping clears any ordinary Client Row Selection in one transaction, retains no dormant IDs, and emits no selection-owned persistence event
 - grouped summaries cannot be row-selected and clearing the final group key restores an empty ungrouped Row Selection capability
+- a grouped read-only Client may select and copy one horizontal or vertical range across mounted or virtualized grouped cells without display-text or private-alias leakage
+- Group By shape changes never reinterpret an old range's identity corners; they cancel gesture/autoscroll and clear the range before publishing the new projection
+- grouped ranges expose no Paste, Drag Fill, or edit command, and grouped Server Tables remain limited to their loaded Active Cell
 - `groupBy: true` controls eligibility rather than initial active state, and `aggFunc` independently contributes at most one aggregate
 - a column declaring both renders its group-field value rather than its own aggregate whenever it is an active key
 - every grouped row shows the live count of filtered source rows it represents, even when no consumer aggregate column exists

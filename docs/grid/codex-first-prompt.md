@@ -41,6 +41,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - one fixed-identity exact-`bigint` Rows System Column while grouped, with optional `groupRowsColumn` label, baseline-width, and presentation configuration plus reserved-identity width persistence
 - grouping and aggregation only on Read-only Table Instances: always available to eligible Server Tables and available to Client Tables only when `editable` is false or omitted
 - Row Selection only for ordinary ungrouped Client rows; entering Group By clears selected Row Identities and the Shift anchor, and grouped summaries never acquire row checkboxes, Select All, or implicit leaf selection
+- one-axis Cell Range Selection and copy remain available over complete resident grouped Client results, with every Group By shape change clearing the previous range first; Server Tables remain Active-Cell-only
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
 - preference persistence limited to filters, sorting, and column layout
