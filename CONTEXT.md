@@ -13,7 +13,7 @@ The private transient identity of one mounted table runtime. It distinguishes si
 _Avoid_: Table Identity, persistence key
 
 **Persisted Grid Preferences**:
-A versioned, JSON-safe snapshot of one Table Identity's Grid Filter Expressions, sorting, column order, visibility, widths, and pinning. BrunoTable accepts an optional one-time initial snapshot and emits a complete replacement snapshot through `onPersistChange` after every committed preference change. The application owns storage and transport.
+A versioned, JSON-safe snapshot of one Table Identity's Grid Filter Expressions, normal sorting, ordered Group By intent, grouped sorting, column order, visibility, widths, and pinning. BrunoTable accepts an optional one-time initial snapshot and emits a complete replacement snapshot through `onPersistChange` after every committed preference change. The application owns storage and transport.
 _Avoid_: Quick Filter, External Filter, Feed Route, edit state, built-in storage adapter, React-controlled table state
 
 **Column Identity**:

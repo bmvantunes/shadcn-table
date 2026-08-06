@@ -59,6 +59,6 @@ if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0") {
 
 const publicModule = await import("@bruno/table");
 
-if (Object.keys(publicModule).length !== 0) {
-  throw new Error("The type-contract slice unexpectedly exposed a public runtime symbol.");
+if (JSON.stringify(Object.keys(publicModule)) !== JSON.stringify(["BrunoTableComputedColumn"])) {
+  throw new Error("The @bruno/table runtime exports do not match the strict column scaffold.");
 }

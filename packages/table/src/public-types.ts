@@ -4,6 +4,8 @@ export type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
 
 export type BrunoTableRowId = string;
 
+export type BrunoTableBuiltInValueType = "text" | "number" | "bigint" | "boolean";
+
 export type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
 export type BrunoTableSourceChrome = {
@@ -31,38 +33,142 @@ export type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome
 
 type FieldKey<TRow> = Extract<keyof TRow, string>;
 
+type NonNullish<TValue> = Exclude<TValue, null | undefined>;
+
+type NonEmptyFields<TRow> = readonly [FieldKey<TRow>, ...FieldKey<TRow>[]];
+
+type ValueForBuiltInType<TValueType extends BrunoTableBuiltInValueType> = TValueType extends "text"
+  ? string
+  : TValueType extends "number"
+    ? number
+    : TValueType extends "bigint"
+      ? bigint
+      : boolean;
+
 type ValueParams<TRow, TValue> = {
   readonly row: TRow;
   readonly value: TValue;
 };
 
-type ValueGetterParams<TRow> = {
-  readonly row: TRow;
+type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
+  readonly row: Pick<TRow, TFields[number]>;
 };
 
-type FieldColumn<TRow, TField extends FieldKey<TRow>> = {
+type FieldColumn<
+  TRow,
+  TField extends FieldKey<TRow>,
+  TValueType extends BrunoTableBuiltInValueType,
+> = {
   readonly columnId: BrunoTableColumnId;
   readonly field: TField;
   readonly headerName: string;
+  readonly valueType: TValueType;
   readonly isEditable?: boolean | ((params: ValueParams<TRow, TRow[TField]>) => boolean);
   readonly valueFormatter?: (params: ValueParams<TRow, TRow[TField]>) => string;
+  readonly fields?: never;
   readonly valueGetter?: never;
 };
 
 type FieldColumns<TRow> = {
-  readonly [TField in FieldKey<TRow>]: FieldColumn<TRow, TField>;
+  readonly [TField in FieldKey<TRow>]:
+    | ([NonNullish<TRow[TField]>] extends [never]
+        ? never
+        : NonNullish<TRow[TField]> extends string
+          ? FieldColumn<TRow, TField, "text">
+          : never)
+    | (NonNullish<TRow[TField]> extends number ? FieldColumn<TRow, TField, "number"> : never)
+    | (NonNullish<TRow[TField]> extends bigint ? FieldColumn<TRow, TField, "bigint"> : never)
+    | (NonNullish<TRow[TField]> extends boolean ? FieldColumn<TRow, TField, "boolean"> : never);
 }[FieldKey<TRow>];
 
-type ComputedColumn<TRow> = {
+const computedColumnMarker: unique symbol = Symbol("BrunoTableComputedColumn");
+
+type ComputedColumn<
+  TRow,
+  TFields extends NonEmptyFields<TRow>,
+  TValue,
+  TValueType extends BrunoTableBuiltInValueType,
+> = {
+  readonly [computedColumnMarker]: true;
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
-  readonly valueGetter: (params: ValueGetterParams<TRow>) => unknown;
+  readonly fields: TFields;
+  readonly valueGetter: (params: ValueGetterParams<TRow, TFields>) => TValue;
+  readonly valueType: TValueType;
   readonly field?: never;
-  readonly isEditable?: false;
-  readonly valueFormatter?: never;
+  readonly isEditable?: never;
+  readonly valueFormatter?: (params: ValueParams<TRow, TValue>) => string;
 };
 
-type Column<TRow> = FieldColumns<TRow> | ComputedColumn<TRow>;
+type AnyComputedColumn<TRow> = {
+  readonly [TValueType in BrunoTableBuiltInValueType]: ComputedColumn<
+    TRow,
+    NonEmptyFields<TRow>,
+    ValueForBuiltInType<TValueType>,
+    TValueType
+  >;
+}[BrunoTableBuiltInValueType];
+
+type ComputedColumnDependencies<TRow, TFields extends NonEmptyFields<TRow>, TValue> = {
+  readonly fields: TFields;
+  readonly valueGetter: (params: ValueGetterParams<TRow, TFields>) => TValue;
+};
+
+type ComputedColumnOptions<
+  TRow,
+  TFields extends NonEmptyFields<TRow>,
+  TValue,
+  TValueType extends BrunoTableBuiltInValueType,
+> = Omit<
+  ComputedColumn<TRow, TFields, TValue, TValueType>,
+  typeof computedColumnMarker | "fields" | "valueGetter"
+>;
+
+/**
+ * Captures a Computed Column's exact dependency tuple before contextually typing its getter.
+ * Built-in Value Type helpers will delegate to this strict construction boundary.
+ */
+export function BrunoTableComputedColumn<
+  TRow,
+  const TFields extends NonEmptyFields<TRow>,
+  const TOptions extends ComputedColumnOptions<TRow, TFields, string, "text">,
+>(
+  options: TOptions & ComputedColumnDependencies<TRow, TFields, string>,
+): TOptions &
+  ComputedColumnDependencies<TRow, TFields, string> &
+  ComputedColumn<TRow, TFields, string, "text">;
+export function BrunoTableComputedColumn<
+  TRow,
+  const TFields extends NonEmptyFields<TRow>,
+  const TOptions extends ComputedColumnOptions<TRow, TFields, number, "number">,
+>(
+  options: TOptions & ComputedColumnDependencies<TRow, TFields, number>,
+): TOptions &
+  ComputedColumnDependencies<TRow, TFields, number> &
+  ComputedColumn<TRow, TFields, number, "number">;
+export function BrunoTableComputedColumn<
+  TRow,
+  const TFields extends NonEmptyFields<TRow>,
+  const TOptions extends ComputedColumnOptions<TRow, TFields, bigint, "bigint">,
+>(
+  options: TOptions & ComputedColumnDependencies<TRow, TFields, bigint>,
+): TOptions &
+  ComputedColumnDependencies<TRow, TFields, bigint> &
+  ComputedColumn<TRow, TFields, bigint, "bigint">;
+export function BrunoTableComputedColumn<
+  TRow,
+  const TFields extends NonEmptyFields<TRow>,
+  const TOptions extends ComputedColumnOptions<TRow, TFields, boolean, "boolean">,
+>(
+  options: TOptions & ComputedColumnDependencies<TRow, TFields, boolean>,
+): TOptions &
+  ComputedColumnDependencies<TRow, TFields, boolean> &
+  ComputedColumn<TRow, TFields, boolean, "boolean">;
+export function BrunoTableComputedColumn(options: Readonly<Record<string, unknown>>) {
+  return { ...options, [computedColumnMarker]: true };
+}
+
+type Column<TRow> = FieldColumns<TRow> | AnyComputedColumn<TRow>;
 
 /**
  * A plain column array intended to be used with `satisfies`.
@@ -130,21 +236,27 @@ type ScalarFilterValue<TValue> = Exclude<TValue, undefined>;
 type StringFilterValue<TValue> = Extract<TValue, string>;
 type NumericFilterValue<TValue> = Extract<TValue, number | bigint>;
 
-type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue> =
-  | {
-      readonly columnId: TColumnId;
-      readonly type: "equals" | "notEqual";
-      readonly filter: ScalarFilterValue<TValue>;
-      readonly caseSensitive?: boolean;
-      readonly accentSensitive?: boolean;
+type TextSensitivity<TValue> = [StringFilterValue<TValue>] extends [never]
+  ? {
+      readonly caseSensitive?: never;
+      readonly accentSensitive?: never;
     }
-  | {
-      readonly columnId: TColumnId;
-      readonly type: "in";
-      readonly filter: readonly ScalarFilterValue<TValue>[];
+  : {
       readonly caseSensitive?: boolean;
       readonly accentSensitive?: boolean;
     };
+
+type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue> =
+  | ({
+      readonly columnId: TColumnId;
+      readonly type: "equals" | "notEqual";
+      readonly filter: ScalarFilterValue<TValue>;
+    } & TextSensitivity<TValue>)
+  | ({
+      readonly columnId: TColumnId;
+      readonly type: "in";
+      readonly filter: readonly ScalarFilterValue<TValue>[];
+    } & TextSensitivity<TValue>);
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TValue> = [
   StringFilterValue<TValue>,
@@ -180,24 +292,38 @@ type BlankFilter<TColumnId extends BrunoTableColumnId> = {
   readonly type: "blank" | "notBlank";
 };
 
-type FilterLeaf<TRow, TColumns extends BrunoTableColumns<TRow>> = {
-  readonly [TColumnId in BrunoTableFilterableColumnId<TColumns>]:
-    | EqualityFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
-    | TextFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
-    | NumericFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
-    | BlankFilter<TColumnId>;
-}[BrunoTableFilterableColumnId<TColumns>];
+type FilterLeaf<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TColumnId extends BrunoTableFilterableColumnId<TColumns>,
+> =
+  | EqualityFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
+  | TextFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
+  | NumericFilter<TColumnId, BrunoTableColumnValue<TRow, TColumns, TColumnId>>
+  | BlankFilter<TColumnId>;
 
-export type BrunoTableFilterExpression<TRow, TColumns extends BrunoTableColumns<TRow>> =
-  | FilterLeaf<TRow, TColumns>
+type FilterExpressionForColumn<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TColumnId extends BrunoTableFilterableColumnId<TColumns>,
+> =
+  | FilterLeaf<TRow, TColumns, TColumnId>
   | {
       readonly type: "AND" | "OR";
-      readonly conditions: readonly BrunoTableFilterExpression<TRow, TColumns>[];
+      readonly conditions: readonly FilterExpressionForColumn<TRow, TColumns, TColumnId>[];
     }
   | {
       readonly type: "NOT";
-      readonly condition: BrunoTableFilterExpression<TRow, TColumns>;
+      readonly condition: FilterExpressionForColumn<TRow, TColumns, TColumnId>;
     };
+
+export type BrunoTableFilterExpression<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly [TColumnId in BrunoTableFilterableColumnId<TColumns>]: FilterExpressionForColumn<
+    TRow,
+    TColumns,
+    TColumnId
+  >;
+}[BrunoTableFilterableColumnId<TColumns>];
 
 export type BrunoTableFilterExpressions<
   TRow,
@@ -206,12 +332,20 @@ export type BrunoTableFilterExpressions<
 
 export type BrunoTableSortBy<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = readonly {
-  readonly [TColumnId in BrunoTableSortableColumnId<TColumns>]: {
-    readonly columnId: TColumnId;
-    readonly direction: "asc" | "desc";
-  };
-}[BrunoTableSortableColumnId<TColumns>][];
+> = readonly [
+  {
+    readonly [TColumnId in BrunoTableSortableColumnId<TColumns>]: {
+      readonly columnId: TColumnId;
+      readonly direction: "asc" | "desc";
+    };
+  }[BrunoTableSortableColumnId<TColumns>],
+  ...{
+    readonly [TColumnId in BrunoTableSortableColumnId<TColumns>]: {
+      readonly columnId: TColumnId;
+      readonly direction: "asc" | "desc";
+    };
+  }[BrunoTableSortableColumnId<TColumns>][],
+];
 
 export type BrunoTableCellChange<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly [TColumnId in BrunoTableEditableColumnId<TColumns>]: {
@@ -225,6 +359,7 @@ export type BrunoTableCellChange<TRow, TColumns extends BrunoTableColumns<TRow>>
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
   readonly columns: TColumns;
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
 };

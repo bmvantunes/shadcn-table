@@ -1,3 +1,4 @@
 interface:
-  display_name: "Code Review"
-  short_description: "Review a diff on standards and spec"
+  display_name: "Convergent Code Review"
+  short_description: "Three-axis review until every blocker is gone"
+  default_prompt: "Use $code-review to review this branch against main and converge every blocking finding before publishing it."

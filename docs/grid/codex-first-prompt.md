@@ -57,7 +57,7 @@ Challenge details where necessary, but preserve these hard requirements:
 - Group By is fully operable without drag-and-drop through Add Group, column-menu actions, explicit chip removal, and scoped `Alt+ArrowLeft/Right` reorder with focus retention and accessible position announcements; pointer drag dispatches the same commands
 - half-open `inRange` parity between Client and Server Tables
 - typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
-- preference persistence limited to filters, sorting, and column layout
+- preference persistence limited to filters, normal and grouped sorting, ordered grouping, column order, visibility, widths, and pinning
 - no persistence of scroll, viewport, selection, or transient interaction state
 - no top-level React state updates for every scroll or server batch
 - strong TypeScript inference without public `any`

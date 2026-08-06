@@ -20,6 +20,12 @@ describe("validateColumns", () => {
     expect(() => {
       validateColumns([{ columnId: "COL_ID_price", headerName: "Price" }]);
     }).toThrow(ColumnConfigurationError);
+
+    for (const columnId of ["COL_ID_é", "COL_ID_ß", "COL_ID_δ"]) {
+      expect(() => {
+        validateColumns([{ columnId, headerName: "Price" }]);
+      }).toThrow(ColumnConfigurationError);
+    }
   });
 
   it("rejects duplicate identities", () => {

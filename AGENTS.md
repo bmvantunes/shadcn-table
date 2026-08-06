@@ -52,6 +52,23 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 <!--VITE PLUS END-->
 
+## Review convergence gate
+
+Before opening or updating a pull request with repository changes, follow the local review loop in `docs/agents/code-review.md`:
+
+1. Run three independent, read-only reviewers in parallel against one pinned merge base:
+   - Standards and architecture
+   - Specification and domain correctness
+   - Verification, public API, and regression safety
+2. Require every reviewer to label findings as blocking or non-blocking and to report explicit counts.
+3. Fix every blocking finding, rerun the relevant validation, then restart all three reviewers from the updated diff.
+4. Commit and push only after one complete round reports zero blockers from all three reviewers and required local checks pass.
+5. Wait for required GitHub checks and GitHub Codex review. Treat pending review as incomplete work.
+6. After any code or documentation change made for remote feedback, rerun local validation and the complete three-reviewer loop before pushing again.
+7. Merge only when local reviewers, required checks, and required GitHub reviewers are clean.
+
+Do not make review ceremonial. Every blocking finding needs concrete evidence, a repository rule or requirement it violates, and a smallest credible fix. Non-blocking suggestions do not prevent publication unless the user promotes them to requirements.
+
 ## Project intent
 
 Build a high-performance, strongly typed, AG Grid-class data grid for React.

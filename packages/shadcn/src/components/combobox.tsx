@@ -32,11 +32,15 @@ function ComboboxTrigger({ className, children, ...props }: ComboboxPrimitive.Tr
   );
 }
 
-function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
+function ComboboxClear({
+  className,
+  "aria-label": ariaLabel = "Clear selection",
+  ...props
+}: ComboboxPrimitive.Clear.Props) {
   return (
     <ComboboxPrimitive.Clear
       data-slot="combobox-clear"
-      render={<InputGroupButton variant="ghost" size="icon-xs" />}
+      render={<InputGroupButton aria-label={ariaLabel} variant="ghost" size="icon-xs" />}
       className={cn(className)}
       {...props}
     >
@@ -56,6 +60,8 @@ function ComboboxInput({
   showTrigger?: boolean;
   showClear?: boolean;
 }) {
+  const triggerId = React.useId();
+
   return (
     <InputGroup className={cn("w-auto", className)}>
       <ComboboxPrimitive.Input render={<InputGroupInput disabled={disabled} />} {...props} />
@@ -64,7 +70,8 @@ function ComboboxInput({
           <InputGroupButton
             size="icon-xs"
             variant="ghost"
-            render={<ComboboxTrigger />}
+            aria-label="Open options"
+            render={<ComboboxTrigger id={triggerId} />}
             data-slot="input-group-button"
             className="group-has-data-[slot=combobox-clear]/input-group:hidden data-pressed:bg-transparent"
             disabled={disabled}
@@ -211,11 +218,19 @@ function ComboboxChips({
 function ComboboxChip({
   className,
   children,
+  removeLabel,
   showRemove = true,
   ...props
 }: ComboboxPrimitive.Chip.Props & {
+  removeLabel?: string;
   showRemove?: boolean;
 }) {
+  const accessibleRemoveLabel =
+    removeLabel ??
+    (typeof children === "string" || typeof children === "number"
+      ? `Remove ${children}`
+      : "Remove item");
+
   return (
     <ComboboxPrimitive.Chip
       data-slot="combobox-chip"
@@ -228,7 +243,7 @@ function ComboboxChip({
       {children}
       {showRemove && (
         <ComboboxPrimitive.ChipRemove
-          render={<Button variant="ghost" size="icon-xs" />}
+          render={<Button aria-label={accessibleRemoveLabel} variant="ghost" size="icon-xs" />}
           className="-ml-1 opacity-50 hover:opacity-100"
           data-slot="combobox-chip-remove"
         >

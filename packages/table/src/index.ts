@@ -1,4 +1,7 @@
+export { BrunoTableComputedColumn } from "./public-types";
+
 export type {
+  BrunoTableBuiltInValueType,
   BrunoTableCellChange,
   BrunoTableClientProps,
   BrunoTableClientSource,

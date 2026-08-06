@@ -5,13 +5,12 @@ The React data-grid package for BrunoTable.
 The public interface is intentionally small and BrunoTable-owned. TanStack Table, virtualization,
 stores, and server-query translation are private implementation details.
 
-The initial package slice establishes the strict TypeScript contracts for columns, client sources,
-server viewport sources, filters, sorts, and the two explicit composition roots:
-`BrunoTableClient` and `BrunoTableServer`.
+The initial package slice establishes strict TypeScript contracts for columns, client sources,
+server viewport sources, filters, sorts, and the future `BrunoTableClient` and `BrunoTableServer`
+composition roots. Runtime table components are not exported yet.
 
-Both roots present one continuous virtual row space. BrunoTable exposes no pagination state or
-controls: the Client Table virtualizes its complete processed dataset, while the Server Table loads
-the indexed viewport window required by the current scroll position.
+The contracts reserve one continuous virtual row space and expose no pagination state or controls.
+Runtime virtualization for Client and Server Tables remains planned backlog work.
 
-Both roots also accept optional children for page-specific toolbar composition. When no children are
-provided, BrunoTable renders no toolbar region.
+The future roots' prop contracts accept optional children for page-specific toolbar composition.
+Runtime toolbar rendering remains planned backlog work.
