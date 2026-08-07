@@ -370,6 +370,27 @@ describe("compiled Column Value Semantics", () => {
       ]),
     ).toThrow("format must be an object");
     expect(() =>
+      Reflect.apply(BrunoTableNumberColumn, undefined, [
+        {
+          columnId: "COL_ID_PRICE",
+          field: "price",
+          headerName: "Price",
+          mysteryOption: true,
+        },
+      ]),
+    ).toThrow("does not accept mysteryOption");
+    expect(() =>
+      Reflect.apply(BrunoTableSelectColumn, undefined, [
+        {
+          columnId: "COL_ID_STATUS",
+          field: "status",
+          headerName: "Status",
+          options: ["open", "closed"],
+          mysteryOption: true,
+        },
+      ]),
+    ).toThrow("does not accept mysteryOption");
+    expect(() =>
       compileColumns([
         {
           columnId: "COL_ID_SYMBOL",

@@ -186,6 +186,23 @@ const presetDefaultKeys = new Set<PropertyKey>([
 ]);
 const numberPresetDefaultKeys = new Set<PropertyKey>([...presetDefaultKeys, "format"]);
 const selectPresetDefaultKeys = new Set<PropertyKey>([...presetDefaultKeys, "options"]);
+const commonColumnOptionKeys = new Set<PropertyKey>([
+  "columnId",
+  "headerName",
+  "width",
+  "cellAlign",
+  "editorLayout",
+  "valueFormatter",
+  "cellClassName",
+  "cellRenderer",
+]);
+const fieldColumnOptionKeys = new Set<PropertyKey>([
+  "field",
+  "enableFilter",
+  "enableSorting",
+  "isEditable",
+]);
+const computedColumnOptionKeys = new Set<PropertyKey>(["fields", "valueGetter"]);
 
 const textBuiltInDefaults: TextBuiltIn = {
   valueType: "text",
@@ -223,6 +240,7 @@ function mergeRuntimeColumn(
   if (Object.hasOwn(defaults, "valueType") || Object.hasOwn(options, "valueType")) {
     throw new TypeError("BrunoTable Column Helpers do not accept a valueType override.");
   }
+  validateRuntimeColumnOptions(builtIn, options);
 
   const builtInFormat = builtIn["format"];
   const defaultFormat = defaults["format"];
@@ -853,6 +871,28 @@ function validateRuntimeFormat(value: unknown): Readonly<Record<PropertyKey, unk
     throw new TypeError("BrunoTable Number Column format must be an object when provided.");
   }
   return value;
+}
+
+function validateRuntimeColumnOptions(
+  builtIn: RuntimeColumnOptions,
+  options: RuntimeColumnOptions,
+): void {
+  const isComputed = Object.hasOwn(options, "fields") || Object.hasOwn(options, "valueGetter");
+  const shapeKeys = isComputed ? computedColumnOptionKeys : fieldColumnOptionKeys;
+  const valueType = builtIn["valueType"];
+  const acceptsFormat = valueType === "number";
+  const acceptsSelectOptions = isRecord(valueType) && valueType["filterFamily"] === "select";
+
+  for (const key of Reflect.ownKeys(options)) {
+    if (
+      !commonColumnOptionKeys.has(key) &&
+      !shapeKeys.has(key) &&
+      !(key === "format" && acceptsFormat) &&
+      !(key === "options" && acceptsSelectOptions)
+    ) {
+      throw new TypeError(`BrunoTable Column Helper does not accept ${String(key)}.`);
+    }
+  }
 }
 
 function createSelectValueType(
