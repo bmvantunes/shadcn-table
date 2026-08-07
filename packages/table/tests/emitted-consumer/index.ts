@@ -1,10 +1,16 @@
 import {
+  BrunoTableBigIntColumn,
+  BrunoTableBooleanColumn,
   BrunoTableComputedColumn,
+  BrunoTableNumberColumn,
+  BrunoTableSelectColumn,
+  BrunoTableTextColumn,
   type BrunoTableBuiltInValueType,
   type BrunoTableClientProps,
   type BrunoTableColumnField,
   type BrunoTableColumnValue,
   type BrunoTableColumns,
+  type BrunoTableDecodeResult,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
   type BrunoTableSaveCellChange,
@@ -12,6 +18,7 @@ import {
   type BrunoTableServerProps,
   type BrunoTableSortableColumnId,
   type BrunoTableSortBy,
+  type BrunoTableValueType,
 } from "@bruno/table";
 
 type Equal<TLeft, TRight> =
@@ -27,6 +34,9 @@ type Order = {
   readonly price: number;
   readonly quantity: bigint;
   readonly revision: bigint;
+  readonly active: boolean;
+  readonly status: "open" | "closed";
+  readonly multiplier: number;
 };
 
 const columns = [
@@ -55,6 +65,157 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const emittedPriceColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  width: 112,
+  format: { minimumFractionDigits: 2 },
+});
+
+const emittedStatusColumn = BrunoTableSelectColumn.withDefaults({
+  headerName: "Status",
+  options: ["open", "closed"],
+});
+
+const emittedComputedNumberColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Calculated price",
+  enableFilter: true,
+  enableSorting: true,
+  isEditable: true,
+});
+
+const emittedComputedPresetColumns = [
+  emittedComputedNumberColumn({
+    columnId: "COL_ID_COMPUTED_PRICE",
+    fields: ["price", "multiplier"],
+    valueGetter: ({ row }) => row.price * row.multiplier,
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+type ComputedPresetOmitsFiltering = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["enableFilter"], undefined>
+>;
+type ComputedPresetOmitsSorting = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["enableSorting"], undefined>
+>;
+type ComputedPresetOmitsEditing = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["isEditable"], undefined>
+>;
+
+const helperColumns = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+  emittedPriceColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    width: 144,
+    valueFormatter: ({ value }) => value.toFixed(2),
+  }),
+  BrunoTableBigIntColumn({
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    headerName: "Quantity",
+  }),
+  BrunoTableBooleanColumn({
+    columnId: "COL_ID_ACTIVE",
+    field: "active",
+    headerName: "Active",
+  }),
+  emittedStatusColumn({
+    columnId: "COL_ID_STATUS",
+    field: "status",
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_WEIGHTED_PRICE",
+    fields: ["price", "multiplier"],
+    headerName: "Weighted price",
+    valueGetter: ({ row }) => row.price * row.multiplier,
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+type HelperColumns = typeof helperColumns;
+type HelperPrice = Expect<
+  Equal<BrunoTableColumnValue<Order, HelperColumns, "COL_ID_PRICE">, number>
+>;
+type HelperQuantity = Expect<
+  Equal<BrunoTableColumnValue<Order, HelperColumns, "COL_ID_QUANTITY">, bigint>
+>;
+type HelperStatus = Expect<
+  Equal<BrunoTableColumnValue<Order, HelperColumns, "COL_ID_STATUS">, "open" | "closed">
+>;
+type HelperWeightedPrice = Expect<
+  Equal<BrunoTableColumnValue<Order, HelperColumns, "COL_ID_WEIGHTED_PRICE">, number>
+>;
+
+type ExactAmount = { readonly minor: bigint };
+type AmountRow = { readonly amount: ExactAmount };
+
+const exactAmountValueType = {
+  codecId: "consumer/exact-amount",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input): BrunoTableDecodeResult<ExactAmount> =>
+    typeof input === "object" &&
+    input !== null &&
+    "minor" in input &&
+    typeof input.minor === "bigint"
+      ? { _tag: "Success", value: { minor: input.minor } }
+      : { _tag: "Failure", message: "Expected an exact amount." },
+  equivalent: (left, right) => left.minor === right.minor,
+  compare: (left, right) => (left.minor === right.minor ? 0 : left.minor < right.minor ? -1 : 1),
+  formatCanonicalText: (value) => value.minor.toString(10),
+  parseCanonicalText: (text) =>
+    /^-?\d+$/u.test(text)
+      ? { _tag: "Success", value: { minor: BigInt(text) } }
+      : { _tag: "Failure", message: "Expected integer minor units." },
+  formatDisplay: (value) => value.minor.toString(10),
+  encodePersisted: (value) => ({ minor: value.minor.toString(10) }),
+  decodePersisted: (input) =>
+    typeof input === "object" &&
+    input !== null &&
+    "minor" in input &&
+    typeof input.minor === "string"
+      ? { _tag: "Success", value: { minor: BigInt(input.minor) } }
+      : { _tag: "Failure", message: "Expected persisted exact amount." },
+} satisfies BrunoTableValueType<ExactAmount, "numeric", "text">;
+
+const exactAmountColumns = [
+  {
+    columnId: "COL_ID_AMOUNT",
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactAmountValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+
+const exactAmountComputedColumns = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_AMOUNT_COPY",
+    fields: ["amount"],
+    headerName: "Amount copy",
+    valueType: exactAmountValueType,
+    valueGetter: ({ row }) => row.amount,
+    valueFormatter: ({ value }) => value.minor.toString(10),
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+
+type ExactComputedAmount = Expect<
+  Equal<
+    BrunoTableColumnValue<AmountRow, typeof exactAmountComputedColumns, "COL_ID_AMOUNT_COPY">,
+    ExactAmount
+  >
+>;
+
+const exactAmountFilters = [
+  { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: { minor: 10n } },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof exactAmountColumns>;
 
 const capabilityColumns = [
   {
@@ -371,6 +532,132 @@ const invalidComputedDependency = [
   }),
 ] satisfies BrunoTableColumns<Order>;
 
+const invalidNumberHelperField = [
+  // @ts-expect-error the rejected helper result cannot enter the emitted typed column tuple.
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_SYMBOL",
+    // @ts-expect-error emitted Number helper rejects a string field.
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+const invalidHelperWithoutColumnId = [
+  // @ts-expect-error emitted helpers still require an explicit Column Identity.
+  BrunoTableTextColumn({ field: "symbol", headerName: "Symbol" }),
+] satisfies BrunoTableColumns<Order>;
+
+const invalidIdentityPreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error emitted presets can never own Column Identity.
+  columnId: "COL_ID_PRICE",
+});
+
+const invalidFieldPreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error emitted presets can never own server field mapping.
+  field: "price",
+});
+
+const invalidValueTypePreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error emitted presets cannot replace exact Value Types.
+  valueType: "text",
+});
+
+const invalidUnknownPresetOption = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error emitted presets reject unknown configuration.
+  mysteryOption: true,
+});
+
+const emittedStrictPricePreset = BrunoTableNumberColumn.withDefaults({ headerName: "Price" });
+const invalidPresetInvocationWithoutColumnId = emittedStrictPricePreset({
+  // @ts-expect-error emitted preset calls still require explicit Column Identity.
+  field: "price",
+});
+
+const invalidNumberHelperValueType = BrunoTableNumberColumn({
+  columnId: "COL_ID_PRICE",
+  // @ts-expect-error emitted Number helpers cannot change exact Value Type.
+  field: "price",
+  headerName: "Price",
+  valueType: "text",
+});
+
+const narrowPriceFormatter = ({
+  row,
+  value,
+}: {
+  readonly row: Order & { readonly secret: string };
+  readonly value: number;
+}) => `${row.secret}:${value}`;
+
+const invalidNarrowPresentationCallback = [
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+    // @ts-expect-error emitted presentation callbacks reject narrower row annotations.
+    valueFormatter: narrowPriceFormatter,
+  },
+] satisfies BrunoTableColumns<Order>;
+
+type MixedAmountRow = { readonly amount: ExactAmount | { readonly major: number } };
+const invalidNarrowCustomValueType = [
+  // @ts-expect-error emitted custom Value Types cover the complete exact field domain.
+  {
+    columnId: "COL_ID_AMOUNT",
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactAmountValueType,
+  },
+] satisfies BrunoTableColumns<MixedAmountRow>;
+
+const invalidHelperComputedDependency = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_WEIGHTED_PRICE",
+    fields: ["price", "multiplier"],
+    headerName: "Weighted price",
+    valueGetter: ({ row }) => {
+      // @ts-expect-error emitted helper getters expose only declared dependencies.
+      void row.status;
+      return row.price * row.multiplier;
+    },
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+const invalidCustomComputedDependency = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_AMOUNT_COPY",
+    fields: ["amount"],
+    headerName: "Amount copy",
+    valueType: exactAmountValueType,
+    valueGetter: ({ row }) => {
+      // @ts-expect-error emitted custom Computed Columns expose only declared dependencies.
+      void row.otherAmount;
+      return row.amount;
+    },
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+
+const invalidIncompleteSelectDomain = [
+  // @ts-expect-error the rejected Select helper cannot enter the emitted typed column tuple.
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_STATUS",
+    // @ts-expect-error emitted Select options must cover the exact field domain.
+    field: "status",
+    headerName: "Status",
+    options: ["open"],
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+const invalidCustomNumericOperand = [
+  // @ts-expect-error emitted custom numeric Value Types keep their exact operand domain.
+  { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof exactAmountColumns>;
+
 const builtInValueType: BrunoTableBuiltInValueType = "bigint";
 
 void (0 as unknown as Price);
@@ -382,6 +669,14 @@ void (0 as unknown as NoSortable);
 void (0 as unknown as MixedCaseColumnIdRejected);
 void (0 as unknown as PriceField);
 void (0 as unknown as CorrelatedSaves);
+void (0 as unknown as HelperPrice);
+void (0 as unknown as HelperQuantity);
+void (0 as unknown as HelperStatus);
+void (0 as unknown as HelperWeightedPrice);
+void (0 as unknown as ExactComputedAmount);
+void (0 as unknown as ComputedPresetOmitsFiltering);
+void (0 as unknown as ComputedPresetOmitsSorting);
+void (0 as unknown as ComputedPresetOmitsEditing);
 void filters;
 void props;
 void editableProps;
@@ -407,4 +702,21 @@ void invalidOptedOutSort;
 void invalidNoCapabilitySort;
 void invalidInitialOrderByWithoutSortingCapability;
 void invalidComputedDependency;
+void helperColumns;
+void exactAmountFilters;
+void exactAmountComputedColumns;
+void invalidNumberHelperField;
+void invalidHelperWithoutColumnId;
+void invalidIdentityPreset;
+void invalidFieldPreset;
+void invalidValueTypePreset;
+void invalidUnknownPresetOption;
+void invalidPresetInvocationWithoutColumnId;
+void invalidNumberHelperValueType;
+void invalidNarrowPresentationCallback;
+void invalidNarrowCustomValueType;
+void invalidHelperComputedDependency;
+void invalidCustomComputedDependency;
+void invalidIncompleteSelectDomain;
+void invalidCustomNumericOperand;
 void builtInValueType;

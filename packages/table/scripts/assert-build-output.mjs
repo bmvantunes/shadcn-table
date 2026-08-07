@@ -123,9 +123,20 @@ if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0") {
 }
 
 const publicModule = await import("@bruno/table");
+const actualRuntimeExports = Object.keys(publicModule).toSorted((left, right) =>
+  left.localeCompare(right),
+);
+const expectedRuntimeExports = [
+  "BrunoTableBigIntColumn",
+  "BrunoTableBooleanColumn",
+  "BrunoTableComputedColumn",
+  "BrunoTableNumberColumn",
+  "BrunoTableSelectColumn",
+  "BrunoTableTextColumn",
+].toSorted((left, right) => left.localeCompare(right));
 
-if (JSON.stringify(Object.keys(publicModule)) !== JSON.stringify(["BrunoTableComputedColumn"])) {
-  throw new Error("The @bruno/table runtime exports do not match the strict column scaffold.");
+if (JSON.stringify(actualRuntimeExports) !== JSON.stringify(expectedRuntimeExports)) {
+  throw new Error("The @bruno/table runtime exports do not match the strict column surface.");
 }
 
 function collectDeclarationExportNames(source) {

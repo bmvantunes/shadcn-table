@@ -1,24 +1,21 @@
-import type { BrunoTableBuiltInValueType, BrunoTableColumnId } from "../public-types";
+import type { BrunoTableColumnId } from "../public-types";
+import { compileColumnValueSemantics, ValueSemanticsConfigurationError } from "./value-semantics";
 
 const columnIdPrefix = "COL_ID_";
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
-const builtInValueTypes = new Set<BrunoTableBuiltInValueType>([
-  "text",
-  "number",
-  "bigint",
-  "boolean",
-]);
-
 type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
 type RuntimeCallback = (...parameters: never[]) => unknown;
 
 type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
-  readonly valueType: BrunoTableBuiltInValueType;
+  readonly valueType: unknown;
+  readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
+  readonly cellClassName?: string | RuntimeCallback;
+  readonly cellRenderer?: RuntimeCallback;
 };
 
 export type CompiledFieldColumn = CompiledColumnBase & {
@@ -56,6 +53,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasEnableSorting = Object.hasOwn(candidate, "enableSorting");
   const hasIsEditable = Object.hasOwn(candidate, "isEditable");
   const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
+  const hasCellClassName = Object.hasOwn(candidate, "cellClassName");
+  const hasCellRenderer = Object.hasOwn(candidate, "cellRenderer");
+  const hasCellAlign = Object.hasOwn(candidate, "cellAlign");
+  const hasEditorLayout = Object.hasOwn(candidate, "editorLayout");
+  const hasWidth = Object.hasOwn(candidate, "width");
+  const hasFormat = Object.hasOwn(candidate, "format");
   const columnId = candidate["columnId"];
 
   if (!isColumnId(columnId)) {
@@ -77,16 +80,40 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   }
 
   const valueType = candidate["valueType"];
-  if (!isBuiltInValueType(valueType)) {
-    throw new ColumnConfigurationError(
-      `BrunoTable valueType must be text, number, bigint, or boolean for column: ${columnId}`,
-    );
+  const cellAlign = hasCellAlign ? candidate["cellAlign"] : undefined;
+  const editorLayout = hasEditorLayout ? candidate["editorLayout"] : undefined;
+  const width = hasWidth ? candidate["width"] : undefined;
+  const format = hasFormat ? candidate["format"] : undefined;
+  let semantics: ReturnType<typeof compileColumnValueSemantics>;
+  try {
+    semantics = compileColumnValueSemantics(valueType, { cellAlign, editorLayout, width, format });
+  } catch (error) {
+    if (!(error instanceof ValueSemanticsConfigurationError)) throw error;
+    throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {
     throw new ColumnConfigurationError(
       `BrunoTable valueFormatter must be a function when provided: ${columnId}`,
+    );
+  }
+
+  const cellClassName = hasCellClassName ? candidate["cellClassName"] : undefined;
+  if (
+    hasCellClassName &&
+    typeof cellClassName !== "string" &&
+    typeof cellClassName !== "function"
+  ) {
+    throw new ColumnConfigurationError(
+      `BrunoTable cellClassName must be a string or function when provided: ${columnId}`,
+    );
+  }
+
+  const cellRenderer = hasCellRenderer ? candidate["cellRenderer"] : undefined;
+  if (hasCellRenderer && typeof cellRenderer !== "function") {
+    throw new ColumnConfigurationError(
+      `BrunoTable cellRenderer must be a function when provided: ${columnId}`,
     );
   }
 
@@ -130,6 +157,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       columnId,
       headerName,
       valueType,
+      semantics,
       field,
       enableFilter,
       enableSorting,
@@ -138,6 +166,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         : {}),
       ...(typeof valueFormatter === "function"
         ? { valueFormatter: valueFormatter as RuntimeCallback }
+        : {}),
+      ...(typeof cellClassName === "string" || typeof cellClassName === "function"
+        ? { cellClassName: cellClassName as string | RuntimeCallback }
+        : {}),
+      ...(typeof cellRenderer === "function"
+        ? { cellRenderer: cellRenderer as RuntimeCallback }
         : {}),
     });
   }
@@ -191,12 +225,19 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     columnId,
     headerName,
     valueType,
+    semantics,
     enableFilter: false,
     enableSorting: false,
     fields,
     valueGetter: valueGetter as RuntimeCallback,
     ...(typeof valueFormatter === "function"
       ? { valueFormatter: valueFormatter as RuntimeCallback }
+      : {}),
+    ...(typeof cellClassName === "string" || typeof cellClassName === "function"
+      ? { cellClassName: cellClassName as string | RuntimeCallback }
+      : {}),
+    ...(typeof cellRenderer === "function"
+      ? { cellRenderer: cellRenderer as RuntimeCallback }
       : {}),
   });
 }
@@ -217,8 +258,4 @@ function isColumnId(columnId: unknown): columnId is BrunoTableColumnId {
     columnIdSuffixStartPattern.test(suffix) &&
     suffix === suffix.toUpperCase()
   );
-}
-
-function isBuiltInValueType(value: unknown): value is BrunoTableBuiltInValueType {
-  return typeof value === "string" && builtInValueTypes.has(value as BrunoTableBuiltInValueType);
 }

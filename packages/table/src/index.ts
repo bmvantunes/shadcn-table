@@ -1,7 +1,17 @@
 export { BrunoTableComputedColumn } from "./public-types";
+export {
+  BrunoTableBigIntColumn,
+  BrunoTableBooleanColumn,
+  BrunoTableNumberColumn,
+  BrunoTableSelectColumn,
+  BrunoTableTextColumn,
+} from "./column-helpers";
+
+export type { BrunoTableSelectValue } from "./column-helpers";
 
 export type {
   BrunoTableBuiltInValueType,
+  BrunoTableCellAlign,
   BrunoTableClientProps,
   BrunoTableClientSource,
   BrunoTableColumnField,
@@ -12,11 +22,18 @@ export type {
   BrunoTableCommonProps,
   BrunoTableEditableColumnId,
   BrunoTableEditableCapability,
+  BrunoTableEditorFamily,
+  BrunoTableEditorLayout,
   BrunoTableEditingCapability,
+  BrunoTableDecodeResult,
+  BrunoTableFilterFamily,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpression,
   BrunoTableFilterExpressions,
   BrunoTableNoGroupingCapability,
+  BrunoTableJsonValue,
+  BrunoTableNumberFormat,
+  BrunoTableOrdering,
   BrunoTableRowId,
   BrunoTableReadOnlyCapability,
   BrunoTableSaveCellChange,
@@ -30,4 +47,6 @@ export type {
   BrunoTableSortBy,
   BrunoTableSourceChrome,
   BrunoTableSourceStatus,
+  BrunoTableValueType,
+  BrunoTableValueTypeValue,
 } from "./public-types";
