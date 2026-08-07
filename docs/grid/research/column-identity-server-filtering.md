@@ -1,19 +1,19 @@
 # Column identity and server query fields
 
-Research date: 2026-08-02
+Research date: 2026-08-02; TanStack Table v9 stable verification updated 2026-08-07
 
 Sources inspected:
 
 - AG Grid `latest`, commit [`2610291`](https://github.com/ag-grid/ag-grid/tree/26102912f3d5f90dab8e6c4fe3264a31e5fb8410) (`36.0.0-beta.20260731.1136`)
-- TanStack Table `beta`, commit [`65712b7`](https://github.com/TanStack/table/tree/65712b74fdb8eb83af1b322885bf7fba0fd5981d) (`9.0.0-beta.69`)
+- TanStack Table `stable`, commit [`d4d91a6`](https://github.com/TanStack/table/tree/d4d91a6cd6caa96b8d3bdb327b894b6125605350) (`9.0.0`)
 - effect-view-server, commit [`0e09abb`](https://github.com/bmvantunes/effect-view-server/tree/0e09abb1384b899279ea07b15f0bcb3c852284b9)
 - Kevin Van Cott's [2026-08-02 X post](https://x.com/KevinVanCott/status/2083714340679512098) and attached screenshot
 
 ## Decision
 
-`BrunoTable` should make `columnId` mandatory for every leaf column. It is the durable identity of a **grid column**, scoped by `tableId`, and should key all persisted column preferences, filters, and sorts. The accepted public identifier grammar is `` `COL_ID_${Uppercase<string>}` ``.
+`BrunoTable` should make `columnId` mandatory for every leaf column. It is the durable identity of a **grid column**, scoped by `tableId`, and should key all persisted column preferences, filters, and sorts. The accepted public identifier grammar is `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` ``, where the required first suffix character is an ASCII uppercase letter, digit, or underscore.
 
-`field` should identify a **row/query field**, not a column. For an ordinary data-backed column it is the cheap direct cell-value path and the default effect-view-server field used when compiling a filter or sort. A computed/action column can omit `field`, but then server filtering and sorting must be disabled unless that column declares an explicit server-query mapping.
+`field` should identify a **row/query field**, not a column. For an ordinary data-backed column it is the cheap direct cell-value path and the default effect-view-server field used when compiling a filter or sort. A Computed Column instead declares a non-empty `fields` dependency tuple with `valueGetter`; those dependencies enter projection, while the column remains non-filterable, non-sortable, and non-editable in V1.
 
 The important correction to the initial hypothesis is that AG Grid does **not** persist or send ordinary filter state keyed by `field`. Its filter model and sort model are keyed by column ID. They only appear field-keyed in most examples because AG Grid defaults `colId` to `field` when no explicit `colId` is supplied.
 
@@ -53,13 +53,13 @@ This separation permits multiple distinct columns over one field and lets displa
 
 TanStack Table also keys its state by column identity:
 
-- column filters are `{ id: string, value: unknown }` ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L33-L41));
-- sorts are `{ id: string, desc: boolean }` ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L12-L22));
-- column order is an array of column IDs ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-ordering/columnOrderingFeature.types.ts#L5-L27)).
+- column filters are `{ id: string, value: unknown }` ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L37-L44));
+- sorts are `{ id: string, desc: boolean }` ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L14-L19));
+- column order is an array of column IDs ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-ordering/columnOrderingFeature.types.ts#L5-L27)).
 
-TanStack derives a column ID from explicit `id`, then `accessorKey`, then a string header. `accessorKey` also creates the row value accessor. See [`constructColumn`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/core/columns/constructColumn.ts#L45-L90). `BrunoTable` should map mandatory `columnId` to TanStack's explicit `id` instead of accepting these fallbacks.
+TanStack derives a column ID from explicit `id`, then `accessorKey`, then a string header. `accessorKey` also creates the row value accessor. See [`constructColumn`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/core/columns/constructColumn.ts#L43-L91). `BrunoTable` should map mandatory `columnId` to TanStack's explicit `id` instead of accepting these fallbacks.
 
-TanStack's “server-side filtering” remains a manual ownership boundary, not a server query compiler. `manualFiltering` skips the filtered row model and assumes the supplied data is already filtered; `manualSorting` does the equivalent for sorting. Applications own the state and use it to issue their own queries. See the current v9 [filtering guide](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/docs/framework/react/guide/column-filtering.md#L48-L87), [sorting guide](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/docs/framework/react/guide/sorting.md#L144-L175), [`manualFiltering`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L257-L273), and [`manualSorting`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L232-L246).
+TanStack's “server-side filtering” remains a manual ownership boundary, not a server query compiler. `manualFiltering` skips the filtered row model and assumes the supplied data is already filtered; `manualSorting` does the equivalent for sorting. Applications own the state and use it to issue their own queries. See the current v9 [filtering guide](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/docs/framework/react/guide/column-filtering.md#L52-L80), [sorting guide](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/docs/framework/react/guide/sorting.md#L144-L180), [`manualFiltering`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L263-L267), and [`manualSorting`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L246-L250).
 
 Kevin's post is a documentation-design question. He notes that each feature guide repeats a client-versus-server section and asks whether TanStack should add “dedicated guides for manual server processing.” The attached image is the existing Column Filtering Guide section. It is **not** an announcement of a new server-side filter engine, field mapping API, or backend protocol.
 
@@ -82,8 +82,8 @@ Persist user intent using `columnId`:
 ```ts
 const preferences = {
   filters: [{ columnId: "COL_ID_PRICE", type: "greaterThanOrEqual", filter: 10 }],
-  sorting: [{ columnId: "COL_ID_PRICE", direction: "desc" }],
-  columnOrder: ["symbol", "price", "quantity"],
+  orderBy: [{ columnId: "COL_ID_PRICE", direction: "desc" }],
+  columnOrder: ["COL_ID_SYMBOL", "COL_ID_PRICE", "COL_ID_QUANTITY"],
 } as const;
 ```
 
@@ -94,6 +94,8 @@ const columns = [
   {
     columnId: "COL_ID_PRICE",
     field: "unitPrice",
+    headerName: "Price",
+    valueType: "number",
     // filter/edit/render configuration
   },
 ] as const;
@@ -117,6 +119,8 @@ The common path should remain terse and cheap:
 {
   columnId: "COL_ID_PRICE",
   field: "price",
+  headerName: "Price",
+  valueType: "number",
   isEditable: ({ row }) => row.status === "open",
 }
 ```
@@ -126,19 +130,21 @@ The type should distinguish it from computed/display columns:
 ```ts
 {
   columnId: "COL_ID_NOTIONAL",
+  headerName: "Notional",
+  valueType: "number",
   valueGetter: ({ row }) => row.price * row.quantity,
   // no field: not server-filterable or server-sortable by default
 }
 ```
 
-If a computed/display column really has server semantics, require an explicit capability-specific mapping (for example `server.filterField`, `server.sortField`, or a typed translator). Do not infer a server predicate from `valueGetter`, and do not execute that function to construct a query.
+V1 does not expose an exceptional computed filter or sort mapping. Do not infer a server predicate from `valueGetter`, and do not execute that function to construct a query. A server-queryable derived value must instead be exposed as a real Field Column.
 
 Because effect-view-server accepts nested filter paths but only top-level raw sort fields, the final TypeScript design should type-check filtering and sorting capabilities separately even if both default from one ordinary `field` in the common case.
 
 ### Separate projection consequence
 
-`field` also gives the viewport adapter an obvious `select` entry for an ordinary data-backed column, but it does not make an arbitrary `valueGetter` queryable. effect-view-server raw queries require an explicit non-empty top-level `select`, so a computed column must either consume explicitly declared selected dependencies or map to a real server-projected field. The adapter must also include infrastructure fields required for row identity and optimistic concurrency. Do not execute or inspect a `valueGetter` to guess those dependencies.
+`field` gives the viewport adapter an obvious `select` entry for an ordinary data-backed column. A Computed Column contributes its explicit non-empty `fields` dependency tuple instead. Its getter is typed against only that `Pick` of the row. The adapter must also include infrastructure fields required for row identity and optimistic concurrency. Do not execute or inspect a `valueGetter` to guess dependencies.
 
-## Remaining uncertainty
+## Subsequent V1 decision
 
-The naming of the exceptional mapping (`server`, `query`, `filterField`/`sortField`, or typed translator functions) is still a public-API design choice. The identity boundary is not uncertain: persisted/TanStack state uses `columnId`; effect-view-server wire queries use validated topic fields resolved through current column definitions.
+The later product decision closed the exceptional-mapping uncertainty for V1: Computed Columns declare `fields` only for projection and cannot opt into filtering, sorting, or editing. The identity boundary remains unchanged: persisted/TanStack state uses `columnId`; effect-view-server wire queries use validated topic fields resolved through current Field Columns.

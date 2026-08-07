@@ -4,3 +4,6 @@
 [submodule ".repos/table"]
 	path = .repos/table
 	url = git@github.com:TanStack/table.git
+[submodule ".repos/effect"]
+	path = .repos/effect
+	url = https://github.com/Effect-TS/effect

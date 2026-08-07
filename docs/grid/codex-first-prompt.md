@@ -23,19 +23,44 @@ Treat the documents as the current product direction, not infallible implementat
 Challenge details where necessary, but preserve these hard requirements:
 
 - mandatory `tableId`
-- mandatory `getRowId`
-- mandatory explicit `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, with no inferred identities
-- every package-owned public export carries the `BrunoTable` prefix; for example, `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`
-- explicit `BrunoTableClient` and `BrunoTableViewport` public variants over a shared internal grid runtime and renderer
+- mandatory Client `getRowId`; Server rejects it and consumes authoritative raw and grouped row keys from its Viewport Source
+- mandatory explicit non-empty `columnId` on every leaf column, typed as `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` `` where the first suffix character is an ASCII uppercase letter, digit, or underscore, with no inferred identities
+- mandatory explicit non-empty `headerName` on every leaf column, used as the default visible and accessible label but never as identity or query mapping
+- mandatory explicit runtime `valueType` for raw value-bearing columns, with no row sampling
+- optional first-class typed `BrunoTable...Column` helpers and reusable presets that return ordinary definitions, preserve strict inference, and keep individual formatting/styling/rendering escape hatches
+- every BrunoTable-owned public export carries the `BrunoTable` prefix; for example, `BrunoTableColumnId`, `BrunoTableRegion`, and `BrunoTableSortBy`
+- explicit `BrunoTableClient` and `BrunoTableServer` public variants over a shared internal grid runtime and renderer
 - React Compiler support
 - horizontal and vertical virtualization
 - pinned columns in one logical navigation order
 - 120 Hz interaction target on capable hardware
 - first-class keyboard navigation
 - client and server viewport row models
-- preference persistence limited to filters, sorting, and column layout
+- explicit compiled Column Value Semantics for exact `bigint` and optional Effect BigDecimal support, with no `number` coercion or row sampling
+- Column Identity-keyed Group Key and Aggregate Cells that never fabricate raw rows; Aggregate Cells may share a source field, never expose private aliases, and both cell kinds provide typed grouped-presentation escape hatches
+- one fixed-identity exact-`bigint` Rows System Column while grouped, with optional `groupRowsColumn` label, baseline-width, and presentation configuration plus reserved-identity width persistence
+- grouping and aggregation only on Read-only Table Instances: always available to eligible Server Tables and available to Client Tables only when `editable` is false or omitted
+- Row Selection only for ordinary ungrouped Client rows; entering Group By clears selected Row Identities and the Shift anchor, and grouped summaries never acquire row checkboxes, Select All, or implicit leaf selection
+- one-axis Cell Range Selection and copy remain available over complete resident grouped Client results, with every Group By shape change clearing the previous range first; Server Tables remain Active-Cell-only
+- Client Cell Ranges preserve their exact ordered identity span across value-only publications and survive structural changes only when that full span remains equal; stale corners clear before Copy instead of silently selecting different cells
+- every Copy command captures one immutable Clipboard Snapshot and serializes only that version, so live updates can never produce a half-old/half-new payload
+- deterministic Active Cell reset after every Group By add, remove, or reorder: row zero and the first visible column in the new projection, with no raw/group focus mapping or DOM-focus theft
+- identity-first Active Cell reconciliation for live grouped updates inside an unchanged Group By tuple, with no auto-reveal and a clamped previous-index fallback only when the active group disappears
+- clean loading rows for every semantic View Server Query Generation change, never old rows under new route/filter/sort/projection/group/aggregate semantics; window-only movement retains overlapping slots and same-generation lifecycle may retain coherent rows
+- Adapter-owned semantic generation tokens whose sinks reject late writes and whose `setRowCount` hints never bridge logical row spaces
+- source-native Match-None Filter semantics for empty Set Filter inclusion intent, covering current and future values without enumerating the facet domain
+- source-authoritative lifecycle chrome built from shared shadcn Skeleton, Alert, Empty, Button, and Spinner components; manual Retry appears only for closed/error sources that explicitly supply a run command plus pending state, with no invented or automatic retries
+- `onSaveEdits` accepts one non-empty atomic row-grouped Change Set and returns only `PromiseLike<void>`; each row carries safely rebased `baseRow` and exact `expectedVersion`, each cell carries correlated `columnId`, `field`, `before`, and `after`, and canonical values/versions arrive only through the live Client Source
+- resolved saves create timeout-free Accepted Overlays plus a two-second success flash until value convergence, Row Version change, or authoritative disappearance; Immediate mode remains concurrent and cell-locked, while Batch globally locks only edit mutations through complete live reconciliation
+- private XState actors decide legal edit/save workflows, while one BrunoTable-owned TanStack Store seam publishes coherent React-observable projections, bounded operation evidence, and bounded Batch History Commands containing reversible Draft and Conflict state
+- one persistent full-width Edit Safety Footer preserves grid width and row height while complete sparse edit collections open in on-demand live reviews; persistent failure notifications expose an accessible Close control and no Retry action
+- Group By is fully operable without drag-and-drop through Add Group, column-menu actions, explicit chip removal, and scoped `Alt+ArrowLeft/Right` reorder with focus retention and accessible position announcements; pointer drag dispatches the same commands
+- half-open `inRange` parity between Client and Server Tables
+- typed Row Version kept separate from the Viewport Source Query Version for optimistic saves
+- preference persistence limited to filters, normal and grouped sorting, ordered grouping, column order, visibility, widths, and pinning
 - no persistence of scroll, viewport, selection, or transient interaction state
 - no top-level React state updates for every scroll or server batch
 - strong TypeScript inference without public `any`
 - full strict TypeScript checks, including exact optional properties and unchecked indexed access
 - positive and negative type tests plus emitted-package consumer tests for every public inference guarantee
+- if BrunoTable needs source-owned semantics missing from effect-view-server, fix the upstream contract and require the compatible release instead of adding a consumer workaround or reconstructing canonical source data

@@ -1,0 +1,3 @@
+# Use global Column Helpers as the computed type boundary
+
+Keep BrunoTable columns as one plain array checked with `satisfies BrunoTableColumns<TRow>`. Global `BrunoTable...Column` helpers receive `TRow` context from that array and return ordinary exact definitions; do not introduce a row-bound helper factory, `defineGrid`, or repeated row generics. Raw Field Columns remain valid, but strict Computed Columns use a global Value Type helper or equivalently typed custom constructor so its non-empty `fields` tuple can contextually restrict `valueGetter.row` to the corresponding `Pick`. Presets remain row-independent until their final contextually typed invocation, and one-time normalization merges built-in, preset, then individual options.
