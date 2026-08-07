@@ -10,6 +10,7 @@ import {
   type BrunoTableColumnField,
   type BrunoTableColumnValue,
   type BrunoTableColumns,
+  type BrunoTableDecodeResult,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
   type BrunoTableSaveCellChange,
@@ -76,6 +77,31 @@ const emittedStatusColumn = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
 });
 
+const emittedComputedNumberColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Calculated price",
+  enableFilter: true,
+  enableSorting: true,
+  isEditable: true,
+});
+
+const emittedComputedPresetColumns = [
+  emittedComputedNumberColumn({
+    columnId: "COL_ID_COMPUTED_PRICE",
+    fields: ["price", "multiplier"],
+    valueGetter: ({ row }) => row.price * row.multiplier,
+  }),
+] satisfies BrunoTableColumns<Order>;
+
+type ComputedPresetOmitsFiltering = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["enableFilter"], undefined>
+>;
+type ComputedPresetOmitsSorting = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["enableSorting"], undefined>
+>;
+type ComputedPresetOmitsEditing = Expect<
+  Equal<(typeof emittedComputedPresetColumns)[0]["isEditable"], undefined>
+>;
+
 const helperColumns = [
   BrunoTableTextColumn({
     columnId: "COL_ID_SYMBOL",
@@ -127,7 +153,7 @@ type HelperWeightedPrice = Expect<
 type ExactAmount = { readonly minor: bigint };
 type AmountRow = { readonly amount: ExactAmount };
 
-const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> = {
+const exactAmountValueType = {
   codecId: "consumer/exact-amount",
   codecVersion: 1,
   filterFamily: "numeric",
@@ -135,7 +161,7 @@ const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> 
   cellAlign: "end",
   editorLayout: "inline",
   defaultWidth: 120,
-  decodeRuntime: (input) =>
+  decodeRuntime: (input): BrunoTableDecodeResult<ExactAmount> =>
     typeof input === "object" &&
     input !== null &&
     "minor" in input &&
@@ -158,7 +184,7 @@ const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> 
     typeof input.minor === "string"
       ? { _tag: "Success", value: { minor: BigInt(input.minor) } }
       : { _tag: "Failure", message: "Expected persisted exact amount." },
-};
+} satisfies BrunoTableValueType<ExactAmount, "numeric", "text">;
 
 const exactAmountColumns = [
   {
@@ -648,6 +674,9 @@ void (0 as unknown as HelperQuantity);
 void (0 as unknown as HelperStatus);
 void (0 as unknown as HelperWeightedPrice);
 void (0 as unknown as ExactComputedAmount);
+void (0 as unknown as ComputedPresetOmitsFiltering);
+void (0 as unknown as ComputedPresetOmitsSorting);
+void (0 as unknown as ComputedPresetOmitsEditing);
 void filters;
 void props;
 void editableProps;

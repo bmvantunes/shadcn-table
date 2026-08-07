@@ -96,6 +96,10 @@ type NumberPresetDefaults = PresetDefaults & {
   readonly format?: BrunoTableNumberFormat;
 };
 
+type FieldOnlyPresetKey = "enableFilter" | "enableSorting" | "isEditable";
+
+type ComputedPresetDefaults<TDefaults> = Omit<TDefaults, FieldOnlyPresetKey>;
+
 type BuiltInColumnPreset<
   TValue,
   TValueType extends BrunoTableBuiltInValueType,
@@ -119,7 +123,7 @@ type BuiltInColumnPreset<
     const TFields extends BrunoTableNonEmptyFields<TRow>,
     const TOptions extends ApplyDefaults<
       ComputedOptions<TRow, TFields, TValue, TValueType>,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     >,
   >(
     options: TOptions &
@@ -131,7 +135,7 @@ type BuiltInColumnPreset<
       >,
   ): PresetResult<
     TBuiltIn,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, TValue>,
     BrunoTableComputedColumnDefinition<TRow, TFields, TValue, TValueType>
   >;
@@ -241,9 +245,11 @@ function mergeRuntimeColumn(
     throw new TypeError("BrunoTable Column Helpers do not accept a valueType override.");
   }
   validateRuntimeColumnOptions(builtIn, options);
+  const isComputed = isComputedColumnOptions(options);
+  const effectiveDefaults = isComputed ? omitFieldOnlyPresetDefaults(defaults) : defaults;
 
   const builtInFormat = builtIn["format"];
-  const defaultFormat = defaults["format"];
+  const defaultFormat = effectiveDefaults["format"];
   const optionFormat = options["format"];
   const builtInFormatRecord = validateRuntimeFormat(builtInFormat);
   const defaultFormatRecord = validateRuntimeFormat(defaultFormat);
@@ -252,7 +258,7 @@ function mergeRuntimeColumn(
     builtInFormat !== undefined || defaultFormat !== undefined || optionFormat !== undefined;
   const merged = {
     ...builtIn,
-    ...defaults,
+    ...effectiveDefaults,
     ...options,
     ...(hasFormat
       ? {
@@ -265,9 +271,21 @@ function mergeRuntimeColumn(
       : {}),
   };
 
-  return Object.hasOwn(merged, "fields")
+  return isComputed
     ? (BrunoTableComputedColumn(merged as never) as unknown as RuntimeColumnOptions)
     : merged;
+}
+
+function isComputedColumnOptions(options: RuntimeColumnOptions): boolean {
+  return Object.hasOwn(options, "fields") || Object.hasOwn(options, "valueGetter");
+}
+
+function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeColumnOptions {
+  return Object.fromEntries(
+    Reflect.ownKeys(defaults)
+      .filter((key) => key !== "enableFilter" && key !== "enableSorting" && key !== "isEditable")
+      .map((key) => [key, defaults[key]]),
+  );
 }
 
 function isRecord(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
@@ -315,12 +333,15 @@ function BrunoTableTextColumnWithDefaults<const TDefaults extends PresetDefaults
   function BrunoTableTextColumnPreset<
     TRow,
     const TFields extends BrunoTableNonEmptyFields<TRow>,
-    const TOptions extends ApplyDefaults<ComputedOptions<TRow, TFields, string, "text">, TDefaults>,
+    const TOptions extends ApplyDefaults<
+      ComputedOptions<TRow, TFields, string, "text">,
+      ComputedPresetDefaults<TDefaults>
+    >,
   >(
     options: TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, string>,
   ): PresetResult<
     TextBuiltIn,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, string>,
     BrunoTableComputedColumnDefinition<TRow, TFields, string, "text">
   >;
@@ -383,13 +404,13 @@ function BrunoTableNumberColumnWithDefaults<const TDefaults extends NumberPreset
     const TFields extends BrunoTableNonEmptyFields<TRow>,
     const TOptions extends ApplyDefaults<
       ComputedOptions<TRow, TFields, number, "number">,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     >,
   >(
     options: TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, number>,
   ): PresetResult<
     NumberBuiltIn,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, number>,
     BrunoTableComputedColumnDefinition<TRow, TFields, number, "number">
   >;
@@ -452,13 +473,13 @@ function BrunoTableBigIntColumnWithDefaults<const TDefaults extends PresetDefaul
     const TFields extends BrunoTableNonEmptyFields<TRow>,
     const TOptions extends ApplyDefaults<
       ComputedOptions<TRow, TFields, bigint, "bigint">,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     >,
   >(
     options: TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, bigint>,
   ): PresetResult<
     BigIntBuiltIn,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, bigint>,
     BrunoTableComputedColumnDefinition<TRow, TFields, bigint, "bigint">
   >;
@@ -521,13 +542,13 @@ function BrunoTableBooleanColumnWithDefaults<const TDefaults extends PresetDefau
     const TFields extends BrunoTableNonEmptyFields<TRow>,
     const TOptions extends ApplyDefaults<
       ComputedOptions<TRow, TFields, boolean, "boolean">,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     >,
   >(
     options: TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, boolean>,
   ): PresetResult<
     BooleanBuiltIn,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, boolean>,
     BrunoTableComputedColumnDefinition<TRow, TFields, boolean, "boolean">
   >;
@@ -626,7 +647,7 @@ type SelectColumnPreset<
         TDefaultOptions[number],
         SelectValueType<TDefaultOptions[number]>
       >,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     > & { readonly options?: never },
   >(
     options: TOptions &
@@ -643,7 +664,7 @@ type SelectColumnPreset<
       >,
   ): PresetResult<
     SelectBuiltIn<TDefaultOptions[number]>,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, TDefaultOptions[number]>,
     BrunoTableComputedColumnDefinition<
       TRow,
@@ -789,14 +810,14 @@ function BrunoTableSelectColumnWithDefaults<
         TDefaultOptions[number],
         SelectValueType<TDefaultOptions[number]>
       >,
-      TDefaults
+      ComputedPresetDefaults<TDefaults>
     > & { readonly options?: never },
   >(
     options: TOptions &
       BrunoTableComputedColumnDependencies<TRow, TFields, TDefaultOptions[number]>,
   ): PresetResult<
     SelectBuiltIn<TDefaultOptions[number]>,
-    TDefaults,
+    ComputedPresetDefaults<TDefaults>,
     TOptions & BrunoTableComputedColumnDependencies<TRow, TFields, TDefaultOptions[number]>,
     BrunoTableComputedColumnDefinition<
       TRow,
@@ -823,6 +844,11 @@ function mergeSelectRuntimeColumn(
   defaults: RuntimeColumnOptions,
   options: RuntimeColumnOptions,
 ): RuntimeColumnOptions {
+  if (Object.hasOwn(defaults, "options") && Object.hasOwn(options, "options")) {
+    throw new TypeError(
+      "BrunoTable Select Column preset options cannot be overridden at the column invocation.",
+    );
+  }
   const merged = { ...defaults, ...options };
   const selectOptions = merged["options"];
 
@@ -877,7 +903,7 @@ function validateRuntimeColumnOptions(
   builtIn: RuntimeColumnOptions,
   options: RuntimeColumnOptions,
 ): void {
-  const isComputed = Object.hasOwn(options, "fields") || Object.hasOwn(options, "valueGetter");
+  const isComputed = isComputedColumnOptions(options);
   const shapeKeys = isComputed ? computedColumnOptionKeys : fieldColumnOptionKeys;
   const valueType = builtIn["valueType"];
   const acceptsFormat = valueType === "number";
@@ -918,6 +944,13 @@ function createSelectValueType(
   }
 
   const findOption = (input: unknown) => options.find((option) => option === input);
+  const requireOption = (input: unknown): unknown => {
+    const option = findOption(input);
+    if (option === undefined) {
+      throw new TypeError("Value is not one of the configured Select options.");
+    }
+    return option;
+  };
   const decodeOption = (input: unknown) => {
     const option = findOption(input);
     return option === undefined
@@ -937,20 +970,21 @@ function createSelectValueType(
     editorLayout: "fullWidth",
     defaultWidth: 160,
     decodeRuntime: decodeOption,
-    equivalent: (left, right) => left === right,
-    compare: (left, right) => compareIndexes(options.indexOf(left), options.indexOf(right)),
-    formatCanonicalText: formatSelectCanonicalText,
+    equivalent: (left, right) => requireOption(left) === requireOption(right),
+    compare: (left, right) =>
+      compareIndexes(options.indexOf(requireOption(left)), options.indexOf(requireOption(right))),
+    formatCanonicalText: (value) => formatSelectCanonicalText(requireOption(value)),
     parseCanonicalText: (text) => {
       const index = canonicalOptions.indexOf(text);
       return index === -1
         ? { _tag: "Failure", message: "Text is not one of the configured Select options." }
         : { _tag: "Success", value: options[index] };
     },
-    formatDisplay: formatSelectCanonicalText,
+    formatDisplay: (value) => formatSelectCanonicalText(requireOption(value)),
     encodePersisted: (value) => ({
       $brunoTableValue: "select",
       version: 1,
-      value: encodeSelectPrimitive(value),
+      value: encodeSelectPrimitive(requireOption(value)),
     }),
     decodePersisted: (input) => {
       if (!isRecord(input) || input["$brunoTableValue"] !== "select" || input["version"] !== 1) {
@@ -985,7 +1019,7 @@ function encodeSelectPrimitive(value: unknown): BrunoTableJsonValue {
     case "boolean":
       return { type: "boolean", value };
     default:
-      return null;
+      throw new TypeError("BrunoTable Select Column cannot encode an unsupported value.");
   }
 }
 

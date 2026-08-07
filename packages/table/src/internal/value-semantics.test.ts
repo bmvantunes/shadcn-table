@@ -123,6 +123,10 @@ describe("compiled Column Value Semantics", () => {
     expect(number.formatCanonicalText(1.25)).toBe("1.25");
     expect(number.parseCanonicalText("1.25e2")).toEqual({ _tag: "Success", value: 125 });
     expect(number.parseCanonicalText("Infinity")._tag).toBe("Failure");
+    expect(Reflect.apply(number.parseCanonicalText, undefined, [125])).toEqual({
+      _tag: "Failure",
+      message: "Expected canonical text input.",
+    });
     expect(bigint.formatCanonicalText(exact)).toBe("9007199254740993123456789");
     expect(bigint.parseCanonicalText("9007199254740993123456789")).toEqual({
       _tag: "Success",
@@ -218,6 +222,38 @@ describe("compiled Column Value Semantics", () => {
     expect(semantics.parseCanonicalText("cancelled")._tag).toBe("Failure");
     const persisted = semantics.encodePersisted("open");
     expect(semantics.decodePersisted(persisted)).toEqual({ _tag: "Success", value: "open" });
+    expect(() => semantics.encodePersisted("cancelled")).toThrow(
+      "not one of the configured Select options",
+    );
+  });
+
+  it("keeps field-only preset defaults out of computed columns", () => {
+    const preset = BrunoTableNumberColumn.withDefaults({
+      headerName: "Price",
+      enableFilter: true,
+      enableSorting: true,
+      isEditable: true,
+    });
+    const fieldColumn = Reflect.apply(preset, undefined, [
+      { columnId: "COL_ID_PRICE", field: "price" },
+    ]) as Readonly<Record<string, unknown>>;
+    const computedColumn = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_NOTIONAL",
+        fields: ["price", "quantity"],
+        valueGetter: ({ row }: { readonly row: SemanticRow }) => row.price * Number(row.quantity),
+      },
+    ]) as Readonly<Record<string, unknown>>;
+
+    expect(fieldColumn).toMatchObject({
+      enableFilter: true,
+      enableSorting: true,
+      isEditable: true,
+    });
+    expect(computedColumn).not.toHaveProperty("enableFilter");
+    expect(computedColumn).not.toHaveProperty("enableSorting");
+    expect(computedColumn).not.toHaveProperty("isEditable");
+    expect(() => compileColumns([computedColumn as never])).not.toThrow();
   });
 
   it("snapshots custom Value Type methods and validates their boundary results", () => {
@@ -258,6 +294,26 @@ describe("compiled Column Value Semantics", () => {
 
     expect(semantics.formatCanonicalText("abc")).toBe("ABC");
     expect(semantics.parseCanonicalText("ABC")).toEqual({ _tag: "Success", value: "abc" });
+
+    const sparseCustom = {
+      ...custom,
+      encodePersisted: () => {
+        const sparse: unknown[] = [];
+        sparse.length = 1;
+        return sparse as never;
+      },
+    };
+    const [sparseCompiled] = compileColumns([
+      {
+        columnId: "COL_ID_SPARSE",
+        field: "code",
+        headerName: "Sparse",
+        valueType: sparseCustom,
+      },
+    ]);
+    expect(() => sparseCompiled!.semantics.encodePersisted("abc")).toThrow(
+      "persisted output must be JSON-safe",
+    );
 
     const malformed = { ...custom, codecId: "" };
     expect(() =>
@@ -365,6 +421,18 @@ describe("compiled Column Value Semantics", () => {
       ]),
     ).toThrow("format must be an object");
     expect(() =>
+      compileColumns([
+        Reflect.apply(BrunoTableNumberColumn, undefined, [
+          {
+            columnId: "COL_ID_PRICE",
+            field: "price",
+            headerName: "Price",
+            format: { maximumFractionDigit: 2 },
+          },
+        ]) as never,
+      ]),
+    ).toThrow("does not accept maximumFractionDigit");
+    expect(() =>
       Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
         { headerName: "Price", format: "invalid" },
       ]),
@@ -390,6 +458,38 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow("does not accept mysteryOption");
+    const statusPreset = BrunoTableSelectColumn.withDefaults({
+      headerName: "Status",
+      options: ["open", "closed"],
+    });
+    expect(() =>
+      Reflect.apply(statusPreset, undefined, [
+        {
+          columnId: "COL_ID_STATUS",
+          field: "status",
+          options: ["open"],
+        },
+      ]),
+    ).toThrow("preset options cannot be overridden");
+    for (const [key, message] of [
+      ["cellAlign", "cellAlign must be"],
+      ["editorLayout", "editorLayout must be"],
+      ["width", "width must be"],
+    ] as const) {
+      expect(() =>
+        Reflect.apply(compileColumns, undefined, [
+          [
+            {
+              columnId: "COL_ID_SYMBOL",
+              field: "symbol",
+              headerName: "Symbol",
+              valueType: "text",
+              [key]: null,
+            },
+          ],
+        ]),
+      ).toThrow(message);
+    }
     expect(() =>
       compileColumns([
         {

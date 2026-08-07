@@ -16,6 +16,7 @@ import type {
   BrunoTableColumnIdOf,
   BrunoTableColumns,
   BrunoTableColumnValue,
+  BrunoTableDecodeResult,
   BrunoTableEditableColumnId,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
@@ -335,6 +336,25 @@ const statusColumn = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
 });
 
+const computedPriceColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Calculated price",
+  enableFilter: true,
+  enableSorting: true,
+  isEditable: true,
+});
+
+const computedPresetColumns = [
+  computedPriceColumn({
+    columnId: "COL_ID_COMPUTED_PRICE",
+    fields: ["price", "multiplier"],
+    valueGetter: ({ row }) => row.price * row.multiplier,
+  }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+expectTypeOf<(typeof computedPresetColumns)[0]["enableFilter"]>().toEqualTypeOf<undefined>();
+expectTypeOf<(typeof computedPresetColumns)[0]["enableSorting"]>().toEqualTypeOf<undefined>();
+expectTypeOf<(typeof computedPresetColumns)[0]["isEditable"]>().toEqualTypeOf<undefined>();
+
 const helperColumns = [
   BrunoTableTextColumn({
     columnId: "COL_ID_SYMBOL",
@@ -424,7 +444,7 @@ describe("BrunoTable Column Helpers", () => {
 type ExactAmount = { readonly minor: bigint };
 type AmountRow = { readonly amount: ExactAmount };
 
-const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> = {
+const exactAmountValueType = {
   codecId: "test/exact-amount",
   codecVersion: 1,
   filterFamily: "numeric",
@@ -432,7 +452,7 @@ const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> 
   cellAlign: "end",
   editorLayout: "inline",
   defaultWidth: 120,
-  decodeRuntime: (input) =>
+  decodeRuntime: (input): BrunoTableDecodeResult<ExactAmount> =>
     typeof input === "object" &&
     input !== null &&
     "minor" in input &&
@@ -449,7 +469,7 @@ const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> 
   formatDisplay: (value) => value.minor.toString(10),
   encodePersisted: (value) => ({ minor: value.minor.toString(10) }),
   decodePersisted: () => ({ _tag: "Failure", message: "Not used in this type proof." }),
-};
+} satisfies BrunoTableValueType<ExactAmount, "numeric", "text">;
 
 const customValueColumns = [
   {

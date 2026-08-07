@@ -57,6 +57,29 @@ export class ValueSemanticsConfigurationError extends TypeError {}
 
 const numberTextPattern = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/u;
 const bigIntTextPattern = /^-?\d+$/u;
+const numberFormatOptionKeys = new Set<PropertyKey>([
+  "compactDisplay",
+  "currency",
+  "currencyDisplay",
+  "currencySign",
+  "localeMatcher",
+  "maximumFractionDigits",
+  "maximumSignificantDigits",
+  "minimumFractionDigits",
+  "minimumIntegerDigits",
+  "minimumSignificantDigits",
+  "notation",
+  "numberingSystem",
+  "roundingIncrement",
+  "roundingMode",
+  "roundingPriority",
+  "signDisplay",
+  "style",
+  "trailingZeroDisplay",
+  "unit",
+  "unitDisplay",
+  "useGrouping",
+]);
 
 const builtInValueTypes: Readonly<Record<BrunoTableBuiltInValueType, RuntimeValueTypeDescriptor>> =
   Object.freeze({
@@ -76,21 +99,22 @@ export function compileColumnValueSemantics(
       ? snapshotCustomValueType(selection)
       : builtInValueTypes[builtInSelection];
 
-  const cellAlign = overrides.cellAlign ?? descriptor.cellAlign;
+  const cellAlign = overrides.cellAlign === undefined ? descriptor.cellAlign : overrides.cellAlign;
   if (!isCellAlign(cellAlign)) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable cellAlign must be start, center, or end when provided.",
     );
   }
 
-  const editorLayout = overrides.editorLayout ?? descriptor.editorLayout;
+  const editorLayout =
+    overrides.editorLayout === undefined ? descriptor.editorLayout : overrides.editorLayout;
   if (!isEditorLayout(editorLayout)) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable editorLayout must be inline, center, or fullWidth when provided.",
     );
   }
 
-  const width = overrides.width ?? descriptor.defaultWidth;
+  const width = overrides.width === undefined ? descriptor.defaultWidth : overrides.width;
   if (typeof width !== "number" || !Number.isFinite(width) || width <= 0) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable width must be a positive finite number when provided.",
@@ -110,6 +134,13 @@ export function compileColumnValueSemantics(
       throw new ValueSemanticsConfigurationError(
         "BrunoTable number format must be an object when provided.",
       );
+    }
+    for (const key of Reflect.ownKeys(format)) {
+      if (!numberFormatOptionKeys.has(key)) {
+        throw new ValueSemanticsConfigurationError(
+          `BrunoTable number format does not accept ${String(key)}.`,
+        );
+      }
     }
     const formatSnapshot = Object.freeze({ ...format }) as BrunoTableNumberFormat;
     let formatter: Intl.NumberFormat;
@@ -135,7 +166,10 @@ export function compileColumnValueSemantics(
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
     formatCanonicalText: (value) => descriptor.formatCanonicalText(value),
-    parseCanonicalText: (text) => descriptor.parseCanonicalText(text),
+    parseCanonicalText: (text) =>
+      typeof text === "string"
+        ? descriptor.parseCanonicalText(text)
+        : { _tag: "Failure", message: "Expected canonical text input." },
     formatDisplay,
     encodePersisted: (value) => descriptor.encodePersisted(value),
     decodePersisted: (input) => descriptor.decodePersisted(input),
@@ -475,11 +509,31 @@ function isJsonValue(value: unknown, ancestors: Set<object>): value is BrunoTabl
 
   ancestors.add(value);
   const valid = Array.isArray(value)
-    ? value.every((entry) => isJsonValue(entry, ancestors))
-    : Object.getPrototypeOf(value) === Object.prototype &&
-      Object.values(value).every((entry) => isJsonValue(entry, ancestors));
+    ? isDenseJsonArray(value, ancestors)
+    : isJsonObject(value, ancestors);
   ancestors.delete(value);
   return valid;
+}
+
+function isDenseJsonArray(value: readonly unknown[], ancestors: Set<object>): boolean {
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) return false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index) || !isJsonValue(value[index], ancestors)) return false;
+  }
+  return true;
+}
+
+function isJsonObject(value: object, ancestors: Set<object>): boolean {
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.some((key) => typeof key !== "string" || !Object.propertyIsEnumerable.call(value, key))
+  ) {
+    return false;
+  }
+  return ownKeys.every((key) => isJsonValue(Reflect.get(value, key), ancestors));
 }
 
 function isBuiltInValueType(value: unknown): value is BrunoTableBuiltInValueType {

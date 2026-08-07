@@ -75,8 +75,6 @@ export type BrunoTableEditorLayout = "inline" | "center" | "fullWidth";
 
 export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
 
-declare const brunoTableValueTypeValue: unique symbol;
-
 /**
  * One explicit runtime value domain. BrunoTable snapshots this descriptor into a private compiled
  * plan during column normalization; mounted cells never discover or dispatch value kinds.
@@ -86,7 +84,6 @@ export interface BrunoTableValueType<
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
   TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
 > {
-  readonly [brunoTableValueTypeValue]?: TValue;
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: TFilterFamily;
@@ -105,7 +102,7 @@ export interface BrunoTableValueType<
 }
 
 export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
-  readonly [brunoTableValueTypeValue]?: infer TValue;
+  readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<infer TValue>;
 }
   ? TValue
   : never;
