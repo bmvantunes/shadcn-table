@@ -486,6 +486,7 @@ export type BrunoTableEditingCapability<
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
   readonly columns: TColumns;
+  readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   readonly initialOrderBy: BrunoTableSortBy<TColumns>;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;

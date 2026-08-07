@@ -506,8 +506,6 @@ The recommended composition is:
   <BrunoTableToolbar>
     <PageSpecificFilters />
     <BrunoTableQuickFilter />
-    <BrunoTableToolbarSpacer />
-    <BrunoTableEditActions />
   </BrunoTableToolbar>
 </BrunoTableServer>
 ```

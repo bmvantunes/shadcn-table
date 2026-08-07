@@ -80,6 +80,24 @@ if (Object.keys(packageJson.exports).some((exportName) => exportName.includes("i
   throw new Error("A private @bruno/table module was exported publicly.");
 }
 
+if (hasInternalExportTarget(packageJson.exports)) {
+  throw new Error("A public @bruno/table export points at a private dist/internal module.");
+}
+
+if (
+  !hasInternalExportTarget({
+    "./aliased-private-module": {
+      import: "./dist/internal/private.mjs",
+    },
+  })
+) {
+  throw new Error("The private export-target validator failed its nested-condition smoke check.");
+}
+
+if (JSON.stringify(packageJson.files) !== JSON.stringify(["dist"])) {
+  throw new Error("The @bruno/table package must publish its complete dist directory.");
+}
+
 if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0") {
   throw new Error(
     "The private TanStack Table engine is not pinned to the audited stable v9.0.0 version.",
@@ -132,4 +150,20 @@ function collectDeclarationExportNames(source) {
   }
 
   return [...new Set(names)];
+}
+
+function hasInternalExportTarget(value) {
+  if (typeof value === "string") {
+    return /^\.\/dist\/internal(?:\/|$)/u.test(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(hasInternalExportTarget);
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).some(hasInternalExportTarget);
+  }
+
+  return false;
 }

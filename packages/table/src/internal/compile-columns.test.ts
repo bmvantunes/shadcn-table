@@ -45,6 +45,89 @@ describe("compileColumns", () => {
     ]);
   });
 
+  it("snapshots accessor-backed definition properties once", () => {
+    const reads = new Map<string, number>();
+    const valueGetter = () => 42;
+    const valueFormatter = () => "42";
+    const property = (name: string, firstValue: unknown, laterValue: unknown) => ({
+      enumerable: true,
+      get() {
+        const count = (reads.get(name) ?? 0) + 1;
+        reads.set(name, count);
+        return count === 1 ? firstValue : laterValue;
+      },
+    });
+    const definition = Object.defineProperties(
+      {},
+      {
+        columnId: property("columnId", "COL_ID_COMPUTED", "COL_ID_changed"),
+        headerName: property("headerName", "Computed", ""),
+        valueType: property("valueType", "number", "invalid"),
+        fields: property("fields", ["price"], []),
+        valueGetter: property("valueGetter", valueGetter, "not a function"),
+        valueFormatter: property("valueFormatter", valueFormatter, 42),
+      },
+    );
+
+    const compiled = compileColumns([definition]);
+
+    expect(Object.fromEntries(reads)).toEqual({
+      columnId: 1,
+      headerName: 1,
+      valueType: 1,
+      fields: 1,
+      valueGetter: 1,
+      valueFormatter: 1,
+    });
+    expect(compiled[0]).toEqual({
+      kind: "computed",
+      columnId: "COL_ID_COMPUTED",
+      headerName: "Computed",
+      valueType: "number",
+      fields: ["price"],
+      valueGetter,
+      valueFormatter,
+    });
+
+    let fieldReads = 0;
+    let editableReads = 0;
+    const fieldDefinition = Object.defineProperties(
+      {
+        columnId: "COL_ID_PRICE",
+        headerName: "Price",
+        valueType: "number",
+      },
+      {
+        field: {
+          enumerable: true,
+          get() {
+            fieldReads += 1;
+            return fieldReads === 1 ? "price" : 42;
+          },
+        },
+        isEditable: {
+          enumerable: true,
+          get() {
+            editableReads += 1;
+            return editableReads === 1;
+          },
+        },
+      },
+    );
+
+    const [compiledField] = compileColumns([fieldDefinition]);
+
+    expect({ fieldReads, editableReads }).toEqual({ fieldReads: 1, editableReads: 1 });
+    expect(compiledField).toEqual({
+      kind: "field",
+      columnId: "COL_ID_PRICE",
+      headerName: "Price",
+      valueType: "number",
+      field: "price",
+      isEditable: true,
+    });
+  });
+
   it("accepts unique namespaced uppercase identities", () => {
     expect(() => {
       compileColumns([
@@ -108,6 +191,23 @@ describe("compileColumns", () => {
         ]);
       }).toThrow(ColumnConfigurationError);
     }
+
+    const hostileColumnId = {
+      [Symbol.toPrimitive]() {
+        throw new Error("must not coerce an invalid Column Identity");
+      },
+    };
+
+    expect(() => {
+      compileColumns([
+        {
+          columnId: hostileColumnId,
+          field: "price",
+          headerName: "Price",
+          valueType: "number",
+        },
+      ]);
+    }).toThrow(ColumnConfigurationError);
   });
 
   it("rejects malformed widened Field Columns", () => {

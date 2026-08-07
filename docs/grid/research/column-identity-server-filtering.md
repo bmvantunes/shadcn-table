@@ -1,11 +1,11 @@
 # Column identity and server query fields
 
-Research date: 2026-08-02
+Research date: 2026-08-02; TanStack Table v9 stable verification updated 2026-08-07
 
 Sources inspected:
 
 - AG Grid `latest`, commit [`2610291`](https://github.com/ag-grid/ag-grid/tree/26102912f3d5f90dab8e6c4fe3264a31e5fb8410) (`36.0.0-beta.20260731.1136`)
-- TanStack Table `beta`, commit [`1b70a17`](https://github.com/TanStack/table/tree/1b70a17ce2ec6a88869e04d587dc6f5dee877ce7) (`9.0.0-beta.74`)
+- TanStack Table `stable`, commit [`d4d91a6`](https://github.com/TanStack/table/tree/d4d91a6cd6caa96b8d3bdb327b894b6125605350) (`9.0.0`)
 - effect-view-server, commit [`0e09abb`](https://github.com/bmvantunes/effect-view-server/tree/0e09abb1384b899279ea07b15f0bcb3c852284b9)
 - Kevin Van Cott's [2026-08-02 X post](https://x.com/KevinVanCott/status/2083714340679512098) and attached screenshot
 
@@ -53,13 +53,13 @@ This separation permits multiple distinct columns over one field and lets displa
 
 TanStack Table also keys its state by column identity:
 
-- column filters are `{ id: string, value: unknown }` ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L33-L41));
-- sorts are `{ id: string, desc: boolean }` ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L12-L22));
-- column order is an array of column IDs ([source](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-ordering/columnOrderingFeature.types.ts#L5-L27)).
+- column filters are `{ id: string, value: unknown }` ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L37-L44));
+- sorts are `{ id: string, desc: boolean }` ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L14-L19));
+- column order is an array of column IDs ([source](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-ordering/columnOrderingFeature.types.ts#L5-L27)).
 
-TanStack derives a column ID from explicit `id`, then `accessorKey`, then a string header. `accessorKey` also creates the row value accessor. See [`constructColumn`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/core/columns/constructColumn.ts#L45-L90). `BrunoTable` should map mandatory `columnId` to TanStack's explicit `id` instead of accepting these fallbacks.
+TanStack derives a column ID from explicit `id`, then `accessorKey`, then a string header. `accessorKey` also creates the row value accessor. See [`constructColumn`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/core/columns/constructColumn.ts#L43-L91). `BrunoTable` should map mandatory `columnId` to TanStack's explicit `id` instead of accepting these fallbacks.
 
-TanStack's “server-side filtering” remains a manual ownership boundary, not a server query compiler. `manualFiltering` skips the filtered row model and assumes the supplied data is already filtered; `manualSorting` does the equivalent for sorting. Applications own the state and use it to issue their own queries. See the current v9 [filtering guide](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/docs/framework/react/guide/column-filtering.md#L48-L87), [sorting guide](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/docs/framework/react/guide/sorting.md#L144-L175), [`manualFiltering`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L257-L273), and [`manualSorting`](https://github.com/TanStack/table/blob/65712b74fdb8eb83af1b322885bf7fba0fd5981d/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L232-L246).
+TanStack's “server-side filtering” remains a manual ownership boundary, not a server query compiler. `manualFiltering` skips the filtered row model and assumes the supplied data is already filtered; `manualSorting` does the equivalent for sorting. Applications own the state and use it to issue their own queries. See the current v9 [filtering guide](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/docs/framework/react/guide/column-filtering.md#L52-L80), [sorting guide](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/docs/framework/react/guide/sorting.md#L144-L180), [`manualFiltering`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/column-filtering/columnFilteringFeature.types.ts#L263-L267), and [`manualSorting`](https://github.com/TanStack/table/blob/d4d91a6cd6caa96b8d3bdb327b894b6125605350/packages/table-core/src/features/row-sorting/rowSortingFeature.types.ts#L246-L250).
 
 Kevin's post is a documentation-design question. He notes that each feature guide repeats a client-versus-server section and asks whether TanStack should add “dedicated guides for manual server processing.” The attached image is the existing Column Filtering Guide section. It is **not** an announcement of a new server-side filter engine, field mapping API, or backend protocol.
 

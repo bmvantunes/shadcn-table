@@ -47,10 +47,16 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     throw new ColumnConfigurationError(`BrunoTable column at index ${index} must be an object.`);
   }
 
+  const hasField = Object.hasOwn(candidate, "field");
+  const hasFields = Object.hasOwn(candidate, "fields");
+  const hasValueGetter = Object.hasOwn(candidate, "valueGetter");
+  const hasIsEditable = Object.hasOwn(candidate, "isEditable");
+  const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
   const columnId = candidate["columnId"];
+
   if (!isColumnId(columnId)) {
     throw new ColumnConfigurationError(
-      `BrunoTable columnId must start with COL_ID_, begin its suffix with A-Z, 0-9, or _, and have an uppercase suffix: ${String(columnId)}`,
+      "BrunoTable columnId must start with COL_ID_, begin its suffix with A-Z, 0-9, or _, and have an uppercase suffix.",
     );
   }
 
@@ -73,16 +79,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
-  const valueFormatter = candidate["valueFormatter"];
-  if (Object.hasOwn(candidate, "valueFormatter") && typeof valueFormatter !== "function") {
+  const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
+  if (hasValueFormatter && typeof valueFormatter !== "function") {
     throw new ColumnConfigurationError(
       `BrunoTable valueFormatter must be a function when provided: ${columnId}`,
     );
   }
-
-  const hasField = Object.hasOwn(candidate, "field");
-  const hasFields = Object.hasOwn(candidate, "fields");
-  const hasValueGetter = Object.hasOwn(candidate, "valueGetter");
 
   if (hasField) {
     if (hasFields || hasValueGetter) {
@@ -91,18 +93,15 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
 
-    if (typeof candidate["field"] !== "string" || candidate["field"].trim().length === 0) {
+    const field = candidate["field"];
+    if (typeof field !== "string" || field.trim().length === 0) {
       throw new ColumnConfigurationError(
         `BrunoTable field must be a non-empty string for column: ${columnId}`,
       );
     }
 
-    const isEditable = candidate["isEditable"];
-    if (
-      Object.hasOwn(candidate, "isEditable") &&
-      typeof isEditable !== "boolean" &&
-      typeof isEditable !== "function"
-    ) {
+    const isEditable = hasIsEditable ? candidate["isEditable"] : undefined;
+    if (hasIsEditable && typeof isEditable !== "boolean" && typeof isEditable !== "function") {
       throw new ColumnConfigurationError(
         `BrunoTable isEditable must be a boolean or function when provided: ${columnId}`,
       );
@@ -113,7 +112,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       columnId,
       headerName,
       valueType,
-      field: candidate["field"],
+      field,
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
         : {}),
@@ -129,13 +128,14 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
-  if (!Array.isArray(candidate["fields"])) {
+  const fieldsCandidate = candidate["fields"];
+  if (!Array.isArray(fieldsCandidate)) {
     throw new ColumnConfigurationError(
       `BrunoTable computed fields must be a non-empty tuple of field names: ${columnId}`,
     );
   }
 
-  const candidateFields = Array.from(candidate["fields"]);
+  const candidateFields = Array.from(fieldsCandidate);
   if (
     candidateFields.length === 0 ||
     !candidateFields.every((field) => typeof field === "string" && field.trim().length > 0)
@@ -145,13 +145,14 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
-  if (typeof candidate["valueGetter"] !== "function") {
+  const valueGetter = candidate["valueGetter"];
+  if (typeof valueGetter !== "function") {
     throw new ColumnConfigurationError(
       `BrunoTable computed valueGetter must be a function: ${columnId}`,
     );
   }
 
-  if (Object.hasOwn(candidate, "isEditable")) {
+  if (hasIsEditable) {
     throw new ColumnConfigurationError(
       `BrunoTable computed columns cannot declare isEditable: ${columnId}`,
     );
@@ -165,7 +166,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     headerName,
     valueType,
     fields,
-    valueGetter: candidate["valueGetter"] as RuntimeCallback,
+    valueGetter: valueGetter as RuntimeCallback,
     ...(typeof valueFormatter === "function"
       ? { valueFormatter: valueFormatter as RuntimeCallback }
       : {}),

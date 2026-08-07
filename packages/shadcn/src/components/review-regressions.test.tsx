@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 
 import { ButtonGroup } from "./button-group";
 import { Carousel } from "./carousel";
-import { ChartStyle } from "./chart";
+import { ChartContainer, ChartStyle, ChartTooltipContent } from "./chart";
 import { EmptyDescription } from "./empty";
 import { Item, ItemGroup } from "./item";
 import { PaginationEllipsis, PaginationLink } from "./pagination";
@@ -154,5 +154,37 @@ describe("reviewed component regressions", () => {
     expect(markup).not.toContain("<script>");
     expect(markup.match(/<\/style>/gu)).toHaveLength(1);
     expect(markup).toContain("\\3c /style>");
+  });
+
+  test("preserves numeric chart labels for rendering and label formatting", () => {
+    const payload = [{ dataKey: "amount", graphicalItemId: "amount", value: 5 }];
+    const labelFormatter = vi.fn((value) => `Axis ${String(value)}`);
+    const plainMarkup = renderToStaticMarkup(
+      <ChartContainer config={{ amount: { label: "Amount" } }}>
+        <ChartTooltipContent active label={0} payload={payload} />
+      </ChartContainer>,
+    );
+    const markup = renderToStaticMarkup(
+      <ChartContainer config={{ amount: { label: "Amount" } }}>
+        <ChartTooltipContent active label={0} labelFormatter={labelFormatter} payload={payload} />
+      </ChartContainer>,
+    );
+
+    expect(plainMarkup).toContain('<div class="font-medium">0</div>');
+    expect(markup).toContain("Axis 0");
+    expect(labelFormatter).toHaveBeenCalledWith(0, payload);
+  });
+
+  test("runs chart tooltip formatters when a value has no name", () => {
+    const payload = [{ dataKey: "amount", graphicalItemId: "amount", value: 5 }];
+    const formatter = vi.fn(() => "Formatted without a name");
+    const markup = renderToStaticMarkup(
+      <ChartContainer config={{ amount: { label: "Amount" } }}>
+        <ChartTooltipContent active formatter={formatter} payload={payload} />
+      </ChartContainer>,
+    );
+
+    expect(markup).toContain("Formatted without a name");
+    expect(formatter).toHaveBeenCalledWith(5, undefined, payload[0], 0, payload);
   });
 });

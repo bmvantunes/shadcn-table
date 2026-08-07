@@ -66,4 +66,61 @@ describe("Combobox", () => {
     expect(markup).toContain('aria-label="Remove Alpha"');
     expect(markup).toContain('aria-label="Remove Beta"');
   });
+
+  test("preserves Base UI stateful class names on composed controls", () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <Combobox items={["Alpha"]}>
+          <ComboboxTrigger className={({ open }) => (open ? "trigger-open" : "trigger-closed")}>
+            Choose status
+          </ComboboxTrigger>
+        </Combobox>
+        <Combobox items={["Beta"]}>
+          <ComboboxInput
+            aria-label="Search values"
+            className={({ open }) => (open ? "input-open" : "input-closed")}
+            inputGroupClassName="input-shell"
+          />
+        </Combobox>
+      </>,
+    );
+
+    expect(markup).toContain("trigger-closed");
+    expect(markup).toContain("input-closed");
+    expect(markup).toContain("input-shell");
+  });
+
+  test("derives distinguishable chip removal names for JSX children", () => {
+    const markup = renderToStaticMarkup(
+      <Combobox items={["Alpha", "Beta"]} defaultValue={["Alpha", "Beta"]} multiple>
+        <ComboboxChips>
+          <ComboboxChip>
+            <span>Alpha</span>
+          </ComboboxChip>
+          <ComboboxChip value="Beta">
+            <span aria-hidden="true">B</span>
+          </ComboboxChip>
+          <ComboboxChipsInput aria-label="Add value" />
+        </ComboboxChips>
+      </Combobox>,
+    );
+
+    expect(markup).toContain('aria-label="Remove Alpha"');
+    expect(markup).toContain('aria-label="Remove Beta"');
+    expect(markup).not.toContain('aria-label="Remove item"');
+  });
+
+  test("requires a removal name for opaque JSX chip content", () => {
+    expect(() =>
+      renderToStaticMarkup(
+        <Combobox items={["Alpha"]} defaultValue={["Alpha"]} multiple>
+          <ComboboxChips>
+            <ComboboxChip>
+              <span aria-label="Alpha" />
+            </ComboboxChip>
+          </ComboboxChips>
+        </Combobox>,
+      ),
+    ).toThrow(/requires a value or removeLabel/u);
+  });
 });

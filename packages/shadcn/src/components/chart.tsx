@@ -139,8 +139,11 @@ function ChartTooltipContent({
     const [item] = payload;
     const key = getPayloadKey(labelKey ?? item?.dataKey ?? item?.name);
     const itemConfig = getPayloadConfigFromPayload(config, item, key);
-    const value =
-      !labelKey && typeof label === "string" ? (config[label]?.label ?? label) : itemConfig?.label;
+    const value = !labelKey
+      ? typeof label === "string"
+        ? (config[label]?.label ?? label)
+        : (label ?? itemConfig?.label)
+      : (itemConfig?.label ?? label);
 
     if (labelFormatter) {
       return (
@@ -185,7 +188,7 @@ function ChartTooltipContent({
                   indicator === "dot" && "items-center",
                 )}
               >
-                {formatter && item?.value !== undefined && item.name !== undefined ? (
+                {formatter && item.value !== undefined ? (
                   formatter(item.value, item.name, item, index, payload)
                 ) : (
                   <>

@@ -69,6 +69,10 @@ void emptyColumnId;
 const invalidUnicodeStartColumnId: BrunoTableColumnId = "COL_ID_ÉTAT";
 void invalidUnicodeStartColumnId;
 
+// @ts-expect-error Every character after the prefix must already be uppercase.
+const invalidMixedCaseColumnId: BrunoTableColumnId = "COL_ID_Price";
+void invalidMixedCaseColumnId;
+
 describe("BrunoTable public types", () => {
   it("preserves exact identities and values", () => {
     expectTypeOf<BrunoTableColumnIdOf<Columns>>().toEqualTypeOf<
@@ -180,6 +184,9 @@ describe("BrunoTable public types", () => {
     const common = {
       tableId: "orders",
       columns,
+      initialFilters: [
+        { columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" },
+      ] satisfies BrunoTableFilterExpressions<Order, Columns>,
       initialOrderBy: [
         { columnId: "COL_ID_PRICE", direction: "desc" },
       ] satisfies BrunoTableSortBy<Columns>,
@@ -237,6 +244,7 @@ describe("BrunoTable public types", () => {
     } satisfies BrunoTableServerProps<Order, Columns, typeof viewport>;
 
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
+    expectTypeOf(clientProps.initialFilters[0]!.columnId).toEqualTypeOf<"COL_ID_SYMBOL">();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
     expectTypeOf(editableClientProps.getRowVersion).returns.toEqualTypeOf<bigint>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();

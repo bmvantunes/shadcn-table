@@ -4,8 +4,7 @@
   "description": "A high-performance, strongly typed data grid for React.",
   "license": "MIT",
   "files": [
-    "dist/index.d.mts",
-    "dist/index.mjs"
+    "dist"
   ],
   "type": "module",
   "sideEffects": false,

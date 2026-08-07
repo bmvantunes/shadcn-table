@@ -100,6 +100,7 @@ const source = {
 const props = {
   tableId: "orders",
   columns,
+  initialFilters: filters,
   initialOrderBy: [
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ] satisfies BrunoTableSortBy<Columns>,
@@ -211,6 +212,10 @@ const invalidColumn = [
     valueType: "number",
   },
 ] satisfies BrunoTableColumns<Order>;
+
+// @ts-expect-error emitted declarations reject mixed-case Column Identity suffixes.
+const invalidMixedCaseColumnId: import("@bruno/table").BrunoTableColumnId = "COL_ID_Price";
+void invalidMixedCaseColumnId;
 
 const missingHeaderName = [
   // @ts-expect-error emitted declarations require an explicit header name.
