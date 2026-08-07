@@ -148,7 +148,7 @@ function ChartTooltipContent({
       );
     }
 
-    if (!value) {
+    if (value === undefined || value === null || value === false || value === "") {
       return null;
     }
 
@@ -185,7 +185,7 @@ function ChartTooltipContent({
                   indicator === "dot" && "items-center",
                 )}
               >
-                {formatter && item?.value !== undefined && item.name ? (
+                {formatter && item?.value !== undefined && item.name !== undefined ? (
                   formatter(item.value, item.name, item, index, payload)
                 ) : (
                   <>
@@ -292,7 +292,7 @@ function ChartLegendContent({
                   }}
                 />
               )}
-              {itemConfig?.label}
+              {itemConfig?.label ?? item.value}
             </div>
           );
         })}

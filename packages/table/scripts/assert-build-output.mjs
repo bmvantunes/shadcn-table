@@ -36,6 +36,7 @@ export interface BrunoTableInterface {}
 export type BrunoTableAlias = string;
 export { BrunoTableInternal as BrunoTableRenamed, type BrunoTableNamedType };
 export * as BrunoTableNamespace from "./namespace.js";
+export type * as BrunoTableTypeNamespace from "./type-namespace.js";
 `);
 
 if (
@@ -48,6 +49,7 @@ if (
       "BrunoTableRenamed",
       "BrunoTableNamedType",
       "BrunoTableNamespace",
+      "BrunoTableTypeNamespace",
     ].toSorted((left, right) => left.localeCompare(right)),
   )
 ) {
@@ -113,7 +115,9 @@ function collectDeclarationExportNames(source) {
     }
   }
 
-  for (const [, name] of source.matchAll(/^\s*export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\b/gmu)) {
+  for (const [, name] of source.matchAll(
+    /^\s*export\s+(?:type\s+)?\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\b/gmu,
+  )) {
     names.push(name);
   }
 

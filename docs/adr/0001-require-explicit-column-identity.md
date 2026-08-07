@@ -1,6 +1,6 @@
 # Require explicit namespaced column identity
 
-BrunoTable requires a stable `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, and never derives identity from `field`, a header, or array position. All grid state and persisted user intent use `columnId`; server Adapters resolve it through current column definitions to row fields when compiling queries. The explicit namespace makes identifiers conspicuous and searchable while preventing accidental row-field names from leaking into saved layouts, filters, sorts, edits, conflicts, and navigation.
+BrunoTable requires a stable `columnId` on every leaf column, typed as `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` ``, where `ColumnIdFirstCharacter` is an ASCII uppercase letter, decimal digit, or underscore. The required first character makes the suffix non-empty. BrunoTable never derives identity from `field`, a header, or array position. All grid state and persisted user intent use `columnId`; server Adapters resolve it through current column definitions to row fields when compiling queries. The explicit namespace makes identifiers conspicuous and searchable while preventing accidental row-field names from leaking into saved layouts, filters, sorts, edits, conflicts, and navigation.
 
 ## Consequences
 

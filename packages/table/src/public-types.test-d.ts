@@ -55,6 +55,20 @@ const columns = [
 
 type Columns = typeof columns;
 
+const validColumnId: BrunoTableColumnId = "COL_ID_PRICE";
+void validColumnId;
+
+const validUnicodeColumnId: BrunoTableColumnId = "COL_ID_AÉTAT";
+void validUnicodeColumnId;
+
+// @ts-expect-error A stable column identity must have a non-empty suffix.
+const emptyColumnId: BrunoTableColumnId = "COL_ID_";
+void emptyColumnId;
+
+// @ts-expect-error The suffix must begin with an ASCII uppercase letter, digit, or underscore.
+const invalidUnicodeStartColumnId: BrunoTableColumnId = "COL_ID_ÉTAT";
+void invalidUnicodeStartColumnId;
+
 describe("BrunoTable public types", () => {
   it("preserves exact identities and values", () => {
     expectTypeOf<BrunoTableColumnIdOf<Columns>>().toEqualTypeOf<

@@ -250,8 +250,13 @@ Two compatible mounted instances may intentionally reuse one `tableId` and there
 Every leaf column definition requires an explicit stable `columnId` with this type:
 
 ```ts
-type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
+type BrunoTableColumnId = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
 ```
+
+`ColumnIdFirstCharacter` is an ASCII uppercase letter, decimal digit, or underscore. This
+non-empty first character makes `COL_ID_` fail at compile time; the remaining suffix retains
+TypeScript's uppercase-string constraint. Runtime validation applies the same grammar to widened
+or external strings.
 
 Never infer column identity from a field, header, array position, or generated counter. Lowercase or unprefixed literals must fail compilation. External values must be validated at runtime. Duplicate `columnId` values are configuration errors.
 

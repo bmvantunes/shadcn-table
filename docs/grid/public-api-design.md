@@ -429,8 +429,12 @@ Edit Mode belongs to the end user, not the consumer interface. Do not expose def
 Every leaf column definition requires an explicit `columnId` from this namespace:
 
 ```ts
-type BrunoTableColumnId = `COL_ID_${Uppercase<string>}`;
+type BrunoTableColumnId = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
 ```
+
+`ColumnIdFirstCharacter` is an ASCII uppercase letter, decimal digit, or underscore. Requiring it
+excludes the empty `COL_ID_` identity during `satisfies` checks; runtime normalization validates
+the same first-character and uppercase-suffix grammar for widened or restored values.
 
 ```ts
 {

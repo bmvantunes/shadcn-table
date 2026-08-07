@@ -26,8 +26,9 @@
     "check:build": "node scripts/assert-build-output.mjs",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run check && vp run test && vp run build && vp run check:build && vp run test:types:emitted"
+    "prepublishOnly": "vp run check && vp run test && vp run test:types:source && vp run build && vp run check:build && vp run test:types:emitted"
   },
   "dependencies": {
     "@tanstack/react-table": "9.0.0"

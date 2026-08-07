@@ -38,7 +38,7 @@ Build:
 - explicit `BrunoTableClient` and `BrunoTableServer` prop interfaces
 - mandatory `tableId`
 - mandatory Client `getRowId` and a Server type-level prohibition on that prop
-- mandatory explicit `` `COL_ID_${Uppercase<string>}` `` identity on every leaf column
+- mandatory explicit non-empty `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` `` identity on every leaf column, with an ASCII uppercase letter, digit, or underscore as the first suffix character
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
 - mandatory non-empty Column Identity-keyed `initialOrderBy`

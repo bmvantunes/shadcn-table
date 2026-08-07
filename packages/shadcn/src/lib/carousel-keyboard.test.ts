@@ -10,13 +10,10 @@ describe("getCarouselKeyboardAction", () => {
     expect(getCarouselKeyboardAction("vertical", "ArrowDown", true, false)).toBe("next");
   });
 
-  test.each(["tab", "slider", "radio", "menu"])(
-    "does not intercept arrow keys owned by a nested %s widget",
-    () => {
-      expect(getCarouselKeyboardAction("horizontal", "ArrowRight", false, false)).toBeUndefined();
-      expect(getCarouselKeyboardAction("vertical", "ArrowDown", false, false)).toBeUndefined();
-    },
-  );
+  test("does not intercept arrow keys owned by a nested focus owner", () => {
+    expect(getCarouselKeyboardAction("horizontal", "ArrowRight", false, false)).toBeUndefined();
+    expect(getCarouselKeyboardAction("vertical", "ArrowDown", false, false)).toBeUndefined();
+  });
 
   test("honours an already prevented owner event", () => {
     expect(getCarouselKeyboardAction("horizontal", "ArrowRight", true, true)).toBeUndefined();

@@ -11,7 +11,7 @@ Sources inspected:
 
 ## Decision
 
-`BrunoTable` should make `columnId` mandatory for every leaf column. It is the durable identity of a **grid column**, scoped by `tableId`, and should key all persisted column preferences, filters, and sorts. The accepted public identifier grammar is `` `COL_ID_${Uppercase<string>}` ``.
+`BrunoTable` should make `columnId` mandatory for every leaf column. It is the durable identity of a **grid column**, scoped by `tableId`, and should key all persisted column preferences, filters, and sorts. The accepted public identifier grammar is `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` ``, where the required first suffix character is an ASCII uppercase letter, digit, or underscore.
 
 `field` should identify a **row/query field**, not a column. For an ordinary data-backed column it is the cheap direct cell-value path and the default effect-view-server field used when compiling a filter or sort. A Computed Column instead declares a non-empty `fields` dependency tuple with `valueGetter`; those dependencies enter projection, while the column remains non-filterable, non-sortable, and non-editable in V1.
 

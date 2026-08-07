@@ -24,7 +24,7 @@ Challenge details where necessary, but preserve these hard requirements:
 
 - mandatory `tableId`
 - mandatory Client `getRowId`; Server rejects it and consumes authoritative raw and grouped row keys from its Viewport Source
-- mandatory explicit `columnId` on every leaf column, typed as `` `COL_ID_${Uppercase<string>}` ``, with no inferred identities
+- mandatory explicit non-empty `columnId` on every leaf column, typed as `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` `` where the first suffix character is an ASCII uppercase letter, digit, or underscore, with no inferred identities
 - mandatory explicit non-empty `headerName` on every leaf column, used as the default visible and accessible label but never as identity or query mapping
 - mandatory explicit runtime `valueType` for raw value-bearing columns, with no row sampling
 - optional first-class typed `BrunoTable...Column` helpers and reusable presets that return ordinary definitions, preserve strict inference, and keep individual formatting/styling/rendering escape hatches

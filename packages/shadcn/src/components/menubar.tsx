@@ -1,8 +1,11 @@
+"use client";
+
 import * as React from "react";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { Menubar as MenubarPrimitive } from "@base-ui/react/menubar";
 
 import { cn } from "#lib/utils";
+import { getMenubarContentSide } from "#lib/menubar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,13 +23,23 @@ import {
 } from "#components/dropdown-menu";
 import { CheckIcon } from "@phosphor-icons/react";
 
-function Menubar({ className, ...props }: MenubarPrimitive.Props) {
+type MenubarOrientation = NonNullable<MenubarPrimitive.Props["orientation"]>;
+
+const MenubarOrientationContext = React.createContext<MenubarOrientation>("horizontal");
+
+function Menubar({ className, orientation = "horizontal", ...props }: MenubarPrimitive.Props) {
   return (
-    <MenubarPrimitive
-      data-slot="menubar"
-      className={cn("flex h-9 items-center rounded-lg border p-1", className)}
-      {...props}
-    />
+    <MenubarOrientationContext.Provider value={orientation}>
+      <MenubarPrimitive
+        data-slot="menubar"
+        orientation={orientation}
+        className={cn(
+          "flex items-center rounded-lg border p-1 data-[orientation=horizontal]:h-9 data-[orientation=vertical]:h-auto data-[orientation=vertical]:w-max data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch",
+          className,
+        )}
+        {...props}
+      />
+    </MenubarOrientationContext.Provider>
   );
 }
 
@@ -47,7 +60,7 @@ function MenubarTrigger({ className, ...props }: React.ComponentProps<typeof Dro
     <DropdownMenuTrigger
       data-slot="menubar-trigger"
       className={cn(
-        "flex items-center rounded-[calc(var(--radius-md)-2px)] px-2 py-[calc(--spacing(0.85))] text-xs/relaxed font-medium outline-hidden select-none hover:bg-muted aria-expanded:bg-muted",
+        "flex items-center rounded-[calc(var(--radius-md)-2px)] px-2 py-[calc(--spacing(0.85))] text-xs/relaxed font-medium outline-hidden select-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30 aria-expanded:bg-muted",
         className,
       )}
       {...props}
@@ -59,14 +72,18 @@ function MenubarContent({
   className,
   align = "start",
   alignOffset = -4,
+  side,
   sideOffset = 8,
   ...props
 }: React.ComponentProps<typeof DropdownMenuContent>) {
+  const orientation = React.useContext(MenubarOrientationContext);
+
   return (
     <DropdownMenuContent
       data-slot="menubar-content"
       align={align}
       alignOffset={alignOffset}
+      side={getMenubarContentSide(orientation, side)}
       sideOffset={sideOffset}
       className={cn(
         "w-auto min-w-32 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
