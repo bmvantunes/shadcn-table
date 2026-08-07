@@ -10,6 +10,7 @@ import {
   type BrunoTableSaveCellChange,
   type BrunoTableSaveChangeSet,
   type BrunoTableServerProps,
+  type BrunoTableSortableColumnId,
   type BrunoTableSortBy,
 } from "@bruno/table";
 
@@ -54,12 +55,51 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const capabilityColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+    enableSorting: false,
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+    enableFilter: false,
+  },
+] satisfies BrunoTableColumns<Order>;
+
+type CapabilityColumns = typeof capabilityColumns;
+
+const noSortingColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+    enableSorting: false,
+  },
+] satisfies BrunoTableColumns<Order>;
+
+type NoSortingColumns = typeof noSortingColumns;
 type Price = Expect<Equal<BrunoTableColumnValue<Order, Columns, "COL_ID_PRICE">, number>>;
 type DoubleQuantity = Expect<
   Equal<BrunoTableColumnValue<Order, Columns, "COL_ID_DOUBLE_QUANTITY">, bigint>
 >;
 type Filterable = Expect<
   Equal<BrunoTableFilterableColumnId<Columns>, "COL_ID_SYMBOL" | "COL_ID_PRICE">
+>;
+type OptedFilterable = Expect<
+  Equal<BrunoTableFilterableColumnId<CapabilityColumns>, "COL_ID_SYMBOL">
+>;
+type OptedSortable = Expect<Equal<BrunoTableSortableColumnId<CapabilityColumns>, "COL_ID_PRICE">>;
+type NoSortable = Expect<Equal<BrunoTableSortableColumnId<NoSortingColumns>, never>>;
+type MixedCaseColumnIdRejected = Expect<
+  Equal<"COL_ID_Price" extends import("@bruno/table").BrunoTableColumnId ? true : false, false>
 >;
 type PriceField = Expect<Equal<BrunoTableColumnField<Columns, "COL_ID_PRICE">, "price">>;
 type CorrelatedSaves = Expect<
@@ -129,6 +169,18 @@ const editableProps = {
     status: "ready",
   },
 } satisfies BrunoTableClientProps<Order, Columns, bigint>;
+
+const noSortingProps = {
+  tableId: "unsortable-orders",
+  columns: noSortingColumns,
+  getRowId: (row: Order) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 0,
+    status: "ready",
+  },
+} satisfies BrunoTableClientProps<Order, NoSortingColumns>;
 
 const widenedColumns: BrunoTableColumns<Order> = columns;
 const widenedEditableProps = {
@@ -231,6 +283,11 @@ const invalidFilter = [
   { columnId: "COL_ID_DOUBLE_QUANTITY", type: "greaterThan", filter: 10n },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
+const invalidOptedOutFilter = [
+  // @ts-expect-error emitted declarations exclude explicitly non-filterable identities.
+  { columnId: "COL_ID_PRICE", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<Order, CapabilityColumns>;
+
 const invalidNumericSensitivity = [
   {
     columnId: "COL_ID_PRICE",
@@ -276,6 +333,30 @@ const invalidMixedColumnCompoundFilter = [
 // @ts-expect-error emitted declarations preserve the non-empty sorting invariant.
 const invalidEmptySort = [] satisfies BrunoTableSortBy<Columns>;
 
+const invalidOptedOutSort = [
+  // @ts-expect-error emitted declarations exclude explicitly nonsortable identities.
+  { columnId: "COL_ID_SYMBOL", direction: "asc" },
+] satisfies BrunoTableSortBy<CapabilityColumns>;
+
+const invalidNoCapabilitySort = [
+  // @ts-expect-error emitted declarations expose no order for a table without sortable columns.
+  { columnId: "COL_ID_SYMBOL", direction: "asc" },
+] satisfies BrunoTableSortBy<NoSortingColumns>;
+
+const invalidInitialOrderByWithoutSortingCapability = {
+  tableId: "unsortable-orders",
+  columns: noSortingColumns,
+  // @ts-expect-error emitted props omit Initial Order By when sorting capability is absent.
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 0,
+    status: "ready",
+  },
+} satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+
 const invalidComputedDependency = [
   BrunoTableComputedColumn({
     columnId: "COL_ID_DOUBLE_QUANTITY",
@@ -295,11 +376,16 @@ const builtInValueType: BrunoTableBuiltInValueType = "bigint";
 void (0 as unknown as Price);
 void (0 as unknown as DoubleQuantity);
 void (0 as unknown as Filterable);
+void (0 as unknown as OptedFilterable);
+void (0 as unknown as OptedSortable);
+void (0 as unknown as NoSortable);
+void (0 as unknown as MixedCaseColumnIdRejected);
 void (0 as unknown as PriceField);
 void (0 as unknown as CorrelatedSaves);
 void filters;
 void props;
 void editableProps;
+void noSortingProps;
 void widenedEditableProps;
 void invalidProps;
 void invalidServerEditing;
@@ -312,9 +398,13 @@ void invalidEmptySave;
 void invalidColumn;
 void missingHeaderName;
 void invalidFilter;
+void invalidOptedOutFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
 void invalidMixedColumnCompoundFilter;
 void invalidEmptySort;
+void invalidOptedOutSort;
+void invalidNoCapabilitySort;
+void invalidInitialOrderByWithoutSortingCapability;
 void invalidComputedDependency;
 void builtInValueType;

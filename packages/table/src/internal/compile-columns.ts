@@ -16,6 +16,8 @@ type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
   readonly valueType: BrunoTableBuiltInValueType;
+  readonly enableFilter: boolean;
+  readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
 };
 
@@ -50,6 +52,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasField = Object.hasOwn(candidate, "field");
   const hasFields = Object.hasOwn(candidate, "fields");
   const hasValueGetter = Object.hasOwn(candidate, "valueGetter");
+  const hasEnableFilter = Object.hasOwn(candidate, "enableFilter");
+  const hasEnableSorting = Object.hasOwn(candidate, "enableSorting");
   const hasIsEditable = Object.hasOwn(candidate, "isEditable");
   const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
   const columnId = candidate["columnId"];
@@ -107,12 +111,28 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
 
+    const enableFilter = hasEnableFilter ? candidate["enableFilter"] : true;
+    if (typeof enableFilter !== "boolean") {
+      throw new ColumnConfigurationError(
+        `BrunoTable enableFilter must be a boolean when provided: ${columnId}`,
+      );
+    }
+
+    const enableSorting = hasEnableSorting ? candidate["enableSorting"] : true;
+    if (typeof enableSorting !== "boolean") {
+      throw new ColumnConfigurationError(
+        `BrunoTable enableSorting must be a boolean when provided: ${columnId}`,
+      );
+    }
+
     return Object.freeze({
       kind: "field",
       columnId,
       headerName,
       valueType,
       field,
+      enableFilter,
+      enableSorting,
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
         : {}),
@@ -158,6 +178,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
+  if (hasEnableFilter || hasEnableSorting) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot declare enableFilter or enableSorting: ${columnId}`,
+    );
+  }
+
   const fields = Object.freeze(candidateFields) as readonly [string, ...string[]];
 
   return Object.freeze({
@@ -165,6 +191,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     columnId,
     headerName,
     valueType,
+    enableFilter: false,
+    enableSorting: false,
     fields,
     valueGetter: valueGetter as RuntimeCallback,
     ...(typeof valueFormatter === "function"

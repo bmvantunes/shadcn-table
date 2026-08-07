@@ -102,6 +102,8 @@ type FieldColumn<
   readonly field: TField;
   readonly headerName: string;
   readonly valueType: TValueType;
+  readonly enableFilter?: boolean;
+  readonly enableSorting?: boolean;
   readonly isEditable?: boolean | ((params: ValueParams<TRow, TRow[TField]>) => boolean);
   readonly valueFormatter?: (params: ValueParams<TRow, TRow[TField]>) => string;
   readonly fields?: never;
@@ -135,6 +137,8 @@ type ComputedColumn<
   readonly valueGetter: (params: ValueGetterParams<TRow, TFields>) => TValue;
   readonly valueType: TValueType;
   readonly field?: never;
+  readonly enableFilter?: never;
+  readonly enableSorting?: never;
   readonly isEditable?: never;
   readonly valueFormatter?: (params: ValueParams<TRow, TValue>) => string;
 };
@@ -249,22 +253,26 @@ export type BrunoTableColumnValue<
         : never
       : never;
 
-type FieldColumnId<TColumns extends readonly { readonly columnId: BrunoTableColumnId }[]> =
-  TColumns[number] extends infer TColumn
-    ? TColumn extends { readonly columnId: infer TColumnId extends BrunoTableColumnId }
-      ? TColumn extends { readonly field: string }
-        ? TColumnId
-        : never
+type EnabledFieldColumnId<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TCapability extends "enableFilter" | "enableSorting",
+> = TColumns[number] extends infer TColumn
+  ? TColumn extends { readonly columnId: infer TColumnId extends BrunoTableColumnId }
+    ? TColumn extends { readonly field: string }
+      ? TColumn extends { readonly [TKey in TCapability]: false }
+        ? never
+        : TColumnId
       : never
-    : never;
+    : never
+  : never;
 
 export type BrunoTableFilterableColumnId<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = FieldColumnId<TColumns>;
+> = EnabledFieldColumnId<TColumns, "enableFilter">;
 
 export type BrunoTableSortableColumnId<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = FieldColumnId<TColumns>;
+> = EnabledFieldColumnId<TColumns, "enableSorting">;
 
 type ExactEditableFieldColumn<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
@@ -483,14 +491,19 @@ export type BrunoTableEditingCapability<
   TRowVersion,
 > = BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
+type InitialOrderByCapability<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = [BrunoTableSortableColumnId<TColumns>] extends [never]
+  ? { readonly initialOrderBy?: never }
+  : { readonly initialOrderBy: BrunoTableSortBy<TColumns> };
+
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
   readonly columns: TColumns;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
-  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
-};
+} & InitialOrderByCapability<TColumns>;
 
 export type BrunoTableClientProps<
   TRow,

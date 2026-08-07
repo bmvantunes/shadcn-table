@@ -72,8 +72,26 @@ const expectedRootExport = {
   default: "./dist/index.mjs",
 };
 
-if (JSON.stringify(packageJson.exports["."]) !== JSON.stringify(expectedRootExport)) {
+if (!hasExactStringRecord(packageJson.exports["."], expectedRootExport)) {
   throw new Error("The @bruno/table root export is invalid.");
+}
+
+if (
+  !hasExactStringRecord(
+    {
+      default: "./dist/index.mjs",
+      types: "./dist/index.d.mts",
+      import: "./dist/index.mjs",
+    },
+    expectedRootExport,
+  ) ||
+  hasExactStringRecord(
+    { ...expectedRootExport, browser: "./dist/index.mjs" },
+    expectedRootExport,
+  ) ||
+  hasExactStringRecord({ ...expectedRootExport, import: "./dist/other.mjs" }, expectedRootExport)
+) {
+  throw new Error("The root-export validator failed its exact order-independent smoke check.");
 }
 
 if (Object.keys(packageJson.exports).some((exportName) => exportName.includes("internal"))) {
@@ -166,4 +184,18 @@ function hasInternalExportTarget(value) {
   }
 
   return false;
+}
+
+function hasExactStringRecord(actual, expected) {
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) {
+    return false;
+  }
+
+  const actualKeys = Object.keys(actual);
+  const expectedKeys = Object.keys(expected);
+
+  return (
+    actualKeys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(actual, key) && actual[key] === expected[key])
+  );
 }

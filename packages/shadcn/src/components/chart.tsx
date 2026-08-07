@@ -10,7 +10,90 @@ import { cn } from "#lib/utils";
 const THEMES = { light: "", dark: ".dark" } as const;
 
 const INITIAL_DIMENSION = { width: 320, height: 200 } as const;
+const CSS_COLOR_FUNCTIONS = new Set([
+  "calc",
+  "clamp",
+  "color",
+  "color-mix",
+  "hsl",
+  "hsla",
+  "hwb",
+  "lab",
+  "lch",
+  "light-dark",
+  "max",
+  "min",
+  "oklab",
+  "oklch",
+  "rgb",
+  "rgba",
+  "var",
+]);
+const CSS_CUSTOM_PROPERTY_SUFFIX = /^[A-Za-z0-9_-]+$/u;
+const CSS_HEX_COLOR = /^#[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{1}|[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{2})?)?$/u;
+const CSS_NAMED_COLOR = /^[A-Za-z][A-Za-z0-9-]*$/u;
+const CSS_COLOR_FUNCTION = /([A-Za-z][A-Za-z0-9-]*)\s*\(/gu;
+const CSS_COLOR_CHARACTERS = /^[#%(),./+\-_*0-9A-Za-z \t]+$/u;
+const DATA_OR_ARIA_ATTRIBUTE = /^(?:aria|data)-[A-Za-z0-9_.:-]+$/u;
+const DOM_EVENT_PROP = /^on[A-Z][A-Za-z0-9]*$/u;
+const SAFE_DIV_PROPS = new Set([
+  "about",
+  "accessKey",
+  "autoCapitalize",
+  "autoCorrect",
+  "autoFocus",
+  "autoSave",
+  "contentEditable",
+  "contextMenu",
+  "datatype",
+  "dir",
+  "draggable",
+  "enterKeyHint",
+  "exportparts",
+  "hidden",
+  "id",
+  "inlist",
+  "inert",
+  "inputMode",
+  "is",
+  "itemID",
+  "itemProp",
+  "itemRef",
+  "itemScope",
+  "itemType",
+  "lang",
+  "nonce",
+  "part",
+  "popover",
+  "popoverTarget",
+  "popoverTargetAction",
+  "prefix",
+  "property",
+  "radioGroup",
+  "ref",
+  "rel",
+  "resource",
+  "results",
+  "rev",
+  "role",
+  "security",
+  "slot",
+  "spellCheck",
+  "style",
+  "suppressContentEditableWarning",
+  "suppressHydrationWarning",
+  "tabIndex",
+  "title",
+  "translate",
+  "typeof",
+  "unselectable",
+  "vocab",
+]);
 type TooltipNameType = number | string;
+type ChartContentDomProps = Omit<
+  React.ComponentProps<"div">,
+  "children" | "dangerouslySetInnerHTML"
+>;
 
 export type ChartConfig = Record<
   string,
@@ -91,7 +174,9 @@ ${prefix} [data-chart="${escapeCssString(id)}"] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ?? itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
+    return isSafeCssCustomPropertySuffix(key) && isSafeCssColor(color)
+      ? `  --color-${key}: ${color.trim()};`
+      : null;
   })
   .join("\n")}
 }
@@ -118,8 +203,9 @@ function ChartTooltipContent({
   color,
   nameKey,
   labelKey,
+  ...props
 }: React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
-  React.ComponentProps<"div"> & {
+  ChartContentDomProps & {
     hideLabel?: boolean;
     hideIndicator?: boolean;
     indicator?: "line" | "dot" | "dashed";
@@ -166,6 +252,7 @@ function ChartTooltipContent({
 
   return (
     <div
+      {...getSafeDivProps(props, true)}
       className={cn(
         "grid min-w-32 items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs/relaxed shadow-xl",
         className,
@@ -254,7 +341,8 @@ function ChartLegendContent({
   payload,
   verticalAlign = "bottom",
   nameKey,
-}: React.ComponentProps<"div"> & {
+  ...props
+}: ChartContentDomProps & {
   hideIcon?: boolean;
   nameKey?: string;
 } & RechartsPrimitive.DefaultLegendContentProps) {
@@ -266,6 +354,7 @@ function ChartLegendContent({
 
   return (
     <div
+      {...getSafeDivProps(props, false)}
       className={cn(
         "flex items-center justify-center gap-4",
         verticalAlign === "top" ? "pb-3" : "pt-3",
@@ -343,6 +432,82 @@ function escapeCssString(value: string): string {
 
 function escapeStyleElementText(value: string): string {
   return value.replaceAll("<", "\\3c ");
+}
+
+function isSafeCssCustomPropertySuffix(value: string): boolean {
+  return CSS_CUSTOM_PROPERTY_SUFFIX.test(value);
+}
+
+function isSafeCssColor(value: string | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+
+  const color = value.trim();
+
+  if (!color || color.length > 512) {
+    return false;
+  }
+
+  if (CSS_HEX_COLOR.test(color) || CSS_NAMED_COLOR.test(color)) {
+    return true;
+  }
+
+  if (
+    !CSS_COLOR_CHARACTERS.test(color) ||
+    color.includes("/*") ||
+    color.includes("*/") ||
+    !hasBalancedParentheses(color)
+  ) {
+    return false;
+  }
+
+  const functions = color.matchAll(CSS_COLOR_FUNCTION);
+  let functionCount = 0;
+
+  for (const match of functions) {
+    functionCount += 1;
+    if (!CSS_COLOR_FUNCTIONS.has(match[1]?.toLowerCase() ?? "")) {
+      return false;
+    }
+  }
+
+  return functionCount > 0;
+}
+
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0;
+
+  for (const character of value) {
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+
+  return depth === 0;
+}
+
+function getSafeDivProps(props: object, allowDomEvents: boolean): ChartContentDomProps {
+  const safeProps: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(props)) {
+    // Recharts Legend `on*` callbacks receive (entry, index, event), so they
+    // cannot be attached to the root div as ordinary one-argument DOM events.
+    if (
+      SAFE_DIV_PROPS.has(key) ||
+      DATA_OR_ARIA_ATTRIBUTE.test(key) ||
+      (allowDomEvents && DOM_EVENT_PROP.test(key))
+    ) {
+      safeProps[key] = value;
+    }
+  }
+
+  return safeProps as ChartContentDomProps;
 }
 
 export {

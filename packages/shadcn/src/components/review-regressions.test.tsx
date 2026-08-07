@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vite-plus/test";
 
 import { ButtonGroup } from "./button-group";
 import { Carousel } from "./carousel";
-import { ChartContainer, ChartStyle, ChartTooltipContent } from "./chart";
+import { ChartContainer, ChartLegendContent, ChartStyle, ChartTooltipContent } from "./chart";
 import { EmptyDescription } from "./empty";
 import { Item, ItemGroup } from "./item";
 import { PaginationEllipsis, PaginationLink } from "./pagination";
@@ -129,6 +129,26 @@ describe("reviewed component regressions", () => {
     expect(markup.match(/type="button"/gu)).toHaveLength(3);
   });
 
+  test("preserves Sidebar menu semantics through tooltip composition", () => {
+    const buttonMarkup = renderToStaticMarkup(
+      <SidebarProvider>
+        <SidebarMenuButton tooltip="Open menu">Menu button</SidebarMenuButton>
+      </SidebarProvider>,
+    );
+    const linkMarkup = renderToStaticMarkup(
+      <SidebarProvider>
+        <SidebarMenuButton render={<a href="/orders" />} tooltip="Open orders">
+          Orders
+        </SidebarMenuButton>
+      </SidebarProvider>,
+    );
+
+    expect(buttonMarkup).toMatch(/<button[^>]*type="button"/u);
+    expect(linkMarkup).toMatch(/<a[^>]*href="\/orders"/u);
+    expect(linkMarkup).not.toContain('type="button"');
+    expect(linkMarkup).not.toContain('role="button"');
+  });
+
   test("publishes the default Button Group orientation", () => {
     expect(renderToStaticMarkup(<ButtonGroup />)).toContain('data-orientation="horizontal"');
   });
@@ -154,6 +174,86 @@ describe("reviewed component regressions", () => {
     expect(markup).not.toContain("<script>");
     expect(markup.match(/<\/style>/gu)).toHaveLength(1);
     expect(markup).toContain("\\3c /style>");
+  });
+
+  test("drops chart colors and keys that cannot be safely embedded in CSS", () => {
+    const markup = renderToStaticMarkup(
+      <ChartStyle
+        id="orders"
+        config={{
+          amount: { color: "oklch(0.7 0.1 40)" },
+          commented: { color: "red/*" },
+          injectedColor: { color: "red; } body { background: url(https://example.test)" },
+          "injected;key": { color: "blue" },
+          variable: { color: "var(--chart-variable)" },
+        }}
+      />,
+    );
+
+    expect(markup).toContain("--color-amount: oklch(0.7 0.1 40)");
+    expect(markup).toContain("--color-variable: var(--chart-variable)");
+    expect(markup).not.toContain("--color-commented");
+    expect(markup).not.toContain("--color-injectedColor");
+    expect(markup).not.toContain("injected;key");
+    expect(markup).not.toContain("url(");
+  });
+
+  test("forwards safe tooltip DOM props without leaking Recharts props", () => {
+    const payload = [{ dataKey: "amount", graphicalItemId: "amount", value: 5 }];
+    const markup = renderToStaticMarkup(
+      <ChartContainer config={{ amount: { label: "Amount" } }}>
+        <ChartTooltipContent
+          active
+          aria-label="Order details"
+          data-state="visible"
+          id="orders-tooltip"
+          payload={payload}
+          separator="should-not-reach-the-dom"
+          style={{ maxWidth: 240 }}
+          tabIndex={0}
+          title="Current order"
+          wrapperClassName="recharts-wrapper-only"
+        />
+      </ChartContainer>,
+    );
+
+    expect(markup).toContain('id="orders-tooltip"');
+    expect(markup).toContain('aria-label="Order details"');
+    expect(markup).toContain('data-state="visible"');
+    expect(markup).toContain('style="max-width:240px"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).toContain('title="Current order"');
+    expect(markup).not.toContain("should-not-reach-the-dom");
+    expect(markup).not.toContain("recharts-wrapper-only");
+  });
+
+  test("forwards safe legend DOM props without leaking Recharts props", () => {
+    const markup = renderToStaticMarkup(
+      <ChartContainer config={{ amount: { label: "Amount" } }}>
+        <ChartLegendContent
+          align="left"
+          aria-label="Order legend"
+          data-state="visible"
+          iconSize={32}
+          id="orders-legend"
+          layout="vertical"
+          payload={[{ color: "red", dataKey: "amount", value: "Amount" }]}
+          style={{ maxWidth: 240 }}
+          tabIndex={0}
+          title="Series"
+        />
+      </ChartContainer>,
+    );
+
+    expect(markup).toContain('id="orders-legend"');
+    expect(markup).toContain('aria-label="Order legend"');
+    expect(markup).toContain('data-state="visible"');
+    expect(markup).toContain('style="max-width:240px"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).toContain('title="Series"');
+    expect(markup).not.toContain('align="left"');
+    expect(markup).not.toContain('iconSize="32"');
+    expect(markup).not.toContain('layout="vertical"');
   });
 
   test("preserves numeric chart labels for rendering and label formatting", () => {

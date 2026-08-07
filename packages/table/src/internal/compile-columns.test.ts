@@ -26,10 +26,18 @@ describe("compileColumns", () => {
     const compiled = compileColumns(columns);
 
     expect(compiled).toEqual([
-      expect.objectContaining({ kind: "field", columnId: "COL_ID_PRICE", field: "price" }),
+      expect.objectContaining({
+        kind: "field",
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        enableFilter: true,
+        enableSorting: true,
+      }),
       expect.objectContaining({
         kind: "computed",
         columnId: "COL_ID_NOTIONAL",
+        enableFilter: false,
+        enableSorting: false,
         fields: ["price", "quantity"],
         valueGetter,
       }),
@@ -84,6 +92,8 @@ describe("compileColumns", () => {
       columnId: "COL_ID_COMPUTED",
       headerName: "Computed",
       valueType: "number",
+      enableFilter: false,
+      enableSorting: false,
       fields: ["price"],
       valueGetter,
       valueFormatter,
@@ -91,6 +101,8 @@ describe("compileColumns", () => {
 
     let fieldReads = 0;
     let editableReads = 0;
+    let enableFilterReads = 0;
+    let enableSortingReads = 0;
     const fieldDefinition = Object.defineProperties(
       {
         columnId: "COL_ID_PRICE",
@@ -112,18 +124,39 @@ describe("compileColumns", () => {
             return editableReads === 1;
           },
         },
+        enableFilter: {
+          enumerable: true,
+          get() {
+            enableFilterReads += 1;
+            return enableFilterReads === 1 ? false : "invalid";
+          },
+        },
+        enableSorting: {
+          enumerable: true,
+          get() {
+            enableSortingReads += 1;
+            return enableSortingReads === 1 ? true : "invalid";
+          },
+        },
       },
     );
 
     const [compiledField] = compileColumns([fieldDefinition]);
 
-    expect({ fieldReads, editableReads }).toEqual({ fieldReads: 1, editableReads: 1 });
+    expect({ fieldReads, editableReads, enableFilterReads, enableSortingReads }).toEqual({
+      fieldReads: 1,
+      editableReads: 1,
+      enableFilterReads: 1,
+      enableSortingReads: 1,
+    });
     expect(compiledField).toEqual({
       kind: "field",
       columnId: "COL_ID_PRICE",
       headerName: "Price",
       valueType: "number",
       field: "price",
+      enableFilter: false,
+      enableSorting: true,
       isEditable: true,
     });
   });
@@ -243,6 +276,20 @@ describe("compileColumns", () => {
         headerName: "Price",
         valueType: "number",
         field: "price",
+        enableFilter: "yes",
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        headerName: "Price",
+        valueType: "number",
+        field: "price",
+        enableSorting: 1,
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        headerName: "Price",
+        valueType: "number",
+        field: "price",
         valueFormatter: 42,
       },
       {
@@ -304,6 +351,22 @@ describe("compileColumns", () => {
         fields: ["price"],
         valueGetter: () => 1,
         isEditable: false,
+      },
+      {
+        columnId: "COL_ID_NOTIONAL",
+        headerName: "Notional",
+        valueType: "number",
+        fields: ["price"],
+        valueGetter: () => 1,
+        enableFilter: false,
+      },
+      {
+        columnId: "COL_ID_NOTIONAL",
+        headerName: "Notional",
+        valueType: "number",
+        fields: ["price"],
+        valueGetter: () => 1,
+        enableSorting: false,
       },
     ]) {
       expect(() => compileColumns([column])).toThrow(ColumnConfigurationError);

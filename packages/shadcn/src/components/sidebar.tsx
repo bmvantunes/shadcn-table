@@ -486,6 +486,7 @@ const sidebarMenuButtonVariants = cva(
 
 function SidebarMenuButton({
   render,
+  nativeButton,
   isActive = false,
   variant = "default",
   size = "default",
@@ -494,15 +495,19 @@ function SidebarMenuButton({
   ...props
 }: useRender.ComponentProps<"button"> &
   React.ComponentProps<"button"> & {
+    nativeButton?: boolean;
     isActive?: boolean;
     tooltip?: string | React.ComponentProps<typeof TooltipContent>;
   } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const { isMobile, state } = useSidebar();
+  const rendersNativeButton =
+    nativeButton ??
+    (render === undefined || (React.isValidElement(render) && render.type === "button"));
   const comp = useRender({
     defaultTagName: "button",
     props: mergeProps<"button">(
       {
-        type: render === undefined ? "button" : undefined,
+        type: rendersNativeButton ? "button" : undefined,
         className: cn(sidebarMenuButtonVariants({ variant, size }), className),
       },
       props,
