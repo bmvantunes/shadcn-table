@@ -460,11 +460,30 @@ const customValueColumns = [
   },
 ] satisfies BrunoTableColumns<AmountRow>;
 
+const customComputedValueColumns = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_AMOUNT_COPY",
+    fields: ["amount"],
+    headerName: "Amount copy",
+    valueType: exactAmountValueType,
+    valueGetter: ({ row }) => {
+      expectTypeOf(row).toEqualTypeOf<Pick<AmountRow, "amount">>();
+      return row.amount;
+    },
+    valueFormatter: ({ value }) => value.minor.toString(10),
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+
+expectTypeOf<
+  BrunoTableColumnValue<AmountRow, typeof customComputedValueColumns, "COL_ID_AMOUNT_COPY">
+>().toEqualTypeOf<ExactAmount>();
+
 const customNumericFilter = [
   { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: { minor: 10n } },
 ] satisfies BrunoTableFilterExpressions<AmountRow, typeof customValueColumns>;
 
 void customNumericFilter;
+void customComputedValueColumns;
 
 const invalidColumnIds = [
   {
@@ -882,6 +901,74 @@ const invalidHelperWithoutColumnId = [
   BrunoTableTextColumn({ field: "symbol", headerName: "Symbol" }),
 ] satisfies BrunoTableColumns<HelperRow>;
 
+const invalidIdentityPreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error a reusable preset can never own Column Identity.
+  columnId: "COL_ID_PRICE",
+});
+
+const invalidFieldPreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error a reusable preset can never own server field mapping.
+  field: "price",
+});
+
+const invalidValueTypePreset = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error a reusable preset cannot replace a helper's exact Value Type.
+  valueType: "text",
+});
+
+const invalidUnknownPresetOption = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  // @ts-expect-error presets reject configuration outside their explicit surface.
+  mysteryOption: true,
+});
+
+const strictPricePreset = BrunoTableNumberColumn.withDefaults({ headerName: "Price" });
+const invalidPresetInvocationWithoutColumnId = strictPricePreset({
+  // @ts-expect-error the final preset invocation still requires Column Identity.
+  field: "price",
+});
+
+const invalidNumberHelperValueType = BrunoTableNumberColumn({
+  columnId: "COL_ID_PRICE",
+  // @ts-expect-error a Number helper cannot be changed into another Value Type.
+  field: "price",
+  headerName: "Price",
+  valueType: "text",
+});
+
+const narrowPriceFormatter = ({
+  row,
+  value,
+}: {
+  readonly row: HelperRow & { readonly secret: string };
+  readonly value: number;
+}) => `${row.secret}:${value}`;
+
+const invalidNarrowPresentationCallback = [
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+    // @ts-expect-error BrunoTable may pass any HelperRow, not a narrower row subtype.
+    valueFormatter: narrowPriceFormatter,
+  },
+] satisfies BrunoTableColumns<HelperRow>;
+
+type MixedAmountRow = { readonly amount: ExactAmount | { readonly major: number } };
+const invalidNarrowCustomValueType = [
+  // @ts-expect-error a custom Value Type must accept the field's complete exact value domain.
+  {
+    columnId: "COL_ID_AMOUNT",
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactAmountValueType,
+  },
+] satisfies BrunoTableColumns<MixedAmountRow>;
+
 const invalidHelperComputedDependency = [
   BrunoTableNumberColumn({
     columnId: "COL_ID_WEIGHTED_PRICE",
@@ -895,7 +982,22 @@ const invalidHelperComputedDependency = [
   }),
 ] satisfies BrunoTableColumns<HelperRow>;
 
+const invalidCustomComputedDependency = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_AMOUNT_COPY",
+    fields: ["amount"],
+    headerName: "Amount copy",
+    valueType: exactAmountValueType,
+    valueGetter: ({ row }) => {
+      // @ts-expect-error custom Computed Columns expose only declared dependencies.
+      void row.otherAmount;
+      return row.amount;
+    },
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+
 const invalidIncompleteSelectDomain = [
+  // @ts-expect-error the rejected Select helper result cannot enter the typed column tuple.
   BrunoTableSelectColumn({
     columnId: "COL_ID_STATUS",
     // @ts-expect-error Select options must cover the field's exact non-nullish value domain.
@@ -947,6 +1049,15 @@ void invalidClientWithoutInitialOrderBy;
 void invalidInitialOrderByWithoutSortingCapability;
 void invalidNumberHelperField;
 void invalidHelperWithoutColumnId;
+void invalidIdentityPreset;
+void invalidFieldPreset;
+void invalidValueTypePreset;
+void invalidUnknownPresetOption;
+void invalidPresetInvocationWithoutColumnId;
+void invalidNumberHelperValueType;
+void invalidNarrowPresentationCallback;
+void invalidNarrowCustomValueType;
 void invalidHelperComputedDependency;
+void invalidCustomComputedDependency;
 void invalidIncompleteSelectDomain;
 void invalidCustomNumericOperand;

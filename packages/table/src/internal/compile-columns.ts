@@ -1,8 +1,4 @@
-import type {
-  BrunoTableBuiltInValueType,
-  BrunoTableColumnId,
-  BrunoTableValueType,
-} from "../public-types";
+import type { BrunoTableColumnId } from "../public-types";
 import { compileColumnValueSemantics, ValueSemanticsConfigurationError } from "./value-semantics";
 
 const columnIdPrefix = "COL_ID_";
@@ -13,7 +9,7 @@ type RuntimeCallback = (...parameters: never[]) => unknown;
 type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
-  readonly valueType: BrunoTableBuiltInValueType | BrunoTableValueType<unknown>;
+  readonly valueType: unknown;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
@@ -95,7 +91,6 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     if (!(error instanceof ValueSemanticsConfigurationError)) throw error;
     throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
-  const compiledValueType = valueType as BrunoTableBuiltInValueType | BrunoTableValueType<unknown>;
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {
@@ -161,7 +156,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       kind: "field",
       columnId,
       headerName,
-      valueType: compiledValueType,
+      valueType,
       semantics,
       field,
       enableFilter,
@@ -229,7 +224,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     kind: "computed",
     columnId,
     headerName,
-    valueType: compiledValueType,
+    valueType,
     semantics,
     enableFilter: false,
     enableSorting: false,

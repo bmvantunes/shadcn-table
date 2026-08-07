@@ -244,16 +244,17 @@ describe("compiled Column Value Semantics", () => {
           ? { _tag: "Success", value: String(input.value) }
           : { _tag: "Failure", message: "Invalid persisted text." },
     };
+    const mutableCustom = { ...custom };
     const [compiled] = compileColumns([
       {
         columnId: "COL_ID_CODE",
         field: "code",
         headerName: "Code",
-        valueType: custom,
+        valueType: mutableCustom,
       },
     ]);
     const semantics = compiled!.semantics;
-    custom.formatCanonicalText = () => "mutated";
+    mutableCustom.formatCanonicalText = () => "mutated";
 
     expect(semantics.formatCanonicalText("abc")).toBe("ABC");
     expect(semantics.parseCanonicalText("ABC")).toEqual({ _tag: "Success", value: "abc" });
@@ -269,6 +270,53 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow(ColumnConfigurationError);
+  });
+
+  it("rejects malformed equality and normalizes custom decoder failures", () => {
+    const custom = {
+      codecId: "example/hostile-text",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 100,
+      decodeRuntime: () => {
+        throw new Error("hostile runtime decoder");
+      },
+      equivalent: () => "false",
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: () => ({ unexpected: true }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => ({ value: String(value) }),
+      decodePersisted: () => {
+        throw new Error("hostile persistence decoder");
+      },
+    };
+    const [compiled] = compileColumns([
+      {
+        columnId: "COL_ID_CODE",
+        field: "code",
+        headerName: "Code",
+        valueType: custom,
+      },
+    ]);
+    const semantics = compiled!.semantics;
+
+    expect(() => semantics.equivalent("left", "right")).toThrow("equivalent must return a boolean");
+    expect(semantics.decodeRuntime("code")).toEqual({
+      _tag: "Failure",
+      message: "BrunoTable Value Type decodeRuntime failed.",
+    });
+    expect(semantics.parseCanonicalText("code")).toEqual({
+      _tag: "Failure",
+      message: "BrunoTable Value Type parseCanonicalText failed.",
+    });
+    expect(semantics.decodePersisted({ value: "code" })).toEqual({
+      _tag: "Failure",
+      message: "BrunoTable Value Type decodePersisted failed.",
+    });
   });
 
   it("rejects malformed helper and presentation configuration", () => {
@@ -292,6 +340,21 @@ describe("compiled Column Value Semantics", () => {
       }),
     ).toThrow("one homogeneous");
     expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+        { headerName: "Price", columnId: "COL_ID_PRICE" },
+      ]),
+    ).toThrow("preset does not accept columnId");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn, undefined, [
+        {
+          columnId: "COL_ID_PRICE",
+          field: "price",
+          headerName: "Price",
+          valueType: "text",
+        },
+      ]),
+    ).toThrow("do not accept a valueType override");
+    expect(() =>
       compileColumns([
         {
           columnId: "COL_ID_SYMBOL",
@@ -313,5 +376,53 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow("cellRenderer must be a function");
+  });
+
+  it("snapshots reusable preset defaults before later caller mutation", () => {
+    const numberDefaults = {
+      headerName: "Price",
+      width: 112,
+      format: { minimumFractionDigits: 2 },
+    };
+    const numberPreset = Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+      numberDefaults,
+    ]);
+    numberDefaults.headerName = "Mutated";
+    numberDefaults.width = 999;
+    numberDefaults.format.minimumFractionDigits = 9;
+    Object.assign(numberDefaults, { columnId: "COL_ID_HIDDEN", field: "price" });
+
+    const numberColumn = Reflect.apply(numberPreset, undefined, [
+      { columnId: "COL_ID_PRICE", field: "price" },
+    ]);
+    expect(numberColumn).toMatchObject({
+      columnId: "COL_ID_PRICE",
+      field: "price",
+      headerName: "Price",
+      width: 112,
+      format: { minimumFractionDigits: 2 },
+    });
+    const numberColumnWithoutIdentity = Reflect.apply(numberPreset, undefined, [
+      { field: "price" },
+    ]);
+    expect(numberColumnWithoutIdentity).not.toHaveProperty("columnId");
+
+    const selectOptions: ["open", "closed"] = ["open", "closed"];
+    const selectDefaults = { headerName: "Status", options: selectOptions };
+    const selectPreset = Reflect.apply(BrunoTableSelectColumn.withDefaults, undefined, [
+      selectDefaults,
+    ]);
+    selectOptions.reverse();
+    Object.assign(selectDefaults, { valueType: "text" });
+
+    const selectColumn = Reflect.apply(selectPreset, undefined, [
+      { columnId: "COL_ID_STATUS", field: "status" },
+    ]);
+    expect(selectColumn).toMatchObject({
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", "closed"],
+    });
   });
 });

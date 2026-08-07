@@ -8,7 +8,6 @@ import type {
   BrunoTableJsonValue,
   BrunoTableNumberFormat,
   BrunoTableOrdering,
-  BrunoTableValueType,
 } from "../public-types";
 
 type SemanticsOverrides = {
@@ -16,6 +15,24 @@ type SemanticsOverrides = {
   readonly editorLayout?: unknown;
   readonly width?: unknown;
   readonly format?: unknown;
+};
+
+type RuntimeValueTypeDescriptor = {
+  readonly codecId: string;
+  readonly codecVersion: number;
+  readonly filterFamily: BrunoTableFilterFamily;
+  readonly editorFamily: BrunoTableEditorFamily;
+  readonly cellAlign: BrunoTableCellAlign;
+  readonly editorLayout: BrunoTableEditorLayout;
+  readonly defaultWidth: number;
+  readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly equivalent: (left: unknown, right: unknown) => boolean;
+  readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
+  readonly formatCanonicalText: (value: unknown) => string;
+  readonly parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>;
+  readonly formatDisplay: (value: unknown) => string;
+  readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
+  readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
 };
 
 export type CompiledColumnValueSemantics = {
@@ -41,14 +58,13 @@ export class ValueSemanticsConfigurationError extends TypeError {}
 const numberTextPattern = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/u;
 const bigIntTextPattern = /^-?\d+$/u;
 
-const builtInValueTypes: Readonly<
-  Record<BrunoTableBuiltInValueType, BrunoTableValueType<unknown>>
-> = Object.freeze({
-  text: createTextValueType(),
-  number: createNumberValueType(),
-  bigint: createBigIntValueType(),
-  boolean: createBooleanValueType(),
-});
+const builtInValueTypes: Readonly<Record<BrunoTableBuiltInValueType, RuntimeValueTypeDescriptor>> =
+  Object.freeze({
+    text: createTextValueType(),
+    number: createNumberValueType(),
+    bigint: createBigIntValueType(),
+    boolean: createBooleanValueType(),
+  });
 
 export function compileColumnValueSemantics(
   selection: unknown,
@@ -126,7 +142,7 @@ export function compileColumnValueSemantics(
   });
 }
 
-function snapshotCustomValueType(selection: unknown): BrunoTableValueType<unknown> {
+function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor {
   if (!isRecord(selection)) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable valueType must be text, number, bigint, boolean, or a Value Type descriptor.",
@@ -186,7 +202,7 @@ function snapshotCustomValueType(selection: unknown): BrunoTableValueType<unknow
   const encodePersistedFunction = requireFunction(encodePersisted, "encodePersisted");
   const decodePersistedFunction = requireFunction(decodePersisted, "decodePersisted");
 
-  const descriptor: BrunoTableValueType<unknown> = {
+  const descriptor: RuntimeValueTypeDescriptor = {
     codecId,
     codecVersion,
     filterFamily,
@@ -194,28 +210,26 @@ function snapshotCustomValueType(selection: unknown): BrunoTableValueType<unknow
     cellAlign,
     editorLayout,
     defaultWidth,
-    decodeRuntime: (input) =>
-      validateDecodeResult(Reflect.apply(decodeRuntimeFunction, undefined, [input])),
+    decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
     equivalent: (left, right) =>
-      Boolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
+      validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
     compare: (left, right) =>
       validateOrdering(Reflect.apply(compareFunction, undefined, [left, right])),
     formatCanonicalText: (value) =>
       validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value])),
     parseCanonicalText: (text) =>
-      validateDecodeResult(Reflect.apply(parseCanonicalTextFunction, undefined, [text])),
+      safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText"),
     formatDisplay: (value) =>
       validateText(Reflect.apply(formatDisplayFunction, undefined, [value])),
     encodePersisted: (value) =>
       validateJsonValue(Reflect.apply(encodePersistedFunction, undefined, [value])),
-    decodePersisted: (input) =>
-      validateDecodeResult(Reflect.apply(decodePersistedFunction, undefined, [input])),
+    decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
 }
 
-function createTextValueType(): BrunoTableValueType<string, "text", "text"> {
-  const descriptor: BrunoTableValueType<string, "text", "text"> = {
+function createTextValueType(): RuntimeValueTypeDescriptor {
+  const descriptor: RuntimeValueTypeDescriptor = {
     codecId: "@bruno/table/text",
     codecVersion: 1,
     filterFamily: "text",
@@ -225,12 +239,12 @@ function createTextValueType(): BrunoTableValueType<string, "text", "text"> {
     defaultWidth: 160,
     decodeRuntime: (input) =>
       typeof input === "string" ? success(input) : failure("Expected a string value."),
-    equivalent: (left, right) => left === right,
-    compare: comparePrimitive,
-    formatCanonicalText: (value) => value,
+    equivalent: (left, right) => assertString(left) === assertString(right),
+    compare: (left, right) => comparePrimitive(assertString(left), assertString(right)),
+    formatCanonicalText: assertString,
     parseCanonicalText: success,
-    formatDisplay: (value) => value,
-    encodePersisted: (value) => persisted("text", value),
+    formatDisplay: assertString,
+    encodePersisted: (value) => persisted("text", assertString(value)),
     decodePersisted: (input) =>
       decodePersistedTag(input, "text", (value) =>
         typeof value === "string" ? success(value) : failure("Persisted text value is invalid."),
@@ -239,8 +253,8 @@ function createTextValueType(): BrunoTableValueType<string, "text", "text"> {
   return Object.freeze(descriptor);
 }
 
-function createNumberValueType(): BrunoTableValueType<number, "numeric", "number"> {
-  const descriptor: BrunoTableValueType<number, "numeric", "number"> = {
+function createNumberValueType(): RuntimeValueTypeDescriptor {
+  const descriptor: RuntimeValueTypeDescriptor = {
     codecId: "@bruno/table/number",
     codecVersion: 1,
     filterFamily: "numeric",
@@ -252,8 +266,8 @@ function createNumberValueType(): BrunoTableValueType<number, "numeric", "number
       typeof input === "number" && Number.isFinite(input)
         ? success(input)
         : failure("Expected a finite number value."),
-    equivalent: (left, right) => left === right,
-    compare: comparePrimitive,
+    equivalent: (left, right) => assertFiniteNumber(left) === assertFiniteNumber(right),
+    compare: (left, right) => comparePrimitive(assertFiniteNumber(left), assertFiniteNumber(right)),
     formatCanonicalText: (value) => String(assertFiniteNumber(value)),
     parseCanonicalText: parseNumberText,
     formatDisplay: (value) => String(assertFiniteNumber(value)),
@@ -268,8 +282,8 @@ function createNumberValueType(): BrunoTableValueType<number, "numeric", "number
   return Object.freeze(descriptor);
 }
 
-function createBigIntValueType(): BrunoTableValueType<bigint, "numeric", "bigint"> {
-  const descriptor: BrunoTableValueType<bigint, "numeric", "bigint"> = {
+function createBigIntValueType(): RuntimeValueTypeDescriptor {
+  const descriptor: RuntimeValueTypeDescriptor = {
     codecId: "@bruno/table/bigint",
     codecVersion: 1,
     filterFamily: "numeric",
@@ -279,12 +293,12 @@ function createBigIntValueType(): BrunoTableValueType<bigint, "numeric", "bigint
     defaultWidth: 140,
     decodeRuntime: (input) =>
       typeof input === "bigint" ? success(input) : failure("Expected a bigint value."),
-    equivalent: (left, right) => left === right,
-    compare: comparePrimitive,
-    formatCanonicalText: (value) => value.toString(10),
+    equivalent: (left, right) => assertBigInt(left) === assertBigInt(right),
+    compare: (left, right) => comparePrimitive(assertBigInt(left), assertBigInt(right)),
+    formatCanonicalText: (value) => assertBigInt(value).toString(10),
     parseCanonicalText: parseBigIntText,
-    formatDisplay: (value) => value.toString(10),
-    encodePersisted: (value) => persisted("bigint", value.toString(10)),
+    formatDisplay: (value) => assertBigInt(value).toString(10),
+    encodePersisted: (value) => persisted("bigint", assertBigInt(value).toString(10)),
     decodePersisted: (input) =>
       decodePersistedTag(input, "bigint", (value) =>
         typeof value === "string"
@@ -295,8 +309,8 @@ function createBigIntValueType(): BrunoTableValueType<bigint, "numeric", "bigint
   return Object.freeze(descriptor);
 }
 
-function createBooleanValueType(): BrunoTableValueType<boolean, "boolean", "boolean"> {
-  const descriptor: BrunoTableValueType<boolean, "boolean", "boolean"> = {
+function createBooleanValueType(): RuntimeValueTypeDescriptor {
+  const descriptor: RuntimeValueTypeDescriptor = {
     codecId: "@bruno/table/boolean",
     codecVersion: 1,
     filterFamily: "boolean",
@@ -306,17 +320,21 @@ function createBooleanValueType(): BrunoTableValueType<boolean, "boolean", "bool
     defaultWidth: 88,
     decodeRuntime: (input) =>
       typeof input === "boolean" ? success(input) : failure("Expected a boolean value."),
-    equivalent: (left, right) => left === right,
-    compare: (left, right) => (left === right ? 0 : left ? 1 : -1),
-    formatCanonicalText: String,
+    equivalent: (left, right) => assertBoolean(left) === assertBoolean(right),
+    compare: (left, right) => {
+      const leftBoolean = assertBoolean(left);
+      const rightBoolean = assertBoolean(right);
+      return leftBoolean === rightBoolean ? 0 : leftBoolean ? 1 : -1;
+    },
+    formatCanonicalText: (value) => String(assertBoolean(value)),
     parseCanonicalText: (text) =>
       text === "true"
         ? success(true)
         : text === "false"
           ? success(false)
           : failure("Expected true or false."),
-    formatDisplay: String,
-    encodePersisted: (value) => persisted("boolean", value),
+    formatDisplay: (value) => String(assertBoolean(value)),
+    encodePersisted: (value) => persisted("boolean", assertBoolean(value)),
     decodePersisted: (input) =>
       decodePersistedTag(input, "boolean", (value) =>
         typeof value === "boolean"
@@ -371,6 +389,46 @@ function failure(message: string): BrunoTableDecodeResult<never> {
 function assertFiniteNumber(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError("BrunoTable Number Value Type received a non-finite value.");
+  }
+  return value;
+}
+
+function assertString(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError("BrunoTable Text Value Type received a non-string value.");
+  }
+  return value;
+}
+
+function assertBigInt(value: unknown): bigint {
+  if (typeof value !== "bigint") {
+    throw new TypeError("BrunoTable BigInt Value Type received a non-bigint value.");
+  }
+  return value;
+}
+
+function assertBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError("BrunoTable Boolean Value Type received a non-boolean value.");
+  }
+  return value;
+}
+
+function safeDecode(
+  decoder: Function,
+  input: unknown,
+  operation: "decodePersisted" | "decodeRuntime" | "parseCanonicalText",
+): BrunoTableDecodeResult<unknown> {
+  try {
+    return validateDecodeResult(Reflect.apply(decoder, undefined, [input]));
+  } catch {
+    return failure(`BrunoTable Value Type ${operation} failed.`);
+  }
+}
+
+function validateBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError("BrunoTable Value Type equivalent must return a boolean.");
   }
   return value;
 }

@@ -75,6 +75,8 @@ export type BrunoTableEditorLayout = "inline" | "center" | "fullWidth";
 
 export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
 
+declare const brunoTableValueTypeValue: unique symbol;
+
 /**
  * One explicit runtime value domain. BrunoTable snapshots this descriptor into a private compiled
  * plan during column normalization; mounted cells never discover or dispatch value kinds.
@@ -84,6 +86,7 @@ export interface BrunoTableValueType<
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
   TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
 > {
+  readonly [brunoTableValueTypeValue]?: TValue;
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: TFilterFamily;
@@ -91,18 +94,21 @@ export interface BrunoTableValueType<
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
-  decodeRuntime(this: void, input: unknown): BrunoTableDecodeResult<TValue>;
-  equivalent(this: void, left: TValue, right: TValue): boolean;
-  compare(this: void, left: TValue, right: TValue): BrunoTableOrdering;
-  formatCanonicalText(this: void, value: TValue): string;
-  parseCanonicalText(this: void, text: string): BrunoTableDecodeResult<TValue>;
-  formatDisplay(this: void, value: TValue): string;
-  encodePersisted(this: void, value: TValue): BrunoTableJsonValue;
-  decodePersisted(this: void, input: unknown): BrunoTableDecodeResult<TValue>;
+  readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
+  readonly equivalent: (this: void, left: TValue, right: TValue) => boolean;
+  readonly compare: (this: void, left: TValue, right: TValue) => BrunoTableOrdering;
+  readonly formatCanonicalText: (this: void, value: TValue) => string;
+  readonly parseCanonicalText: (this: void, text: string) => BrunoTableDecodeResult<TValue>;
+  readonly formatDisplay: (this: void, value: TValue) => string;
+  readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
+  readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
 }
 
-export type BrunoTableValueTypeValue<TValueType> =
-  TValueType extends BrunoTableValueType<infer TValue> ? TValue : never;
+export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
+  readonly [brunoTableValueTypeValue]?: infer TValue;
+}
+  ? TValue
+  : never;
 
 export type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -148,16 +154,10 @@ type ValueParams<TRow, TValue> = {
   readonly value: TValue;
 };
 
-type BivariantCallback<TParams, TResult> = {
-  bivarianceHack(parameters: TParams): TResult;
-}["bivarianceHack"];
-
 type ColumnPresentation<TRow, TValue> = {
-  readonly valueFormatter?: BivariantCallback<ValueParams<TRow, TValue>, string>;
-  readonly cellClassName?:
-    | string
-    | BivariantCallback<ValueParams<TRow, TValue>, string | undefined>;
-  readonly cellRenderer?: BivariantCallback<ValueParams<TRow, TValue>, ReactNode>;
+  readonly valueFormatter?: (parameters: ValueParams<TRow, TValue>) => string;
+  readonly cellClassName?: string | ((parameters: ValueParams<TRow, TValue>) => string | undefined);
+  readonly cellRenderer?: (parameters: ValueParams<TRow, TValue>) => ReactNode;
 };
 
 type ColumnLayout = {
@@ -182,7 +182,7 @@ type FieldColumn<
     readonly valueType: TValueType;
     readonly enableFilter?: boolean;
     readonly enableSorting?: boolean;
-    readonly isEditable?: boolean | BivariantCallback<ValueParams<TRow, TRow[TField]>, boolean>;
+    readonly isEditable?: boolean | ((parameters: ValueParams<TRow, TRow[TField]>) => boolean);
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
@@ -209,7 +209,7 @@ type ComputedColumn<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = ColumnPresentation<TRow, TValue> &
   ColumnLayout & {
     readonly [computedColumnMarker]: true;
@@ -225,6 +225,39 @@ type ComputedColumn<
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };
 
+type ErasedValueType = {
+  readonly codecId: string;
+  readonly codecVersion: number;
+  readonly filterFamily: BrunoTableFilterFamily;
+  readonly editorFamily: BrunoTableEditorFamily;
+  readonly cellAlign: BrunoTableCellAlign;
+  readonly editorLayout: BrunoTableEditorLayout;
+  readonly defaultWidth: number;
+  readonly decodeRuntime: (input: unknown) => unknown;
+  readonly equivalent: (...parameters: never[]) => unknown;
+  readonly compare: (...parameters: never[]) => unknown;
+  readonly formatCanonicalText: (...parameters: never[]) => unknown;
+  readonly parseCanonicalText: (text: string) => unknown;
+  readonly formatDisplay: (...parameters: never[]) => unknown;
+  readonly encodePersisted: (...parameters: never[]) => unknown;
+  readonly decodePersisted: (input: unknown) => unknown;
+};
+
+type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
+  ColumnLayout & {
+    readonly [computedColumnMarker]: true;
+    readonly columnId: BrunoTableColumnId;
+    readonly headerName: string;
+    readonly fields: NonEmptyFields<TRow>;
+    readonly valueGetter: (...parameters: never[]) => unknown;
+    readonly valueType: ErasedValueType;
+    readonly field?: never;
+    readonly enableFilter?: never;
+    readonly enableSorting?: never;
+    readonly isEditable?: never;
+    readonly format?: never;
+  };
+
 type AnyComputedColumn<TRow> =
   | {
       readonly [TValueType in BrunoTableBuiltInValueType]: ComputedColumn<
@@ -234,7 +267,7 @@ type AnyComputedColumn<TRow> =
         TValueType
       >;
     }[BrunoTableBuiltInValueType]
-  | ComputedColumn<TRow, NonEmptyFields<TRow>, unknown, BrunoTableValueType<unknown>>;
+  | ErasedCustomComputedColumn<TRow>;
 
 type ComputedColumnDependencies<TRow, TFields extends NonEmptyFields<TRow>, TValue> = {
   readonly fields: TFields;
@@ -245,7 +278,7 @@ type ComputedColumnOptions<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = Omit<
   ComputedColumn<TRow, TFields, TValue, TValueType>,
   typeof computedColumnMarker | "fields" | "valueGetter"
@@ -331,6 +364,25 @@ export function BrunoTableComputedColumn<
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, boolean> &
   ComputedColumn<TRow, TFields, boolean, "boolean">;
+export function BrunoTableComputedColumn<
+  TRow,
+  const TFields extends NonEmptyFields<TRow>,
+  const TValueType extends ErasedValueType,
+  const TOptions extends ComputedColumnOptions<
+    TRow,
+    TFields,
+    BrunoTableValueTypeValue<TValueType>,
+    TValueType
+  >,
+>(
+  options: TOptions & { readonly valueType: TValueType } & ComputedColumnDependencies<
+      TRow,
+      TFields,
+      BrunoTableValueTypeValue<TValueType>
+    >,
+): TOptions &
+  ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>> &
+  ComputedColumn<TRow, TFields, BrunoTableValueTypeValue<TValueType>, TValueType>;
 export function BrunoTableComputedColumn(options: Readonly<Record<string, unknown>>) {
   return { ...options, [computedColumnMarker]: true };
 }
