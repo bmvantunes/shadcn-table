@@ -1,6 +1,13 @@
 import { describe, expectTypeOf, it } from "vitest";
 
-import { BrunoTableComputedColumn } from "./index";
+import {
+  BrunoTableBigIntColumn,
+  BrunoTableBooleanColumn,
+  BrunoTableComputedColumn,
+  BrunoTableNumberColumn,
+  BrunoTableSelectColumn,
+  BrunoTableTextColumn,
+} from "./index";
 
 import type {
   BrunoTableClientProps,
@@ -17,6 +24,7 @@ import type {
   BrunoTableServerProps,
   BrunoTableSortableColumnId,
   BrunoTableSortBy,
+  BrunoTableValueType,
 } from "./index";
 
 type Order = {
@@ -303,6 +311,160 @@ describe("BrunoTable public types", () => {
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
   });
 });
+
+type HelperRow = {
+  readonly symbol: string;
+  readonly price: number;
+  readonly quantity: bigint;
+  readonly active: boolean;
+  readonly status: "open" | "closed";
+  readonly multiplier: number;
+};
+
+const priceColumn = BrunoTableNumberColumn.withDefaults({
+  headerName: "Price",
+  width: 112,
+  format: {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  },
+});
+
+const statusColumn = BrunoTableSelectColumn.withDefaults({
+  headerName: "Status",
+  options: ["open", "closed"],
+});
+
+const helperColumns = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+  priceColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    width: 144,
+    format: { maximumFractionDigits: 4 },
+    isEditable: ({ row, value }) => {
+      expectTypeOf(row).toEqualTypeOf<HelperRow>();
+      expectTypeOf(value).toEqualTypeOf<number>();
+      return row.status === "open" && value >= 0;
+    },
+    valueFormatter: ({ row, value }) => `${row.symbol} ${value.toFixed(2)}`,
+    cellClassName: ({ value }) => (value < 0 ? "text-destructive" : undefined),
+    cellRenderer: ({ row, value }) => `${row.symbol}:${value}`,
+  }),
+  BrunoTableBigIntColumn({
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    headerName: "Quantity",
+  }),
+  BrunoTableBooleanColumn({
+    columnId: "COL_ID_ACTIVE",
+    field: "active",
+    headerName: "Active",
+  }),
+  statusColumn({
+    columnId: "COL_ID_STATUS",
+    field: "status",
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_WEIGHTED_PRICE",
+    fields: ["price", "multiplier"],
+    headerName: "Weighted price",
+    valueGetter: ({ row }) => {
+      expectTypeOf(row).toEqualTypeOf<Pick<HelperRow, "price" | "multiplier">>();
+      return row.price * row.multiplier;
+    },
+    valueFormatter: ({ value }) => value.toFixed(2),
+  }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+type HelperColumns = typeof helperColumns;
+type PriceHelperColumn = Extract<HelperColumns[number], { readonly columnId: "COL_ID_PRICE" }>;
+type QuantityHelperColumn = Extract<
+  HelperColumns[number],
+  { readonly columnId: "COL_ID_QUANTITY" }
+>;
+type ActiveHelperColumn = Extract<HelperColumns[number], { readonly columnId: "COL_ID_ACTIVE" }>;
+type StatusHelperColumn = Extract<HelperColumns[number], { readonly columnId: "COL_ID_STATUS" }>;
+
+describe("BrunoTable Column Helpers", () => {
+  it("preserves identities, values, defaults, presets, and individual overrides", () => {
+    expectTypeOf<BrunoTableColumnIdOf<HelperColumns>>().toEqualTypeOf<
+      | "COL_ID_SYMBOL"
+      | "COL_ID_PRICE"
+      | "COL_ID_QUANTITY"
+      | "COL_ID_ACTIVE"
+      | "COL_ID_STATUS"
+      | "COL_ID_WEIGHTED_PRICE"
+    >();
+    expectTypeOf<
+      BrunoTableColumnValue<HelperRow, HelperColumns, "COL_ID_PRICE">
+    >().toEqualTypeOf<number>();
+    expectTypeOf<
+      BrunoTableColumnValue<HelperRow, HelperColumns, "COL_ID_QUANTITY">
+    >().toEqualTypeOf<bigint>();
+    expectTypeOf<BrunoTableColumnValue<HelperRow, HelperColumns, "COL_ID_STATUS">>().toEqualTypeOf<
+      "open" | "closed"
+    >();
+    expectTypeOf<
+      BrunoTableColumnValue<HelperRow, HelperColumns, "COL_ID_WEIGHTED_PRICE">
+    >().toEqualTypeOf<number>();
+
+    expectTypeOf<PriceHelperColumn["width"]>().toEqualTypeOf<144>();
+    expectTypeOf<PriceHelperColumn["cellAlign"]>().toEqualTypeOf<"end">();
+    expectTypeOf<QuantityHelperColumn["cellAlign"]>().toEqualTypeOf<"end">();
+    expectTypeOf<ActiveHelperColumn["cellAlign"]>().toEqualTypeOf<"center">();
+    expectTypeOf<StatusHelperColumn["editorLayout"]>().toEqualTypeOf<"fullWidth">();
+  });
+});
+
+type ExactAmount = { readonly minor: bigint };
+type AmountRow = { readonly amount: ExactAmount };
+
+const exactAmountValueType: BrunoTableValueType<ExactAmount, "numeric", "text"> = {
+  codecId: "test/exact-amount",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input) =>
+    typeof input === "object" &&
+    input !== null &&
+    "minor" in input &&
+    typeof input.minor === "bigint"
+      ? { _tag: "Success", value: { minor: input.minor } }
+      : { _tag: "Failure", message: "Expected an exact amount." },
+  equivalent: (left, right) => left.minor === right.minor,
+  compare: (left, right) => (left.minor === right.minor ? 0 : left.minor < right.minor ? -1 : 1),
+  formatCanonicalText: (value) => value.minor.toString(10),
+  parseCanonicalText: (text) =>
+    /^-?\d+$/u.test(text)
+      ? { _tag: "Success", value: { minor: BigInt(text) } }
+      : { _tag: "Failure", message: "Expected integer minor units." },
+  formatDisplay: (value) => value.minor.toString(10),
+  encodePersisted: (value) => ({ minor: value.minor.toString(10) }),
+  decodePersisted: () => ({ _tag: "Failure", message: "Not used in this type proof." }),
+};
+
+const customValueColumns = [
+  {
+    columnId: "COL_ID_AMOUNT",
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactAmountValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+
+const customNumericFilter = [
+  { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: { minor: 10n } },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof customValueColumns>;
+
+void customNumericFilter;
 
 const invalidColumnIds = [
   {
@@ -705,6 +867,49 @@ const invalidInitialOrderByWithoutSortingCapability = {
   },
 } satisfies BrunoTableClientProps<Order, NoSortingColumns>;
 
+const invalidNumberHelperField = [
+  // @ts-expect-error the rejected helper result cannot enter the typed column tuple.
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_SYMBOL",
+    // @ts-expect-error the Number helper cannot target a string field.
+    field: "symbol",
+    headerName: "Symbol",
+  }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+const invalidHelperWithoutColumnId = [
+  // @ts-expect-error every helper invocation still requires an explicit Column Identity.
+  BrunoTableTextColumn({ field: "symbol", headerName: "Symbol" }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+const invalidHelperComputedDependency = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_WEIGHTED_PRICE",
+    fields: ["price", "multiplier"],
+    headerName: "Weighted price",
+    valueGetter: ({ row }) => {
+      // @ts-expect-error only declared dependencies exist in a Computed getter row.
+      void row.status;
+      return row.price * row.multiplier;
+    },
+  }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+const invalidIncompleteSelectDomain = [
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_STATUS",
+    // @ts-expect-error Select options must cover the field's exact non-nullish value domain.
+    field: "status",
+    headerName: "Status",
+    options: ["open"],
+  }),
+] satisfies BrunoTableColumns<HelperRow>;
+
+const invalidCustomNumericOperand = [
+  // @ts-expect-error a custom numeric Value Type retains its exact operand domain.
+  { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof customValueColumns>;
+
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
@@ -740,3 +945,8 @@ void invalidEmptySaveChangeSet;
 void invalidEmptySaveCellChangeSet;
 void invalidClientWithoutInitialOrderBy;
 void invalidInitialOrderByWithoutSortingCapability;
+void invalidNumberHelperField;
+void invalidHelperWithoutColumnId;
+void invalidHelperComputedDependency;
+void invalidIncompleteSelectDomain;
+void invalidCustomNumericOperand;

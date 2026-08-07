@@ -97,6 +97,14 @@ describe("compileColumns", () => {
       fields: ["price"],
       valueGetter,
       valueFormatter,
+      semantics: expect.objectContaining({
+        codecId: "@bruno/table/number",
+        filterFamily: "numeric",
+        editorFamily: "number",
+        cellAlign: "end",
+        editorLayout: "inline",
+        width: 120,
+      }),
     });
 
     let fieldReads = 0;
@@ -158,6 +166,12 @@ describe("compileColumns", () => {
       enableFilter: false,
       enableSorting: true,
       isEditable: true,
+      semantics: expect.objectContaining({
+        codecId: "@bruno/table/number",
+        cellAlign: "end",
+        editorLayout: "inline",
+        width: 120,
+      }),
     });
   });
 
