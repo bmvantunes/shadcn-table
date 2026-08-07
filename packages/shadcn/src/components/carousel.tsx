@@ -2,6 +2,7 @@ import * as React from "react";
 import useEmblaCarousel, { type UseEmblaCarouselType } from "embla-carousel-react";
 
 import { cn } from "#lib/utils";
+import { getCarouselKeyboardAction } from "#lib/carousel-keyboard";
 import { Button } from "#components/button";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 
@@ -49,6 +50,10 @@ function Carousel({
   plugins,
   className,
   children,
+  onKeyDownCapture,
+  tabIndex = 0,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   ...props
 }: React.ComponentProps<"div"> & CarouselProps) {
   const [carouselRef, api] = useEmblaCarousel(
@@ -100,15 +105,23 @@ function Carousel({
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "ArrowLeft") {
+      onKeyDownCapture?.(event);
+      const action = getCarouselKeyboardAction(
+        orientation,
+        event.key,
+        event.target === event.currentTarget,
+        event.defaultPrevented,
+      );
+
+      if (action === "previous") {
         event.preventDefault();
         scrollPrev();
-      } else if (event.key === "ArrowRight") {
+      } else if (action === "next") {
         event.preventDefault();
         scrollNext();
       }
     },
-    [scrollPrev, scrollNext],
+    [onKeyDownCapture, orientation, scrollPrev, scrollNext],
   );
 
   React.useEffect(() => {
@@ -131,9 +144,15 @@ function Carousel({
     >
       <div
         onKeyDownCapture={handleKeyDown}
-        className={cn("relative", className)}
+        className={cn(
+          "relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          className,
+        )}
         role="region"
         aria-roledescription="carousel"
+        aria-label={ariaLabel ?? (ariaLabelledBy ? undefined : "Carousel")}
+        aria-labelledby={ariaLabelledBy}
+        tabIndex={tabIndex}
         data-slot="carousel"
         {...props}
       >
@@ -178,6 +197,8 @@ function CarouselPrevious({
   className,
   variant = "outline",
   size = "icon-sm",
+  disabled,
+  onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
   const { orientation, scrollPrev, canScrollPrev } = useCarousel();
@@ -194,8 +215,13 @@ function CarouselPrevious({
           : "-top-12 left-1/2 -translate-x-1/2 rotate-90",
         className,
       )}
-      disabled={!canScrollPrev}
-      onClick={scrollPrev}
+      disabled={disabled || !canScrollPrev}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          scrollPrev();
+        }
+      }}
       {...props}
     >
       <CaretLeftIcon />
@@ -208,6 +234,8 @@ function CarouselNext({
   className,
   variant = "outline",
   size = "icon-sm",
+  disabled,
+  onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
   const { orientation, scrollNext, canScrollNext } = useCarousel();
@@ -224,8 +252,13 @@ function CarouselNext({
           : "-bottom-12 left-1/2 -translate-x-1/2 rotate-90",
         className,
       )}
-      disabled={!canScrollNext}
-      onClick={scrollNext}
+      disabled={disabled || !canScrollNext}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          scrollNext();
+        }
+      }}
       {...props}
     >
       <CaretRightIcon />

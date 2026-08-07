@@ -3,14 +3,17 @@ import { describe, expectTypeOf, it } from "vitest";
 import { BrunoTableComputedColumn } from "./index";
 
 import type {
-  BrunoTableCellChange,
   BrunoTableClientProps,
+  BrunoTableColumnField,
+  BrunoTableColumnId,
   BrunoTableColumnIdOf,
   BrunoTableColumns,
   BrunoTableColumnValue,
   BrunoTableEditableColumnId,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
+  BrunoTableSaveCellChange,
+  BrunoTableSaveChangeSet,
   BrunoTableServerProps,
   BrunoTableSortableColumnId,
   BrunoTableSortBy,
@@ -22,6 +25,7 @@ type Order = {
   readonly price: number;
   readonly quantity: bigint;
   readonly status: "open" | "closed";
+  readonly revision: bigint;
 };
 
 const columns = [
@@ -30,6 +34,7 @@ const columns = [
     field: "symbol",
     headerName: "Symbol",
     valueType: "text",
+    isEditable: true,
   },
   {
     columnId: "COL_ID_PRICE",
@@ -69,15 +74,64 @@ describe("BrunoTable public types", () => {
     expectTypeOf<BrunoTableSortableColumnId<Columns>>().toEqualTypeOf<
       "COL_ID_SYMBOL" | "COL_ID_PRICE"
     >();
-    expectTypeOf<BrunoTableEditableColumnId<Columns>>().toEqualTypeOf<"COL_ID_PRICE">();
+    expectTypeOf<BrunoTableEditableColumnId<Columns>>().toEqualTypeOf<
+      "COL_ID_SYMBOL" | "COL_ID_PRICE"
+    >();
   });
 
-  it("correlates edits with editable column values", () => {
-    expectTypeOf<BrunoTableCellChange<Order, Columns>>().toEqualTypeOf<{
+  it("keeps widened runtime columns conservatively editable", () => {
+    const widenedColumns: BrunoTableColumns<Order> = columns;
+
+    expectTypeOf<
+      BrunoTableEditableColumnId<typeof widenedColumns>
+    >().toEqualTypeOf<BrunoTableColumnId>();
+
+    const widenedEditableProps = {
+      tableId: "orders",
+      columns: widenedColumns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: (changes) => {
+        expectTypeOf(changes[0].changes[0]).not.toBeNever();
+        return Promise.resolve();
+      },
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    } satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
+
+    expectTypeOf(widenedEditableProps.getRowVersion).returns.toEqualTypeOf<bigint>();
+  });
+
+  it("correlates row-grouped saves with source fields and exact row versions", () => {
+    expectTypeOf<BrunoTableColumnField<Columns, "COL_ID_PRICE">>().toEqualTypeOf<"price">();
+    expectTypeOf<BrunoTableSaveCellChange<Order, Columns>>().toEqualTypeOf<
+      | {
+          readonly columnId: "COL_ID_SYMBOL";
+          readonly field: "symbol";
+          readonly before: string;
+          readonly after: string;
+        }
+      | {
+          readonly columnId: "COL_ID_PRICE";
+          readonly field: "price";
+          readonly before: number;
+          readonly after: number;
+        }
+    >();
+    expectTypeOf<BrunoTableSaveChangeSet<Order, Columns, bigint>[number]>().toEqualTypeOf<{
       readonly rowId: string;
-      readonly columnId: "COL_ID_PRICE";
-      readonly before: number;
-      readonly after: number;
+      readonly baseRow: Order;
+      readonly expectedVersion: bigint;
+      readonly changes: readonly [
+        BrunoTableSaveCellChange<Order, Columns>,
+        ...BrunoTableSaveCellChange<Order, Columns>[],
+      ];
     }>();
   });
 
@@ -129,6 +183,31 @@ describe("BrunoTable public types", () => {
       },
     } satisfies BrunoTableClientProps<Order, Columns>;
 
+    const editableClientProps = {
+      ...common,
+      editable: true,
+      getRowId: (row: Order) => row.id,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: (changes) => {
+        expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
+        const [change] = changes[0].changes;
+        if (change.columnId === "COL_ID_PRICE") {
+          expectTypeOf(change.field).toEqualTypeOf<"price">();
+          expectTypeOf(change.after).toEqualTypeOf<number>();
+        } else {
+          expectTypeOf(change.field).toEqualTypeOf<"symbol">();
+          expectTypeOf(change.after).toEqualTypeOf<string>();
+        }
+        return Promise.resolve();
+      },
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    } satisfies BrunoTableClientProps<Order, Columns, bigint>;
+
     const viewport = {
       replace: () => ({ setWindow: () => undefined, release: () => undefined }),
       destroy: () => undefined,
@@ -145,6 +224,7 @@ describe("BrunoTable public types", () => {
 
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
+    expectTypeOf(editableClientProps.getRowVersion).returns.toEqualTypeOf<bigint>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
   });
 });
@@ -351,6 +431,141 @@ const invalidServerWithRowId = {
   },
 } satisfies BrunoTableServerProps<Order, Columns>;
 
+const invalidServerEditing = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  viewportSource: {
+    viewport: {},
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+  // @ts-expect-error Server Tables cannot enable editing.
+  editable: true,
+} satisfies BrunoTableServerProps<Order, Columns>;
+
+const editableClientWithoutSave = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  editable: true,
+  getRowVersion: (row: Order) => row.revision,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const;
+
+// @ts-expect-error editable Client Tables require an onSaveEdits operation.
+const invalidEditableClientWithoutSave: BrunoTableClientProps<Order, Columns, bigint> =
+  editableClientWithoutSave;
+
+const readOnlyClientWithSave = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  editable: false,
+  getRowVersion: (row: Order) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const;
+
+// @ts-expect-error read-only Client Tables reject edit-only operations.
+const invalidReadOnlyClientWithSave: BrunoTableClientProps<Order, Columns, bigint> =
+  readOnlyClientWithSave;
+
+const nonEditableColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Order>;
+
+const invalidClientWithoutEditableColumns = {
+  tableId: "orders",
+  columns: nonEditableColumns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  // @ts-expect-error no column exposes editable capability.
+  editable: true,
+  // @ts-expect-error no column exposes editable capability.
+  getRowVersion: (row: Order) => row.revision,
+  // @ts-expect-error no column exposes editable capability.
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} satisfies BrunoTableClientProps<Order, typeof nonEditableColumns, bigint>;
+
+const editableClientWithGrouping = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  editable: true,
+  getRowVersion: (row: Order) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+  groupRowsColumn: { headerName: "Rows" },
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const;
+
+// @ts-expect-error editable Client Tables reject grouping even for non-fresh props objects.
+const invalidEditableClientWithGrouping: BrunoTableClientProps<Order, Columns, bigint> =
+  editableClientWithGrouping;
+
+const invalidCrossedSaveCell = {
+  columnId: "COL_ID_PRICE",
+  field: "symbol",
+  before: 1,
+  after: 2,
+} as const;
+
+// @ts-expect-error a Column Identity is correlated with its exact source field.
+const invalidCrossedSaveCellAssignment: BrunoTableSaveCellChange<Order, Columns> =
+  invalidCrossedSaveCell;
+
+const widenedColumns: BrunoTableColumns<Order> = columns;
+const invalidWidenedSaveCell = {
+  columnId: "COL_ID_PRICE",
+  field: "price",
+  before: "not a number",
+  after: "still not a number",
+} as const;
+
+// @ts-expect-error widened columns retain field/value correlation for runtime validation.
+const invalidWidenedSaveCellAssignment: BrunoTableSaveCellChange<Order, typeof widenedColumns> =
+  invalidWidenedSaveCell;
+
+// @ts-expect-error a Save Change Set is never empty.
+const invalidEmptySaveChangeSet = [] satisfies BrunoTableSaveChangeSet<Order, Columns, bigint>;
+
+// @ts-expect-error a row Save Cell Change Set is never empty.
+const invalidEmptySaveCellChangeSet = [] satisfies BrunoTableSaveChangeSet<
+  Order,
+  Columns,
+  bigint
+>[number]["changes"];
+
 const clientWithoutInitialOrderBy = {
   tableId: "orders",
   columns,
@@ -385,4 +600,15 @@ void invalidPaginatedClient;
 void invalidPaginatedServer;
 void invalidClientWithoutRowId;
 void invalidServerWithRowId;
+void invalidServerEditing;
+void invalidEditableClientWithoutSave;
+void invalidReadOnlyClientWithSave;
+void invalidClientWithoutEditableColumns;
+void invalidEditableClientWithGrouping;
+void invalidCrossedSaveCell;
+void invalidCrossedSaveCellAssignment;
+void invalidWidenedSaveCell;
+void invalidWidenedSaveCellAssignment;
+void invalidEmptySaveChangeSet;
+void invalidEmptySaveCellChangeSet;
 void invalidClientWithoutInitialOrderBy;

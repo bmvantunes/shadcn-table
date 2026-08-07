@@ -1,3 +1,5 @@
+"use client";
+
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 
 import { cn } from "#lib/utils";
@@ -12,9 +14,11 @@ function Slider({
 }: SliderPrimitive.Root.Props) {
   const _values = Array.isArray(value)
     ? value
-    : Array.isArray(defaultValue)
-      ? defaultValue
-      : [min, max];
+    : value === undefined
+      ? Array.isArray(defaultValue)
+        ? defaultValue
+        : [defaultValue ?? min]
+      : [value];
 
   return (
     <SliderPrimitive.Root

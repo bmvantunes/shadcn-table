@@ -26,6 +26,12 @@ describe("validateColumns", () => {
         validateColumns([{ columnId, headerName: "Price" }]);
       }).toThrow(ColumnConfigurationError);
     }
+
+    for (const columnId of [42, null, undefined, Symbol("COL_ID_PRICE")]) {
+      expect(() => {
+        validateColumns([{ columnId, headerName: "Price" }]);
+      }).toThrow(ColumnConfigurationError);
+    }
   });
 
   it("rejects duplicate identities", () => {

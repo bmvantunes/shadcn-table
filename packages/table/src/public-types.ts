@@ -187,6 +187,14 @@ type ColumnForId<
   TColumnId extends BrunoTableColumnIdOf<TColumns>,
 > = Extract<TColumns[number], { readonly columnId: TColumnId }>;
 
+export type BrunoTableColumnField<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TColumnId extends BrunoTableColumnIdOf<TColumns>,
+> =
+  ColumnForId<TColumns, TColumnId> extends { readonly field: infer TField extends string }
+    ? TField
+    : never;
+
 export type BrunoTableColumnValue<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
@@ -219,18 +227,34 @@ export type BrunoTableSortableColumnId<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = FieldColumnId<TColumns>;
 
-export type BrunoTableEditableColumnId<
+type ExactEditableFieldColumn<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = TColumns[number] extends infer TColumn
   ? TColumn extends {
-      readonly columnId: infer TColumnId extends BrunoTableColumnId;
+      readonly field: string;
       readonly isEditable: infer TEditable;
     }
-    ? TEditable extends false
+    ? TEditable extends false | undefined
       ? never
-      : TColumnId
+      : TColumn
     : never
   : never;
+
+type PotentiallyEditableFieldColumn<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> =
+  BrunoTableColumnId extends BrunoTableColumnIdOf<TColumns>
+    ? Extract<TColumns[number], { readonly field: string }>
+    : ExactEditableFieldColumn<TColumns>;
+
+export type BrunoTableEditableColumnId<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> =
+  PotentiallyEditableFieldColumn<TColumns> extends infer TColumn
+    ? TColumn extends { readonly columnId: infer TColumnId extends BrunoTableColumnId }
+      ? TColumnId
+      : never
+    : never;
 
 type ScalarFilterValue<TValue> = Exclude<TValue, undefined>;
 type StringFilterValue<TValue> = Extract<TValue, string>;
@@ -347,14 +371,78 @@ export type BrunoTableSortBy<
   }[BrunoTableSortableColumnId<TColumns>][],
 ];
 
-export type BrunoTableCellChange<TRow, TColumns extends BrunoTableColumns<TRow>> = {
-  readonly [TColumnId in BrunoTableEditableColumnId<TColumns>]: {
-    readonly rowId: BrunoTableRowId;
-    readonly columnId: TColumnId;
-    readonly before: BrunoTableColumnValue<TRow, TColumns, TColumnId>;
-    readonly after: BrunoTableColumnValue<TRow, TColumns, TColumnId>;
-  };
-}[BrunoTableEditableColumnId<TColumns>];
+type SaveCellChangeForColumn<TRow, TColumn> = TColumn extends {
+  readonly columnId: infer TColumnId extends BrunoTableColumnId;
+  readonly field: infer TField extends keyof TRow & string;
+}
+  ? {
+      readonly columnId: TColumnId;
+      readonly field: TField;
+      readonly before: TRow[TField];
+      readonly after: TRow[TField];
+    }
+  : never;
+
+export type BrunoTableSaveCellChange<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = SaveCellChangeForColumn<TRow, PotentiallyEditableFieldColumn<TColumns>>;
+
+export type BrunoTableSaveCellChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
+  BrunoTableSaveCellChange<TRow, TColumns>,
+  ...BrunoTableSaveCellChange<TRow, TColumns>[],
+];
+
+export type BrunoTableSaveRowChange<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = {
+  readonly rowId: BrunoTableRowId;
+  readonly baseRow: TRow;
+  readonly expectedVersion: TRowVersion;
+  readonly changes: BrunoTableSaveCellChangeSet<TRow, TColumns>;
+};
+
+export type BrunoTableSaveChangeSet<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = readonly [
+  BrunoTableSaveRowChange<TRow, TColumns, TRowVersion>,
+  ...BrunoTableSaveRowChange<TRow, TColumns, TRowVersion>[],
+];
+
+export type BrunoTableSaveEditsHandler<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = (changes: BrunoTableSaveChangeSet<TRow, TColumns, TRowVersion>) => PromiseLike<void>;
+
+export type BrunoTableReadOnlyCapability = {
+  readonly editable?: false;
+  readonly getRowVersion?: never;
+  readonly onSaveEdits?: never;
+};
+
+export type BrunoTableNoGroupingCapability = {
+  readonly groupRowsColumn?: never;
+};
+
+export type BrunoTableEditableCapability<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> =
+  BrunoTableEditableColumnId<TColumns> extends never
+    ? never
+    : {
+        readonly editable: true;
+        readonly getRowVersion: (row: TRow) => TRowVersion;
+        readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
+      } & BrunoTableNoGroupingCapability;
+
+export type BrunoTableEditingCapability<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
@@ -367,11 +455,13 @@ export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>
 export type BrunoTableClientProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
-> = BrunoTableCommonProps<TRow, TColumns> & {
-  readonly getRowId: (row: TRow) => BrunoTableRowId;
-  readonly clientSource: BrunoTableClientSource<TRow>;
-  readonly viewportSource?: never;
-};
+  TRowVersion = never,
+> = BrunoTableCommonProps<TRow, TColumns> &
+  BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
+    readonly getRowId: (row: TRow) => BrunoTableRowId;
+    readonly clientSource: BrunoTableClientSource<TRow>;
+    readonly viewportSource?: never;
+  };
 
 export type BrunoTableServerProps<
   TRow,
@@ -382,4 +472,7 @@ export type BrunoTableServerProps<
   readonly getRowId?: never;
   readonly viewportSource: BrunoTableServerSource<TViewport>;
   readonly clientSource?: never;
+  readonly editable?: never;
+  readonly getRowVersion?: never;
+  readonly onSaveEdits?: never;
 };

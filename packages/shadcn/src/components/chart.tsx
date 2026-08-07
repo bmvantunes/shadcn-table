@@ -84,13 +84,10 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null;
   }
 
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+  const stylesheet = Object.entries(THEMES)
+    .map(
+      ([theme, prefix]) => `
+${prefix} [data-chart="${escapeCssString(id)}"] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ?? itemConfig.color;
@@ -99,11 +96,10 @@ ${colorConfig
   .join("\n")}
 }
 `,
-          )
-          .join("\n"),
-      }}
-    />
-  );
+    )
+    .join("\n");
+
+  return <style dangerouslySetInnerHTML={{ __html: escapeStyleElementText(stylesheet) }} />;
 };
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
@@ -190,7 +186,7 @@ function ChartTooltipContent({
                 )}
               >
                 {formatter && item?.value !== undefined && item.name ? (
-                  formatter(item.value, item.name, item, index, item.payload)
+                  formatter(item.value, item.name, item, index, payload)
                 ) : (
                   <>
                     {itemConfig?.icon ? (
@@ -331,6 +327,19 @@ function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key:
 
 function getPayloadKey(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "value";
+}
+
+function escapeCssString(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", "\\a ")
+    .replaceAll("\r", "\\d ")
+    .replaceAll("\f", "\\c ");
+}
+
+function escapeStyleElementText(value: string): string {
+  return value.replaceAll("<", "\\3c ");
 }
 
 export {

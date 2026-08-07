@@ -1,3 +1,5 @@
+"use client";
+
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
 
@@ -49,7 +51,7 @@ function CommandDialog({
         className={cn("top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0", className)}
         showCloseButton={showCloseButton}
       >
-        {children}
+        <Command>{children}</Command>
       </DialogContent>
     </Dialog>
   );

@@ -1,11 +1,15 @@
 type ColumnDefinitionMetadata = {
-  readonly columnId: string;
+  readonly columnId: unknown;
   readonly headerName?: unknown;
 };
 
 const columnIdPrefix = "COL_ID_";
 
-function isColumnId(columnId: string): boolean {
+function isColumnId(columnId: unknown): columnId is string {
+  if (typeof columnId !== "string") {
+    return false;
+  }
+
   const suffix = columnId.slice(columnIdPrefix.length);
 
   return (
@@ -21,7 +25,7 @@ export function validateColumns(columns: readonly ColumnDefinitionMetadata[]): v
   for (const { columnId, headerName } of columns) {
     if (!isColumnId(columnId)) {
       throw new ColumnConfigurationError(
-        `BrunoTable columnId must start with COL_ID_ and have a non-empty uppercase suffix: ${columnId}`,
+        `BrunoTable columnId must start with COL_ID_ and have a non-empty uppercase suffix: ${String(columnId)}`,
       );
     }
 
