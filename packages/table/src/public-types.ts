@@ -170,7 +170,7 @@ type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
 type FieldColumn<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<NonNullish<TRow[TField]>>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = ColumnPresentation<TRow, TRow[TField]> &
   ColumnLayout & {
     readonly columnId: BrunoTableColumnId;
@@ -294,7 +294,7 @@ export type BrunoTableNonEmptyFields<TRow> = NonEmptyFields<TRow>;
 export type BrunoTableFieldColumnDefinition<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<NonNullish<TRow[TField]>>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = FieldColumn<TRow, TField, TValueType>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */

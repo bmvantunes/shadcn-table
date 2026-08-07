@@ -4,10 +4,6 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "paths": {
-      "@bruno/table": ["../../src/index.ts"],
-      "@bruno/table/effect": ["../../src/effect.ts"]
-    },
     "types": []
   },
   "include": ["index.ts"]

@@ -64,6 +64,33 @@ Display callbacks such as `valueFormatter`, `cellClassName`, and `cellRenderer` 
 equality, sorting, clipboard text, parsing, persistence, or conflict comparison. Custom exact domains
 use an explicit `BrunoTableValueType` with paired canonical text and persistence codecs.
 
+Effect BigDecimal support is isolated behind the optional entry point. Applications that use it
+install the compatible Effect peer and import only that subpath:
+
+```tsx
+import * as BigDecimal from "effect/BigDecimal";
+import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@bruno/table/effect";
+import type { BrunoTableColumns } from "@bruno/table";
+
+type PriceRow = { readonly price: BigDecimal.BigDecimal };
+
+const columns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+  }),
+] satisfies BrunoTableColumns<PriceRow>;
+
+void BrunoTableBigDecimalValueType;
+```
+
+The BigDecimal Value Type keeps canonical text, persisted operands, equality, and ordering exact. It
+accepts only effect-view-server-compatible wire-safe values, treats differently scaled
+representations as equal, and never compares by aligning scales through a power of ten. Importing
+`@bruno/table` does not import or require Effect; `effect@4.0.0-beta.100` is an optional peer used
+only by `@bruno/table/effect`.
+
 The private column compiler already converts a stable definition array into one frozen, trusted
 Field-or-Computed representation and rejects malformed widened input. The first runtime root is
 owned by issue #7 and must install that compiler once when constructing or replacing its definition
