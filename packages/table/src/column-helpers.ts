@@ -227,6 +227,9 @@ function mergeRuntimeColumn(
   const builtInFormat = builtIn["format"];
   const defaultFormat = defaults["format"];
   const optionFormat = options["format"];
+  const builtInFormatRecord = validateRuntimeFormat(builtInFormat);
+  const defaultFormatRecord = validateRuntimeFormat(defaultFormat);
+  const optionFormatRecord = validateRuntimeFormat(optionFormat);
   const hasFormat =
     builtInFormat !== undefined || defaultFormat !== undefined || optionFormat !== undefined;
   const merged = {
@@ -236,9 +239,9 @@ function mergeRuntimeColumn(
     ...(hasFormat
       ? {
           format: {
-            ...(isRecord(builtInFormat) ? builtInFormat : {}),
-            ...(isRecord(defaultFormat) ? defaultFormat : {}),
-            ...(isRecord(optionFormat) ? optionFormat : {}),
+            ...builtInFormatRecord,
+            ...defaultFormatRecord,
+            ...optionFormatRecord,
           },
         }
       : {}),
@@ -836,11 +839,20 @@ function snapshotPresetDefaults(
 
   const format = defaults["format"];
   const options = defaults["options"];
+  validateRuntimeFormat(format);
   return Object.freeze({
     ...defaults,
     ...(isRecord(format) ? { format: Object.freeze({ ...format }) } : {}),
     ...(Array.isArray(options) ? { options: Object.freeze(Array.from(options)) } : {}),
   });
+}
+
+function validateRuntimeFormat(value: unknown): Readonly<Record<PropertyKey, unknown>> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) {
+    throw new TypeError("BrunoTable Number Column format must be an object when provided.");
+  }
+  return value;
 }
 
 function createSelectValueType(

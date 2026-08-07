@@ -355,6 +355,21 @@ describe("compiled Column Value Semantics", () => {
       ]),
     ).toThrow("do not accept a valueType override");
     expect(() =>
+      Reflect.apply(BrunoTableNumberColumn, undefined, [
+        {
+          columnId: "COL_ID_PRICE",
+          field: "price",
+          headerName: "Price",
+          format: "invalid",
+        },
+      ]),
+    ).toThrow("format must be an object");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+        { headerName: "Price", format: "invalid" },
+      ]),
+    ).toThrow("format must be an object");
+    expect(() =>
       compileColumns([
         {
           columnId: "COL_ID_SYMBOL",
