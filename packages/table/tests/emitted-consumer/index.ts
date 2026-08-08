@@ -10,6 +10,7 @@ import {
   type BrunoTableBuiltInValueType,
   type BrunoTableClientProps,
   type BrunoTableColumnField,
+  type BrunoTableColumnId,
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
@@ -31,6 +32,10 @@ type Equal<TLeft, TRight> =
 
 type Expect<TValue extends true> = TValue;
 
+const emittedWhitespaceColumnIdRejected: Expect<Equal<BrunoTableColumnId<"COL_ID_A B">, never>> =
+  true;
+void emittedWhitespaceColumnIdRejected;
+
 type Order = {
   readonly id: string;
   readonly symbol: string;
@@ -41,6 +46,17 @@ type Order = {
   readonly status: "open" | "closed";
   readonly multiplier: number;
 };
+
+const emittedInvalidWhitespaceHelperOptions = {
+  columnId: "COL_ID_UNIT PRICE",
+  field: "price",
+  headerName: "Unit price",
+} as const;
+const emittedInvalidWhitespaceHelperColumn = [
+  // @ts-expect-error Emitted Column Helper declarations reject whitespace identities.
+  BrunoTableNumberColumn(emittedInvalidWhitespaceHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void emittedInvalidWhitespaceHelperColumn;
 
 const columns = [
   {

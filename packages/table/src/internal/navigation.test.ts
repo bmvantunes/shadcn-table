@@ -51,4 +51,42 @@ describe("BrunoTableNavigationRuntime", () => {
       columnId: "COL_ID_NAME",
     });
   });
+
+  it("moves through the coherent header/body space and preserves row identity across reorder", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        pinned: "start",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    expect(navigation.getSnapshot()?.columnId).toBe("COL_ID_SCORE");
+
+    navigation.move(-1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_SCORE" });
+    navigation.move(0, 1);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_NAME" });
+    navigation.move(1, 0);
+    navigation.move(1, 0);
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 1,
+      rowId: "second",
+      columnId: "COL_ID_NAME",
+    });
+
+    navigation.setShape(["second", "first"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
+  });
 });

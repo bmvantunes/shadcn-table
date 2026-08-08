@@ -444,7 +444,14 @@ type BrunoTableColumnId = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`
 
 `ColumnIdFirstCharacter` is an ASCII uppercase letter, decimal digit, or underscore. Requiring it
 excludes the empty `COL_ID_` identity during `satisfies` checks; runtime normalization validates
-the same first-character and uppercase-suffix grammar for widened or restored values.
+the same first-character and uppercase-suffix grammar for widened or restored values and rejects
+whitespace anywhere in the identity. `BrunoTableColumnId<TLiteral>` is available when a boundary
+needs to validate a specific literal type for that whitespace rule. BrunoTable's callable Column
+Helpers and Computed Column constructor apply that literal validation during inference. A plain
+array checked with `satisfies BrunoTableColumns<TRow>` intentionally remains the primary raw-column
+shape; TypeScript cannot subtract the open Unicode whitespace set from an unbounded template-literal
+type at that contextual boundary, so runtime normalization remains authoritative for raw arrays and
+for widened or restored identities.
 
 ```ts
 {

@@ -16,6 +16,7 @@ import type {
   BrunoTableAggregateResults,
   BrunoTableCellAlign,
   BrunoTableColumnId,
+  BrunoTableColumnIdentityInput,
   BrunoTableComputedColumnDefinition,
   BrunoTableComputedColumnDependencies,
   BrunoTableComputedColumnInput,
@@ -252,7 +253,7 @@ type OnlyKnownKeys<TActual, TAllowed> = {
 };
 
 type FieldIdentity<TField extends PropertyKey, TColumnId extends BrunoTableColumnId> = {
-  readonly columnId: TColumnId;
+  readonly columnId: BrunoTableColumnId<TColumnId>;
   readonly field: TField;
 };
 
@@ -490,6 +491,7 @@ type BrunoTableBigDecimalColumnPreset<TDefaults extends BrunoTableBigDecimalColu
       >,
     >(
       options: TOptions &
+        BrunoTableColumnIdentityInput<TOptions> &
         BrunoTableComputedColumnDependencies<TRow, TFields, BigDecimal.BigDecimal> &
         OnlyKnownKeys<
           TOptions,
@@ -594,6 +596,7 @@ type BrunoTableBigDecimalColumnHelper = {
     const TOptions extends BigDecimalComputedOptions<TRow, TFields>,
   >(
     options: TOptions &
+      BrunoTableColumnIdentityInput<TOptions> &
       BrunoTableComputedColumnDependencies<TRow, TFields, BigDecimal.BigDecimal> &
       OnlyKnownKeys<
         TOptions,

@@ -39,7 +39,43 @@ type ColumnIdFirstCharacter =
   | "Y"
   | "Z";
 
-export type BrunoTableColumnId = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
+type ColumnIdWhitespace =
+  | "\t"
+  | "\n"
+  | "\v"
+  | "\f"
+  | "\r"
+  | " "
+  | "\u00a0"
+  | "\u1680"
+  | "\u2000"
+  | "\u2001"
+  | "\u2002"
+  | "\u2003"
+  | "\u2004"
+  | "\u2005"
+  | "\u2006"
+  | "\u2007"
+  | "\u2008"
+  | "\u2009"
+  | "\u200a"
+  | "\u2028"
+  | "\u2029"
+  | "\u202f"
+  | "\u205f"
+  | "\u3000"
+  | "\ufeff";
+type ColumnIdPattern = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
+
+export type BrunoTableColumnId<TColumnId extends ColumnIdPattern = ColumnIdPattern> =
+  TColumnId extends `${string}${ColumnIdWhitespace}${string}` ? never : TColumnId;
+
+/** @internal Applies literal Column Identity validation at inference boundaries. */
+export type BrunoTableColumnIdentityInput<TOptions> = TOptions extends {
+  readonly columnId: infer TColumnId extends ColumnIdPattern;
+}
+  ? { readonly columnId: BrunoTableColumnId<TColumnId> }
+  : unknown;
 
 export type BrunoTableRowId = string;
 
@@ -567,7 +603,9 @@ export function BrunoTableComputedColumn<
   const TFields extends NonEmptyFields<TRow>,
   const TOptions extends ComputedColumnOptions<TRow, TFields, string, "text">,
 >(
-  options: TOptions & ComputedColumnDependencies<TRow, TFields, string>,
+  options: TOptions &
+    BrunoTableColumnIdentityInput<TOptions> &
+    ComputedColumnDependencies<TRow, TFields, string>,
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, string> &
   ComputedColumn<TRow, TFields, string, "text">;
@@ -576,7 +614,9 @@ export function BrunoTableComputedColumn<
   const TFields extends NonEmptyFields<TRow>,
   const TOptions extends ComputedColumnOptions<TRow, TFields, number, "number">,
 >(
-  options: TOptions & ComputedColumnDependencies<TRow, TFields, number>,
+  options: TOptions &
+    BrunoTableColumnIdentityInput<TOptions> &
+    ComputedColumnDependencies<TRow, TFields, number>,
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, number> &
   ComputedColumn<TRow, TFields, number, "number">;
@@ -585,7 +625,9 @@ export function BrunoTableComputedColumn<
   const TFields extends NonEmptyFields<TRow>,
   const TOptions extends ComputedColumnOptions<TRow, TFields, bigint, "bigint">,
 >(
-  options: TOptions & ComputedColumnDependencies<TRow, TFields, bigint>,
+  options: TOptions &
+    BrunoTableColumnIdentityInput<TOptions> &
+    ComputedColumnDependencies<TRow, TFields, bigint>,
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, bigint> &
   ComputedColumn<TRow, TFields, bigint, "bigint">;
@@ -594,7 +636,9 @@ export function BrunoTableComputedColumn<
   const TFields extends NonEmptyFields<TRow>,
   const TOptions extends ComputedColumnOptions<TRow, TFields, boolean, "boolean">,
 >(
-  options: TOptions & ComputedColumnDependencies<TRow, TFields, boolean>,
+  options: TOptions &
+    BrunoTableColumnIdentityInput<TOptions> &
+    ComputedColumnDependencies<TRow, TFields, boolean>,
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, boolean> &
   ComputedColumn<TRow, TFields, boolean, "boolean">;
@@ -609,11 +653,10 @@ export function BrunoTableComputedColumn<
     TValueType
   >,
 >(
-  options: TOptions & { readonly valueType: TValueType } & ComputedColumnDependencies<
-      TRow,
-      TFields,
-      BrunoTableValueTypeValue<TValueType>
-    >,
+  options: TOptions &
+    BrunoTableColumnIdentityInput<TOptions> & {
+      readonly valueType: TValueType;
+    } & ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>>,
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>> &
   ComputedColumn<TRow, TFields, BrunoTableValueTypeValue<TValueType>, TValueType>;
@@ -798,6 +841,7 @@ type NumericFilter<
         }
       | {
           readonly columnId: TColumnId;
+          /** Matches the half-open interval `filter <= value < filterTo`. */
           readonly type: "inRange";
           readonly filter: ScalarFilterValue<TValue>;
           readonly filterTo: ScalarFilterValue<TValue>;

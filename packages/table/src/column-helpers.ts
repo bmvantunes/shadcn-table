@@ -4,6 +4,7 @@ import type {
   BrunoTableBuiltInValueType,
   BrunoTableCellAlign,
   BrunoTableColumnId,
+  BrunoTableColumnIdentityInput,
   BrunoTableComputedColumnDependencies,
   BrunoTableComputedColumnDefinition,
   BrunoTableComputedColumnInput,
@@ -47,7 +48,7 @@ type OnlyKnownKeys<TActual, TAllowed> = {
 };
 
 type FieldIdentity<TField extends PropertyKey, TColumnId extends BrunoTableColumnId> = {
-  readonly columnId: TColumnId;
+  readonly columnId: BrunoTableColumnId<TColumnId>;
   readonly field: TField;
 };
 
@@ -175,6 +176,7 @@ type BuiltInColumnPreset<
     >,
   >(
     options: TOptions &
+      BrunoTableColumnIdentityInput<TOptions> &
       BrunoTableComputedColumnDependencies<TRow, TFields, TValue> &
       OnlyKnownKeys<
         TOptions,
@@ -215,6 +217,7 @@ type BuiltInColumnHelper<
     const TOptions extends ComputedOptions<TRow, TFields, TValue, TValueType>,
   >(
     options: TOptions &
+      BrunoTableColumnIdentityInput<TOptions> &
       BrunoTableComputedColumnDependencies<TRow, TFields, TValue> &
       OnlyKnownKeys<
         TOptions,
@@ -767,6 +770,7 @@ type SelectColumnPreset<
     > & { readonly options?: never },
   >(
     options: TOptions &
+      BrunoTableColumnIdentityInput<TOptions> &
       BrunoTableComputedColumnDependencies<TRow, TFields, TDefaultOptions[number]> &
       OnlyKnownKeys<
         TOptions,
@@ -827,6 +831,7 @@ type SelectColumnHelper = {
         TFields,
         TSelectOptions[number]
       > &
+      BrunoTableColumnIdentityInput<TOptions> &
       OnlyKnownKeys<
         TOptions,
         SelectComputedInput<TRow, TFields, TSelectOptions> &

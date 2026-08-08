@@ -33,18 +33,16 @@ export type BrunoTableClientChromeSnapshot = Readonly<{
   readonly receivedRows: number;
 }>;
 
-export type BrunoTableClientBodySnapshot<TRow> = Readonly<
+export type BrunoTableClientBodySnapshot = Readonly<
   | {
       readonly kind: "loading";
       readonly skeletonCount: number;
     }
   | {
       readonly kind: "invalid";
-      readonly rows: readonly [];
     }
   | {
       readonly kind: "empty";
-      readonly rows: readonly [];
       readonly emptyTitle: string;
       readonly emptyDescription?: string;
       readonly retry?: BrunoTableSourceRetry;
@@ -52,14 +50,12 @@ export type BrunoTableClientBodySnapshot<TRow> = Readonly<
     }
   | {
       readonly kind: "rows";
-      readonly rows: readonly TRow[];
-      readonly rowIds: readonly BrunoTableRowId[];
     }
 >;
 
 export type BrunoTableClientRuntimeView = {
   readonly getChromeSnapshot: () => BrunoTableClientChromeSnapshot;
-  readonly getBodySnapshot: () => BrunoTableClientBodySnapshot<unknown>;
+  readonly getBodySnapshot: () => BrunoTableClientBodySnapshot;
   readonly getRowsSnapshot: () => readonly unknown[];
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
   readonly getQuerySnapshot: () => BrunoTableClientQuerySnapshot;
@@ -106,13 +102,12 @@ type CoherentRows<TRow> = Readonly<{
   readonly rowIds: readonly BrunoTableRowId[];
   readonly rowsById: Readonly<{
     readonly get: (rowId: BrunoTableRowId) => TRow | undefined;
-    readonly depth: number;
   }>;
 }>;
 
 type RuntimeState<TRow> = Readonly<{
   readonly chrome: BrunoTableClientChromeSnapshot;
-  readonly body: BrunoTableClientBodySnapshot<TRow>;
+  readonly body: BrunoTableClientBodySnapshot;
   readonly coherent: CoherentRows<TRow> | undefined;
 }>;
 
@@ -179,7 +174,7 @@ export class BrunoTableClientRuntime<TRow> {
     if (this.view === undefined) {
       this.view = Object.freeze({
         getChromeSnapshot: this.getChromeSnapshot,
-        getBodySnapshot: () => this.getBodySnapshot() as BrunoTableClientBodySnapshot<unknown>,
+        getBodySnapshot: this.getBodySnapshot,
         getRowsSnapshot: () => this.state.coherent?.rows ?? EMPTY_ROWS,
         getRowSnapshot: this.getRowSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
@@ -257,7 +252,7 @@ export class BrunoTableClientRuntime<TRow> {
 
   public readonly getChromeSnapshot = (): BrunoTableClientChromeSnapshot => this.state.chrome;
 
-  public readonly getBodySnapshot = (): BrunoTableClientBodySnapshot<TRow> => this.state.body;
+  public readonly getBodySnapshot = (): BrunoTableClientBodySnapshot => this.state.body;
 
   public readonly getRowSnapshot = (rowId: BrunoTableRowId): TRow | undefined =>
     this.state.coherent?.rowsById.get(rowId);
@@ -291,7 +286,11 @@ export class BrunoTableClientRuntime<TRow> {
       this.rowListeners.set(rowId, listeners);
     }
     listeners.add(listener);
+    let active = true;
     return () => {
+      if (!active) return;
+      active = false;
+      if (this.rowListeners.get(rowId) !== listeners) return;
       listeners.delete(listener);
       if (listeners.size === 0) this.rowListeners.delete(rowId);
     };
@@ -310,7 +309,11 @@ export class BrunoTableClientRuntime<TRow> {
       this.columnCommandListeners.set(columnId, listeners);
     }
     listeners.add(listener);
+    let active = true;
     return () => {
+      if (!active) return;
+      active = false;
+      if (this.columnCommandListeners.get(columnId) !== listeners) return;
       listeners.delete(listener);
       if (listeners.size === 0) this.columnCommandListeners.delete(columnId);
     };
@@ -389,20 +392,19 @@ export class BrunoTableClientRuntime<TRow> {
       receivedRows: sourceSnapshot.rows.length,
     });
 
-    let body: BrunoTableClientBodySnapshot<TRow>;
+    let body: BrunoTableClientBodySnapshot;
     if (sourceSnapshot.status === "loading") {
       body = Object.freeze({
         kind: "loading",
         skeletonCount: skeletonCount(sourceSnapshot.totalRows),
       });
     } else if (incomplete && coherent === undefined) {
-      body = Object.freeze({ kind: "invalid", rows: EMPTY_ROWS });
+      body = Object.freeze({ kind: "invalid" });
     } else if (hasCoherentRows && coherent !== undefined && coherent.rows.length > 0) {
-      body = Object.freeze({ kind: "rows", rows: coherent.rows, rowIds: coherent.rowIds });
+      body = Object.freeze({ kind: "rows" });
     } else {
       body = Object.freeze({
         kind: "empty",
-        rows: EMPTY_ROWS,
         emptyTitle: emptyTitle(sourceSnapshot.status),
         ...emptyDescription(sourceSnapshot),
         ...(sourceSnapshot.status === "closed" || sourceSnapshot.status === "error"
@@ -539,8 +541,7 @@ function createCoherent<TRow>(
   resolveRowIds: boolean,
 ): CoherentRows<TRow> {
   const rowIds = Array.from({ length: rows.length }, () => "" as BrunoTableRowId);
-  const changedById = new Map<BrunoTableRowId, TRow>();
-  const removedIds = new Set<BrunoTableRowId>();
+  const rowsById = new Map<BrunoTableRowId, TRow>();
   const seenIds = new Set<BrunoTableRowId>();
   let changed = previous === undefined || previous.rows.length !== rows.length;
   for (let index = 0; index < rows.length; index += 1) {
@@ -558,46 +559,18 @@ function createCoherent<TRow>(
     }
     seenIds.add(rowId);
     rowIds[index] = rowId;
+    rowsById.set(rowId, row);
     if (previousRow !== row || previous?.rowIds[index] !== rowId) {
       changed = true;
-      changedById.set(rowId, row);
-      const previousRowId = previous?.rowIds[index];
-      if (previousRowId !== undefined && previousRowId !== rowId) removedIds.add(previousRowId);
-    }
-  }
-  if (previous !== undefined) {
-    for (const previousRowId of previous.rowIds) {
-      if (!seenIds.has(previousRowId)) removedIds.add(previousRowId);
     }
   }
   if (!changed && previous !== undefined) return previous;
 
-  const depth = (previous?.rowsById.depth ?? 0) + 1;
-  if (depth >= 32) {
-    const flatRowsById = new Map<BrunoTableRowId, TRow>();
-    for (let index = 0; index < rowIds.length; index += 1) {
-      flatRowsById.set(rowIds[index]!, rows[index]!);
-    }
-    return Object.freeze({
-      rows: Object.freeze(Array.from(rows)),
-      rowIds: Object.freeze(rowIds),
-      rowsById: Object.freeze({
-        get: (rowId: BrunoTableRowId) => flatRowsById.get(rowId),
-        depth: 0,
-      }),
-    });
-  }
-
   return Object.freeze({
-    rows: Object.freeze(Array.from(rows)),
+    rows,
     rowIds: Object.freeze(rowIds),
     rowsById: Object.freeze({
-      get: (rowId: BrunoTableRowId) => {
-        if (changedById.has(rowId)) return changedById.get(rowId);
-        if (removedIds.has(rowId)) return undefined;
-        return previous?.rowsById.get(rowId);
-      },
-      depth,
+      get: (rowId: BrunoTableRowId) => rowsById.get(rowId),
     }),
   });
 }
@@ -664,17 +637,15 @@ function sameChrome(
   );
 }
 
-function sameBody<TRow>(
-  previous: BrunoTableClientBodySnapshot<TRow>,
-  next: BrunoTableClientBodySnapshot<TRow>,
+function sameBody(
+  previous: BrunoTableClientBodySnapshot,
+  next: BrunoTableClientBodySnapshot,
 ): boolean {
   if (previous.kind !== next.kind) return false;
   if (previous.kind === "loading" && next.kind === "loading") {
     return previous.skeletonCount === next.skeletonCount;
   }
-  if (previous.kind === "rows" && next.kind === "rows") {
-    return sameRowIds(previous.rowIds, next.rowIds);
-  }
+  if (previous.kind === "rows" && next.kind === "rows") return true;
   if (previous.kind === "empty" && next.kind === "empty") {
     return (
       previous.emptyTitle === next.emptyTitle &&
@@ -685,13 +656,6 @@ function sameBody<TRow>(
     );
   }
   return true;
-}
-
-function sameRowIds(
-  previous: readonly BrunoTableRowId[],
-  next: readonly BrunoTableRowId[],
-): boolean {
-  return previous.length === next.length && previous.every((rowId, index) => rowId === next[index]);
 }
 
 function createColumnCommandSnapshots(
@@ -755,5 +719,13 @@ function subscribe(listeners: Set<Listener>, listener: Listener): () => void {
 }
 
 function notify(listeners: Set<Listener>): void {
-  for (const listener of listeners) listener();
+  let firstError: unknown;
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError !== undefined) throw firstError;
 }

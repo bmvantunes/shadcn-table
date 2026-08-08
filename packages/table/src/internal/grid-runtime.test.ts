@@ -54,6 +54,7 @@ describe("BrunoTableClientRuntime", () => {
     runtime.subscribeRows(rowsListener);
     runtime.subscribeRow("first", firstListener);
     runtime.subscribeRow("second", secondListener);
+    const bodySnapshot = runtime.getBodySnapshot();
 
     const nextSecond = { id: "second", name: "Grace Hopper" } satisfies Row;
     runtime.publish(source([first, nextSecond]));
@@ -63,9 +64,51 @@ describe("BrunoTableClientRuntime", () => {
     expect(rowsListener).toHaveBeenCalledOnce();
     expect(firstListener).not.toHaveBeenCalled();
     expect(secondListener).toHaveBeenCalledOnce();
-    expect(runtime.getBodySnapshot().kind).toBe("rows");
+    expect(runtime.getBodySnapshot()).toBe(bodySnapshot);
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getView().getRowsSnapshot()).toEqual([first, nextSecond]);
     expect(Object.isFrozen(runtime.getBodySnapshot())).toBe(true);
     expect(runtime.getView()).toBe(runtime.getView());
+  });
+
+  it("keeps unsubscribe functions idempotent after a subscription key is reused", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([first]));
+    const staleRowListener = vi.fn();
+    const liveRowListener = vi.fn();
+    const staleCommandListener = vi.fn();
+    const liveCommandListener = vi.fn();
+
+    const unsubscribeRow = runtime.subscribeRow("first", staleRowListener);
+    unsubscribeRow();
+    runtime.subscribeRow("first", liveRowListener);
+    unsubscribeRow();
+
+    const unsubscribeCommand = runtime.subscribeColumnCommands("COL_ID_NAME", staleCommandListener);
+    unsubscribeCommand();
+    runtime.subscribeColumnCommands("COL_ID_NAME", liveCommandListener);
+    unsubscribeCommand();
+
+    runtime.publish(source([{ id: "first", name: "Ada Lovelace" }]));
+    runtime.toggleColumnSort("COL_ID_NAME", false);
+
+    expect(staleRowListener).not.toHaveBeenCalled();
+    expect(liveRowListener).toHaveBeenCalledOnce();
+    expect(staleCommandListener).not.toHaveBeenCalled();
+    expect(liveCommandListener).toHaveBeenCalledOnce();
+  });
+
+  it("notifies every listener in one channel before rethrowing the first listener error", () => {
+    const runtime = createRuntime(source([{ id: "first", name: "Ada" }]));
+    const laterListener = vi.fn();
+    runtime.subscribeChrome(() => {
+      throw new Error("listener failed");
+    });
+    runtime.subscribeChrome(laterListener);
+
+    expect(() => runtime.publish(source([], "loading"))).toThrow("listener failed");
+    expect(laterListener).toHaveBeenCalledOnce();
+    expect(runtime.getChromeSnapshot().status).toBe("loading");
   });
 
   it("reuses row collections when a source publishes the same row references", () => {
@@ -109,10 +152,8 @@ describe("BrunoTableClientRuntime", () => {
     runtime.reconcile(source(nextRows), getRowId, runtimeColumns);
 
     expect(getRowId).toHaveBeenCalledTimes(nextRows.length);
-    expect(runtime.getBodySnapshot()).toMatchObject({
-      kind: "rows",
-      rowIds: ["first", "second"],
-    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getView().getRowsSnapshot()).toEqual(nextRows);
   });
 
   it("notifies simultaneous source, identity, and column replacement as one coherent state", () => {
@@ -140,7 +181,7 @@ describe("BrunoTableClientRuntime", () => {
 
     expect(observations).toEqual([
       {
-        body: expect.objectContaining({ kind: "rows", rowIds: ["next:next"] }),
+        body: { kind: "rows" },
         query: {
           filters: [],
           orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
@@ -236,7 +277,7 @@ describe("BrunoTableClientRuntime", () => {
       incomplete: true,
       hasCoherentRows: true,
     });
-    expect(runtime.getBodySnapshot()).toMatchObject({ kind: "rows", rowIds: ["first"] });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });
 
@@ -353,6 +394,7 @@ describe("BrunoTableClientRuntime", () => {
     runtime.retry();
     expect(run).toHaveBeenCalledOnce();
 
+    // The runtime snapshots source-owned pending state; later caller mutation cannot rewrite it.
     retry.pending = true;
     runtime.retry();
     expect(run).toHaveBeenCalledTimes(2);
@@ -385,7 +427,7 @@ describe("BrunoTableClientRuntime", () => {
       status: "error",
       hasCoherentRows: true,
     });
-    expect(runtime.getBodySnapshot()).toMatchObject({ kind: "rows", rowIds: ["first"] });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });
 

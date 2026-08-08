@@ -1,5 +1,6 @@
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
 
@@ -7,7 +8,7 @@ const reactCompiler = await babel({
   presets: [reactCompilerPreset({ compilationMode: "infer", target: "19" })],
 });
 
-const shadcnRoot = new URL("../shadcn/src/components/", import.meta.url).pathname;
+const shadcnRoot = fileURLToPath(new URL("../shadcn/src/components/", import.meta.url));
 const shadcnAliases = Object.fromEntries(
   ["alert", "button", "empty", "skeleton", "spinner", "table"].map((name) => [
     `@bruno/shadcn/${name}`,

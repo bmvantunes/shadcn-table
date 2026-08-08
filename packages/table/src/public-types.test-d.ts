@@ -1,5 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 
+import type { ReactNode } from "react";
+
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
@@ -162,6 +164,34 @@ void validColumnId;
 const validUnicodeColumnId: BrunoTableColumnId = "COL_ID_AÉTAT";
 void validUnicodeColumnId;
 
+expectTypeOf<BrunoTableColumnId<"COL_ID_A B">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_A\tB">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_A\u3000B">>().toEqualTypeOf<never>();
+
+const invalidWhitespaceHelperOptions = {
+  columnId: "COL_ID_UNIT PRICE",
+  field: "price",
+  headerName: "Unit price",
+} as const;
+const invalidWhitespaceHelperColumn = [
+  // @ts-expect-error Column Helper inputs reject whitespace in literal identities.
+  BrunoTableNumberColumn(invalidWhitespaceHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidWhitespaceHelperColumn;
+
+const invalidWhitespaceComputedOptions = {
+  columnId: "COL_ID_UNIT\u3000PRICE",
+  fields: ["price"],
+  headerName: "Unit price",
+  valueType: "number",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "price"> }) => row.price,
+} as const;
+const invalidWhitespaceComputedColumn = [
+  // @ts-expect-error Computed Column inputs reject Unicode whitespace in literal identities.
+  BrunoTableComputedColumn(invalidWhitespaceComputedOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidWhitespaceComputedColumn;
+
 // @ts-expect-error A stable column identity must have a non-empty suffix.
 const emptyColumnId: BrunoTableColumnId = "COL_ID_";
 void emptyColumnId;
@@ -189,8 +219,8 @@ describe("BrunoTable public types", () => {
       },
     });
 
-    expectTypeOf(rendered).not.toBeNever();
-    expectTypeOf(BrunoTableToolbar({ children: "Filters" })).not.toBeNever();
+    expectTypeOf(rendered).toEqualTypeOf<ReactNode>();
+    expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
 
     const missingTableId = {
       columns,
@@ -437,23 +467,25 @@ describe("BrunoTable public types", () => {
       ...clientProps,
       initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
     });
-    void BrunoTableClient({
+    const missingColumns = {
       tableId: "orders",
-      // @ts-expect-error Inference cannot satisfy a client without columns.
       getRowId: (row: Order) => row.id,
-      // @ts-expect-error Inference cannot satisfy a client without columns.
-      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }] as const,
       clientSource: clientProps.clientSource,
-    });
-    void BrunoTableClient({
+    };
+    // @ts-expect-error A Client Table cannot omit its column definitions.
+    const invalidMissingColumns: BrunoTableClientProps<Order, Columns> = missingColumns;
+    void invalidMissingColumns;
+
+    const missingClientSource = {
       tableId: "orders",
-      // @ts-expect-error Inference cannot satisfy this incomplete client.
       columns,
-      // @ts-expect-error Inference cannot satisfy this incomplete client.
       getRowId: (row: Order) => row.id,
-      // @ts-expect-error Inference cannot satisfy this incomplete client.
-      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
-    });
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }] as const,
+    };
+    // @ts-expect-error A Client Table cannot omit its live Client Source.
+    const invalidMissingClientSource: BrunoTableClientProps<Order, Columns> = missingClientSource;
+    void invalidMissingClientSource;
     void BrunoTableClient({
       ...clientProps,
       // @ts-expect-error initialOrderBy is a non-empty typed tuple.

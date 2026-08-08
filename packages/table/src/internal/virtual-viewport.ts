@@ -1,8 +1,6 @@
 import type { CompiledColumn } from "./compile-columns";
 
 export type BrunoTableViewportSnapshot = Readonly<{
-  readonly scrollTop: number;
-  readonly scrollLeft: number;
   readonly width: number;
   readonly height: number;
   readonly virtualWindow: BrunoTableVirtualWindow;
@@ -24,7 +22,10 @@ export type BrunoTableVirtualWindow = Readonly<{
 
 type Listener = () => void;
 
-const ROW_HEIGHT = 36;
+export const BRUNO_TABLE_ROW_HEIGHT = 36;
+export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
+
+const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_OVERSCAN = 4;
 const COLUMN_OVERSCAN = 2;
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
@@ -43,10 +44,8 @@ type ViewportLayout = Readonly<{
 }>;
 
 const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
-  scrollTop: 0,
-  scrollLeft: 0,
   width: 0,
-  height: 480,
+  height: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
   virtualWindow: emptyVirtualWindow(),
 });
 
@@ -80,16 +79,29 @@ export class BrunoTableViewportRuntime {
     this.layoutColumns = columns;
     this.layout = createLayout(rowCount, columns);
     if (this.element === null) {
-      this.snapshot = createViewportSnapshot(this.layout, {
-        scrollTop: 0,
-        scrollLeft: 0,
-        width: 0,
-        height: 480,
-      });
+      this.publishSnapshot(
+        createViewportSnapshot(this.layout, {
+          scrollTop: 0,
+          scrollLeft: 0,
+          width: 0,
+          height: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+        }),
+      );
       return;
     }
     this.publishFromElement();
   };
+
+  private publishSnapshot(next: BrunoTableViewportSnapshot): void {
+    if (
+      next.width === this.snapshot.width &&
+      next.height === this.snapshot.height &&
+      sameVirtualWindow(next.virtualWindow, this.snapshot.virtualWindow)
+    )
+      return;
+    this.snapshot = next;
+    for (const listener of this.listeners) listener();
+  }
 
   public readonly revealCell = (rowIndex: number, columnId: string): void => {
     const element = this.element;
@@ -184,14 +196,7 @@ export class BrunoTableViewportRuntime {
       width: element.clientWidth,
       height: element.clientHeight,
     });
-    if (
-      next.width === this.snapshot.width &&
-      next.height === this.snapshot.height &&
-      sameVirtualWindow(next.virtualWindow, this.snapshot.virtualWindow)
-    )
-      return;
-    this.snapshot = next;
-    for (const listener of this.listeners) listener();
+    this.publishSnapshot(next);
   };
 }
 
@@ -205,7 +210,8 @@ function createViewportSnapshot(
   }>,
 ): BrunoTableViewportSnapshot {
   return Object.freeze({
-    ...viewport,
+    width: viewport.width,
+    height: viewport.height,
     virtualWindow: calculateVirtualWindow(layout, viewport),
   });
 }

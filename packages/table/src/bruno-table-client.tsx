@@ -18,6 +18,7 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -33,20 +34,25 @@ import type {
 } from "./public-types";
 import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
 import { useClientRowIds } from "./internal/client-adapter";
-import { filterClientRows } from "./internal/client-row-model";
 import { readCompiledColumnValue } from "./internal/cell-value";
-import { BrunoTableNavigationRuntime, type BrunoTableActiveCell } from "./internal/navigation";
+import {
+  BrunoTableNavigationRuntime,
+  orderBrunoTableLogicalColumns,
+  type BrunoTableActiveCell,
+} from "./internal/navigation";
 import {
   BrunoTableClientRuntime,
   type BrunoTableClientRuntimeView,
   type BrunoTableRowOrderChangeDetector,
 } from "./internal/grid-runtime";
 import {
+  BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+  BRUNO_TABLE_ROW_HEIGHT,
   BrunoTableViewportRuntime,
   type BrunoTableViewportSnapshot,
 } from "./internal/virtual-viewport";
 
-const ROW_HEIGHT = 36;
+const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const VISUALLY_HIDDEN: CSSProperties = {
   clip: "rect(0 0 0 0)",
   clipPath: "inset(50%)",
@@ -334,15 +340,8 @@ const ClientRowOrder = memo(function ClientRowOrder(props: ClientRowOrderProps) 
     props.runtime.getQuerySnapshot,
     props.runtime.getQuerySnapshot,
   );
-  return query.orderBy.length === 0 ? (
-    <ClientUnsortedRowOrder
-      {...props}
-      filters={query.filters}
-      orderBy={query.orderBy}
-      queryGeneration={query.generation}
-    />
-  ) : (
-    <ClientSortedRowOrder
+  return (
+    <ClientResolvedRowOrder
       {...props}
       filters={query.filters}
       orderBy={query.orderBy}
@@ -366,53 +365,7 @@ type ClientResolvedRowOrderProps = ClientRowOrderProps & {
   }[];
 };
 
-const ClientUnsortedRowOrder = memo(function ClientUnsortedRowOrder({
-  tableId,
-  runtime,
-  columns,
-  filters,
-  orderBy,
-  queryGeneration,
-}: ClientResolvedRowOrderProps) {
-  const rowOrderDetector = useMemo<BrunoTableRowOrderChangeDetector>(
-    () => (previousRows, nextRows, previousRowIds, nextRowIds) =>
-      rowOrderChanged(
-        previousRows,
-        nextRows,
-        previousRowIds,
-        nextRowIds,
-        columns,
-        filters,
-        orderBy,
-      ),
-    [columns, filters, orderBy],
-  );
-  const subscribeRowOrder = useMemo(
-    () => (listener: () => void) => runtime.subscribeRows(listener, rowOrderDetector),
-    [rowOrderDetector, runtime],
-  );
-  const rows = useSyncExternalStore(
-    subscribeRowOrder,
-    runtime.getRowsSnapshot,
-    runtime.getRowsSnapshot,
-  );
-  const filteredRows = useMemo(
-    () => filterClientRows(rows, columns, filters),
-    [columns, filters, rows],
-  );
-  const rowIds = useMemo(() => filteredRows.map(runtime.resolveRowId), [filteredRows, runtime]);
-  return (
-    <ClientVirtualTable
-      tableId={tableId}
-      rowIds={rowIds}
-      runtime={runtime}
-      columns={columns}
-      queryGeneration={queryGeneration}
-    />
-  );
-});
-
-const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
+const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   tableId,
   runtime,
   columns,
@@ -443,48 +396,23 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
     runtime.getRowsSnapshot,
   );
   const nextRowIds = useClientRowIds(rows, columns, orderBy, runtime.resolveRowId, filters);
-  const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds));
+  const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
   useLayoutEffect(() => {
-    orderStore.publish(nextRowIds);
-  }, [nextRowIds, orderStore]);
-  const rowIds = useSyncExternalStore(
+    orderStore.publish(nextRowIds, queryGeneration);
+  }, [nextRowIds, orderStore, queryGeneration]);
+  const orderSnapshot = useSyncExternalStore(
     orderStore.subscribe,
     orderStore.getSnapshot,
     orderStore.getSnapshot,
   );
 
   return (
-    <ClientVirtualTable
-      tableId={tableId}
-      rowIds={rowIds}
-      runtime={runtime}
-      columns={columns}
-      queryGeneration={queryGeneration}
-    />
-  );
-});
-
-// The private viewport adapter coordinates mutable DOM geometry outside React's compiled data path.
-const ClientVirtualTable = memo(function ClientVirtualTable({
-  tableId,
-  rowIds,
-  runtime,
-  columns,
-  queryGeneration,
-}: {
-  readonly tableId: string;
-  readonly rowIds: readonly string[];
-  readonly runtime: BrunoTableClientRuntimeView;
-  readonly columns: readonly CompiledColumn[];
-  readonly queryGeneration: number;
-}) {
-  return (
     <ViewportAdapter
       tableId={tableId}
-      rowIds={rowIds}
+      rowIds={orderSnapshot.rowIds}
       runtime={runtime}
       columns={columns}
-      queryGeneration={queryGeneration}
+      queryGeneration={orderSnapshot.queryGeneration}
     />
   );
 });
@@ -512,15 +440,19 @@ const ViewportAdapter = memo(function ViewportAdapter({
     return next;
   });
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
+  const queryGenerationRef = useRef(queryGeneration);
   const viewportSnapshot = useSyncExternalStore(
     viewport.subscribe,
     viewport.getSnapshot,
     viewport.getSnapshot,
   );
   useLayoutEffect(() => {
+    if (queryGenerationRef.current === queryGeneration) return;
+    queryGenerationRef.current = queryGeneration;
     viewport.resetVertical();
     navigation.reset();
-  }, [navigation, queryGeneration, viewport]);
+    navigation.setShape(rowIds, columns);
+  }, [columns, navigation, queryGeneration, rowIds, viewport]);
   useLayoutEffect(() => {
     viewport.setLayout(rowIds.length, columns);
     navigation.setShape(rowIds, columns);
@@ -581,14 +513,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
     activeCell.region === "header" ||
     (activeCell.rowIndex >= virtualWindow.rowStart && activeCell.rowIndex < virtualWindow.rowEnd);
   const activeProxyNeeded = activeCell !== undefined && (!activeColumnMounted || !activeRowMounted);
-  const logicalColumns = useMemo(
-    () => [
-      ...columns.filter((column) => column.pinned === "start"),
-      ...columns.filter((column) => column.pinned === undefined),
-      ...columns.filter((column) => column.pinned === "end"),
-    ],
-    [columns],
-  );
+  const logicalColumns = useMemo(() => orderBrunoTableLogicalColumns(columns), [columns]);
 
   return (
     <div
@@ -606,6 +531,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
         virtualWindow.pinnedEnd.length
       }
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         const delta = navigationDelta(event.key);
         if (delta === undefined) return;
         event.preventDefault();
@@ -613,7 +539,11 @@ const ClientGridSurface = memo(function ClientGridSurface({
         const next = navigation.getSnapshot();
         if (next !== undefined) revealCell(next.rowIndex, next.columnId);
       }}
-      style={{ maxHeight: 480, overflow: "auto", position: "relative" }}
+      style={{
+        maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+        overflow: "auto",
+        position: "relative",
+      }}
     >
       <table
         role="presentation"
@@ -636,7 +566,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
                 role="presentation"
                 style={pinnedRegionStyle("start", totalColumnWidth(virtualWindow.pinnedStart))}
               >
-                <div style={{ display: "flex" }}>
+                <div role="presentation" style={{ display: "flex" }}>
                   {virtualWindow.pinnedStart.map((column, index) => (
                     <ClientHeaderCell
                       key={column.columnId}
@@ -679,7 +609,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
                 role="presentation"
                 style={pinnedRegionStyle("end", totalColumnWidth(virtualWindow.pinnedEnd))}
               >
-                <div style={{ display: "flex" }}>
+                <div role="presentation" style={{ display: "flex" }}>
                   {virtualWindow.pinnedEnd.map((column, index) => (
                     <ClientHeaderCell
                       key={column.columnId}
@@ -820,7 +750,7 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
     id: headerDomId(instanceId, tableId, column.columnId),
     "aria-label": column.headerName,
     "aria-colindex": columnIndex + 1,
-    "aria-sort": command.sortable ? ariaSort : undefined,
+    "aria-sort": command.sortPriority === 1 ? ariaSort : undefined,
     role: "columnheader",
     style: {
       boxSizing: "border-box",
@@ -922,11 +852,12 @@ const ClientRow = memo(function ClientRow({
   readonly top: number;
   readonly width: number;
 }) {
-  const row = useSyncExternalStore(
-    (listener) => runtime.subscribeRow(rowId, listener),
-    () => runtime.getRowSnapshot(rowId),
-    () => runtime.getRowSnapshot(rowId),
+  const subscribe = useMemo(
+    () => (listener: () => void) => runtime.subscribeRow(rowId, listener),
+    [rowId, runtime],
   );
+  const getSnapshot = useMemo(() => () => runtime.getRowSnapshot(rowId), [rowId, runtime]);
+  const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   if (row === undefined) return null;
 
   return (
@@ -950,14 +881,13 @@ const ClientRow = memo(function ClientRow({
           role="presentation"
           style={pinnedRegionStyle("start", totalColumnWidth(pinnedStart))}
         >
-          <div style={{ display: "flex" }}>
+          <div role="presentation" style={{ display: "flex" }}>
             {pinnedStart.map((column, index) => (
               <ClientCell
                 key={column.columnId}
                 regionCell
                 row={row}
                 rowId={rowId}
-                rowIndex={top / ROW_HEIGHT}
                 instanceId={instanceId}
                 tableId={tableId}
                 columnIndex={index}
@@ -975,7 +905,6 @@ const ClientRow = memo(function ClientRow({
           key={column.columnId}
           row={row}
           rowId={rowId}
-          rowIndex={top / ROW_HEIGHT}
           instanceId={instanceId}
           tableId={tableId}
           columnIndex={pinnedStartCount + centerStartIndex + center.indexOf(column)}
@@ -991,14 +920,13 @@ const ClientRow = memo(function ClientRow({
           role="presentation"
           style={pinnedRegionStyle("end", totalColumnWidth(pinnedEnd))}
         >
-          <div style={{ display: "flex" }}>
+          <div role="presentation" style={{ display: "flex" }}>
             {pinnedEnd.map((column, index) => (
               <ClientCell
                 key={column.columnId}
                 regionCell
                 row={row}
                 rowId={rowId}
-                rowIndex={top / ROW_HEIGHT}
                 instanceId={instanceId}
                 tableId={tableId}
                 columnIndex={pinnedStartCount + centerCount + index}
@@ -1015,7 +943,6 @@ const ClientRow = memo(function ClientRow({
 const ClientCell = memo(function ClientCell({
   row,
   rowId,
-  rowIndex: _rowIndex,
   instanceId,
   tableId,
   columnIndex,
@@ -1025,7 +952,6 @@ const ClientCell = memo(function ClientCell({
 }: {
   readonly row: unknown;
   readonly rowId: string;
-  readonly rowIndex?: number;
   readonly instanceId?: string;
   readonly tableId?: string;
   readonly columnIndex?: number;
@@ -1182,22 +1108,38 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 
 class ClientRowOrderStore {
   private readonly listeners = new Set<() => void>();
-  private snapshot: readonly string[];
+  private snapshot: Readonly<{
+    readonly rowIds: readonly string[];
+    readonly queryGeneration: number;
+  }>;
 
-  public constructor(initialSnapshot: readonly string[]) {
-    this.snapshot = Object.freeze(Array.from(initialSnapshot));
+  public constructor(initialRowIds: readonly string[], queryGeneration: number) {
+    this.snapshot = Object.freeze({
+      rowIds: Object.freeze(Array.from(initialRowIds)),
+      queryGeneration,
+    });
   }
 
-  public readonly getSnapshot = (): readonly string[] => this.snapshot;
+  public readonly getSnapshot = (): typeof this.snapshot => this.snapshot;
 
   public readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
 
-  public readonly publish = (next: readonly string[]): void => {
-    if (sameRowIds(this.snapshot, next)) return;
-    this.snapshot = Object.freeze(Array.from(next));
+  public readonly publish = (nextRowIds: readonly string[], queryGeneration: number): void => {
+    if (
+      this.snapshot.queryGeneration === queryGeneration &&
+      sameRowIds(this.snapshot.rowIds, nextRowIds)
+    ) {
+      return;
+    }
+    this.snapshot = Object.freeze({
+      rowIds: sameRowIds(this.snapshot.rowIds, nextRowIds)
+        ? this.snapshot.rowIds
+        : Object.freeze(Array.from(nextRowIds)),
+      queryGeneration,
+    });
     for (const listener of this.listeners) listener();
   };
 }

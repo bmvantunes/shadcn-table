@@ -1,5 +1,15 @@
 import type { CompiledColumn } from "./compile-columns";
 
+export function orderBrunoTableLogicalColumns(
+  columns: readonly CompiledColumn[],
+): readonly CompiledColumn[] {
+  return Object.freeze([
+    ...columns.filter((column) => column.pinned === "start"),
+    ...columns.filter((column) => column.pinned === undefined),
+    ...columns.filter((column) => column.pinned === "end"),
+  ]);
+}
+
 export type BrunoTableActiveCell = Readonly<{
   readonly region: "header" | "body";
   readonly rowIndex: number;
@@ -29,11 +39,7 @@ export class BrunoTableNavigationRuntime {
     columns: readonly CompiledColumn[],
   ): void => {
     this.rowIds = rowIds;
-    this.columns = [
-      ...columns.filter((column) => column.pinned === "start"),
-      ...columns.filter((column) => column.pinned === undefined),
-      ...columns.filter((column) => column.pinned === "end"),
-    ];
+    this.columns = orderBrunoTableLogicalColumns(columns);
     const firstColumn = this.columns[0];
     if (rowIds.length === 0 || firstColumn === undefined) {
       this.setActive(undefined);

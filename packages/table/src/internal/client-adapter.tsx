@@ -57,7 +57,8 @@ export function useClientRowIds<TRow>(
     () => null,
   );
 
-  return table.getRowModel().rows.map((row) => row.id);
+  const rowModel = table.getRowModel();
+  return useMemo(() => rowModel.rows.map((row) => row.id), [rowModel]);
 }
 
 function buildAdapterColumns(

@@ -233,7 +233,8 @@ function evaluateFilter(
       column.semantics.compare(value, filter["filterTo"]) < 0
     );
   }
-  if (typeof value !== "string" || typeof operand !== "string") return false;
+  if (typeof operand !== "string") return false;
+  if (typeof value !== "string") return filter["type"] === "notContains";
   const left = normalizeText(value, caseSensitive, accentSensitive);
   const right = normalizeText(operand, caseSensitive, accentSensitive);
   if (filter["type"] === "contains") return left.includes(right);

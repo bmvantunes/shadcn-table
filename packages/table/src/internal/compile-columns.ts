@@ -7,6 +7,7 @@ import {
 
 const columnIdPrefix = "COL_ID_";
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
+const columnIdWhitespacePattern = /\s/u;
 type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
 type RuntimeCallback = (...parameters: never[]) => unknown;
 
@@ -412,6 +413,7 @@ function isColumnId(columnId: unknown): columnId is BrunoTableColumnId {
   return (
     columnId.startsWith(columnIdPrefix) &&
     columnIdSuffixStartPattern.test(suffix) &&
+    !columnIdWhitespacePattern.test(suffix) &&
     suffix === suffix.toUpperCase()
   );
 }

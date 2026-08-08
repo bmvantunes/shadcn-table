@@ -508,7 +508,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("columnheader", { name: "Scroll end" }))
       .toBeInTheDocument();
-    expect(screen.getByRole("columnheader").all().length).toBeLessThan(wideColumns.length + 2);
+    expect(screen.getByRole("columnheader").all().length).toBeLessThan(wideColumns.length + 1);
   });
 
   test("keeps pinned columns in separate continuously mounted regions", async () => {
@@ -630,9 +630,12 @@ describe("BrunoTableClient browser surface", () => {
         headerName: "Action",
         pinned: "end" as const,
         cellRenderer: ({ row }: { readonly row: Row }) => (
-          <button type="button" onClick={() => activate(row.id)}>
-            Open {row.name}
-          </button>
+          <>
+            <button type="button" onClick={() => activate(row.id)}>
+              Open {row.name}
+            </button>
+            <input aria-label={`Edit ${row.name}`} defaultValue={row.name} />
+          </>
         ),
       },
     ] as const;
@@ -649,12 +652,33 @@ describe("BrunoTableClient browser surface", () => {
     await screen.getByRole("button", { name: "Open Grace" }).click();
     expect(activate).toHaveBeenCalledWith("grace");
     await expect.element(screen.getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ACTIONS" });
+    const input = screen.getByRole("textbox", { name: "Edit Grace" });
+    input.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    const arrow = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "ArrowLeft",
+    });
+    input.element().dispatchEvent(arrow);
+    expect(arrow.defaultPrevented).toBe(false);
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
   });
 
   test("moves one logical active cell across the body with arrow keys", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const region = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
     region.element().focus();
+    await vi.waitFor(() =>
+      expect(region.element().getAttribute("aria-activedescendant")).toContain(
+        "TABLE_ID_PEOPLE-grace-COL_ID_NAME",
+      ),
+    );
     const firstActiveId = region.element().getAttribute("aria-activedescendant");
     expect(firstActiveId).toContain("TABLE_ID_PEOPLE-grace-COL_ID_NAME");
 
@@ -685,6 +709,10 @@ describe("BrunoTableClient browser surface", () => {
     );
     const grids = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }).all();
     expect(grids).toHaveLength(2);
+    await vi.waitFor(() => {
+      expect(grids[0]!.element().getAttribute("aria-activedescendant")).not.toBeNull();
+      expect(grids[1]!.element().getAttribute("aria-activedescendant")).not.toBeNull();
+    });
     const firstId = grids[0]!.element().getAttribute("aria-activedescendant");
     const secondId = grids[1]!.element().getAttribute("aria-activedescendant");
     expect(firstId).not.toBe(secondId);
@@ -739,8 +767,10 @@ describe("BrunoTableClient browser surface", () => {
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BOOLEAN_PROXY" });
     grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
     const activeId = grid.element().getAttribute("aria-activedescendant");
-    expect(activeId).not.toBeNull();
 
     await grid.wheel({ delta: { y: 1200 } });
 
@@ -779,6 +809,37 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("columnheader", { name: "Score" }))
       .toHaveAttribute("aria-sort", "descending");
+
+    screen
+      .getByRole("button", { name: "Sort by Name" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "Score" }))
+      .toHaveAttribute("aria-sort", "descending");
+    await expect
+      .element(screen.getByRole("columnheader", { name: "Name" }))
+      .not.toHaveAttribute("aria-sort");
+  });
+
+  test("reinstalls navigation after a query whose row order is unchanged", async () => {
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource([rows[0]!])} />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+
+    await screen
+      .getByRole("button", { name: "Sort by Score, currently ascending, priority 1" })
+      .click();
+
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toContain(
+        "TABLE_ID_PEOPLE-ada-COL_ID_NAME",
+      ),
+    );
   });
 
   test("resets vertical projection only for query commands, not live row publications", async () => {
