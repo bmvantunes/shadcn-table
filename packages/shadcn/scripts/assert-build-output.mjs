@@ -242,6 +242,7 @@ function runCommand(command, parameters, cwd, label) {
     cwd,
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: 5 * 60 * 1000,
     env: { ...process.env, CI: "true" },
   });
   if (result.error || result.status !== 0 || result.signal !== null) {

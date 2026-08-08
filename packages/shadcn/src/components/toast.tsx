@@ -16,11 +16,26 @@ import {
 
 const toast = ToastPrimitive.createToastManager();
 
-const ToastAccessibilityContext = React.createContext({ timeout: 5000, isPersistent: false });
+const ToastAccessibilityContext = React.createContext({
+  timeout: 5000,
+  isPersistent: false,
+  isViewportFocused: false,
+});
+type ToastViewportFocusEvent = Parameters<NonNullable<ToastPrimitive.Viewport.Props["onFocus"]>>[0];
+type ToastViewportBlurEvent = Parameters<NonNullable<ToastPrimitive.Viewport.Props["onBlur"]>>[0];
+
+function isPersistentToast(
+  toastItem: { timeout?: number | undefined; type?: string | undefined } | null | undefined,
+  timeout: number,
+) {
+  return toastItem?.type === "loading" || (toastItem?.timeout ?? timeout) <= 0;
+}
 
 function ToastProvider({ children, timeout = 5000, ...props }: ToastPrimitive.Provider.Props) {
   return (
-    <ToastAccessibilityContext.Provider value={{ timeout, isPersistent: false }}>
+    <ToastAccessibilityContext.Provider
+      value={{ timeout, isPersistent: false, isViewportFocused: false }}
+    >
       <ToastPrimitive.Provider timeout={timeout} {...props}>
         {children}
       </ToastPrimitive.Provider>
@@ -32,29 +47,57 @@ function ToastPortal({ ...props }: ToastPrimitive.Portal.Props) {
   return <ToastPrimitive.Portal data-slot="toast-portal" {...props} />;
 }
 
-function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
+function ToastViewport({ className, onBlur, onFocus, ...props }: ToastPrimitive.Viewport.Props) {
+  const accessibility = React.useContext(ToastAccessibilityContext);
+  const [isViewportFocused, setIsViewportFocused] = React.useState(false);
+
+  const handleFocus = (event: ToastViewportFocusEvent) => {
+    onFocus?.(event);
+    if (event.target instanceof HTMLElement && event.target.matches(":focus-visible")) {
+      setIsViewportFocused(true);
+    }
+  };
+
+  const handleBlur = (event: ToastViewportBlurEvent) => {
+    onBlur?.(event);
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsViewportFocused(false);
+    }
+  };
+
   return (
-    <ToastPrimitive.Viewport
-      data-slot="toast-viewport"
-      className={cn(
-        "pointer-events-none fixed inset-x-4 bottom-4 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
-        className,
-      )}
-      {...props}
-    />
+    <ToastAccessibilityContext.Provider value={{ ...accessibility, isViewportFocused }}>
+      <ToastPrimitive.Viewport
+        data-slot="toast-viewport"
+        className={cn(
+          "pointer-events-none fixed inset-x-4 bottom-4 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
+          className,
+        )}
+        {...props}
+        onBlur={handleBlur}
+        onFocus={handleFocus}
+      />
+    </ToastAccessibilityContext.Provider>
   );
 }
 
 function Toast({ className, ...props }: ToastPrimitive.Root.Props) {
-  const { timeout } = React.useContext(ToastAccessibilityContext);
-  const isPersistent = props.toast?.type === "loading" || (props.toast?.timeout ?? timeout) <= 0;
+  const { isViewportFocused, timeout } = React.useContext(ToastAccessibilityContext);
+  const isPersistent = isPersistentToast(props.toast, timeout);
   const persistentRootProps =
     isPersistent && props.toast?.priority === "high"
-      ? { role: "presentation" as const, "aria-hidden": false, "aria-live": "off" as const }
+      ? isViewportFocused
+        ? { role: "alertdialog" as const, "aria-hidden": false }
+        : {
+            role: "presentation" as const,
+            tabIndex: -1,
+            "aria-hidden": false,
+            "aria-live": "off" as const,
+          }
       : {};
 
   return (
-    <ToastAccessibilityContext.Provider value={{ timeout, isPersistent }}>
+    <ToastAccessibilityContext.Provider value={{ timeout, isPersistent, isViewportFocused }}>
       <ToastPrimitive.Root
         data-slot="toast"
         className={cn(
@@ -194,6 +237,7 @@ function ToastIcon({ type }: { type: string | undefined }) {
 
 function ToastList() {
   const { toasts } = ToastPrimitive.useToastManager();
+  const { timeout } = React.useContext(ToastAccessibilityContext);
 
   return toasts.map((toastItem) => (
     <Toast key={toastItem.id} toast={toastItem}>
@@ -203,7 +247,7 @@ function ToastList() {
           <ToastTitle />
           <ToastDescription />
         </div>
-        <ToastAction />
+        {!isPersistentToast(toastItem, timeout) && <ToastAction />}
         {/* Base UI hides collapsed Close controls by default; persistent
               workflow notifications must stay in the accessibility tree. */}
         <ToastClose />
