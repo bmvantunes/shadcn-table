@@ -3,7 +3,19 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { createToastManager, Toaster } from "./toast";
+import {
+  createToastManager,
+  Toast,
+  ToastClose,
+  ToastContent,
+  ToastDescription,
+  ToastPortal,
+  ToastProvider,
+  ToastTitle,
+  ToastViewport,
+  Toaster,
+  useToastManager,
+} from "./toast";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -41,7 +53,58 @@ function addPersistentToast(
   });
 }
 
+function CompoundToastList() {
+  const { toasts } = useToastManager();
+
+  return toasts.map((toastItem) => (
+    <Toast key={toastItem.id} toast={toastItem}>
+      <ToastContent>
+        <div>
+          <ToastTitle />
+          <ToastDescription />
+        </div>
+        <ToastClose />
+      </ToastContent>
+    </Toast>
+  ));
+}
+
+function CompoundToastHarness({
+  toastManager,
+  timeout,
+}: {
+  toastManager: ReturnType<typeof createToastManager>;
+  timeout?: number;
+}) {
+  return (
+    <ToastProvider toastManager={toastManager} timeout={timeout}>
+      <ToastPortal>
+        <ToastViewport>
+          <CompoundToastList />
+        </ToastViewport>
+      </ToastPortal>
+    </ToastProvider>
+  );
+}
+
 describe("persistent toast accessibility", () => {
+  test("keeps the public compound Close control accessible", async () => {
+    const toastManager = createToastManager();
+    const screen = await render(<CompoundToastHarness toastManager={toastManager} />);
+
+    toastManager.add({
+      title: "Compound failure",
+      description: "The compound save was not confirmed.",
+      timeout: 0,
+      type: "error",
+    });
+
+    const toast = screen.getByRole("dialog", { name: "Compound failure" });
+    await expect
+      .element(toast.getByRole("button", { name: "Close toast" }))
+      .toHaveAttribute("aria-hidden", "false");
+  });
+
   test("keeps timeout-zero failures until explicit dismissal or replacement", async () => {
     const toastManager = createToastManager();
     const screen = await render(<ToastHarness toastManager={toastManager} />);
@@ -217,9 +280,8 @@ describe("persistent toast accessibility", () => {
       await expect.element(toast).toBeInTheDocument();
       await expect.element(toast.getByRole("button", { name: "Close toast" })).toBeInTheDocument();
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
     const frontmostToast = screen.getByRole("dialog", { name: "Third failure" });
-    expect(frontmostToast.element().hasAttribute("data-expanded")).toBe(false);
+    await expect.element(frontmostToast).not.toHaveAttribute("data-expanded", "");
     let closeButtonElements = viewport
       .element()
       .querySelectorAll<HTMLButtonElement>('button[aria-label="Close toast"]');
@@ -230,7 +292,6 @@ describe("persistent toast accessibility", () => {
 
     await frontmostToast.hover();
     await expect.element(frontmostToast).toHaveAttribute("data-expanded", "");
-    await new Promise((resolve) => setTimeout(resolve, 50));
     closeButtonElements = viewport
       .element()
       .querySelectorAll<HTMLButtonElement>('button[aria-label="Close toast"]');

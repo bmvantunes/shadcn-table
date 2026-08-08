@@ -115,11 +115,11 @@ async function assertPackedConsumer() {
           type: "module",
           dependencies: {
             "@bruno/shadcn": `file:${tarball}`,
-            "@types/react": "19.2.18",
-            "@types/react-dom": "19.2.4",
-            react: "19.2.8",
-            "react-dom": "19.2.8",
-            typescript: "7.0.2",
+            "@types/react": requiredDevDependency("@types/react"),
+            "@types/react-dom": requiredDevDependency("@types/react-dom"),
+            react: requiredDevDependency("react"),
+            "react-dom": requiredDevDependency("react-dom"),
+            typescript: requiredDevDependency("typescript"),
           },
         }),
       );
@@ -195,7 +195,21 @@ function runCommand(command, parameters, cwd, label) {
     encoding: "utf8",
     env: { ...process.env, CI: "true" },
   });
-  if (result.status !== 0) {
-    throw new Error(`${label} failed.\n${result.stdout ?? ""}${result.stderr ?? ""}`);
+  if (result.error || result.status !== 0 || result.signal !== null) {
+    const commandLine = [command, ...parameters].join(" ");
+    const failure =
+      result.error?.message ??
+      `exit status ${result.status ?? "unknown"}${result.signal ? ` (signal ${result.signal})` : ""}`;
+    throw new Error(
+      `${label} failed: ${commandLine}\n${failure}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+    );
   }
+}
+
+function requiredDevDependency(name) {
+  const version = packageJson.devDependencies?.[name];
+  if (!version) {
+    throw new Error(`The packed consumer requires ${name} in @bruno/shadcn devDependencies.`);
+  }
+  return version;
 }
