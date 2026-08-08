@@ -47,6 +47,14 @@ export type BrunoTableBuiltInValueType = "text" | "number" | "bigint" | "boolean
 
 export type BrunoTableOrdering = -1 | 0 | 1;
 
+export type BrunoTableAggFunc = "countDistinct" | "sum" | "min" | "max" | "avg";
+
+export type BrunoTableAggregateResultKind = "self" | "bigint";
+
+export type BrunoTableAggregateResults = Readonly<
+  Partial<Record<BrunoTableAggFunc, BrunoTableAggregateResultKind>>
+>;
+
 export type BrunoTableDecodeResult<TValue> =
   | { readonly _tag: "Success"; readonly value: TValue }
   | { readonly _tag: "Failure"; readonly message: string };
@@ -79,11 +87,12 @@ export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
  * One explicit runtime value domain. BrunoTable snapshots this descriptor into a private compiled
  * plan during column normalization; mounted cells never discover or dispatch value kinds.
  */
-export interface BrunoTableValueType<
+export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
   TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
-> {
+  TAggregateResults extends BrunoTableAggregateResults = {},
+> = {
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: TFilterFamily;
@@ -99,7 +108,9 @@ export interface BrunoTableValueType<
   readonly formatDisplay: (this: void, value: TValue) => string;
   readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
   readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
-}
+} & ([keyof TAggregateResults] extends [never]
+  ? { readonly aggregateResults?: TAggregateResults }
+  : { readonly aggregateResults: TAggregateResults });
 
 export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
   readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<infer TValue>;
@@ -151,6 +162,168 @@ type ValueParams<TRow, TValue> = {
   readonly value: TValue;
 };
 
+type GroupKeyCallback<TValue, TColumnId extends BrunoTableColumnId, TResult> = (
+  parameters: BrunoTableGroupKeyCellParams<TValue, TColumnId>,
+) => TResult;
+
+type AggregateCallback<
+  TValue,
+  TColumnId extends BrunoTableColumnId,
+  TAggFunc extends BrunoTableAggFunc,
+  TResult,
+> = (parameters: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId>) => TResult;
+
+type RowGroupKeyValue<TRow> = {
+  readonly [TField in FieldKey<TRow>]: [NonNullish<TRow[TField]>] extends [never]
+    ? never
+    : {
+        readonly columnId: BrunoTableColumnId;
+        readonly field: TField;
+        readonly value: TRow[TField];
+      };
+}[FieldKey<TRow>];
+
+type DefinedGroupKeyValue<
+  TRow,
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = TColumns[number] extends infer TColumn
+  ? TColumn extends {
+      readonly columnId: infer TColumnId extends BrunoTableColumnId;
+      readonly field: infer TField extends FieldKey<TRow>;
+      readonly groupBy: true;
+    }
+    ? {
+        readonly columnId: TColumnId;
+        readonly field: TField;
+        readonly value: TRow[TField];
+      }
+    : never
+  : never;
+
+export type BrunoTableGroupKeyValue<
+  TRow,
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[] | undefined = undefined,
+> = TColumns extends readonly { readonly columnId: BrunoTableColumnId }[]
+  ? DefinedGroupKeyValue<TRow, TColumns>
+  : RowGroupKeyValue<TRow>;
+
+export type BrunoTableGroupKeyValues<
+  TRow,
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = readonly BrunoTableGroupKeyValue<TRow, TColumns>[];
+
+export type BrunoTableGroupKeyCellParams<TValue, TColumnId extends BrunoTableColumnId> = {
+  readonly columnId: TColumnId;
+  readonly value: TValue;
+  readonly rowCount: bigint;
+};
+
+export type BrunoTableAggregateCellParams<
+  TAggFunc extends BrunoTableAggFunc,
+  TValue,
+  TColumnId extends BrunoTableColumnId,
+> = {
+  readonly columnId: TColumnId;
+  readonly aggFunc: TAggFunc;
+  readonly value: TValue;
+  readonly rowCount: bigint;
+};
+
+type GroupKeyPresentation<TValue, TColumnId extends BrunoTableColumnId> =
+  | {
+      readonly groupBy?: false | undefined;
+      readonly groupKeyValueFormatter?: never;
+      readonly groupKeyCellClassName?: never;
+      readonly groupKeyCellRenderer?: never;
+    }
+  | {
+      readonly groupBy: true;
+      readonly groupKeyValueFormatter?: GroupKeyCallback<TValue, TColumnId, string>;
+      readonly groupKeyCellClassName?:
+        | string
+        | GroupKeyCallback<TValue, TColumnId, string | undefined>;
+      readonly groupKeyCellRenderer?: GroupKeyCallback<TValue, TColumnId, ReactNode>;
+    };
+
+type BuiltInAggregateResults<TValueType extends BrunoTableBuiltInValueType> =
+  TValueType extends "bigint"
+    ? {
+        readonly countDistinct: "bigint";
+        readonly sum: "self";
+        readonly min: "self";
+        readonly max: "self";
+      }
+    : {
+        readonly countDistinct: "bigint";
+        readonly min: "self";
+        readonly max: "self";
+      };
+
+type AggregateResultsFor<TValue, TValueType> = Omit<
+  TValueType extends BrunoTableBuiltInValueType
+    ? BuiltInAggregateResults<TValueType>
+    : TValueType extends {
+          readonly aggregateResults?: infer TAggregateResults extends BrunoTableAggregateResults;
+        }
+      ? TAggregateResults
+      : {},
+  [TValue] extends [NonNullish<TValue>] ? never : "sum" | "avg"
+>;
+
+type AggregateResultValue<TValue, TResultKind> = TResultKind extends "self"
+  ? TValue
+  : TResultKind extends "bigint"
+    ? bigint
+    : never;
+
+type AggregatePresentationBranch<
+  TValue,
+  TColumnId extends BrunoTableColumnId,
+  TAggFunc extends BrunoTableAggFunc,
+  TResultKind extends BrunoTableAggregateResultKind,
+> = {
+  readonly aggFunc: TAggFunc;
+  readonly aggregateValueFormatter?: AggregateCallback<
+    AggregateResultValue<TValue, TResultKind>,
+    TColumnId,
+    TAggFunc,
+    string
+  >;
+  readonly aggregateCellClassName?:
+    | string
+    | AggregateCallback<
+        AggregateResultValue<TValue, TResultKind>,
+        TColumnId,
+        TAggFunc,
+        string | undefined
+      >;
+  readonly aggregateCellRenderer?: AggregateCallback<
+    AggregateResultValue<TValue, TResultKind>,
+    TColumnId,
+    TAggFunc,
+    ReactNode
+  >;
+};
+
+type AggregatePresentation<TValue, TValueType, TColumnId extends BrunoTableColumnId> =
+  | {
+      readonly aggFunc?: never;
+      readonly aggregateValueFormatter?: never;
+      readonly aggregateCellClassName?: never;
+      readonly aggregateCellRenderer?: never;
+    }
+  | {
+      readonly [TAggFunc in Extract<
+        keyof AggregateResultsFor<TValue, TValueType>,
+        BrunoTableAggFunc
+      >]: AggregatePresentationBranch<
+        TValue,
+        TColumnId,
+        TAggFunc,
+        Extract<AggregateResultsFor<TValue, TValueType>[TAggFunc], BrunoTableAggregateResultKind>
+      >;
+    }[Extract<keyof AggregateResultsFor<TValue, TValueType>, BrunoTableAggFunc>];
+
 type ColumnPresentation<TRow, TValue> = {
   readonly valueFormatter?: (parameters: ValueParams<TRow, TValue>) => string;
   readonly cellClassName?: string | ((parameters: ValueParams<TRow, TValue>) => string | undefined);
@@ -170,10 +343,11 @@ type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
 type FieldColumn<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<NonNullish<TRow[TField]>>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = ColumnPresentation<TRow, TRow[TField]> &
   ColumnLayout & {
-    readonly columnId: BrunoTableColumnId;
+    readonly columnId: TColumnId;
     readonly field: TField;
     readonly headerName: string;
     readonly valueType: TValueType;
@@ -183,7 +357,36 @@ type FieldColumn<
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
-  };
+  } & GroupKeyPresentation<TRow[TField], TColumnId> &
+  AggregatePresentation<TRow[TField], TValueType, TColumnId>;
+
+type RawCustomFieldValueType<
+  TValue,
+  TAggregateResults extends BrunoTableAggregateResults = {},
+> = BrunoTableValueType<
+  NonNullish<TValue>,
+  BrunoTableFilterFamily,
+  BrunoTableEditorFamily,
+  TAggregateResults
+>;
+
+type RawCustomFieldColumnWithoutAggregate<TRow, TField extends FieldKey<TRow>> = Extract<
+  FieldColumn<TRow, TField, RawCustomFieldValueType<TRow[TField]>>,
+  { readonly aggFunc?: never }
+>;
+
+type RawCustomAggregatedFieldColumn<TRow, TField extends FieldKey<TRow>> = {
+  readonly [TAggFunc in BrunoTableAggFunc]: {
+    readonly [TResultKind in BrunoTableAggregateResultKind]: Extract<
+      FieldColumn<
+        TRow,
+        TField,
+        RawCustomFieldValueType<TRow[TField], Readonly<Record<TAggFunc, TResultKind>>>
+      >,
+      { readonly aggFunc: TAggFunc }
+    >;
+  }[BrunoTableAggregateResultKind];
+}[BrunoTableAggFunc];
 
 type FieldColumns<TRow> = {
   readonly [TField in FieldKey<TRow>]:
@@ -197,7 +400,9 @@ type FieldColumns<TRow> = {
     | (NonNullish<TRow[TField]> extends boolean ? FieldColumn<TRow, TField, "boolean"> : never)
     | ([NonNullish<TRow[TField]>] extends [never]
         ? never
-        : FieldColumn<TRow, TField, BrunoTableValueType<NonNullish<TRow[TField]>>>);
+        :
+            | RawCustomFieldColumnWithoutAggregate<TRow, TField>
+            | RawCustomAggregatedFieldColumn<TRow, TField>);
 }[FieldKey<TRow>];
 
 const computedColumnMarker: unique symbol = Symbol("BrunoTableComputedColumn");
@@ -230,6 +435,7 @@ type ErasedValueType = {
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
+  readonly aggregateResults?: BrunoTableAggregateResults;
   readonly decodeRuntime: (input: unknown) => unknown;
   readonly equivalent: (...parameters: never[]) => unknown;
   readonly compare: (...parameters: never[]) => unknown;
@@ -281,7 +487,7 @@ type ComputedColumnOptions<
   typeof computedColumnMarker | "fields" | "valueGetter"
 >;
 
-/** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
+/** A string key of the consumer's Row type. */
 export type BrunoTableFieldKey<TRow> = FieldKey<TRow>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
@@ -291,11 +497,35 @@ export type BrunoTableNonNullish<TValue> = NonNullish<TValue>;
 export type BrunoTableNonEmptyFields<TRow> = NonEmptyFields<TRow>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
+type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void]
+  ? TColumn
+  : TOptions extends {
+        readonly groupBy: true;
+      }
+    ? TOptions extends { readonly aggFunc: infer TAggFunc }
+      ? Extract<TColumn, { readonly groupBy: true; readonly aggFunc: TAggFunc }>
+      : Extract<TColumn, { readonly groupBy: true; readonly aggFunc?: never }>
+    : TOptions extends { readonly aggFunc: infer TAggFunc }
+      ? Extract<TColumn, { readonly groupBy?: false | undefined; readonly aggFunc: TAggFunc }>
+      : Extract<TColumn, { readonly groupBy?: false | undefined; readonly aggFunc?: never }>;
+
+/** Exact structural Field Column definition for advanced raw configuration. */
 export type BrunoTableFieldColumnDefinition<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<NonNullish<TRow[TField]>>,
-> = FieldColumn<TRow, TField, TValueType>;
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TOptions = void,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
+> = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId>;
+
+/** @internal Capability-selecting input shape for first-party Column Helpers. */
+export type BrunoTableFieldColumnInput<
+  TRow,
+  TField extends FieldKey<TRow>,
+  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TOptions = void,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
+> = SelectFieldColumnCapabilities<FieldColumn<TRow, TField, TValueType, TColumnId>, TOptions>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 export type BrunoTableComputedColumnDefinition<
@@ -384,7 +614,27 @@ export function BrunoTableComputedColumn(options: Readonly<Record<string, unknow
   return { ...options, [computedColumnMarker]: true };
 }
 
-type Column<TRow> = FieldColumns<TRow> | AnyComputedColumn<TRow>;
+type GroupedPresentationCallbackKey =
+  | "groupKeyValueFormatter"
+  | "groupKeyCellClassName"
+  | "groupKeyCellRenderer"
+  | "aggregateValueFormatter"
+  | "aggregateCellClassName"
+  | "aggregateCellRenderer";
+
+type EraseCallbackParameters<TValue> = TValue extends (...parameters: never[]) => infer TResult
+  ? (...parameters: never[]) => TResult
+  : TValue;
+
+type EraseGroupedPresentationCallbacks<TColumn> = TColumn extends unknown
+  ? {
+      readonly [TKey in keyof TColumn]: TKey extends GroupedPresentationCallbackKey
+        ? EraseCallbackParameters<TColumn[TKey]>
+        : TColumn[TKey];
+    }
+  : never;
+
+type Column<TRow> = EraseGroupedPresentationCallbacks<FieldColumns<TRow>> | AnyComputedColumn<TRow>;
 
 /**
  * A plain column array intended to be used with `satisfies`.

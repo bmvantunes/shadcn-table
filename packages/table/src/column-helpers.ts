@@ -3,11 +3,13 @@ import { BrunoTableComputedColumn } from "./public-types";
 import type {
   BrunoTableBuiltInValueType,
   BrunoTableCellAlign,
+  BrunoTableColumnId,
   BrunoTableComputedColumnDependencies,
   BrunoTableComputedColumnDefinition,
   BrunoTableComputedColumnInput,
   BrunoTableEditorLayout,
   BrunoTableFieldColumnDefinition,
+  BrunoTableFieldColumnInput,
   BrunoTableFieldKey,
   BrunoTableJsonValue,
   BrunoTableNonEmptyFields,
@@ -31,20 +33,56 @@ type FieldOfKind<TRow, TValueKind> = {
 
 type Merge<TDefaults, TOptions> = Omit<TDefaults, keyof TOptions> & TOptions;
 
-type ApplyDefaults<TOptions, TDefaults> = Omit<TOptions, Extract<keyof TDefaults, keyof TOptions>> &
-  Partial<Pick<TOptions, Extract<keyof TDefaults, keyof TOptions>>>;
+type ApplyDefaults<TOptions, TDefaults> = TOptions extends unknown
+  ? Omit<TOptions, Extract<keyof TDefaults, keyof TOptions>> &
+      Partial<Pick<TOptions, Extract<keyof TDefaults, keyof TOptions>>>
+  : never;
+
+type DistributiveOmit<TValue, TKey extends PropertyKey> = TValue extends unknown
+  ? Omit<TValue, TKey>
+  : never;
 
 type OnlyKnownKeys<TActual, TAllowed> = {
   readonly [TKey in Exclude<keyof TActual, keyof TAllowed>]: never;
 };
 
-type HelperResult<TBuiltIn, TOptions, TColumn> = Merge<TBuiltIn, TOptions> & TColumn;
+type FieldIdentity<TField extends PropertyKey, TColumnId extends BrunoTableColumnId> = {
+  readonly columnId: TColumnId;
+  readonly field: TField;
+};
+
+type NarrowFieldCapabilities<TColumn, TOptions> = TColumn extends { readonly field: string }
+  ? TOptions extends { readonly groupBy: true }
+    ? TOptions extends { readonly aggFunc: infer TAggFunc }
+      ? TColumn extends { readonly groupBy: true; readonly aggFunc: TAggFunc }
+        ? TColumn
+        : never
+      : TColumn extends { readonly groupBy: true; readonly aggFunc?: never }
+        ? TColumn
+        : never
+    : TOptions extends { readonly aggFunc: infer TAggFunc }
+      ? TColumn extends {
+          readonly groupBy?: false | undefined;
+          readonly aggFunc: TAggFunc;
+        }
+        ? TColumn
+        : never
+      : TColumn extends {
+            readonly groupBy?: false | undefined;
+            readonly aggFunc?: never;
+          }
+        ? TColumn
+        : never
+  : TColumn;
+
+type HelperResult<TBuiltIn, TOptions, TColumn> = Merge<TBuiltIn, TOptions> &
+  NarrowFieldCapabilities<TColumn, TOptions>;
 
 type PresetResult<TBuiltIn, TDefaults, TOptions, TColumn> = Merge<
   Merge<TBuiltIn, TDefaults>,
   TOptions
 > &
-  TColumn;
+  NarrowFieldCapabilities<TColumn, Merge<TDefaults, TOptions>>;
 
 type FieldInput<
   TRow,
@@ -52,7 +90,11 @@ type FieldInput<
   TValueType extends
     | BrunoTableBuiltInValueType
     | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>,
-> = Omit<BrunoTableFieldColumnDefinition<TRow, TField, TValueType>, "valueType">;
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
+> = DistributiveOmit<
+  BrunoTableFieldColumnInput<TRow, TField, TValueType, void, TColumnId>,
+  "valueType"
+>;
 
 type ComputedOptions<
   TRow,
@@ -108,15 +150,21 @@ type BuiltInColumnPreset<
 > = {
   <
     TRow,
-    TField extends FieldOfKind<TRow, TValue>,
-    const TOptions extends ApplyDefaults<FieldInput<TRow, TField, TValueType>, TDefaults>,
+    const TField extends FieldOfKind<TRow, TValue>,
+    const TColumnId extends BrunoTableColumnId,
+    const TOptions extends ApplyDefaults<
+      FieldInput<TRow, TField, TValueType, TColumnId>,
+      TDefaults
+    >,
   >(
-    options: TOptions & OnlyKnownKeys<TOptions, FieldInput<TRow, TField, TValueType>>,
+    options: TOptions &
+      FieldIdentity<TField, TColumnId> &
+      OnlyKnownKeys<TOptions, FieldInput<TRow, TField, TValueType, TColumnId>>,
   ): PresetResult<
     TBuiltIn,
     TDefaults,
     TOptions,
-    BrunoTableFieldColumnDefinition<TRow, TField, TValueType>
+    BrunoTableFieldColumnDefinition<TRow, TField, TValueType, void, TColumnId>
   >;
   <
     TRow,
@@ -149,11 +197,18 @@ type BuiltInColumnHelper<
 > = {
   <
     TRow,
-    TField extends FieldOfKind<TRow, TValue>,
-    const TOptions extends FieldInput<TRow, TField, TValueType>,
+    const TField extends FieldOfKind<TRow, TValue>,
+    const TColumnId extends BrunoTableColumnId,
+    const TOptions extends FieldInput<TRow, TField, TValueType, TColumnId>,
   >(
-    options: TOptions & OnlyKnownKeys<TOptions, FieldInput<TRow, TField, TValueType>>,
-  ): HelperResult<TBuiltIn, TOptions, BrunoTableFieldColumnDefinition<TRow, TField, TValueType>>;
+    options: TOptions &
+      FieldIdentity<TField, TColumnId> &
+      OnlyKnownKeys<TOptions, FieldInput<TRow, TField, TValueType, TColumnId>>,
+  ): HelperResult<
+    TBuiltIn,
+    TOptions,
+    BrunoTableFieldColumnDefinition<TRow, TField, TValueType, void, TColumnId>
+  >;
   <
     TRow,
     const TFields extends BrunoTableNonEmptyFields<TRow>,
@@ -205,6 +260,14 @@ const fieldColumnOptionKeys = new Set<PropertyKey>([
   "enableFilter",
   "enableSorting",
   "isEditable",
+  "groupBy",
+  "groupKeyValueFormatter",
+  "groupKeyCellClassName",
+  "groupKeyCellRenderer",
+  "aggFunc",
+  "aggregateValueFormatter",
+  "aggregateCellClassName",
+  "aggregateCellRenderer",
 ]);
 const computedColumnOptionKeys = new Set<PropertyKey>(["fields", "valueGetter"]);
 
@@ -270,10 +333,45 @@ function mergeRuntimeColumn(
         }
       : {}),
   };
+  if (!isComputed) {
+    validateRuntimeFieldCapabilities(merged);
+  }
 
   return isComputed
     ? (BrunoTableComputedColumn(merged as never) as unknown as RuntimeColumnOptions)
     : merged;
+}
+
+function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
+  const hasGroupPresentation =
+    Object.hasOwn(options, "groupKeyValueFormatter") ||
+    Object.hasOwn(options, "groupKeyCellClassName") ||
+    Object.hasOwn(options, "groupKeyCellRenderer");
+  if (hasGroupPresentation && options["groupBy"] !== true) {
+    throw new TypeError("BrunoTable group-key presentation requires groupBy: true.");
+  }
+
+  const hasAggregatePresentation =
+    Object.hasOwn(options, "aggregateValueFormatter") ||
+    Object.hasOwn(options, "aggregateCellClassName") ||
+    Object.hasOwn(options, "aggregateCellRenderer");
+  if (hasAggregatePresentation && typeof options["aggFunc"] !== "string") {
+    throw new TypeError("BrunoTable aggregate presentation requires aggFunc.");
+  }
+
+  const aggFunc = options["aggFunc"];
+  if (aggFunc === undefined) return;
+  if (typeof aggFunc !== "string") {
+    throw new TypeError("BrunoTable Column received an unsupported aggFunc.");
+  }
+  const valueType = options["valueType"];
+  const supported =
+    valueType === "bigint"
+      ? new Set(["countDistinct", "sum", "min", "max"])
+      : new Set(["countDistinct", "min", "max"]);
+  if (!supported.has(aggFunc)) {
+    throw new TypeError(`BrunoTable ${String(valueType)} Column received an unsupported aggFunc.`);
+  }
 }
 
 function isComputedColumnOptions(options: RuntimeColumnOptions): boolean {
@@ -283,7 +381,20 @@ function isComputedColumnOptions(options: RuntimeColumnOptions): boolean {
 function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeColumnOptions {
   return Object.fromEntries(
     Reflect.ownKeys(defaults)
-      .filter((key) => key !== "enableFilter" && key !== "enableSorting" && key !== "isEditable")
+      .filter(
+        (key) =>
+          key !== "enableFilter" &&
+          key !== "enableSorting" &&
+          key !== "isEditable" &&
+          key !== "groupBy" &&
+          key !== "groupKeyValueFormatter" &&
+          key !== "groupKeyCellClassName" &&
+          key !== "groupKeyCellRenderer" &&
+          key !== "aggFunc" &&
+          key !== "aggregateValueFormatter" &&
+          key !== "aggregateCellClassName" &&
+          key !== "aggregateCellRenderer",
+      )
       .map((key) => [key, defaults[key]]),
   );
 }
@@ -590,8 +701,9 @@ type SelectFieldInput<
   TRow,
   TField extends BrunoTableFieldKey<TRow>,
   TOptions extends NonEmptySelectOptions,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = Omit<
-  FieldInput<TRow, TField, SelectValueType<BrunoTableNonNullish<TRow[TField]>>>,
+  FieldInput<TRow, TField, SelectValueType<BrunoTableNonNullish<TRow[TField]>>, TColumnId>,
   "options"
 > & {
   readonly options: TOptions;
@@ -615,17 +727,19 @@ type SelectColumnPreset<
 > = {
   <
     TRow,
-    TField extends FieldOfKind<TRow, TDefaultOptions[number]>,
+    const TField extends FieldOfKind<TRow, TDefaultOptions[number]>,
+    const TColumnId extends BrunoTableColumnId,
     const TOptions extends ApplyDefaults<
-      SelectFieldInput<TRow, TField, TDefaultOptions>,
+      SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>,
       TDefaults
     > & { readonly options?: never },
   >(
     options: TOptions &
+      FieldIdentity<TField, TColumnId> &
       ExactSelectDomain<TDefaultOptions[number], BrunoTableNonNullish<TRow[TField]>> &
       OnlyKnownKeys<
         TOptions,
-        ApplyDefaults<SelectFieldInput<TRow, TField, TDefaultOptions>, TDefaults>
+        ApplyDefaults<SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>, TDefaults>
       >,
   ): PresetResult<
     SelectBuiltIn<BrunoTableNonNullish<TRow[TField]>>,
@@ -634,7 +748,9 @@ type SelectColumnPreset<
     BrunoTableFieldColumnDefinition<
       TRow,
       TField,
-      SelectValueType<BrunoTableNonNullish<TRow[TField]>>
+      SelectValueType<BrunoTableNonNullish<TRow[TField]>>,
+      void,
+      TColumnId
     >
   >;
   <
@@ -679,21 +795,25 @@ type SelectColumnHelper = {
   <
     TRow,
     const TSelectOptions extends NonEmptySelectOptions,
-    TField extends FieldOfKind<TRow, TSelectOptions[number]>,
-    const TOptions extends SelectFieldInput<TRow, TField, TSelectOptions>,
+    const TField extends FieldOfKind<TRow, TSelectOptions[number]>,
+    const TColumnId extends BrunoTableColumnId,
+    const TOptions extends SelectFieldInput<TRow, TField, TSelectOptions, TColumnId>,
   >(
-    options: TOptions & { readonly options: TSelectOptions } & ExactSelectDomain<
+    options: TOptions &
+      FieldIdentity<TField, TColumnId> & { readonly options: TSelectOptions } & ExactSelectDomain<
         TSelectOptions[number],
         BrunoTableNonNullish<TRow[TField]>
       > &
-      OnlyKnownKeys<TOptions, SelectFieldInput<TRow, TField, TSelectOptions>>,
+      OnlyKnownKeys<TOptions, SelectFieldInput<TRow, TField, TSelectOptions, TColumnId>>,
   ): HelperResult<
     SelectBuiltIn<BrunoTableNonNullish<TRow[TField]>>,
     TOptions,
     BrunoTableFieldColumnDefinition<
       TRow,
       TField,
-      SelectValueType<BrunoTableNonNullish<TRow[TField]>>
+      SelectValueType<BrunoTableNonNullish<TRow[TField]>>,
+      void,
+      TColumnId
     >
   >;
   <
@@ -859,7 +979,7 @@ function mergeSelectRuntimeColumn(
   const optionsSnapshot = Object.freeze(Array.from(selectOptions));
   const valueType = createSelectValueType(optionsSnapshot);
 
-  return mergeRuntimeColumn(
+  const column = mergeRuntimeColumn(
     {
       valueType,
       cellAlign: "start",
@@ -869,6 +989,7 @@ function mergeSelectRuntimeColumn(
     defaults,
     { ...options, options: optionsSnapshot },
   );
+  return column;
 }
 
 function snapshotPresetDefaults(

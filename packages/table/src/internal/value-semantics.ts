@@ -1,5 +1,6 @@
 import type {
   BrunoTableBuiltInValueType,
+  BrunoTableAggregateResults,
   BrunoTableCellAlign,
   BrunoTableDecodeResult,
   BrunoTableEditorFamily,
@@ -25,6 +26,7 @@ type RuntimeValueTypeDescriptor = {
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
+  readonly aggregateResults: BrunoTableAggregateResults;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -43,6 +45,7 @@ export type CompiledColumnValueSemantics = {
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly width: number;
+  readonly aggregateResults: BrunoTableAggregateResults;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -80,6 +83,16 @@ const numberFormatOptionKeys = new Set<PropertyKey>([
   "unitDisplay",
   "useGrouping",
 ]);
+const aggregateFunctionNames = new Set<PropertyKey>(["countDistinct", "sum", "min", "max", "avg"]);
+const builtInScalarAggregateResults = Object.freeze({
+  countDistinct: "bigint",
+  min: "self",
+  max: "self",
+} satisfies BrunoTableAggregateResults);
+const builtInBigIntAggregateResults = Object.freeze({
+  ...builtInScalarAggregateResults,
+  sum: "self",
+} satisfies BrunoTableAggregateResults);
 
 const builtInValueTypes: Readonly<Record<BrunoTableBuiltInValueType, RuntimeValueTypeDescriptor>> =
   Object.freeze({
@@ -162,6 +175,7 @@ export function compileColumnValueSemantics(
     cellAlign,
     editorLayout,
     width,
+    aggregateResults: descriptor.aggregateResults,
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
@@ -190,6 +204,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const cellAlign = selection["cellAlign"];
   const editorLayout = selection["editorLayout"];
   const defaultWidth = selection["defaultWidth"];
+  const aggregateResults = snapshotAggregateResults(selection["aggregateResults"]);
   const decodeRuntime = selection["decodeRuntime"];
   const equivalent = selection["equivalent"];
   const compare = selection["compare"];
@@ -244,6 +259,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     cellAlign,
     editorLayout,
     defaultWidth,
+    aggregateResults,
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
@@ -262,6 +278,38 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   return Object.freeze(descriptor);
 }
 
+function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
+  if (input === undefined) return Object.freeze({});
+  if (!isRecord(input)) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable Value Type aggregateResults must be an object when provided.",
+    );
+  }
+
+  const snapshot: Partial<Record<string, "self" | "bigint">> = {};
+  for (const key of Reflect.ownKeys(input)) {
+    if (!aggregateFunctionNames.has(key) || typeof key !== "string") {
+      throw new ValueSemanticsConfigurationError(
+        `BrunoTable Value Type aggregateResults does not accept ${String(key)}.`,
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable Value Type aggregateResults must contain enumerable data properties.",
+      );
+    }
+    if (descriptor.value !== "self" && descriptor.value !== "bigint") {
+      throw new ValueSemanticsConfigurationError(
+        `BrunoTable Value Type aggregateResults.${key} is invalid.`,
+      );
+    }
+    snapshot[key] = descriptor.value;
+  }
+
+  return Object.freeze(snapshot);
+}
+
 function createTextValueType(): RuntimeValueTypeDescriptor {
   const descriptor: RuntimeValueTypeDescriptor = {
     codecId: "@bruno/table/text",
@@ -271,6 +319,7 @@ function createTextValueType(): RuntimeValueTypeDescriptor {
     cellAlign: "start",
     editorLayout: "inline",
     defaultWidth: 160,
+    aggregateResults: builtInScalarAggregateResults,
     decodeRuntime: (input) =>
       typeof input === "string" ? success(input) : failure("Expected a string value."),
     equivalent: (left, right) => assertString(left) === assertString(right),
@@ -296,6 +345,7 @@ function createNumberValueType(): RuntimeValueTypeDescriptor {
     cellAlign: "end",
     editorLayout: "inline",
     defaultWidth: 120,
+    aggregateResults: builtInScalarAggregateResults,
     decodeRuntime: (input) =>
       typeof input === "number" && Number.isFinite(input)
         ? success(input)
@@ -325,6 +375,7 @@ function createBigIntValueType(): RuntimeValueTypeDescriptor {
     cellAlign: "end",
     editorLayout: "inline",
     defaultWidth: 140,
+    aggregateResults: builtInBigIntAggregateResults,
     decodeRuntime: (input) =>
       typeof input === "bigint" ? success(input) : failure("Expected a bigint value."),
     equivalent: (left, right) => assertBigInt(left) === assertBigInt(right),
@@ -352,6 +403,7 @@ function createBooleanValueType(): RuntimeValueTypeDescriptor {
     cellAlign: "center",
     editorLayout: "center",
     defaultWidth: 88,
+    aggregateResults: builtInScalarAggregateResults,
     decodeRuntime: (input) =>
       typeof input === "boolean" ? success(input) : failure("Expected a boolean value."),
     equivalent: (left, right) => assertBoolean(left) === assertBoolean(right),

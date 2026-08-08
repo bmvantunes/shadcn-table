@@ -204,12 +204,14 @@ effect-view-server explicitly avoids that path. Its comparator compares sign, de
 
 BrunoTable client filtering, sorting, draft equality, and conflict equality must use semantics equivalent to the server comparator. Otherwise a Client Table and Server Table can disagree, and an incoming pathological value can turn a comparison into a huge allocation.
 
-The current implementation cannot lawfully import that function: `@effect-view-server/effect-utils` is a private workspace package ([effect-utils `package.json`](../../../../effect-view-server/packages/effect-utils/package.json#L1-L21)). Before shipping unrestricted effect-view-server BigDecimal support, choose one of these paths:
-
-1. expose the safe semantics through a public effect-view-server value-semantics API and let the integration reuse it; or
-2. implement the audited digit comparator in the optional BrunoTable Effect adapter and maintain cross-repository parity tests against effect-view-server.
-
-The first path is preferred because it establishes one authority. A documented maximum scale could make ordinary Effect comparison safe for a deliberately bounded non-View-Server domain, but BrunoTable must not silently invent such a bound for values the View Server accepts.
+The ownership gap is resolved by
+[effect-view-server#412](https://github.com/bmvantunes/effect-view-server/pull/412). The public
+`effect-view-server/value-semantics` facade now mints opaque reusable comparison metadata and
+compares only tokens owned by the same loaded module instance. BrunoTable's optional Effect entry
+point caches that metadata beside each admitted value and delegates comparison to the View Server
+authority; it does not carry a second digit comparator. A documented maximum scale could make
+ordinary Effect comparison safe for a deliberately bounded non-View-Server domain, but BrunoTable
+must not silently invent such a bound for values the View Server accepts.
 
 ### Wire safety
 
@@ -487,7 +489,7 @@ Rules:
 - abort multi-cell local operations atomically rather than applying a valid prefix;
 - let the server validate and authorize every save; client parsers and editor hooks are convenience and feedback, not a security boundary.
 
-effect-view-server's hostile BigDecimal inspection verifies the prototype brand, own enumerable coefficient/scale data, safe-integer scale, and canonical wire safety while catching reflection failure ([wire-safe BigDecimal inspection](../../../../effect-view-server/packages/effect-utils/src/wire-safe-big-decimal.ts#L20-L119)). BrunoTable should reuse a public version of that boundary or an equivalent audited decoder in the optional integration.
+effect-view-server's hostile BigDecimal inspection verifies the prototype brand, own enumerable coefficient/scale data, safe-integer scale, and canonical wire safety while catching reflection failure ([wire-safe BigDecimal inspection](../../../../effect-view-server/packages/effect-utils/src/wire-safe-big-decimal.ts#L20-L119)). BrunoTable's optional integration must use the public `effect-view-server@2.3.0/value-semantics` admission and opaque comparison-metadata contract as the single source authority; it must not reproduce that decoder or comparator locally.
 
 ## Required verification matrix
 
@@ -549,8 +551,8 @@ Include pathological safe scales and large coefficients, not only ordinary curre
 5. Install custom TanStack client sort/filter functions, including half-open range semantics.
 6. Route draft dirtiness and conflict reconciliation through column equivalence.
 7. Finalize exact row-version typing, the void Save Operation boundary, and live-source reconciliation.
-8. Expose or reproduce effect-view-server's wire-safe BigDecimal semantics with parity tests.
-9. Ship the optional Effect BigDecimal adapter only after the safe-comparator and wire-admission tests pass.
+8. Use effect-view-server 2.3.0's public wire-safe BigDecimal admission and opaque comparison metadata with parity tests. Resolved by effect-view-server PR 412.
+9. Ship the optional Effect BigDecimal adapter only after the upstream comparator and wire-admission tests pass.
 10. Add realistic exact-numeric performance gates before enabling the feature by default.
 
 ## Rejected approaches

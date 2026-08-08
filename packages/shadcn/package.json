@@ -330,7 +330,8 @@
     "check:build": "node scripts/assert-build-output.mjs",
     "dev": "vp pack --watch",
     "test": "vp test",
-    "prepublishOnly": "vp run check && vp run test && vp run build && vp run check:build"
+    "test:browser": "vp test --project browser --run",
+    "prepublishOnly": "vp run check && vp run test && vp run test:browser && vp run build && vp run check:build"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -353,18 +354,19 @@
     "@babel/core": "^7.29.7",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4.3.3",
-    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/browser-playwright": "4.1.10",
     "babel-plugin-react-compiler": "^1.0.0",
-    "jsdom": "^30.0.1",
+    "playwright": "1.60.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest-browser-react": "2.2.0"
   },
   "peerDependencies": {
     "react": "^19.2.8",

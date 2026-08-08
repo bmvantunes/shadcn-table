@@ -42,6 +42,12 @@ The compiler rejects a Price change that claims the Quantity field, an editable 
 
 - Keep global helpers optional for Field Columns and mandatory as the strict generic boundary for Computed Columns.
 - Preserve exact helper input options in the return type; do not widen early to `BrunoTableColumns<TRow>[number]`.
+- Cross-element callback context cannot infer the eventual sibling tuple from a plain array checked
+  with `satisfies BrunoTableColumns<TRow>`. Grouped presentation callbacks therefore keep their own
+  Column Identity, value, and aggregate function exact but omit sibling Group Key evidence. Once
+  `typeof columns` exists, `BrunoTableGroupKeyValues<TRow, typeof columns>` provides the exact
+  groupable Column Identity union. A free callback generic is not a substitute: it would let
+  callers claim a tuple unrelated to the Table Instance.
 - Keep TanStack Table entirely below the normalization boundary.
 - Compile helper, preset, and raw Field definitions into one ordinary normalized registry once.
 - Add source and emitted-package type tests for every accepted and rejected case exercised by the prototype.

@@ -3,11 +3,9 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
+    "lib": ["esnext", "dom"],
     "noEmit": true,
-    "paths": {
-      "@bruno/table": ["../../src/index.ts"],
-      "@bruno/table/effect": ["../../src/effect.ts"]
-    },
+    "skipLibCheck": false,
     "types": []
   },
   "include": ["index.ts"]

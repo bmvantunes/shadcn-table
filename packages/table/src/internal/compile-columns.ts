@@ -1,4 +1,4 @@
-import type { BrunoTableColumnId } from "../public-types";
+import type { BrunoTableAggFunc, BrunoTableColumnId } from "../public-types";
 import { compileColumnValueSemantics, ValueSemanticsConfigurationError } from "./value-semantics";
 
 const columnIdPrefix = "COL_ID_";
@@ -21,7 +21,15 @@ type CompiledColumnBase = {
 export type CompiledFieldColumn = CompiledColumnBase & {
   readonly kind: "field";
   readonly field: string;
+  readonly groupBy: boolean;
+  readonly aggFunc?: BrunoTableAggFunc;
   readonly isEditable?: boolean | RuntimeCallback;
+  readonly groupKeyValueFormatter?: RuntimeCallback;
+  readonly groupKeyCellClassName?: string | RuntimeCallback;
+  readonly groupKeyCellRenderer?: RuntimeCallback;
+  readonly aggregateValueFormatter?: RuntimeCallback;
+  readonly aggregateCellClassName?: string | RuntimeCallback;
+  readonly aggregateCellRenderer?: RuntimeCallback;
 };
 
 export type CompiledComputedColumn = CompiledColumnBase & {
@@ -59,7 +67,11 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasEditorLayout = Object.hasOwn(candidate, "editorLayout");
   const hasWidth = Object.hasOwn(candidate, "width");
   const hasFormat = Object.hasOwn(candidate, "format");
+  const hasGroupBy = Object.hasOwn(candidate, "groupBy");
+  const hasAggFunc = Object.hasOwn(candidate, "aggFunc");
   const columnId = candidate["columnId"];
+  const groupPresentation = compilePresentationCallbacks(candidate, columnId, "groupKey");
+  const aggregatePresentation = compilePresentationCallbacks(candidate, columnId, "aggregate");
 
   if (!isColumnId(columnId)) {
     throw new ColumnConfigurationError(
@@ -152,6 +164,35 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
 
+    const groupBy = hasGroupBy ? candidate["groupBy"] : false;
+    if (typeof groupBy !== "boolean") {
+      throw new ColumnConfigurationError(
+        `BrunoTable groupBy must be a boolean when provided: ${columnId}`,
+      );
+    }
+    if (groupPresentation.hasPresentation && !groupBy) {
+      throw new ColumnConfigurationError(
+        `BrunoTable group-key presentation requires groupBy: true: ${columnId}`,
+      );
+    }
+
+    const aggFunc = hasAggFunc ? candidate["aggFunc"] : undefined;
+    if (aggFunc !== undefined && !isAggFunc(aggFunc)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable aggFunc is unsupported for column: ${columnId}`,
+      );
+    }
+    if (aggregatePresentation.hasPresentation && aggFunc === undefined) {
+      throw new ColumnConfigurationError(
+        `BrunoTable aggregate presentation requires aggFunc: ${columnId}`,
+      );
+    }
+    if (aggFunc !== undefined && !Object.hasOwn(semantics.aggregateResults, aggFunc)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Value Type does not support ${aggFunc} aggregation: ${columnId}`,
+      );
+    }
+
     return Object.freeze({
       kind: "field",
       columnId,
@@ -159,11 +200,15 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       valueType,
       semantics,
       field,
+      groupBy,
       enableFilter,
       enableSorting,
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
         : {}),
+      ...(aggFunc === undefined ? {} : { aggFunc }),
+      ...groupPresentation.compiled,
+      ...aggregatePresentation.compiled,
       ...(typeof valueFormatter === "function"
         ? { valueFormatter: valueFormatter as RuntimeCallback }
         : {}),
@@ -212,6 +257,17 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
+  if (
+    hasGroupBy ||
+    hasAggFunc ||
+    groupPresentation.hasPresentation ||
+    aggregatePresentation.hasPresentation
+  ) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot declare grouping or aggregation: ${columnId}`,
+    );
+  }
+
   if (hasEnableFilter || hasEnableSorting) {
     throw new ColumnConfigurationError(
       `BrunoTable computed columns cannot declare enableFilter or enableSorting: ${columnId}`,
@@ -244,6 +300,70 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
 
 function isRuntimeColumnDefinition(value: unknown): value is RuntimeColumnDefinition {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compilePresentationCallbacks(
+  candidate: RuntimeColumnDefinition,
+  columnId: unknown,
+  family: "groupKey" | "aggregate",
+): {
+  readonly hasPresentation: boolean;
+  readonly compiled: Readonly<Record<string, string | RuntimeCallback>>;
+} {
+  const valueFormatterKey = `${family}ValueFormatter`;
+  const cellClassNameKey = `${family}CellClassName`;
+  const cellRendererKey = `${family}CellRenderer`;
+  const hasValueFormatter = Object.hasOwn(candidate, valueFormatterKey);
+  const hasCellClassName = Object.hasOwn(candidate, cellClassNameKey);
+  const hasCellRenderer = Object.hasOwn(candidate, cellRendererKey);
+  const valueFormatter = candidate[valueFormatterKey];
+  const cellClassName = candidate[cellClassNameKey];
+  const cellRenderer = candidate[cellRendererKey];
+
+  if (hasValueFormatter && typeof valueFormatter !== "function") {
+    throw new ColumnConfigurationError(
+      `BrunoTable ${valueFormatterKey} must be a function when provided: ${String(columnId)}`,
+    );
+  }
+  if (
+    hasCellClassName &&
+    typeof cellClassName !== "string" &&
+    typeof cellClassName !== "function"
+  ) {
+    throw new ColumnConfigurationError(
+      `BrunoTable ${cellClassNameKey} must be a string or function when provided: ${String(columnId)}`,
+    );
+  }
+  if (hasCellRenderer && typeof cellRenderer !== "function") {
+    throw new ColumnConfigurationError(
+      `BrunoTable ${cellRendererKey} must be a function when provided: ${String(columnId)}`,
+    );
+  }
+
+  return {
+    hasPresentation: hasValueFormatter || hasCellClassName || hasCellRenderer,
+    compiled: {
+      ...(typeof valueFormatter === "function"
+        ? { [valueFormatterKey]: valueFormatter as RuntimeCallback }
+        : {}),
+      ...(typeof cellClassName === "string" || typeof cellClassName === "function"
+        ? { [cellClassNameKey]: cellClassName as string | RuntimeCallback }
+        : {}),
+      ...(typeof cellRenderer === "function"
+        ? { [cellRendererKey]: cellRenderer as RuntimeCallback }
+        : {}),
+    },
+  };
+}
+
+function isAggFunc(value: unknown): value is BrunoTableAggFunc {
+  return (
+    value === "countDistinct" ||
+    value === "sum" ||
+    value === "min" ||
+    value === "max" ||
+    value === "avg"
+  );
 }
 
 function isColumnId(columnId: unknown): columnId is BrunoTableColumnId {

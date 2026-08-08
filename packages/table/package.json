@@ -14,6 +14,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./effect": {
+      "types": "./dist/effect.d.mts",
+      "import": "./dist/effect.mjs",
+      "default": "./dist/effect.mjs"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -26,7 +31,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
-    "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json",
+    "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
     "prepublishOnly": "vp run check && vp run test && vp run test:types:source && vp run build && vp run check:build && vp run test:types:emitted"
   },
   "dependencies": {
@@ -39,13 +44,25 @@
     "@types/react": "^19.2.18",
     "@vitejs/plugin-react": "^6.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
+    "effect": "4.0.0-beta.100",
+    "effect-view-server": "2.3.0",
     "react": "^19.2.8",
+    "react-dom": "19.2.8",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
+    "effect": "4.0.0-beta.100",
     "react": "^19.2.8"
+  },
+  "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    }
+  },
+  "inlinedDependencies": {
+    "effect-view-server": "2.3.0"
   }
 }

@@ -607,8 +607,8 @@ Success criteria:
 - Client and Server results agree for supported operations, null handling, and exact Number, BigInt, and BigDecimal result domains
 - aggregate aliases and group fields sort through validated View Server query members
 - two aggregate columns over one source field render, format, and sort independently through their distinct Column Identities
-- Group Key Cell callbacks receive exact field values, ordered group keys, and row count without a fabricated `TRow`
-- aggregate callbacks receive typed values, ordered group keys, and row count without a fabricated `TRow`, and private aliases never enter their context
+- Group Key Cell callbacks receive exact field values, owning Column Identity, and row count without a fabricated `TRow` or sibling Group Key evidence
+- aggregate callbacks receive typed values, aggregate function, owning Column Identity, and row count without a fabricated `TRow` or sibling Group Key evidence, and private aliases never enter their context
 - conditional grouped classes handle value-aware styling without requiring a custom renderer or causing non-mounted cell work
 - a column declaring both capabilities selects only its group-key presentation while active as a key and only its aggregate presentation while participating as an aggregate
 - grouped sorting accepts only active keys, Rows, and visible participating aggregates; sanitization preserves surviving priorities and falls back to every active key ascending rather than producing an unsorted state

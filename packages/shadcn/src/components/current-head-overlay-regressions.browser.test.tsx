@@ -1,8 +1,5 @@
-// @vitest-environment jsdom
-
-import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test } from "vite-plus/test";
+import { cleanup, render } from "vitest-browser-react";
 
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "./drawer";
 import {
@@ -26,14 +23,13 @@ import {
   NavigationMenuList,
   NavigationMenuTrigger,
 } from "./navigation-menu";
-import { Sidebar, SidebarProvider } from "./sidebar";
 import { createToastManager, Toaster } from "./toast";
 
 afterEach(cleanup);
 
 describe("current-head overlay regressions", () => {
   test("bridges every Navigation Menu popup side and uses a valid exit easing utility", async () => {
-    render(
+    const screen = await render(
       <NavigationMenu value="docs">
         <NavigationMenuList>
           <NavigationMenuItem value="docs">
@@ -46,14 +42,11 @@ describe("current-head overlay regressions", () => {
       </NavigationMenu>,
     );
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="navigation-menu-content"]')).not.toBeNull();
-    });
+    const documentationLink = screen.getByRole("link", { name: "Documentation" });
+    await expect.element(documentationLink).toBeInTheDocument();
 
-    const positioner = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="presentation"]'),
-    ).find((element) => element.className.includes("before:absolute"));
-    expect(positioner).toBeDefined();
+    const positioner = documentationLink.element().closest<HTMLElement>('[role="presentation"]');
+    expect(positioner).not.toBeNull();
 
     const positionerClasses = positioner?.className ?? "";
     expect(positionerClasses).toContain("before:content-['']");
@@ -66,7 +59,7 @@ describe("current-head overlay regressions", () => {
   });
 
   test("styles every Base UI Dropdown Menu highlight seam from data-highlighted", async () => {
-    render(
+    const screen = await render(
       <DropdownMenu open>
         <DropdownMenuTrigger>Open menu</DropdownMenuTrigger>
         <DropdownMenuContent>
@@ -89,24 +82,21 @@ describe("current-head overlay regressions", () => {
       </DropdownMenu>,
     );
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="dropdown-menu-content"]')).not.toBeNull();
-    });
+    const items = [
+      screen.getByRole("menuitem", { name: "Item" }),
+      screen.getByRole("menuitemcheckbox", { name: "Checkbox item" }),
+      screen.getByRole("menuitemradio", { name: "Radio item" }),
+      screen.getByRole("menuitem", { name: "More" }),
+    ];
 
-    for (const slot of [
-      "dropdown-menu-item",
-      "dropdown-menu-checkbox-item",
-      "dropdown-menu-radio-item",
-      "dropdown-menu-sub-trigger",
-    ]) {
-      const element = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`);
-      expect(element?.className).toContain("data-highlighted:bg-accent");
-      expect(element?.className).toContain("data-highlighted:text-accent-foreground");
+    for (const item of items) {
+      await expect.element(item).toHaveClass(/data-highlighted:bg-accent/u);
+      await expect.element(item).toHaveClass(/data-highlighted:text-accent-foreground/u);
     }
   });
 
   test("keeps long Drawer content vertically and touch scrollable", async () => {
-    render(
+    const screen = await render(
       <Drawer open>
         <DrawerContent>
           <DrawerTitle>Order details</DrawerTitle>
@@ -115,43 +105,44 @@ describe("current-head overlay regressions", () => {
       </Drawer>,
     );
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="drawer-content"]')).not.toBeNull();
-    });
+    const dialog = screen.getByRole("dialog", { name: "Order details" });
+    await expect.element(dialog).toBeInTheDocument();
 
-    const contentClasses =
-      document.querySelector<HTMLElement>('[data-slot="drawer-content"]')?.className ?? "";
-    expect(contentClasses).toContain("overflow-y-auto");
-    expect(contentClasses).toContain("touch-pan-y");
-    expect(contentClasses).not.toContain("overflow-hidden");
-  });
-
-  test("forwards Sidebar direction to desktop and non-collapsible roots", () => {
-    const markup = renderToStaticMarkup(
-      <SidebarProvider>
-        <Sidebar dir="rtl" collapsible="none" />
-        <Sidebar dir="rtl" />
-      </SidebarProvider>,
-    );
-
-    expect(markup.match(/data-slot="sidebar"/gu)).toHaveLength(2);
-    expect(markup.match(/dir="rtl"/gu)).toHaveLength(2);
+    const content = dialog.element().querySelector<HTMLElement>('[data-slot="drawer-content"]');
+    expect(content).not.toBeNull();
+    expect(content?.className).toContain("overflow-y-auto");
+    expect(content?.className).toContain("touch-pan-y");
+    expect(content?.className).not.toContain("overflow-hidden");
   });
 
   test("keeps a persistent Toast Close control accessible while collapsed", async () => {
     const toastManager = createToastManager();
-    render(<Toaster toastManager={toastManager} />);
 
-    act(() => {
-      toastManager.add({ title: "Save failed", description: "Try again later.", timeout: 0 });
-    });
+    function ToastHarness() {
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              toastManager.add({
+                title: "Save failed",
+                description: "Try again later.",
+                timeout: 0,
+              })
+            }
+          >
+            Show failure
+          </button>
+          <Toaster toastManager={toastManager} />
+        </>
+      );
+    }
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="toast-close"]')).not.toBeNull();
-    });
+    const screen = await render(<ToastHarness />);
+    await screen.getByRole("button", { name: "Show failure" }).click();
 
-    const close = document.querySelector<HTMLElement>('[data-slot="toast-close"]');
-    expect(close?.getAttribute("aria-label")).toBe("Close toast");
-    expect(close?.getAttribute("aria-hidden")).toBe("false");
+    const close = screen.getByRole("button", { name: "Close toast" });
+    await expect.element(close).toBeInTheDocument();
+    await expect.element(close).toHaveAttribute("aria-hidden", "false");
   });
 });

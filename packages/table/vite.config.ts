@@ -23,6 +23,7 @@ const config: UserConfig = defineConfig({
   pack: {
     entry: {
       index: "src/index.ts",
+      effect: "src/effect.ts",
       "internal/compiler-smoke": "src/internal/compiler-smoke.tsx",
     },
     dts: {
@@ -32,9 +33,13 @@ const config: UserConfig = defineConfig({
       exclude: ["internal/**"],
       customExports(packageExports) {
         const rootExport = packageExports["."];
+        const effectExport = packageExports["./effect"];
 
         if (typeof rootExport !== "string" || !rootExport.endsWith(".mjs")) {
           throw new TypeError("Expected vp pack to generate the @bruno/table root export.");
+        }
+        if (typeof effectExport !== "string" || !effectExport.endsWith(".mjs")) {
+          throw new TypeError("Expected vp pack to generate the @bruno/table/effect export.");
         }
 
         return {
@@ -42,6 +47,11 @@ const config: UserConfig = defineConfig({
             types: rootExport.replace(/\.mjs$/, ".d.mts"),
             import: rootExport,
             default: rootExport,
+          },
+          "./effect": {
+            types: effectExport.replace(/\.mjs$/, ".d.mts"),
+            import: effectExport,
+            default: effectExport,
           },
           "./package.json": "./package.json",
         };

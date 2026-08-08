@@ -64,6 +64,52 @@ Display callbacks such as `valueFormatter`, `cellClassName`, and `cellRenderer` 
 equality, sorting, clipboard text, parsing, persistence, or conflict comparison. Custom exact domains
 use an explicit `BrunoTableValueType` with paired canonical text and persistence codecs.
 
+Effect BigDecimal support is isolated behind the optional entry point. Applications that use it
+install the compatible Effect peer and import only that subpath:
+
+```tsx
+import * as BigDecimal from "effect/BigDecimal";
+import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@bruno/table/effect";
+import type { BrunoTableColumns } from "@bruno/table";
+
+type PriceRow = { readonly price: BigDecimal.BigDecimal };
+
+const columns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    aggFunc: "sum",
+    aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+  }),
+] satisfies BrunoTableColumns<PriceRow>;
+
+void BrunoTableBigDecimalValueType;
+```
+
+The BigDecimal Value Type keeps canonical text, persisted operands, equality, and ordering exact. It
+accepts only effect-view-server-compatible wire-safe values, treats differently scaled
+representations as equal, and never compares by aligning scales through a power of ten. Importing
+`@bruno/table` does not import or require Effect; `effect@4.0.0-beta.100` is an optional peer used
+only by `@bruno/table/effect`. The integration is built against the public, versioned
+`effect-view-server@2.3.0/value-semantics` contract. Admitted cross-bundle wire values are copied
+into owned local BigDecimals and receive opaque source-owned comparison metadata before BrunoTable
+exposes the full Effect value type. That focused runtime is inlined into `@bruno/table/effect`;
+applications do not install effect-view-server merely to use BigDecimal columns. BigDecimal columns
+support `countDistinct`, `sum`, `min`, `max`, and
+`avg`; aggregate callbacks receive the exact result (`bigint` for `countDistinct`, BigDecimal for
+the others), owning Column Identity, aggregate function, and row count, but never sibling Group Key
+evidence or a fabricated raw source row.
+`sum` and `avg` are intentionally unavailable for optional or nullable fields because the View
+Server rejects those aggregate domains; `min` and `max` preserve the field's nullish result type.
+Canonical and persisted BigDecimal text is rejected above 4,096 UTF-16 code units before parsing,
+which bounds synchronous coefficient work on browser input paths.
+
+Raw field definitions remain fully supported for grouping and aggregation. A raw custom Value Type
+must structurally declare the selected function in `aggregateResults`; unsupported pairs fail both
+TypeScript and runtime normalization. BrunoTable's optional typed Column Helpers provide the same
+ordinary definitions with contextual callback inference and reusable defaults.
+
 The private column compiler already converts a stable definition array into one frozen, trusted
 Field-or-Computed representation and rejects malformed widened input. The first runtime root is
 owned by issue #7 and must install that compiler once when constructing or replacing its definition

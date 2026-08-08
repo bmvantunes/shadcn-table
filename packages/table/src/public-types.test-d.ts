@@ -20,6 +20,8 @@ import type {
   BrunoTableEditableColumnId,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
+  BrunoTableFieldColumnDefinition,
+  BrunoTableGroupKeyCellParams,
   BrunoTableSaveCellChange,
   BrunoTableSaveChangeSet,
   BrunoTableServerProps,
@@ -63,6 +65,63 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const rawGroupSymbol = {
+  columnId: "COL_ID_GROUP_SYMBOL",
+  field: "symbol",
+  headerName: "Symbol group",
+  valueType: "text",
+  groupBy: true,
+  groupKeyValueFormatter: ({ value }) => value,
+} satisfies BrunoTableFieldColumnDefinition<
+  Order,
+  "symbol",
+  "text",
+  { readonly groupBy: true },
+  "COL_ID_GROUP_SYMBOL"
+>;
+
+const rawMaximumPrice = {
+  columnId: "COL_ID_MAX_PRICE",
+  field: "price",
+  headerName: "Maximum price",
+  valueType: "number",
+  aggFunc: "max",
+  aggregateValueFormatter: ({ value }) => value.toFixed(2),
+} satisfies BrunoTableFieldColumnDefinition<
+  Order,
+  "price",
+  "number",
+  { readonly aggFunc: "max" },
+  "COL_ID_MAX_PRICE"
+>;
+
+const rawGroupedColumns = [rawGroupSymbol, rawMaximumPrice] satisfies BrunoTableColumns<Order>;
+void rawGroupedColumns;
+
+type OnlySymbolGroupEvidence = readonly [
+  {
+    readonly columnId: "COL_ID_GROUP_SYMBOL";
+    readonly field: "symbol";
+    readonly groupBy: true;
+  },
+];
+
+type UnsafelyNarrowGroupedCallbackParams = BrunoTableGroupKeyCellParams<
+  string,
+  "COL_ID_GROUP_SYMBOL"
+> & { readonly groupKeys: OnlySymbolGroupEvidence };
+
+const unsafelyNarrowGroupedCallback = (_params: UnsafelyNarrowGroupedCallbackParams) => "symbol";
+
+BrunoTableTextColumn({
+  columnId: "COL_ID_UNSAFE_GROUP_SYMBOL",
+  // @ts-expect-error Narrow sibling evidence makes the grouped callback overload invalid.
+  field: "symbol",
+  headerName: "Unsafe symbol group",
+  groupBy: true,
+  groupKeyValueFormatter: unsafelyNarrowGroupedCallback,
+});
 
 const capabilityColumns = [
   {

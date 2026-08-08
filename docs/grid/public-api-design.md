@@ -776,49 +776,56 @@ The exact `aggFunc` union exposed for a concrete column must be capability-deriv
 Grouped presentation is also capability-derived. Its conceptual shape is:
 
 ```ts
-type BrunoTableGroupKeyCellParams<
-  TColumns,
-  TColumnId extends BrunoTableGroupableColumnId<TColumns>,
-> = {
+type BrunoTableGroupKeyCellParams<TValue, TColumnId extends BrunoTableColumnId> = {
   readonly columnId: TColumnId;
-  readonly value: BrunoTableColumnValue<TColumns, TColumnId>;
-  readonly groupKeys: BrunoTableGroupKeyValues<TColumns>;
+  readonly value: TValue;
   readonly rowCount: bigint;
 };
 
-type BrunoTableGroupKeyPresentation<TColumns, TColumnId> = {
+type BrunoTableGroupKeyPresentation<TValue, TColumnId> = {
   readonly groupKeyValueFormatter?: (
-    params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>,
+    params: BrunoTableGroupKeyCellParams<TValue, TColumnId>,
   ) => string;
   readonly groupKeyCellClassName?:
-    string | ((params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>) => string | undefined);
+    string | ((params: BrunoTableGroupKeyCellParams<TValue, TColumnId>) => string | undefined);
   readonly groupKeyCellRenderer?: (
-    params: BrunoTableGroupKeyCellParams<TColumns, TColumnId>,
+    params: BrunoTableGroupKeyCellParams<TValue, TColumnId>,
   ) => React.ReactNode;
 };
 
 type BrunoTableAggregateCellParams<
-  TColumns,
-  TColumnId extends BrunoTableAggregatedColumnId<TColumns>,
+  TAggFunc extends BrunoTableAggFunc,
+  TValue,
+  TColumnId extends BrunoTableColumnId,
 > = {
   readonly columnId: TColumnId;
-  readonly aggFunc: BrunoTableAggFuncFor<TColumns, TColumnId>;
-  readonly value: BrunoTableAggregateValue<TColumns, TColumnId>;
-  readonly groupKeys: BrunoTableGroupKeyValues<TColumns>;
+  readonly aggFunc: TAggFunc;
+  readonly value: TValue;
   readonly rowCount: bigint;
 };
 
-type BrunoTableAggregatePresentation<TColumns, TColumnId> = {
+type BrunoTableAggregatePresentation<TAggFunc, TValue, TColumnId> = {
   readonly aggregateValueFormatter?: (
-    params: BrunoTableAggregateCellParams<TColumns, TColumnId>,
+    params: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId>,
   ) => string;
   readonly aggregateCellClassName?:
-    string | ((params: BrunoTableAggregateCellParams<TColumns, TColumnId>) => string | undefined);
+    | string
+    | ((params: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId>) => string | undefined);
   readonly aggregateCellRenderer?: (
-    params: BrunoTableAggregateCellParams<TColumns, TColumnId>,
+    params: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId>,
   ) => React.ReactNode;
 };
 ```
+
+The owning callback's `columnId`, `value`, and `aggFunc` remain literal and exact. Column-level
+presentation callbacks deliberately do not receive sibling Group Key evidence: a plain array
+checked with `satisfies BrunoTableColumns<TRow>` cannot contextually reference its own eventual
+sibling tuple without circular inference. Publishing a row-wide approximation would admit
+non-groupable fields, while accepting a consumer-supplied tuple would let the callback claim
+columns that the Table does not own. Code outside the array that already has `typeof columns` may
+use `BrunoTableGroupKeyValues<TRow, typeof columns>` where an exact groupable Column Identity union
+is required. A future table-bound presentation seam may expose that evidence after it can bind the
+actual tuple.
 
 A Group Key Cell's `value` retains the exact field value type, but its presentation context intentionally omits `row: TRow` because the cell identifies a complete group rather than one representative source row. Without an override, BrunoTable formats it through the field's compiled Value Type presentation.
 
