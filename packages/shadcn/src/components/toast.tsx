@@ -237,7 +237,6 @@ function ToastIcon({ type }: { type: string | undefined }) {
 
 function ToastList() {
   const { toasts } = ToastPrimitive.useToastManager();
-  const { timeout } = React.useContext(ToastAccessibilityContext);
 
   return toasts.map((toastItem) => (
     <Toast key={toastItem.id} toast={toastItem}>
@@ -247,7 +246,7 @@ function ToastList() {
           <ToastTitle />
           <ToastDescription />
         </div>
-        {!isPersistentToast(toastItem, timeout) && <ToastAction />}
+        <ToastAction />
         {/* Base UI hides collapsed Close controls by default; persistent
               workflow notifications must stay in the accessibility tree. */}
         <ToastClose />

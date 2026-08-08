@@ -65,7 +65,14 @@ If the user requested review only, stop after reporting the three axes. Do not m
 
 ## GitHub convergence loop
 
-1. Trigger or request the remote reviewers, then wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. Codex and CodeRabbit are explicit repository minimums even when no checked-in integration configuration exists. For this repository, trigger them with `gh pr comment <number> --body '@codex review'` and `gh pr comment <number> --body '@coderabbitai review'`, then inspect review threads with the repository's `gh-address-comments` helper. A missing, pending, skipped, or unavailable required review is incomplete work and blocks publication; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
+1. Trigger or request the remote reviewers, then wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. Codex and CodeRabbit are explicit repository minimums even when no checked-in integration configuration exists. For this repository, trigger them with `gh pr comment <number> --body '@codex review'` and `gh pr comment <number> --body '@coderabbitai review'`. Inspect review submissions with `gh pr view <number> --json reviews` and thread state with the supported GitHub CLI GraphQL API:
+
+   ```bash
+   gh api graphql -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { reviewThreads(first:100) { nodes { isResolved isOutdated path line comments(first:20) { nodes { author { login } body } } } } } } }' -f owner='<owner>' -f repo='<repo>' -F number='<number>'
+   ```
+
+   A missing, pending, skipped, or unavailable required review is incomplete work and blocks publication; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
+
 2. Address every blocking finding locally, including findings from CodeRabbit, other configured reviewers, or local agents. Also address accepted actionable non-blocking findings. Blocking findings cannot be waived; disputed non-blocking findings require a recorded rationale rather than silent omission.
 3. Rerun affected validation and the complete three-reviewer local loop.
 4. Commit and push only after the new local round is clean.

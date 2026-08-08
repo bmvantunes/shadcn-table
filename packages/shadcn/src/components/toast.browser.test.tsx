@@ -174,25 +174,22 @@ describe("persistent toast accessibility", () => {
       .toHaveAttribute("aria-hidden", "false");
   });
 
-  test("preserves transient toast actions while omitting persistent mutation actions", async () => {
+  test("preserves generic persistent toast actions without coupling them to Close", async () => {
     const toastManager = createToastManager();
+    const action = vi.fn();
     const screen = await render(<ToastHarness toastManager={toastManager} />);
-
-    toastManager.add({
-      title: "Saved",
-      description: "The save completed.",
-      timeout: 5000,
-      actionProps: { children: "View details" },
-    });
-    await expect.element(screen.getByRole("button", { name: "View details" })).toBeInTheDocument();
 
     toastManager.add({
       title: "Save failed",
       description: "The save was not confirmed.",
       timeout: 0,
-      actionProps: { children: "Retry" },
+      type: "error",
+      actionProps: { children: "View details", onClick: action },
     });
-    await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    const toast = screen.getByRole("dialog", { name: "Save failed" });
+    await expect.element(toast.getByRole("button", { name: "View details" })).toBeInTheDocument();
+    await toast.getByRole("button", { name: "Close toast" }).click();
+    expect(action).not.toHaveBeenCalled();
   });
 
   test("keeps inherited timeout-zero and loading Close controls accessible", async () => {
@@ -295,7 +292,6 @@ describe("persistent toast accessibility", () => {
       const close = screen.getByRole("button", { name: "Close toast" });
       await expect.element(close).toBeInTheDocument();
       await expect.element(close).toHaveAttribute("aria-hidden", "false");
-      await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
       close.element().focus();
       await expect.element(close).toHaveFocus();
       if (method === "pointer") {
