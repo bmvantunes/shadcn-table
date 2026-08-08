@@ -1,4 +1,4 @@
-export { BrunoTableClient } from "./bruno-table-client";
+export { BrunoTableClient, BrunoTableToolbar } from "./bruno-table-client";
 export { BrunoTableComputedColumn } from "./public-types";
 export {
   BrunoTableBigIntColumn,

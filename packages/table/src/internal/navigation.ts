@@ -22,6 +22,8 @@ export class BrunoTableNavigationRuntime {
     return () => this.listeners.delete(listener);
   };
 
+  public readonly reset = (): void => this.setActive(undefined);
+
   public readonly setShape = (
     rowIds: readonly string[],
     columns: readonly CompiledColumn[],
@@ -117,7 +119,7 @@ export class BrunoTableNavigationRuntime {
       this.activeCell?.columnId === next?.columnId
     )
       return;
-    this.activeCell = next;
+    this.activeCell = next === undefined ? undefined : Object.freeze(next);
     for (const listener of this.listeners) listener();
   };
 }

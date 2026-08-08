@@ -200,6 +200,7 @@ const expectedRuntimeExports = [
   "BrunoTableNumberColumn",
   "BrunoTableSelectColumn",
   "BrunoTableTextColumn",
+  "BrunoTableToolbar",
 ].toSorted((left, right) => left.localeCompare(right));
 
 if (JSON.stringify(actualRuntimeExports) !== JSON.stringify(expectedRuntimeExports)) {
@@ -344,7 +345,7 @@ async function assertPackedRootConsumer(tarball, shadcnTarball) {
   try {
     await writeFile(
       join(consumerRoot, "index.ts"),
-      `import { BrunoTableClient, BrunoTableTextColumn } from "@bruno/table";
+      `import { BrunoTableClient, BrunoTableTextColumn, BrunoTableToolbar } from "@bruno/table";
 import type { BrunoTableColumns } from "@bruno/table";
 
 type Row = { readonly symbol: string };
@@ -360,6 +361,8 @@ const rendered = BrunoTableClient({
   clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" },
 });
 void rendered;
+const toolbar = BrunoTableToolbar({ children: "Filters" });
+void toolbar;
 `,
     );
     await writeFile(join(consumerRoot, "runtime.mjs"), 'await import("@bruno/table");\n');

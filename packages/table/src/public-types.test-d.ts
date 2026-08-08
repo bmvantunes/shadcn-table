@@ -8,6 +8,7 @@ import {
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
+  BrunoTableToolbar,
 } from "./index";
 
 import type {
@@ -189,6 +190,7 @@ describe("BrunoTable public types", () => {
     });
 
     expectTypeOf(rendered).not.toBeNever();
+    expectTypeOf(BrunoTableToolbar({ children: "Filters" })).not.toBeNever();
 
     const missingTableId = {
       columns,

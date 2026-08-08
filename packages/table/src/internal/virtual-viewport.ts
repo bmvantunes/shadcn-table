@@ -127,6 +127,12 @@ export class BrunoTableViewportRuntime {
     this.publishFromElement();
   };
 
+  public readonly resetVertical = (): void => {
+    if (this.element === null) return;
+    this.element.scrollTop = 0;
+    this.publishFromElement();
+  };
+
   public readonly attach = (element: HTMLElement | null): void => {
     if (this.element === element) return;
     this.element?.removeEventListener("scroll", this.handleScroll);

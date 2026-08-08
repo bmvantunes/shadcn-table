@@ -6,6 +6,7 @@ import {
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
+  BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
   type BrunoTableClientProps,
   type BrunoTableColumnField,
@@ -339,6 +340,8 @@ const emittedClient = BrunoTableClient({
   },
 });
 void emittedClient;
+const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
+void emittedToolbar;
 
 const editableProps = {
   tableId: "orders",

@@ -15,6 +15,7 @@ import {
   isValidElement,
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useState,
@@ -31,12 +32,8 @@ import type {
   BrunoTableSortBy,
 } from "./public-types";
 import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
-import {
-  sanitizeClientInitialFilters,
-  sanitizeClientInitialOrderBy,
-  filterClientRows,
-  useClientRowIds,
-} from "./internal/client-adapter";
+import { useClientRowIds } from "./internal/client-adapter";
+import { filterClientRows } from "./internal/client-row-model";
 import { readCompiledColumnValue } from "./internal/cell-value";
 import { BrunoTableNavigationRuntime, type BrunoTableActiveCell } from "./internal/navigation";
 import {
@@ -74,50 +71,72 @@ function navigationDelta(
   return undefined;
 }
 
-function cellDomId(tableId: string, rowId: string, columnId: string): string {
-  return `bruno-table-cell-${encodeURIComponent(tableId)}-${encodeURIComponent(rowId)}-${columnId}`;
+function cellDomId(instanceId: string, tableId: string, rowId: string, columnId: string): string {
+  return `bruno-table-cell-${encodeURIComponent(instanceId)}-${encodeURIComponent(tableId)}-${encodeURIComponent(rowId)}-${columnId}`;
 }
 
-function headerDomId(tableId: string, columnId: string): string {
-  return `bruno-table-header-${encodeURIComponent(tableId)}-${columnId}`;
+function headerDomId(instanceId: string, tableId: string, columnId: string): string {
+  return `bruno-table-header-${encodeURIComponent(instanceId)}-${encodeURIComponent(tableId)}-${columnId}`;
 }
 
-function activeDomId(tableId: string, activeCell: BrunoTableActiveCell): string | undefined {
+function activeDomId(
+  instanceId: string,
+  tableId: string,
+  activeCell: BrunoTableActiveCell,
+): string | undefined {
   return activeCell.region === "header"
-    ? headerDomId(tableId, activeCell.columnId)
+    ? headerDomId(instanceId, tableId, activeCell.columnId)
     : activeCell.rowId === undefined
       ? undefined
-      : cellDomId(tableId, activeCell.rowId, activeCell.columnId);
+      : cellDomId(instanceId, tableId, activeCell.rowId, activeCell.columnId);
+}
+
+export function BrunoTableToolbar({ children }: { readonly children?: ReactNode }): ReactNode {
+  if (!hasRenderableChildren(children)) return null;
+  return (
+    <div
+      aria-label="Table controls"
+      className="flex min-w-0 items-center gap-2 overflow-x-auto"
+      role="toolbar"
+    >
+      {children}
+    </div>
+  );
 }
 
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientRenderProps<TRow, TColumns>,
 ): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
-  const [runtime] = useState(() => new BrunoTableClientRuntime(props.clientSource, props.getRowId));
-  const [initialFilters] = useState(() =>
-    sanitizeClientInitialFilters(props.initialFilters, compiledColumns),
+  const [runtime] = useState(
+    () =>
+      new BrunoTableClientRuntime(
+        props.clientSource,
+        props.getRowId,
+        compiledColumns,
+        props.initialFilters,
+        props.initialOrderBy,
+      ),
   );
-  const [initialOrderBy] = useState(() =>
-    sanitizeClientInitialOrderBy(props.initialOrderBy, compiledColumns),
-  );
+  const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    runtime.configure(props.getRowId);
+    runtime.configure(props.getRowId, compiledColumns);
     runtime.publish(props.clientSource);
-  }, [props.clientSource, props.getRowId, runtime]);
+  }, [compiledColumns, props.clientSource, props.getRowId, runtime]);
+
+  useLayoutEffect(() => {
+    toolbar.publish(props.children);
+  }, [props.children, toolbar]);
 
   return (
     <BrunoTableView
       runtime={runtimeView}
       tableId={props.tableId}
       compiledColumns={compiledColumns}
-      initialFilters={initialFilters}
-      initialOrderBy={initialOrderBy}
-    >
-      {props.children}
-    </BrunoTableView>
+      toolbar={toolbar}
+    />
   );
 }
 
@@ -137,39 +156,39 @@ type BrunoTableViewProps = {
   readonly runtime: BrunoTableClientRuntimeView;
   readonly tableId: string;
   readonly compiledColumns: readonly CompiledColumn[];
-  readonly initialFilters: readonly unknown[] | undefined;
-  readonly initialOrderBy:
-    | readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[]
-    | undefined;
+  readonly toolbar: BrunoTableToolbarStore;
 };
 
 const BrunoTableView = memo(function BrunoTableView({
   runtime,
   tableId,
   compiledColumns,
-  initialFilters,
-  initialOrderBy,
-  children,
-}: BrunoTableViewProps & { readonly children?: ReactNode }) {
-  const hasToolbar = hasRenderableChildren(children);
-
+  toolbar,
+}: BrunoTableViewProps) {
   return (
     <section aria-label={tableId} data-bruno-table={tableId}>
-      {hasToolbar ? (
-        <div aria-label="Table toolbar" role="region">
-          {children}
-        </div>
-      ) : null}
+      <ToolbarOutlet toolbar={toolbar} />
       <SourceLifecycle runtime={runtime} />
-      <ClientGridBody
-        runtime={runtime}
-        tableId={tableId}
-        compiledColumns={compiledColumns}
-        initialFilters={initialFilters}
-        initialOrderBy={initialOrderBy}
-      />
+      <ClientGridBody runtime={runtime} tableId={tableId} compiledColumns={compiledColumns} />
     </section>
   );
+});
+
+const ToolbarOutlet = memo(function ToolbarOutlet({
+  toolbar,
+}: {
+  readonly toolbar: BrunoTableToolbarStore;
+}) {
+  const snapshot = useSyncExternalStore(
+    toolbar.subscribe,
+    toolbar.getSnapshot,
+    toolbar.getSnapshot,
+  );
+  return snapshot.hasToolbar ? (
+    <div aria-label="Table toolbar" role="region">
+      {snapshot.children}
+    </div>
+  ) : null;
 });
 
 type RuntimeProps = { readonly runtime: BrunoTableClientRuntimeView };
@@ -268,19 +287,9 @@ type ClientGridBodyProps = {
   readonly runtime: BrunoTableClientRuntimeView;
   readonly tableId: string;
   readonly compiledColumns: readonly CompiledColumn[];
-  readonly initialFilters: readonly unknown[] | undefined;
-  readonly initialOrderBy:
-    | readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[]
-    | undefined;
 };
 
-function ClientGridBody({
-  runtime,
-  tableId,
-  compiledColumns,
-  initialFilters,
-  initialOrderBy,
-}: ClientGridBodyProps) {
+function ClientGridBody({ runtime, tableId, compiledColumns }: ClientGridBodyProps) {
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
@@ -317,25 +326,29 @@ function ClientGridBody({
     );
   }
 
-  return (
-    <ClientRowOrder
-      tableId={tableId}
-      runtime={runtime}
-      columns={compiledColumns}
-      initialFilters={initialFilters}
-      initialOrderBy={initialOrderBy ?? EMPTY_ORDER_BY}
-    />
-  );
+  return <ClientRowOrder tableId={tableId} runtime={runtime} columns={compiledColumns} />;
 }
 
-const ClientRowOrder = memo(function ClientRowOrder({
-  initialOrderBy,
-  ...props
-}: ClientRowOrderProps) {
-  return initialOrderBy.length === 0 ? (
-    <ClientUnsortedRowOrder {...props} initialOrderBy={initialOrderBy} />
+const ClientRowOrder = memo(function ClientRowOrder(props: ClientRowOrderProps) {
+  const query = useSyncExternalStore(
+    props.runtime.subscribeQuery,
+    props.runtime.getQuerySnapshot,
+    props.runtime.getQuerySnapshot,
+  );
+  return query.orderBy.length === 0 ? (
+    <ClientUnsortedRowOrder
+      {...props}
+      filters={query.filters}
+      orderBy={query.orderBy}
+      queryGeneration={query.generation}
+    />
   ) : (
-    <ClientSortedRowOrder {...props} initialOrderBy={initialOrderBy} />
+    <ClientSortedRowOrder
+      {...props}
+      filters={query.filters}
+      orderBy={query.orderBy}
+      queryGeneration={query.generation}
+    />
   );
 });
 
@@ -343,8 +356,12 @@ type ClientRowOrderProps = {
   readonly tableId: string;
   readonly runtime: BrunoTableClientRuntimeView;
   readonly columns: readonly CompiledColumn[];
-  readonly initialFilters: readonly unknown[] | undefined;
-  readonly initialOrderBy: readonly {
+};
+
+type ClientResolvedRowOrderProps = ClientRowOrderProps & {
+  readonly filters: readonly unknown[];
+  readonly queryGeneration: number;
+  readonly orderBy: readonly {
     readonly columnId: string;
     readonly direction: "asc" | "desc";
   }[];
@@ -354,9 +371,10 @@ const ClientUnsortedRowOrder = memo(function ClientUnsortedRowOrder({
   tableId,
   runtime,
   columns,
-  initialFilters,
-  initialOrderBy,
-}: ClientRowOrderProps) {
+  filters,
+  orderBy,
+  queryGeneration,
+}: ClientResolvedRowOrderProps) {
   const rowOrderDetector = useMemo<BrunoTableRowOrderChangeDetector>(
     () => (previousRows, nextRows, previousRowIds, nextRowIds) =>
       rowOrderChanged(
@@ -365,10 +383,10 @@ const ClientUnsortedRowOrder = memo(function ClientUnsortedRowOrder({
         previousRowIds,
         nextRowIds,
         columns,
-        initialFilters,
-        initialOrderBy,
+        filters,
+        orderBy,
       ),
-    [columns, initialFilters, initialOrderBy],
+    [columns, filters, orderBy],
   );
   const subscribeRowOrder = useMemo(
     () => (listener: () => void) => runtime.subscribeRows(listener, rowOrderDetector),
@@ -380,12 +398,18 @@ const ClientUnsortedRowOrder = memo(function ClientUnsortedRowOrder({
     runtime.getRowsSnapshot,
   );
   const filteredRows = useMemo(
-    () => filterClientRows(rows, columns, initialFilters),
-    [columns, initialFilters, rows],
+    () => filterClientRows(rows, columns, filters),
+    [columns, filters, rows],
   );
   const rowIds = useMemo(() => filteredRows.map(runtime.resolveRowId), [filteredRows, runtime]);
   return (
-    <ClientVirtualTable tableId={tableId} rowIds={rowIds} runtime={runtime} columns={columns} />
+    <ClientVirtualTable
+      tableId={tableId}
+      rowIds={rowIds}
+      runtime={runtime}
+      columns={columns}
+      queryGeneration={queryGeneration}
+    />
   );
 });
 
@@ -393,18 +417,10 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
   tableId,
   runtime,
   columns,
-  initialFilters,
-  initialOrderBy,
-}: {
-  readonly tableId: string;
-  readonly runtime: BrunoTableClientRuntimeView;
-  readonly columns: readonly CompiledColumn[];
-  readonly initialFilters: readonly unknown[] | undefined;
-  readonly initialOrderBy: readonly {
-    readonly columnId: string;
-    readonly direction: "asc" | "desc";
-  }[];
-}) {
+  filters,
+  orderBy,
+  queryGeneration,
+}: ClientResolvedRowOrderProps) {
   const rowOrderDetector = useMemo<BrunoTableRowOrderChangeDetector>(
     () => (previousRows, nextRows, previousRowIds, nextRowIds) =>
       rowOrderChanged(
@@ -413,10 +429,10 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
         previousRowIds,
         nextRowIds,
         columns,
-        initialFilters,
-        initialOrderBy,
+        filters,
+        orderBy,
       ),
-    [columns, initialFilters, initialOrderBy],
+    [columns, filters, orderBy],
   );
   const subscribeRowOrder = useMemo(
     () => (listener: () => void) => runtime.subscribeRows(listener, rowOrderDetector),
@@ -427,13 +443,7 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
     runtime.getRowsSnapshot,
     runtime.getRowsSnapshot,
   );
-  const nextRowIds = useClientRowIds(
-    rows,
-    columns,
-    initialOrderBy,
-    runtime.resolveRowId,
-    initialFilters,
-  );
+  const nextRowIds = useClientRowIds(rows, columns, orderBy, runtime.resolveRowId, filters);
   const [orderStore] = useState(() => new ClientRowOrderStore());
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds);
@@ -445,7 +455,13 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
   );
 
   return (
-    <ClientVirtualTable tableId={tableId} rowIds={rowIds} runtime={runtime} columns={columns} />
+    <ClientVirtualTable
+      tableId={tableId}
+      rowIds={rowIds}
+      runtime={runtime}
+      columns={columns}
+      queryGeneration={queryGeneration}
+    />
   );
 });
 
@@ -455,13 +471,23 @@ const ClientVirtualTable = memo(function ClientVirtualTable({
   rowIds,
   runtime,
   columns,
+  queryGeneration,
 }: {
   readonly tableId: string;
   readonly rowIds: readonly string[];
   readonly runtime: BrunoTableClientRuntimeView;
   readonly columns: readonly CompiledColumn[];
+  readonly queryGeneration: number;
 }) {
-  return <ViewportAdapter tableId={tableId} rowIds={rowIds} runtime={runtime} columns={columns} />;
+  return (
+    <ViewportAdapter
+      tableId={tableId}
+      rowIds={rowIds}
+      runtime={runtime}
+      columns={columns}
+      queryGeneration={queryGeneration}
+    />
+  );
 });
 
 // DOM attachment and measurement are isolated here from the compiler-managed render surface.
@@ -471,13 +497,16 @@ const ViewportAdapter = memo(function ViewportAdapter({
   rowIds,
   runtime,
   columns,
+  queryGeneration,
 }: {
   readonly tableId: string;
   readonly rowIds: readonly string[];
   readonly runtime: BrunoTableClientRuntimeView;
   readonly columns: readonly CompiledColumn[];
+  readonly queryGeneration: number;
 }) {
   "use no memo";
+  const instanceId = useId();
   const [viewport] = useState(() => {
     const next = new BrunoTableViewportRuntime();
     next.setLayout(rowIds.length, columns);
@@ -490,6 +519,10 @@ const ViewportAdapter = memo(function ViewportAdapter({
     viewport.getSnapshot,
   );
   useLayoutEffect(() => {
+    viewport.resetVertical();
+    navigation.reset();
+  }, [navigation, queryGeneration, viewport]);
+  useLayoutEffect(() => {
     viewport.setLayout(rowIds.length, columns);
     navigation.setShape(rowIds, columns);
   }, [columns, navigation, rowIds, viewport]);
@@ -497,9 +530,11 @@ const ViewportAdapter = memo(function ViewportAdapter({
 
   return (
     <ClientGridSurface
+      instanceId={instanceId}
       tableId={tableId}
       rowIds={rowIds}
       runtime={runtime}
+      columns={columns}
       viewportSnapshot={viewportSnapshot}
       attach={viewport.attach}
       navigation={navigation}
@@ -510,17 +545,21 @@ const ViewportAdapter = memo(function ViewportAdapter({
 // oxlint-enable react/react-compiler
 
 const ClientGridSurface = memo(function ClientGridSurface({
+  instanceId,
   tableId,
   rowIds,
   runtime,
+  columns,
   viewportSnapshot,
   attach,
   navigation,
   revealCell,
 }: {
+  readonly instanceId: string;
   readonly tableId: string;
   readonly rowIds: readonly string[];
   readonly runtime: BrunoTableClientRuntimeView;
+  readonly columns: readonly CompiledColumn[];
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly navigation: BrunoTableNavigationRuntime;
@@ -543,6 +582,14 @@ const ClientGridSurface = memo(function ClientGridSurface({
     activeCell.region === "header" ||
     (activeCell.rowIndex >= virtualWindow.rowStart && activeCell.rowIndex < virtualWindow.rowEnd);
   const activeProxyNeeded = activeCell !== undefined && (!activeColumnMounted || !activeRowMounted);
+  const logicalColumns = useMemo(
+    () => [
+      ...columns.filter((column) => column.pinned === "start"),
+      ...columns.filter((column) => column.pinned === undefined),
+      ...columns.filter((column) => column.pinned === "end"),
+    ],
+    [columns],
+  );
 
   return (
     <div
@@ -551,7 +598,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
       aria-label={`Data for ${tableId}`}
       tabIndex={0}
       aria-activedescendant={
-        activeCell === undefined ? undefined : activeDomId(tableId, activeCell)
+        activeCell === undefined ? undefined : activeDomId(instanceId, tableId, activeCell)
       }
       aria-rowcount={rowIds.length + 1}
       aria-colcount={
@@ -569,30 +616,6 @@ const ClientGridSurface = memo(function ClientGridSurface({
       }}
       style={{ maxHeight: 480, overflow: "auto", position: "relative" }}
     >
-      {virtualWindow.pinnedStart.length > 0 ? (
-        <PinnedRegion
-          side="start"
-          columns={virtualWindow.pinnedStart}
-          rowIds={rowIds}
-          rowStart={virtualWindow.rowStart}
-          rowEnd={virtualWindow.rowEnd}
-          totalHeight={virtualWindow.totalHeight}
-          width={totalColumnWidth(virtualWindow.pinnedStart)}
-          runtime={runtime}
-        />
-      ) : null}
-      {virtualWindow.pinnedEnd.length > 0 ? (
-        <PinnedRegion
-          side="end"
-          columns={virtualWindow.pinnedEnd}
-          rowIds={rowIds}
-          rowStart={virtualWindow.rowStart}
-          rowEnd={virtualWindow.rowEnd}
-          totalHeight={virtualWindow.totalHeight}
-          width={totalColumnWidth(virtualWindow.pinnedEnd)}
-          runtime={runtime}
-        />
-      ) : null}
       <table
         role="presentation"
         style={{ minWidth: "100%", tableLayout: "fixed", width: tableWidth }}
@@ -608,70 +631,73 @@ const ClientGridSurface = memo(function ClientGridSurface({
           }}
         >
           <tr aria-rowindex={1} role="row">
-            {virtualWindow.pinnedStart.map((column) => (
+            {virtualWindow.pinnedStart.length > 0 ? (
               <th
-                key={column.columnId}
-                role="columnheader"
-                id={headerDomId(tableId, column.columnId)}
-                aria-colindex={virtualWindow.pinnedStart.indexOf(column) + 1}
-                scope="col"
-                style={{
-                  color: "transparent",
-                  opacity: 0,
-                  pointerEvents: "none",
-                  width: column.semantics.width,
-                  ...pinnedCellStyle("start", column, virtualWindow.pinnedStart),
-                }}
+                data-pinned-region="start"
+                role="presentation"
+                style={pinnedRegionStyle("start", totalColumnWidth(virtualWindow.pinnedStart))}
               >
-                {column.headerName}
+                <div style={{ display: "flex" }}>
+                  {virtualWindow.pinnedStart.map((column, index) => (
+                    <ClientHeaderCell
+                      key={column.columnId}
+                      regionCell
+                      instanceId={instanceId}
+                      tableId={tableId}
+                      columnIndex={index}
+                      column={column}
+                      runtime={runtime}
+                      style={{ width: column.semantics.width }}
+                    />
+                  ))}
+                </div>
               </th>
-            ))}
+            ) : null}
             {virtualWindow.leftPadding > 0 ? (
               <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.leftPadding }} />
             ) : null}
             {virtualWindow.center.map((column) => (
-              <th
+              <ClientHeaderCell
                 key={column.columnId}
-                role="columnheader"
-                id={headerDomId(tableId, column.columnId)}
-                aria-colindex={
+                instanceId={instanceId}
+                tableId={tableId}
+                columnIndex={
                   virtualWindow.pinnedStart.length +
                   virtualWindow.centerStartIndex +
-                  virtualWindow.center.indexOf(column) +
-                  1
+                  virtualWindow.center.indexOf(column)
                 }
-                scope="col"
+                column={column}
+                runtime={runtime}
                 style={{ width: column.semantics.width }}
-              >
-                {column.headerName}
-              </th>
+              />
             ))}
             {virtualWindow.rightPadding > 0 ? (
               <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.rightPadding }} />
             ) : null}
-            {virtualWindow.pinnedEnd.map((column) => (
+            {virtualWindow.pinnedEnd.length > 0 ? (
               <th
-                key={column.columnId}
-                role="columnheader"
-                id={headerDomId(tableId, column.columnId)}
-                aria-colindex={
-                  virtualWindow.pinnedStart.length +
-                  virtualWindow.centerCount +
-                  virtualWindow.pinnedEnd.indexOf(column) +
-                  1
-                }
-                scope="col"
-                style={{
-                  color: "transparent",
-                  opacity: 0,
-                  pointerEvents: "none",
-                  width: column.semantics.width,
-                  ...pinnedCellStyle("end", column, virtualWindow.pinnedEnd),
-                }}
+                data-pinned-region="end"
+                role="presentation"
+                style={pinnedRegionStyle("end", totalColumnWidth(virtualWindow.pinnedEnd))}
               >
-                {column.headerName}
+                <div style={{ display: "flex" }}>
+                  {virtualWindow.pinnedEnd.map((column, index) => (
+                    <ClientHeaderCell
+                      key={column.columnId}
+                      regionCell
+                      instanceId={instanceId}
+                      tableId={tableId}
+                      columnIndex={
+                        virtualWindow.pinnedStart.length + virtualWindow.centerCount + index
+                      }
+                      column={column}
+                      runtime={runtime}
+                      style={{ width: column.semantics.width }}
+                    />
+                  ))}
+                </div>
               </th>
-            ))}
+            ) : null}
           </tr>
         </thead>
         <tbody
@@ -687,6 +713,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
             <ClientRow
               key={rowId}
               rowId={rowId}
+              instanceId={instanceId}
               tableId={tableId}
               centerStartIndex={virtualWindow.centerStartIndex}
               centerCount={virtualWindow.centerCount}
@@ -704,95 +731,156 @@ const ClientGridSurface = memo(function ClientGridSurface({
         </tbody>
       </table>
       {activeProxyNeeded && activeCell !== undefined ? (
-        activeCell.region === "header" ? (
-          <div
-            id={headerDomId(tableId, activeCell.columnId)}
-            role="columnheader"
-            style={VISUALLY_HIDDEN}
-          />
-        ) : (
-          <div
-            id={cellDomId(tableId, activeCell.rowId ?? "", activeCell.columnId)}
-            role="gridcell"
-            style={VISUALLY_HIDDEN}
-          />
-        )
+        <ActiveDescendantProxy
+          activeCell={activeCell}
+          column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
+          columnIndex={logicalColumns.findIndex(
+            (column) => column.columnId === activeCell.columnId,
+          )}
+          instanceId={instanceId}
+          runtime={runtime}
+          tableId={tableId}
+        />
       ) : null}
     </div>
   );
 });
 
-const PinnedRegion = memo(function PinnedRegion({
-  side,
-  columns,
-  rowIds,
-  rowStart,
-  rowEnd,
-  totalHeight,
-  width,
+const ClientHeaderCell = memo(function ClientHeaderCell({
+  instanceId,
+  tableId,
+  columnIndex,
+  column,
+  regionCell = false,
   runtime,
+  style,
 }: {
-  readonly side: "start" | "end";
-  readonly columns: readonly CompiledColumn[];
-  readonly rowIds: readonly string[];
-  readonly rowStart: number;
-  readonly rowEnd: number;
-  readonly totalHeight: number;
-  readonly width: number;
+  readonly instanceId: string;
+  readonly tableId: string;
+  readonly columnIndex: number;
+  readonly column: CompiledColumn;
+  readonly regionCell?: boolean;
   readonly runtime: BrunoTableClientRuntimeView;
+  readonly style?: CSSProperties;
 }) {
-  return (
-    <div
-      data-pinned-region={side}
-      aria-hidden="true"
-      style={{
-        background: "Canvas",
-        height: 0,
-        pointerEvents: "none",
-        position: "sticky",
-        top: 0,
-        width,
-        zIndex: 3,
-        ...(side === "start" ? { left: 0 } : { right: 0 }),
-      }}
-    >
-      <div style={{ position: "absolute", top: 0, width }}>
-        <table style={{ tableLayout: "fixed", width }}>
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column.columnId} scope="col" style={{ width: column.semantics.width }}>
-                  {column.headerName}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        </table>
+  const subscribe = useMemo(
+    () => (listener: () => void) => runtime.subscribeColumnCommands(column.columnId, listener),
+    [column.columnId, runtime],
+  );
+  const getSnapshot = useMemo(
+    () => () => runtime.getColumnCommandSnapshot(column.columnId),
+    [column.columnId, runtime],
+  );
+  const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const ariaSort =
+    command.sortDirection === "asc"
+      ? "ascending"
+      : command.sortDirection === "desc"
+        ? "descending"
+        : "none";
+  const sortLabel =
+    command.sortDirection === undefined
+      ? `Sort by ${column.headerName}`
+      : `Sort by ${column.headerName}, currently ${ariaSort}, priority ${String(command.sortPriority)}`;
+
+  const content = (
+    <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+      {command.sortable ? (
+        <Button
+          aria-label={sortLabel}
+          size="xs"
+          type="button"
+          variant="ghost"
+          onClick={(event) => runtime.toggleColumnSort(column.columnId, event.shiftKey)}
+        >
+          <span className="truncate">{column.headerName}</span>
+          {command.sortPriority === undefined ? null : (
+            <span aria-hidden="true">{String(command.sortPriority)}</span>
+          )}
+        </Button>
+      ) : (
+        <span className="truncate">{column.headerName}</span>
+      )}
+      {command.filterBaselineAvailable ? (
+        <Button
+          aria-label={`${command.filterActive ? "Clear" : "Reset"} filter for ${column.headerName}`}
+          size="xs"
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            if (command.filterActive) runtime.clearColumnFilters(column.columnId);
+            else runtime.resetColumnFilters(column.columnId);
+          }}
+        >
+          {command.filterActive ? "Clear" : "Reset"}
+        </Button>
+      ) : null}
+    </div>
+  );
+  const headerProps = {
+    id: headerDomId(instanceId, tableId, column.columnId),
+    "aria-label": column.headerName,
+    "aria-colindex": columnIndex + 1,
+    "aria-sort": command.sortable ? ariaSort : undefined,
+    role: "columnheader",
+    style: { boxSizing: "border-box", overflow: "hidden", ...style } satisfies CSSProperties,
+  } as const;
+  return regionCell ? (
+    <div {...headerProps}>{content}</div>
+  ) : (
+    <th {...headerProps} scope="col">
+      {content}
+    </th>
+  );
+});
+
+const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
+  activeCell,
+  column,
+  columnIndex,
+  instanceId,
+  runtime,
+  tableId,
+}: {
+  readonly activeCell: BrunoTableActiveCell;
+  readonly column: CompiledColumn | undefined;
+  readonly columnIndex: number;
+  readonly instanceId: string;
+  readonly runtime: BrunoTableClientRuntimeView;
+  readonly tableId: string;
+}) {
+  const rowId = activeCell.rowId ?? "";
+  const subscribe = useMemo(
+    () => (listener: () => void) => runtime.subscribeRow(rowId, listener),
+    [rowId, runtime],
+  );
+  const getSnapshot = useMemo(() => () => runtime.getRowSnapshot(rowId), [rowId, runtime]);
+  const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (column === undefined || columnIndex < 0) return null;
+
+  if (activeCell.region === "header") {
+    return (
+      <div aria-rowindex={1} role="row" style={VISUALLY_HIDDEN}>
+        <div
+          id={headerDomId(instanceId, tableId, column.columnId)}
+          aria-colindex={columnIndex + 1}
+          role="columnheader"
+        >
+          {column.headerName}
+        </div>
       </div>
+    );
+  }
+
+  const value = row === undefined ? undefined : readCompiledColumnValue(column, row);
+  return (
+    <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
-        style={{
-          height: totalHeight,
-          position: "absolute",
-          top: ROW_HEIGHT,
-          transform: "translateY(calc(-1 * var(--bruno-table-scroll-top, 0px)))",
-          width,
-        }}
+        id={cellDomId(instanceId, tableId, rowId, column.columnId)}
+        aria-colindex={columnIndex + 1}
+        role="gridcell"
       >
-        <table style={{ tableLayout: "fixed", width }}>
-          <tbody style={{ display: "block", height: totalHeight, position: "relative" }}>
-            {rowIds.slice(rowStart, rowEnd).map((rowId, offset) => (
-              <PinnedRow
-                key={rowId}
-                rowId={rowId}
-                rowIndex={rowStart + offset}
-                runtime={runtime}
-                columns={columns}
-                top={(rowStart + offset) * ROW_HEIGHT}
-                width={width}
-              />
-            ))}
-          </tbody>
-        </table>
+        {row === undefined ? "Unavailable row" : resolveCellText(column, row, value)}
       </div>
     </div>
   );
@@ -800,6 +888,7 @@ const PinnedRegion = memo(function PinnedRegion({
 
 const ClientRow = memo(function ClientRow({
   rowId,
+  instanceId,
   tableId,
   centerStartIndex,
   centerCount,
@@ -814,6 +903,7 @@ const ClientRow = memo(function ClientRow({
   width,
 }: {
   readonly rowId: string;
+  readonly instanceId: string;
   readonly tableId: string;
   readonly centerStartIndex: number;
   readonly centerCount: number;
@@ -849,17 +939,29 @@ const ClientRow = memo(function ClientRow({
         width,
       }}
     >
-      {pinnedStart.map((column) => (
-        <ClientSemanticCell
-          key={column.columnId}
-          row={row}
-          rowId={rowId}
-          rowIndex={top / ROW_HEIGHT}
-          tableId={tableId}
-          columnIndex={pinnedStart.indexOf(column)}
-          column={column}
-        />
-      ))}
+      {pinnedStart.length > 0 ? (
+        <td
+          data-pinned-region="start"
+          role="presentation"
+          style={pinnedRegionStyle("start", totalColumnWidth(pinnedStart))}
+        >
+          <div style={{ display: "flex" }}>
+            {pinnedStart.map((column, index) => (
+              <ClientCell
+                key={column.columnId}
+                regionCell
+                row={row}
+                rowId={rowId}
+                rowIndex={top / ROW_HEIGHT}
+                instanceId={instanceId}
+                tableId={tableId}
+                columnIndex={index}
+                column={column}
+              />
+            ))}
+          </div>
+        </td>
+      ) : null}
       {leftPadding > 0 ? (
         <td aria-hidden="true" style={{ padding: 0, width: leftPadding }} />
       ) : null}
@@ -869,6 +971,7 @@ const ClientRow = memo(function ClientRow({
           row={row}
           rowId={rowId}
           rowIndex={top / ROW_HEIGHT}
+          instanceId={instanceId}
           tableId={tableId}
           columnIndex={pinnedStartCount + centerStartIndex + center.indexOf(column)}
           column={column}
@@ -877,58 +980,29 @@ const ClientRow = memo(function ClientRow({
       {rightPadding > 0 ? (
         <td aria-hidden="true" style={{ padding: 0, width: rightPadding }} />
       ) : null}
-      {pinnedEnd.map((column) => (
-        <ClientSemanticCell
-          key={column.columnId}
-          row={row}
-          rowId={rowId}
-          rowIndex={top / ROW_HEIGHT}
-          tableId={tableId}
-          columnIndex={pinnedStartCount + centerCount + pinnedEnd.indexOf(column)}
-          column={column}
-        />
-      ))}
-    </tr>
-  );
-});
-
-const PinnedRow = memo(function PinnedRow({
-  rowId,
-  rowIndex: _rowIndex,
-  runtime,
-  columns,
-  top,
-  width,
-}: {
-  readonly rowId: string;
-  readonly rowIndex: number;
-  readonly runtime: BrunoTableClientRuntimeView;
-  readonly columns: readonly CompiledColumn[];
-  readonly top: number;
-  readonly width: number;
-}) {
-  const row = useSyncExternalStore(
-    (listener) => runtime.subscribeRow(rowId, listener),
-    () => runtime.getRowSnapshot(rowId),
-    () => runtime.getRowSnapshot(rowId),
-  );
-  if (row === undefined) return null;
-  return (
-    <tr
-      style={{
-        display: "table",
-        height: ROW_HEIGHT,
-        maxHeight: ROW_HEIGHT,
-        overflow: "hidden",
-        position: "absolute",
-        tableLayout: "fixed",
-        top,
-        width,
-      }}
-    >
-      {columns.map((column) => (
-        <ClientCell key={column.columnId} row={row} rowId={rowId} column={column} />
-      ))}
+      {pinnedEnd.length > 0 ? (
+        <td
+          data-pinned-region="end"
+          role="presentation"
+          style={pinnedRegionStyle("end", totalColumnWidth(pinnedEnd))}
+        >
+          <div style={{ display: "flex" }}>
+            {pinnedEnd.map((column, index) => (
+              <ClientCell
+                key={column.columnId}
+                regionCell
+                row={row}
+                rowId={rowId}
+                rowIndex={top / ROW_HEIGHT}
+                instanceId={instanceId}
+                tableId={tableId}
+                columnIndex={pinnedStartCount + centerCount + index}
+                column={column}
+              />
+            ))}
+          </div>
+        </td>
+      ) : null}
     </tr>
   );
 });
@@ -937,107 +1011,89 @@ const ClientCell = memo(function ClientCell({
   row,
   rowId,
   rowIndex: _rowIndex,
+  instanceId,
   tableId,
   columnIndex,
   column,
+  regionCell = false,
   style,
 }: {
   readonly row: unknown;
   readonly rowId: string;
   readonly rowIndex?: number;
+  readonly instanceId?: string;
   readonly tableId?: string;
   readonly columnIndex?: number;
   readonly column: CompiledColumn;
+  readonly regionCell?: boolean;
   readonly style?: CSSProperties;
 }) {
   const value = readCompiledColumnValue(column, row);
   const className = resolveCellClassName(column, row, value);
-  const rendered = resolveCellRenderer(column, row, value);
-  return (
-    <td
-      role="gridcell"
-      {...(tableId === undefined || columnIndex === undefined
-        ? {}
-        : { id: cellDomId(tableId, rowId, column.columnId) })}
-      aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
-      className={className}
+  const content =
+    column.cellRenderer === undefined
+      ? resolveCellText(column, row, value)
+      : resolveCellRenderer(column, row, value);
+  const id =
+    instanceId === undefined || tableId === undefined || columnIndex === undefined
+      ? undefined
+      : cellDomId(instanceId, tableId, rowId, column.columnId);
+  const cellStyle: CSSProperties = {
+    boxSizing: "border-box",
+    height: ROW_HEIGHT,
+    maxHeight: ROW_HEIGHT,
+    overflow: "hidden",
+    padding: 0,
+    textAlign: column.semantics.cellAlign,
+    width: column.semantics.width,
+    ...style,
+  };
+  const cellContent = (
+    <div
       style={{
         boxSizing: "border-box",
         height: ROW_HEIGHT,
         maxHeight: ROW_HEIGHT,
         overflow: "hidden",
-        padding: 0,
-        textAlign: column.semantics.cellAlign,
-        width: column.semantics.width,
-        ...style,
+        width: "100%",
       }}
     >
-      <div
-        style={{
-          boxSizing: "border-box",
-          height: ROW_HEIGHT,
-          maxHeight: ROW_HEIGHT,
-          overflow: "hidden",
-          width: "100%",
-        }}
-      >
-        {rendered ?? resolveCellText(column, row, value)}
-      </div>
-    </td>
+      {content}
+    </div>
   );
-});
-
-const ClientSemanticCell = memo(function ClientSemanticCell({
-  row,
-  rowId,
-  rowIndex: _rowIndex,
-  tableId,
-  columnIndex,
-  column,
-}: {
-  readonly row: unknown;
-  readonly rowId: string;
-  readonly rowIndex?: number;
-  readonly tableId: string;
-  readonly columnIndex: number;
-  readonly column: CompiledColumn;
-}) {
-  const value = readCompiledColumnValue(column, row);
-  return (
-    <td
+  return regionCell ? (
+    <div
+      id={id}
+      aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
+      className={className}
       role="gridcell"
-      id={cellDomId(tableId, rowId, column.columnId)}
-      aria-colindex={columnIndex + 1}
-      style={{
-        color: "transparent",
-        height: ROW_HEIGHT,
-        maxHeight: ROW_HEIGHT,
-        opacity: 0,
-        padding: 0,
-        pointerEvents: "none",
-      }}
+      style={cellStyle}
     >
-      <div style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT, overflow: "hidden" }}>
-        {resolveCellText(column, row, value)}
-      </div>
+      {cellContent}
+    </div>
+  ) : (
+    <td
+      id={id}
+      aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
+      className={className}
+      role="gridcell"
+      style={cellStyle}
+    >
+      {cellContent}
     </td>
   );
 });
 
-function pinnedCellStyle(
-  side: "start" | "end",
-  column: CompiledColumn,
-  columns: readonly CompiledColumn[],
-): CSSProperties {
-  const index = columns.indexOf(column);
-  const offset = columns
-    .slice(side === "start" ? 0 : index + 1, side === "start" ? index : undefined)
-    .reduce((total, item) => total + item.semantics.width, 0);
+function pinnedRegionStyle(side: "start" | "end", width: number): CSSProperties {
   return {
     background: "Canvas",
+    boxSizing: "border-box",
+    minWidth: width,
+    padding: 0,
     position: "sticky",
-    zIndex: 2,
-    ...(side === "start" ? { left: offset } : { right: offset }),
+    width,
+    zIndex: 3,
+    ...(side === "start" ? { left: 0 } : { right: 0 }),
   };
 }
 
@@ -1065,10 +1121,10 @@ function rowOrderChanged(
   nextRowIds: readonly string[],
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
-  initialOrderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
+  orderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
 ): boolean {
   if (!sameRowIds(previousRowIds, nextRowIds)) return true;
-  const relevantIds = new Set(initialOrderBy.map((sort) => sort.columnId));
+  const relevantIds = new Set(orderBy.map((sort) => sort.columnId));
   for (const filter of filters ?? EMPTY_ORDER_BY) collectFilterColumnIds(filter, relevantIds);
   const relevantColumns = columns.filter((column) => relevantIds.has(column.columnId));
   if (relevantColumns.length === 0) return false;
@@ -1148,14 +1204,88 @@ function resolveCellRenderer(
 
 function LoadingRows({ count }: { readonly count: number }) {
   return (
-    <div aria-label="Loading table rows" role="region">
-      {Array.from({ length: count }, (_, index) => (
-        <div key={index} role="row" style={{ height: ROW_HEIGHT }}>
-          <Skeleton aria-label="Loading row" style={{ height: ROW_HEIGHT - 8, margin: 4 }} />
-        </div>
-      ))}
+    <div
+      aria-busy="true"
+      aria-colcount={1}
+      aria-label="Loading table rows"
+      aria-rowcount={count}
+      role="grid"
+    >
+      <div role="rowgroup">
+        {Array.from({ length: count }, (_, index) => (
+          <div key={index} aria-rowindex={index + 1} role="row" style={{ height: ROW_HEIGHT }}>
+            <div role="gridcell">
+              <Skeleton aria-label="Loading row" style={{ height: ROW_HEIGHT - 8, margin: 4 }} />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-const EMPTY_ORDER_BY: readonly never[] = [];
+type BrunoTableToolbarSnapshot = Readonly<{
+  readonly children: ReactNode;
+  readonly hasToolbar: boolean;
+}>;
+
+class BrunoTableToolbarStore {
+  private readonly listeners = new Set<() => void>();
+  private snapshot: BrunoTableToolbarSnapshot;
+
+  public constructor(children: ReactNode) {
+    this.snapshot = createToolbarSnapshot(children);
+  }
+
+  public readonly getSnapshot = (): BrunoTableToolbarSnapshot => this.snapshot;
+
+  public readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  public readonly publish = (children: ReactNode): void => {
+    if (sameToolbarNode(this.snapshot.children, children)) return;
+    this.snapshot = createToolbarSnapshot(children);
+    for (const listener of this.listeners) listener();
+  };
+}
+
+function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
+  return Object.freeze({ children, hasToolbar: hasRenderableChildren(children) });
+}
+
+function sameToolbarNode(previous: ReactNode, next: ReactNode): boolean {
+  if (Object.is(previous, next)) return true;
+  if (isValidElement(previous) && isValidElement(next)) {
+    if (previous.type !== next.type || previous.key !== next.key) return false;
+    return sameToolbarProps(
+      previous as ReactElement<Readonly<Record<string, unknown>>>,
+      next as ReactElement<Readonly<Record<string, unknown>>>,
+    );
+  }
+  if (Array.isArray(previous) && Array.isArray(next)) {
+    return (
+      previous.length === next.length &&
+      previous.every((child, index) => sameToolbarNode(child, next[index]))
+    );
+  }
+  return false;
+}
+
+function sameToolbarProps(
+  previous: ReactElement<Readonly<Record<string, unknown>>>,
+  next: ReactElement<Readonly<Record<string, unknown>>>,
+): boolean {
+  const previousKeys = Object.keys(previous.props);
+  const nextKeys = Object.keys(next.props);
+  if (previousKeys.length !== nextKeys.length) return false;
+  return previousKeys.every((key) => {
+    if (!Object.hasOwn(next.props, key)) return false;
+    return key === "children"
+      ? sameToolbarNode(previous.props[key] as ReactNode, next.props[key] as ReactNode)
+      : Object.is(previous.props[key], next.props[key]);
+  });
+}
+
+const EMPTY_ORDER_BY: readonly never[] = Object.freeze([]);
