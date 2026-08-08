@@ -3,6 +3,10 @@ import { cleanup, render } from "vitest-browser-react";
 import { useEffect } from "react";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import {
+  BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
+  BRUNO_TABLE_ROW_HEIGHT,
+} from "./internal/virtual-viewport";
 
 type Row = {
   readonly id: string;
@@ -166,6 +170,18 @@ describe("BrunoTableClient browser surface", () => {
       .toHaveTextContent("Ada");
   });
 
+  test("keeps narrow header and body cells on identical fixed column geometry", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const header = screen.getByRole("columnheader", { name: "Name" }).element();
+    const bodyCell = screen.getByRole("gridcell", { name: "Grace" }).element();
+    const headerBounds = header.getBoundingClientRect();
+    const bodyBounds = bodyCell.getBoundingClientRect();
+
+    expect(Math.abs(headerBounds.left - bodyBounds.left)).toBeLessThanOrEqual(2);
+    expect(Math.abs(headerBounds.width - bodyBounds.width)).toBeLessThanOrEqual(2);
+    expect(header.closest("table")?.style.minWidth).toBe("");
+  });
+
   test("keeps the canonical row identity tie-break ascending under descending sorts", async () => {
     const tiedRows = [
       { id: "z-row", name: "Zulu", score: 4 },
@@ -184,6 +200,57 @@ describe("BrunoTableClient browser surface", () => {
       .toHaveTextContent("Alpha");
   });
 
+  test("routes undefined and null sorting through BrunoTable value semantics", async () => {
+    type OptionalRow = {
+      readonly id: string;
+      readonly name: string;
+      readonly score?: number | null;
+    };
+    const optionalColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ] as const;
+    const optionalRows = [
+      { id: "z-undefined", name: "Undefined" },
+      { id: "a-null", name: "Null", score: null },
+      { id: "m-number", name: "Number", score: 1 },
+    ] satisfies readonly OptionalRow[];
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_OPTIONAL"
+        getRowId={(row: OptionalRow) => row.id}
+        columns={optionalColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{
+          rows: optionalRows,
+          totalRows: optionalRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await expect
+      .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Null");
+    await expect
+      .element(screen.getByRole("row").nth(2).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Undefined");
+    await expect
+      .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Number");
+  });
+
   test("renders loading skeletons and rejects an incomplete ready source visibly", async () => {
     const screen = await render(
       <BrunoTableClient
@@ -199,7 +266,18 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
-        clientSource={{ rows: [rows[0]!], totalRows: 2, version: 2, status: "ready" }}
+        clientSource={{ rows, totalRows: rows.length, version: 2, status: "loading" }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [rows[0]!], totalRows: 2, version: 3, status: "ready" }}
       />,
     );
     await expect
@@ -209,7 +287,7 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
-        clientSource={{ rows: [], totalRows: 0, version: 3, status: "stale", message: "Delayed" }}
+        clientSource={{ rows: [], totalRows: 0, version: 4, status: "stale", message: "Delayed" }}
       />,
     );
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
@@ -395,6 +473,45 @@ describe("BrunoTableClient browser surface", () => {
     expect(screen.getByRole("row").all().length).toBeLessThan(30);
   });
 
+  test(
+    "reports logical aria row indexes after physical scroll-space compression",
+    { timeout: 30_000 },
+    async () => {
+      const rowCount = Math.floor(BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT / BRUNO_TABLE_ROW_HEIGHT + 2);
+      const compressedRows = Array.from({ length: rowCount }, (_, index) => ({
+        id: `row-${String(index).padStart(6, "0")}`,
+        name: `Row ${index}`,
+        score: index,
+      })) satisfies readonly Row[];
+      const screen = await render(
+        <BrunoTableClient {...props} clientSource={readySource(compressedRows)} />,
+      );
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+
+      grid.element().scrollTop = grid.element().scrollHeight;
+      grid.element().dispatchEvent(new Event("scroll"));
+      const suffixCell = screen.getByRole("gridcell", { name: `Row ${rowCount - 1}` });
+      await expect.element(suffixCell).toBeInTheDocument();
+
+      expect(suffixCell.element().closest('[role="row"]')?.getAttribute("aria-rowindex")).toBe(
+        String(rowCount + 1),
+      );
+      const mountedRows = screen.getByRole("row").all();
+      const penultimate = mountedRows.find(
+        (row) => row.element().getAttribute("aria-rowindex") === String(rowCount),
+      );
+      const last = mountedRows.find(
+        (row) => row.element().getAttribute("aria-rowindex") === String(rowCount + 1),
+      );
+      expect(
+        Math.abs(
+          last!.element().getBoundingClientRect().top -
+            penultimate!.element().getBoundingClientRect().top,
+        ),
+      ).toBe(BRUNO_TABLE_ROW_HEIGHT);
+    },
+  );
+
   test("bounds mounted centre columns for a wide resident source", async () => {
     const screen = await render(
       <BrunoTableClient
@@ -554,6 +671,18 @@ describe("BrunoTableClient browser surface", () => {
     expect(Math.abs(gridBounds.right - endBounds.right)).toBeLessThanOrEqual(2);
     expect(endBounds.height).toBe(36);
     expect(centerBounds.height).toBe(36);
+    const headerLayer = screen
+      .getByRole("columnheader", { name: "Pinned end" })
+      .element()
+      .closest("thead");
+    const bodyPinnedLayer = screen
+      .getByRole("gridcell", { name: "Grace" })
+      .nth(0)
+      .element()
+      .closest('[data-pinned-region="start"]');
+    expect(Number(headerLayer?.style.zIndex)).toBeGreaterThan(
+      Number((bodyPinnedLayer as HTMLElement | null)?.style.zIndex),
+    );
   });
 
   test("renders boolean values as read-only checkbox semantics", async () => {
@@ -674,29 +803,27 @@ describe("BrunoTableClient browser surface", () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const region = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
     region.element().focus();
+    const graceRow = screen.getByRole("row").nth(1);
+    const graceNameId = graceRow.getByRole("gridcell").nth(0).element().id;
+    const graceScoreId = graceRow.getByRole("gridcell").nth(1).element().id;
+    const adaScoreId = screen.getByRole("row").nth(2).getByRole("gridcell").nth(1).element().id;
     await vi.waitFor(() =>
-      expect(region.element().getAttribute("aria-activedescendant")).toContain(
-        "TABLE_ID_PEOPLE-grace-COL_ID_NAME",
-      ),
+      expect(region.element().getAttribute("aria-activedescendant")).toBe(graceNameId),
     );
     const firstActiveId = region.element().getAttribute("aria-activedescendant");
-    expect(firstActiveId).toContain("TABLE_ID_PEOPLE-grace-COL_ID_NAME");
+    expect(firstActiveId).toBe(graceNameId);
 
     region
       .element()
       .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
     await vi.waitFor(() => {
-      expect(region.element().getAttribute("aria-activedescendant")).toContain(
-        "TABLE_ID_PEOPLE-grace-COL_ID_SCORE",
-      );
+      expect(region.element().getAttribute("aria-activedescendant")).toBe(graceScoreId);
     });
     region
       .element()
       .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() => {
-      expect(region.element().getAttribute("aria-activedescendant")).toContain(
-        "TABLE_ID_PEOPLE-ada-COL_ID_SCORE",
-      );
+      expect(region.element().getAttribute("aria-activedescendant")).toBe(adaScoreId);
     });
   });
 
@@ -718,6 +845,27 @@ describe("BrunoTableClient browser surface", () => {
     expect(firstId).not.toBe(secondId);
   });
 
+  test("builds total DOM identities for lone UTF-16 surrogates", async () => {
+    const unsafe = "\ud800";
+    const screen = await render(
+      <BrunoTableClient
+        tableId={`TABLE_ID_${unsafe}`}
+        getRowId={() => unsafe}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={readySource([{ id: unsafe, name: "Surrogate", score: 1 }])}
+      />,
+    );
+    const grid = screen.getByRole("grid");
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+
+    expect(activeId).toMatch(/^[a-z0-9-]+$/u);
+    expect(document.getElementById(activeId!)).not.toBeNull();
+  });
+
   test("preserves complete active-cell semantics after virtualization unmounts it", async () => {
     const largeRows = Array.from({ length: 100 }, (_, index) => ({
       id: `row-${index}`,
@@ -735,6 +883,43 @@ describe("BrunoTableClient browser surface", () => {
     const proxyCell = screen.getByRole("gridcell", { name: "Row 0" });
     await expect.element(proxyCell).toHaveAttribute("aria-colindex", "1");
     expect(proxyCell.element().parentElement?.getAttribute("aria-rowindex")).toBe("2");
+  });
+
+  test("makes interactive custom-renderer proxies inert while retaining a cell name", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const interactiveColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <button type="button">Open {row.name}</button>
+        ),
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_PROXY_ACTION"
+        getRowId={(row: Row) => row.id}
+        columns={interactiveColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource(largeRows)}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PROXY_ACTION" });
+    grid.element().focus();
+    await grid.wheel({ delta: { y: 1200 } });
+
+    const proxyCell = screen.getByRole("gridcell", { name: "Row 0" });
+    await vi.waitFor(() => {
+      const hiddenButton = proxyCell.element().querySelector("button");
+      expect(hiddenButton === null || hiddenButton.closest("[inert]") !== null).toBe(true);
+    });
+    await expect
+      .element(screen.getByRole("button", { name: "Open Row 0" }))
+      .not.toBeInTheDocument();
   });
 
   test("preserves boolean checkbox semantics in a virtualized active-cell proxy", async () => {
@@ -794,6 +979,15 @@ describe("BrunoTableClient browser surface", () => {
     );
     await expect.element(screen.getByRole("gridcell", { name: "Grace" })).not.toBeInTheDocument();
 
+    expect(screen.getByRole("button", { name: "Clear filter for Name" }).element().tabIndex).toBe(
+      -1,
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Sort by Score, currently ascending, priority 1" })
+        .element().tabIndex,
+    ).toBe(-1);
+
     await screen.getByRole("button", { name: "Clear filter for Name" }).click();
     await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
     await screen.getByRole("button", { name: "Reset filter for Name" }).click();
@@ -822,6 +1016,38 @@ describe("BrunoTableClient browser surface", () => {
       .not.toHaveAttribute("aria-sort");
   });
 
+  test("activates the logical header with Enter and preserves sticky-header scroll", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(largeRows)} />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    grid.element().scrollTop = 720;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const scrollTop = grid.element().scrollTop;
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }));
+    grid
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(grid.element().scrollTop).toBe(scrollTop);
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    await expect
+      .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Row 99");
+  });
+
   test("reinstalls navigation after a query whose row order is unchanged", async () => {
     const screen = await render(
       <BrunoTableClient {...props} clientSource={readySource([rows[0]!])} />,
@@ -835,10 +1061,9 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("button", { name: "Sort by Score, currently ascending, priority 1" })
       .click();
 
+    const adaNameId = screen.getByRole("gridcell", { name: "Ada" }).element().id;
     await vi.waitFor(() =>
-      expect(grid.element().getAttribute("aria-activedescendant")).toContain(
-        "TABLE_ID_PEOPLE-ada-COL_ID_NAME",
-      ),
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(adaNameId),
     );
   });
 
@@ -866,8 +1091,8 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("button", { name: "Sort by Score, currently ascending, priority 1" })
       .click();
     await vi.waitFor(() => expect(grid.element().scrollTop).toBe(0));
-    expect(grid.element().getAttribute("aria-activedescendant")).toContain(
-      "TABLE_ID_PEOPLE-row-99-COL_ID_NAME",
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+      screen.getByRole("gridcell", { name: "Row 99" }).element().id,
     );
   });
 

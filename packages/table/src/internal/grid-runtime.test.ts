@@ -281,6 +281,16 @@ describe("BrunoTableClientRuntime", () => {
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });
 
+  it("keeps complete authoritative rows visible during loading refreshes", () => {
+    const row = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([], "loading", { totalRows: 1 }));
+
+    runtime.publish(source([row], "loading", { totalRows: 1 }));
+
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getRowSnapshot("first")).toBe(row);
+  });
+
   it("owns live non-empty sorting and reversible initial filter commands", () => {
     const columns = compileColumns([
       {

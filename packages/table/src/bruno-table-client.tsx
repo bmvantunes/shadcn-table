@@ -78,11 +78,19 @@ function navigationDelta(
 }
 
 function cellDomId(instanceId: string, tableId: string, rowId: string, columnId: string): string {
-  return `bruno-table-cell-${encodeURIComponent(instanceId)}-${encodeURIComponent(tableId)}-${encodeURIComponent(rowId)}-${columnId}`;
+  return `bruno-table-cell-${encodeDomIdSegment(instanceId)}-${encodeDomIdSegment(tableId)}-${encodeDomIdSegment(rowId)}-${encodeDomIdSegment(columnId)}`;
 }
 
 function headerDomId(instanceId: string, tableId: string, columnId: string): string {
-  return `bruno-table-header-${encodeURIComponent(instanceId)}-${encodeURIComponent(tableId)}-${columnId}`;
+  return `bruno-table-header-${encodeDomIdSegment(instanceId)}-${encodeDomIdSegment(tableId)}-${encodeDomIdSegment(columnId)}`;
+}
+
+function encodeDomIdSegment(value: string): string {
+  let encoded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    encoded += value.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return encoded;
 }
 
 function activeDomId(
@@ -494,7 +502,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly navigation: BrunoTableNavigationRuntime;
-  readonly revealCell: (rowIndex: number, columnId: string) => void;
+  readonly revealCell: (rowIndex: number, columnId: string, region?: "header" | "body") => void;
 }) {
   const virtualWindow = viewportSnapshot.virtualWindow;
   const tableWidth = virtualWindow.totalWidth;
@@ -532,12 +540,29 @@ const ClientGridSurface = memo(function ClientGridSurface({
       }
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          const active = navigation.getSnapshot();
+          const column = logicalColumns.find(
+            (candidate) => candidate.columnId === active?.columnId,
+          );
+          if (active?.region !== "header" || column === undefined) return;
+          const command = runtime.getColumnCommandSnapshot(column.columnId);
+          if (command.sortable) {
+            event.preventDefault();
+            runtime.toggleColumnSort(column.columnId, event.shiftKey);
+          } else if (command.filterBaselineAvailable) {
+            event.preventDefault();
+            if (command.filterActive) runtime.clearColumnFilters(column.columnId);
+            else runtime.resetColumnFilters(column.columnId);
+          }
+          return;
+        }
         const delta = navigationDelta(event.key);
         if (delta === undefined) return;
         event.preventDefault();
         navigation.move(delta.row, delta.column);
         const next = navigation.getSnapshot();
-        if (next !== undefined) revealCell(next.rowIndex, next.columnId);
+        if (next !== undefined) revealCell(next.rowIndex, next.columnId, next.region);
       }}
       style={{
         maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
@@ -545,10 +570,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
         position: "relative",
       }}
     >
-      <table
-        role="presentation"
-        style={{ minWidth: "100%", tableLayout: "fixed", width: tableWidth }}
-      >
+      <table role="presentation" style={{ tableLayout: "fixed", width: tableWidth }}>
         <thead
           role="rowgroup"
           style={{
@@ -556,7 +578,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
             position: "sticky",
             top: 0,
             width: tableWidth,
-            zIndex: 1,
+            zIndex: 4,
           }}
         >
           <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
@@ -653,7 +675,8 @@ const ClientGridSurface = memo(function ClientGridSurface({
               pinnedEnd={virtualWindow.pinnedEnd}
               leftPadding={virtualWindow.leftPadding}
               rightPadding={virtualWindow.rightPadding}
-              top={(virtualWindow.rowStart + offset) * ROW_HEIGHT}
+              logicalRowIndex={virtualWindow.rowStart + offset}
+              top={offset * ROW_HEIGHT}
               width={tableWidth}
             />
           ))}
@@ -717,6 +740,7 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
       {command.sortable ? (
         <Button
           aria-label={sortLabel}
+          tabIndex={-1}
           size="xs"
           type="button"
           variant="ghost"
@@ -733,6 +757,7 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
       {command.filterBaselineAvailable ? (
         <Button
           aria-label={`${command.filterActive ? "Clear" : "Reset"} filter for ${column.headerName}`}
+          tabIndex={-1}
           size="xs"
           type="button"
           variant="ghost"
@@ -808,18 +833,35 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   }
 
   const value = row === undefined ? undefined : readCompiledColumnValue(column, row);
+  const content = row === undefined ? "Unavailable row" : resolveCellContent(column, row, value);
+  const customProxy = row !== undefined && column.cellRenderer !== undefined;
+  const customProxyHasContent =
+    customProxy && content !== null && content !== undefined && content !== false && content !== "";
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
         id={cellDomId(instanceId, tableId, rowId, column.columnId)}
         aria-colindex={columnIndex + 1}
+        aria-label={customProxyHasContent ? resolveCellText(column, row, value) : undefined}
         role="gridcell"
       >
-        {row === undefined ? "Unavailable row" : resolveCellContent(column, row, value)}
+        {customProxyHasContent ? <InertProxyContent>{content}</InertProxyContent> : content}
       </div>
     </div>
   );
 });
+
+function InertProxyContent({ children }: { readonly children: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (ref.current !== null) ref.current.inert = true;
+  }, []);
+  return (
+    <span ref={ref} aria-hidden="true">
+      {children}
+    </span>
+  );
+}
 
 const ClientRow = memo(function ClientRow({
   rowId,
@@ -834,6 +876,7 @@ const ClientRow = memo(function ClientRow({
   pinnedEnd,
   leftPadding,
   rightPadding,
+  logicalRowIndex,
   top,
   width,
 }: {
@@ -849,6 +892,7 @@ const ClientRow = memo(function ClientRow({
   readonly pinnedEnd: readonly CompiledColumn[];
   readonly leftPadding: number;
   readonly rightPadding: number;
+  readonly logicalRowIndex: number;
   readonly top: number;
   readonly width: number;
 }) {
@@ -863,7 +907,7 @@ const ClientRow = memo(function ClientRow({
   return (
     <tr
       role="row"
-      aria-rowindex={top / ROW_HEIGHT + 2}
+      aria-rowindex={logicalRowIndex + 2}
       style={{
         display: "table",
         height: ROW_HEIGHT,
@@ -871,7 +915,7 @@ const ClientRow = memo(function ClientRow({
         overflow: "hidden",
         position: "absolute",
         tableLayout: "fixed",
-        top,
+        top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${top}px)`,
         width,
       }}
     >

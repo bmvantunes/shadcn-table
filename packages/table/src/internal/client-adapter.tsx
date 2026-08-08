@@ -69,6 +69,7 @@ function buildAdapterColumns(
     id: column.columnId,
     header: column.headerName,
     accessorFn: (row: AdapterRow) => readCompiledColumnValue(column, row),
+    sortUndefined: false,
     sortFn: (rowA, rowB) => {
       const comparison = column.semantics.compare(
         rowA.getValue(column.columnId),

@@ -393,15 +393,15 @@ export class BrunoTableClientRuntime<TRow> {
     });
 
     let body: BrunoTableClientBodySnapshot;
-    if (sourceSnapshot.status === "loading") {
+    if (hasCoherentRows && coherent !== undefined && coherent.rows.length > 0) {
+      body = Object.freeze({ kind: "rows" });
+    } else if (sourceSnapshot.status === "loading" && coherent === undefined) {
       body = Object.freeze({
         kind: "loading",
         skeletonCount: skeletonCount(sourceSnapshot.totalRows),
       });
     } else if (incomplete && coherent === undefined) {
       body = Object.freeze({ kind: "invalid" });
-    } else if (hasCoherentRows && coherent !== undefined && coherent.rows.length > 0) {
-      body = Object.freeze({ kind: "rows" });
     } else {
       body = Object.freeze({
         kind: "empty",

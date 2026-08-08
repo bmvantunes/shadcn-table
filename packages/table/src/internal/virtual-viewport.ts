@@ -24,6 +24,7 @@ type Listener = () => void;
 
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
+export const BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT = 4_000_000;
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_OVERSCAN = 4;
@@ -40,7 +41,15 @@ type ViewportLayout = Readonly<{
   readonly pinnedStartWidth: number;
   readonly pinnedEndWidth: number;
   readonly centerWidth: number;
+  readonly logicalRowHeight: number;
+  readonly physicalRowHeight: number;
   readonly totalWidth: number;
+}>;
+
+type RevealTarget = Readonly<{
+  readonly rowIndex: number;
+  readonly columnId: string;
+  readonly region: "header" | "body";
 }>;
 
 const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
@@ -56,6 +65,10 @@ export class BrunoTableViewportRuntime {
   private element: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private frame: number | null = null;
+  private pendingReveal: RevealTarget | undefined;
+  private segmentLogicalBase = 0;
+  private segmentPhysicalAnchor = 0;
+  private lastPhysicalScrollTop = 0;
   private layout: ViewportLayout = createLayout(0, []);
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private layoutKey = "";
@@ -75,13 +88,16 @@ export class BrunoTableViewportRuntime {
       .map((column) => `${column.columnId}:${column.pinned ?? "center"}:${column.semantics.width}`)
       .join(",")}`;
     if (nextLayoutKey === this.layoutKey && this.layoutColumns === columns) return;
+    const element = this.element;
+    const previousLogicalScrollTop =
+      element === null ? 0 : this.readLogicalScrollTop(element, false);
     this.layoutKey = nextLayoutKey;
     this.layoutColumns = columns;
     this.layout = createLayout(rowCount, columns);
-    if (this.element === null) {
+    if (element === null) {
       this.publishSnapshot(
         createViewportSnapshot(this.layout, {
-          scrollTop: 0,
+          logicalScrollTop: 0,
           scrollLeft: 0,
           width: 0,
           height: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
@@ -89,6 +105,7 @@ export class BrunoTableViewportRuntime {
       );
       return;
     }
+    this.setLogicalScrollTop(element, previousLogicalScrollTop);
     this.publishFromElement();
   };
 
@@ -103,23 +120,36 @@ export class BrunoTableViewportRuntime {
     for (const listener of this.listeners) listener();
   }
 
-  public readonly revealCell = (rowIndex: number, columnId: string): void => {
+  public readonly revealCell = (
+    rowIndex: number,
+    columnId: string,
+    region: "header" | "body" = "body",
+  ): void => {
+    if (this.element === null) return;
+    this.pendingReveal = Object.freeze({ rowIndex, columnId, region });
+    this.schedulePublish();
+  };
+
+  private applyReveal(target: RevealTarget): void {
     const element = this.element;
-    const column = this.layout.columns.find((candidate) => candidate.columnId === columnId);
+    const column = this.layout.columns.find((candidate) => candidate.columnId === target.columnId);
     if (element === null || column === undefined) return;
-    const nextTop = rowIndex * ROW_HEIGHT;
-    const headerInset = ROW_HEIGHT;
-    const rowTop = headerInset + nextTop;
-    const rowBottom = rowTop + ROW_HEIGHT;
-    const visibleTop = element.scrollTop + headerInset;
-    const visibleBottom = element.scrollTop + element.clientHeight;
-    if (rowTop < visibleTop) element.scrollTop = Math.max(rowTop - headerInset, 0);
-    else if (rowBottom > visibleBottom) {
-      element.scrollTop = Math.max(rowBottom - element.clientHeight, 0);
+    if (target.region === "body") {
+      const logicalScrollTop = this.readLogicalScrollTop(element, false);
+      const rowTop = ROW_HEIGHT + target.rowIndex * ROW_HEIGHT;
+      const rowBottom = rowTop + ROW_HEIGHT;
+      const visibleTop = logicalScrollTop + ROW_HEIGHT;
+      const visibleBottom = logicalScrollTop + element.clientHeight;
+      let nextLogicalScrollTop = logicalScrollTop;
+      if (rowTop < visibleTop) nextLogicalScrollTop = Math.max(rowTop - ROW_HEIGHT, 0);
+      else if (rowBottom > visibleBottom) {
+        nextLogicalScrollTop = Math.max(rowBottom - element.clientHeight, 0);
+      }
+      this.setLogicalScrollTop(element, nextLogicalScrollTop);
     }
     if (column.pinned !== undefined) return;
     const centerIndex = this.layout.center.findIndex(
-      (candidate) => candidate.columnId === columnId,
+      (candidate) => candidate.columnId === target.columnId,
     );
     const centerOffset = this.layout.centerOffsets[centerIndex] ?? 0;
     const centerEnd = centerOffset + column.semantics.width;
@@ -141,11 +171,14 @@ export class BrunoTableViewportRuntime {
     } else if (centerEnd > centerScrollLeft + centerViewportWidth) {
       element.scrollLeft = centerEnd - centerViewportWidth;
     }
-    this.publishFromElement();
-  };
+  }
 
   public readonly resetVertical = (): void => {
     if (this.element === null) return;
+    this.pendingReveal = undefined;
+    this.segmentLogicalBase = 0;
+    this.segmentPhysicalAnchor = 0;
+    this.lastPhysicalScrollTop = 0;
     this.element.scrollTop = 0;
     this.publishFromElement();
   };
@@ -156,6 +189,9 @@ export class BrunoTableViewportRuntime {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.element = element;
+    this.segmentLogicalBase = 0;
+    this.segmentPhysicalAnchor = 0;
+    this.lastPhysicalScrollTop = element?.scrollTop ?? 0;
     this.element?.addEventListener("scroll", this.handleScroll, { passive: true });
     if (this.element !== null && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.handleResize);
@@ -171,6 +207,10 @@ export class BrunoTableViewportRuntime {
     this.element = null;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
+    this.pendingReveal = undefined;
+    this.segmentLogicalBase = 0;
+    this.segmentPhysicalAnchor = 0;
+    this.lastPhysicalScrollTop = 0;
   };
 
   private readonly handleScroll = (): void => this.schedulePublish();
@@ -179,23 +219,103 @@ export class BrunoTableViewportRuntime {
   private readonly schedulePublish = (): void => {
     if (this.frame !== null) return;
     this.frame = requestAnimationFrame(() => {
+      const reveal = this.pendingReveal;
+      this.pendingReveal = undefined;
+      if (reveal !== undefined) this.applyReveal(reveal);
       this.frame = null;
       this.publishFromElement();
+      if (this.pendingReveal !== undefined) this.schedulePublish();
     });
   };
+
+  private readLogicalScrollTop(element: HTMLElement, rebase: boolean): number {
+    const physicalMaximum = physicalScrollMaximum(this.layout, element.clientHeight);
+    const logicalMaximum = logicalScrollMaximum(this.layout, element.clientHeight);
+    if (logicalMaximum <= physicalMaximum || physicalMaximum === 0) {
+      this.segmentLogicalBase = 0;
+      this.segmentPhysicalAnchor = 0;
+      const logicalScrollTop = Math.min(Math.max(element.scrollTop, 0), logicalMaximum);
+      this.lastPhysicalScrollTop = element.scrollTop;
+      return logicalScrollTop;
+    }
+    if (rebase && element.scrollTop <= 0) {
+      this.setLogicalScrollTop(element, 0);
+      return 0;
+    }
+    if (rebase && element.scrollTop >= physicalMaximum - 1) {
+      this.setLogicalScrollTop(element, logicalMaximum);
+      return logicalMaximum;
+    }
+    if (
+      rebase &&
+      Math.abs(element.scrollTop - this.lastPhysicalScrollTop) >
+        Math.max(element.clientHeight * 4, ROW_HEIGHT * 20)
+    ) {
+      const proportionalLogicalScrollTop = (element.scrollTop / physicalMaximum) * logicalMaximum;
+      this.setLogicalScrollTop(element, proportionalLogicalScrollTop);
+      return proportionalLogicalScrollTop;
+    }
+    const logicalScrollTop = Math.min(
+      Math.max(this.segmentLogicalBase + element.scrollTop - this.segmentPhysicalAnchor, 0),
+      logicalMaximum,
+    );
+    if (
+      rebase &&
+      (element.scrollTop <= physicalMaximum * 0.2 || element.scrollTop >= physicalMaximum * 0.8)
+    ) {
+      this.setLogicalScrollTop(element, logicalScrollTop);
+    } else {
+      this.lastPhysicalScrollTop = element.scrollTop;
+    }
+    return logicalScrollTop;
+  }
+
+  private setLogicalScrollTop(element: HTMLElement, requestedLogicalScrollTop: number): void {
+    const physicalMaximum = physicalScrollMaximum(this.layout, element.clientHeight);
+    const logicalMaximum = logicalScrollMaximum(this.layout, element.clientHeight);
+    const logicalScrollTop = Math.min(Math.max(requestedLogicalScrollTop, 0), logicalMaximum);
+    let physicalScrollTop: number;
+    if (logicalMaximum <= physicalMaximum || physicalMaximum === 0) {
+      this.segmentLogicalBase = 0;
+      this.segmentPhysicalAnchor = 0;
+      physicalScrollTop = logicalScrollTop;
+    } else {
+      const edgeSpan = physicalMaximum * 0.75;
+      if (logicalScrollTop <= edgeSpan) {
+        this.segmentLogicalBase = 0;
+        this.segmentPhysicalAnchor = 0;
+        physicalScrollTop = logicalScrollTop;
+      } else if (logicalScrollTop >= logicalMaximum - edgeSpan) {
+        this.segmentLogicalBase = logicalMaximum - physicalMaximum;
+        this.segmentPhysicalAnchor = 0;
+        physicalScrollTop = logicalScrollTop - this.segmentLogicalBase;
+      } else {
+        const physicalAnchor = physicalMaximum / 2;
+        this.segmentLogicalBase = logicalScrollTop;
+        this.segmentPhysicalAnchor = physicalAnchor;
+        physicalScrollTop = physicalAnchor;
+      }
+    }
+    element.scrollTop = physicalScrollTop;
+    this.lastPhysicalScrollTop = physicalScrollTop;
+  }
 
   private readonly publishFromElement = (): void => {
     const element = this.element;
     if (element === null) return;
-    element.style.setProperty("--bruno-table-scroll-top", `${element.scrollTop}px`);
-    const scrollTop = quantizeScroll(element.scrollTop);
+    const logicalScrollTop = this.readLogicalScrollTop(element, true);
+    const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const scrollLeft = quantizeScroll(element.scrollLeft);
     const next = createViewportSnapshot(this.layout, {
-      scrollTop,
+      logicalScrollTop: structuralLogicalScrollTop,
       scrollLeft,
       width: element.clientWidth,
       height: element.clientHeight,
     });
+    element.style.setProperty(
+      "--bruno-table-row-layer-offset",
+      `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`,
+    );
     this.publishSnapshot(next);
   };
 }
@@ -203,7 +323,7 @@ export class BrunoTableViewportRuntime {
 function createViewportSnapshot(
   layout: ViewportLayout,
   viewport: Readonly<{
-    readonly scrollTop: number;
+    readonly logicalScrollTop: number;
     readonly scrollLeft: number;
     readonly width: number;
     readonly height: number;
@@ -219,17 +339,17 @@ function createViewportSnapshot(
 function calculateVirtualWindow(
   layout: ViewportLayout,
   viewport: Readonly<{
-    readonly scrollTop: number;
+    readonly logicalScrollTop: number;
     readonly scrollLeft: number;
     readonly width: number;
     readonly height: number;
   }>,
 ): BrunoTableVirtualWindow {
   const rowViewportHeight = viewport.height > 0 ? viewport.height : 480;
-  const rowStart = Math.max(Math.floor(viewport.scrollTop / ROW_HEIGHT) - ROW_OVERSCAN, 0);
+  const rowStart = Math.max(Math.floor(viewport.logicalScrollTop / ROW_HEIGHT) - ROW_OVERSCAN, 0);
   const rowEnd = Math.min(
     layout.rowCount,
-    Math.ceil((viewport.scrollTop + rowViewportHeight) / ROW_HEIGHT) + ROW_OVERSCAN,
+    Math.ceil((viewport.logicalScrollTop + rowViewportHeight) / ROW_HEIGHT) + ROW_OVERSCAN,
   );
   // Pinned columns occupy their original table slots while their visual regions are sticky.
   // The native offset consequently maps directly to the centre-column offset.
@@ -260,7 +380,7 @@ function calculateVirtualWindow(
     centerCount: layout.center.length,
     leftPadding,
     rightPadding: Math.max(layout.centerWidth - leftPadding - visibleWidth, 0),
-    totalHeight: layout.rowCount * ROW_HEIGHT,
+    totalHeight: layout.physicalRowHeight,
     totalWidth: layout.totalWidth,
   });
 }
@@ -297,6 +417,8 @@ function createLayout(rowCount: number, columns: readonly CompiledColumn[]): Vie
   const pinnedStartWidth = totalColumnWidth(pinnedStart);
   const pinnedEndWidth = totalColumnWidth(pinnedEnd);
   const centerWidth = centerOffsets.at(-1) ?? 0;
+  const logicalRowHeight = rowCount * ROW_HEIGHT;
+  const physicalRowHeight = Math.min(logicalRowHeight, BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT);
   return Object.freeze({
     rowCount,
     columns: normalizedColumns,
@@ -307,6 +429,8 @@ function createLayout(rowCount: number, columns: readonly CompiledColumn[]): Vie
     pinnedStartWidth,
     pinnedEndWidth,
     centerWidth,
+    logicalRowHeight,
+    physicalRowHeight,
     totalWidth: pinnedStartWidth + centerWidth + pinnedEndWidth,
   });
 }
@@ -325,6 +449,14 @@ function emptyVirtualWindow(): BrunoTableVirtualWindow {
     totalHeight: 0,
     totalWidth: 0,
   });
+}
+
+function physicalScrollMaximum(layout: ViewportLayout, viewportHeight: number): number {
+  return Math.max(layout.physicalRowHeight + ROW_HEIGHT - viewportHeight, 0);
+}
+
+function logicalScrollMaximum(layout: ViewportLayout, viewportHeight: number): number {
+  return Math.max(layout.logicalRowHeight + ROW_HEIGHT - viewportHeight, 0);
 }
 
 function totalColumnWidth(columns: readonly CompiledColumn[]): number {
