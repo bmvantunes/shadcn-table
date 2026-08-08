@@ -303,10 +303,13 @@ async function assertPackedConsumers() {
   try {
     const packageRoot = fileURLToPath(new URL("..", import.meta.url));
     runCommand("pnpm", ["pack", "--pack-destination", packRoot], packageRoot, "package tarball");
-    const tarball = join(packRoot, "bruno-table-0.0.0.tgz");
-    if (!existsSync(tarball)) {
-      throw new Error("pnpm pack did not produce the expected @bruno/table tarball.");
+    const tarballNames = (await readdir(packRoot)).filter((fileName) => fileName.endsWith(".tgz"));
+    if (tarballNames.length !== 1) {
+      throw new Error(
+        `pnpm pack produced ${tarballNames.length} tarballs; expected exactly one (${tarballNames.join(", ") || "none"}).`,
+      );
     }
+    const tarball = join(packRoot, tarballNames[0]);
 
     await assertPackedRootConsumer(tarball);
     await assertPackedEffectConsumer(tarball);
