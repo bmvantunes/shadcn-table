@@ -18,6 +18,6 @@ vp run -r build
 
 ## Review workflow
 
-Changes converge through three independent local reviews—standards and architecture, specification and domain correctness, and verification and regression safety. Blocking findings are fixed and all three reviews restart before a branch is published. After publication, required GitHub checks and GitHub Codex review must be clean; any resulting change goes through the complete local loop again.
+Changes converge through three independent local reviews—standards and architecture, specification and domain correctness, and verification and regression safety. Blocking findings are fixed and all three reviews restart before a branch is published. After publication, required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews must be clean; missing, pending, or skipped reviews are incomplete, and any resulting change goes through the complete local loop again.
 
 See [`docs/agents/code-review.md`](./docs/agents/code-review.md) for the authoritative workflow.

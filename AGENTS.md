@@ -63,7 +63,7 @@ Before opening or updating a pull request with repository changes, follow the lo
 2. Require every reviewer to label findings as blocking or non-blocking and to report explicit counts.
 3. Fix every blocking finding, rerun the relevant validation, then restart all three reviewers from the updated diff.
 4. Commit and push only after one complete round reports zero blockers from all three reviewers and required local checks pass.
-5. Wait for required GitHub checks and GitHub Codex review. Treat pending review as incomplete work.
+5. Wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. A missing, pending, or skipped Codex or CodeRabbit review is incomplete work; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
 6. After any code or documentation change made for remote feedback, rerun local validation and the complete three-reviewer loop before pushing again.
 7. Merge only when local reviewers, required checks, and required GitHub reviewers are clean.
 

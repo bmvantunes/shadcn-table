@@ -86,7 +86,7 @@ If the user authorized fixes or publication:
 3. Start a fresh round with all three reviewers against the updated complete target.
 4. Repeat until one complete round reports zero blockers on all axes and validation is green.
 5. Commit and push only after that clean round.
-6. Wait for required GitHub checks and GitHub Codex review.
+6. Wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. A missing, pending, or skipped Codex or CodeRabbit review is incomplete work; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
 7. If remote feedback causes any change, fix it locally, rerun validation, and restart the complete three-reviewer loop before pushing.
 8. Merge only when local review, required checks, and required GitHub reviews are clean.
 
