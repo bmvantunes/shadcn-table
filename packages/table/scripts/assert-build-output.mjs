@@ -195,10 +195,12 @@ const actualRuntimeExports = Object.keys(publicModule).toSorted((left, right) =>
 const expectedRuntimeExports = [
   "BrunoTableBigIntColumn",
   "BrunoTableBooleanColumn",
+  "BrunoTableClient",
   "BrunoTableComputedColumn",
   "BrunoTableNumberColumn",
   "BrunoTableSelectColumn",
   "BrunoTableTextColumn",
+  "BrunoTableToolbar",
 ].toSorted((left, right) => left.localeCompare(right));
 
 if (JSON.stringify(actualRuntimeExports) !== JSON.stringify(expectedRuntimeExports)) {
@@ -303,27 +305,47 @@ async function assertPackedConsumers() {
   try {
     const packageRoot = fileURLToPath(new URL("..", import.meta.url));
     runCommand("pnpm", ["pack", "--pack-destination", packRoot], packageRoot, "package tarball");
+    const shadcnRoot = join(packageRoot, "../shadcn");
+    runCommand(
+      "pnpm",
+      ["pack", "--pack-destination", packRoot],
+      shadcnRoot,
+      "shadcn package tarball",
+    );
     const tarballNames = (await readdir(packRoot)).filter((fileName) => fileName.endsWith(".tgz"));
-    if (tarballNames.length !== 1) {
+    if (tarballNames.length !== 2) {
       throw new Error(
-        `pnpm pack produced ${tarballNames.length} tarballs; expected exactly one (${tarballNames.join(", ") || "none"}).`,
+        `pnpm pack produced ${tarballNames.length} tarballs; expected exactly two (${tarballNames.join(", ") || "none"}).`,
       );
     }
-    const tarball = join(packRoot, tarballNames[0]);
+    const tableTarballName = tarballNames.find((fileName) => fileName.startsWith("bruno-table-"));
+    const shadcnTarballName = tarballNames.find((fileName) => fileName.startsWith("bruno-shadcn-"));
+    if (!tableTarballName || !shadcnTarballName) {
+      throw new Error(
+        `Packed tarballs did not contain the expected table and shadcn packages (${tarballNames.join(", ")}).`,
+      );
+    }
+    const tarball = join(packRoot, tableTarballName);
+    const shadcnTarball = join(packRoot, shadcnTarballName);
 
-    await assertPackedRootConsumer(tarball);
-    await assertPackedEffectConsumer(tarball);
+    await assertPackedRootConsumer(tarball, shadcnTarball);
+    await assertPackedEffectConsumer(tarball, shadcnTarball);
   } finally {
     await rm(packRoot, { recursive: true, force: true });
   }
 }
 
-async function assertPackedRootConsumer(tarball) {
-  const consumerRoot = await createPackedConsumer("bruno-table-root-consumer-", tarball, false);
+async function assertPackedRootConsumer(tarball, shadcnTarball) {
+  const consumerRoot = await createPackedConsumer(
+    "bruno-table-root-consumer-",
+    tarball,
+    shadcnTarball,
+    false,
+  );
   try {
     await writeFile(
       join(consumerRoot, "index.ts"),
-      `import { BrunoTableTextColumn } from "@bruno/table";
+      `import { BrunoTableClient, BrunoTableTextColumn, BrunoTableToolbar } from "@bruno/table";
 import type { BrunoTableColumns } from "@bruno/table";
 
 type Row = { readonly symbol: string };
@@ -331,6 +353,16 @@ const columns = [
   BrunoTableTextColumn({ columnId: "COL_ID_SYMBOL", field: "symbol", headerName: "Symbol" }),
 ] satisfies BrunoTableColumns<Row>;
 void columns;
+const rendered = BrunoTableClient({
+  tableId: "TABLE_ID_PACKED",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Row) => row.symbol,
+  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" },
+});
+void rendered;
+const toolbar = BrunoTableToolbar({ children: "Filters" });
+void toolbar;
 `,
     );
     await writeFile(join(consumerRoot, "runtime.mjs"), 'await import("@bruno/table");\n');
@@ -343,8 +375,13 @@ void columns;
   }
 }
 
-async function assertPackedEffectConsumer(tarball) {
-  const consumerRoot = await createPackedConsumer("bruno-table-effect-consumer-", tarball, true);
+async function assertPackedEffectConsumer(tarball, shadcnTarball) {
+  const consumerRoot = await createPackedConsumer(
+    "bruno-table-effect-consumer-",
+    tarball,
+    shadcnTarball,
+    true,
+  );
   try {
     await writeFile(
       join(consumerRoot, "index.ts"),
@@ -409,7 +446,7 @@ if (admitted._tag === "Success") {
   }
 }
 
-async function createPackedConsumer(prefix, tarball, includeEffect) {
+async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffect) {
   const consumerRoot = await mkdtemp(join(tmpdir(), prefix));
   await writeFile(
     join(consumerRoot, "package.json"),
@@ -418,6 +455,7 @@ async function createPackedConsumer(prefix, tarball, includeEffect) {
       type: "module",
       dependencies: {
         "@bruno/table": `file:${tarball}`,
+        "@bruno/shadcn": `file:${shadcnTarball}`,
         "@types/react": "19.2.18",
         ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
         react: "19.2.8",

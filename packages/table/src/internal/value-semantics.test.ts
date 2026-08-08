@@ -26,6 +26,7 @@ describe("compiled Column Value Semantics", () => {
         columnId: "COL_ID_SYMBOL",
         field: "symbol",
         headerName: "Symbol",
+        pinned: "start",
       }),
       BrunoTableNumberColumn({
         columnId: "COL_ID_PRICE",
@@ -49,6 +50,7 @@ describe("compiled Column Value Semantics", () => {
 
     expect(semantics.map((plan) => Object.isFrozen(plan))).toEqual([true, true, true, true]);
     expect(new Set(semantics).size).toBe(4);
+    expect(compiled[0]?.pinned).toBe("start");
     expect(
       semantics.map((plan) => ({
         codecId: plan.codecId,

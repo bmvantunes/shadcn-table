@@ -1,13 +1,16 @@
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
+  BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
+  BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
   type BrunoTableClientProps,
   type BrunoTableColumnField,
+  type BrunoTableColumnId,
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
@@ -29,6 +32,10 @@ type Equal<TLeft, TRight> =
 
 type Expect<TValue extends true> = TValue;
 
+const emittedWhitespaceColumnIdRejected: Expect<Equal<BrunoTableColumnId<"COL_ID_A B">, never>> =
+  true;
+void emittedWhitespaceColumnIdRejected;
+
 type Order = {
   readonly id: string;
   readonly symbol: string;
@@ -39,6 +46,17 @@ type Order = {
   readonly status: "open" | "closed";
   readonly multiplier: number;
 };
+
+const emittedInvalidWhitespaceHelperOptions = {
+  columnId: "COL_ID_UNIT PRICE",
+  field: "price",
+  headerName: "Unit price",
+} as const;
+const emittedInvalidWhitespaceHelperColumn = [
+  // @ts-expect-error Emitted Column Helper declarations reject whitespace identities.
+  BrunoTableNumberColumn(emittedInvalidWhitespaceHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void emittedInvalidWhitespaceHelperColumn;
 
 const columns = [
   {
@@ -325,6 +343,22 @@ const props = {
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
+const emittedClient = BrunoTableClient({
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 0,
+    status: "ready",
+  },
+});
+void emittedClient;
+const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
+void emittedToolbar;
+
 const editableProps = {
   tableId: "orders",
   columns,
@@ -358,7 +392,10 @@ const noSortingProps = {
     version: 0,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+} as const;
+
+// @ts-expect-error emitted Client props always require a typed non-empty Initial Order By.
+const invalidNoSortingProps: BrunoTableClientProps<Order, NoSortingColumns> = noSortingProps;
 
 const widenedColumns: BrunoTableColumns<Order> = columns;
 const widenedEditableProps = {
@@ -524,7 +561,7 @@ const invalidNoCapabilitySort = [
 const invalidInitialOrderByWithoutSortingCapability = {
   tableId: "unsortable-orders",
   columns: noSortingColumns,
-  // @ts-expect-error emitted props omit Initial Order By when sorting capability is absent.
+  // @ts-expect-error no valid Initial Order By exists when sorting capability is absent.
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
@@ -698,6 +735,7 @@ void filters;
 void props;
 void editableProps;
 void noSortingProps;
+void invalidNoSortingProps;
 void widenedEditableProps;
 void invalidProps;
 void invalidServerEditing;

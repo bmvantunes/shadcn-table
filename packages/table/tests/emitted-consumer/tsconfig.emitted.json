@@ -4,7 +4,11 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "types": []
+    "types": [],
+    "paths": {
+      "@bruno/table": ["../../dist/index.d.mts"],
+      "@bruno/table/effect": ["../../dist/effect.d.mts"]
+    }
   },
   "include": ["index.ts"]
 }

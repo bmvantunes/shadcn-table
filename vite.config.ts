@@ -17,6 +17,7 @@ const config: UserConfig = defineConfig({
         },
       },
       "./packages/shadcn/vitest.browser.config.ts",
+      "./packages/table/vitest.browser.config.ts",
     ],
   },
   staged: {

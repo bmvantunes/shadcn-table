@@ -220,6 +220,7 @@ describe("BrunoTableBigDecimalColumn", () => {
       priceColumn({
         columnId: "COL_ID_PRICE",
         field: "price",
+        pinned: "end",
         width: 144,
         valueFormatter: ({ value }) => `GBP ${BigDecimal.format(value)}`,
       }),
@@ -233,6 +234,7 @@ describe("BrunoTableBigDecimalColumn", () => {
       cellAlign: "end",
       editorLayout: "inline",
       width: 144,
+      pinned: "end",
       cellClassName: "tabular-nums",
     });
     expect(

@@ -29,31 +29,38 @@
     "check": "vp check",
     "check:build": "node scripts/assert-build-output.mjs",
     "dev": "vp pack --watch",
-    "test": "vp test",
+    "test": "vp test --exclude \"src/**/*.browser.test.tsx\"",
+    "test:browser": "vp test --config vitest.browser.config.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run check && vp run test && vp run test:types:source && vp run build && vp run check:build && vp run test:types:emitted"
+    "prepublishOnly": "vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run check:build && vp run test:types:emitted"
   },
   "dependencies": {
     "@tanstack/react-table": "9.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
+    "@bruno/shadcn": "workspace:*",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/browser-playwright": "4.1.10",
     "babel-plugin-react-compiler": "^1.0.0",
     "effect": "4.0.0-beta.100",
     "effect-view-server": "2.3.0",
+    "playwright": "1.60.0",
     "react": "^19.2.8",
     "react-dom": "19.2.8",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "vitest-browser-react": "2.2.0"
   },
   "peerDependencies": {
+    "@bruno/shadcn": ">=0.0.0 <1.0.0",
     "effect": "4.0.0-beta.100",
     "react": "^19.2.8"
   },

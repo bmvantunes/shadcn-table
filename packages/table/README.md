@@ -6,8 +6,8 @@ The public interface is intentionally small and BrunoTable-owned. TanStack Table
 stores, and server-query translation are private implementation details.
 
 The package establishes strict TypeScript contracts for columns, client sources, server viewport
-sources, filters, sorts, and the future `BrunoTableClient` and `BrunoTableServer` composition roots.
-Runtime table components are not exported yet.
+sources, filters, sorts, and the `BrunoTableClient` composition root. `BrunoTableClient` is the
+first live read-only Client renderer; the Server composition root remains future work.
 
 Use one plain column array with `satisfies`. Optional helpers supply coherent exact value semantics
 and presentation defaults without generating identity or hiding the resulting column definition:
@@ -115,8 +115,8 @@ Field-or-Computed representation and rejects malformed widened input. The first 
 owned by issue #7 and must install that compiler once when constructing or replacing its definition
 set; issue #3 deliberately exposes no consumer-side grid-definition or compilation API.
 
-The contracts reserve one continuous virtual row space and expose no pagination state or controls.
-Runtime virtualization for Client and Server Tables remains planned backlog work.
+The Client renderer uses one continuous virtual row space, one native scroll owner, and no pagination
+state or controls. Server-side runtime virtualization remains planned backlog work.
 
-The future roots' prop contracts accept optional children for page-specific toolbar composition.
-Runtime toolbar rendering remains planned backlog work.
+The Client root accepts optional children for page-specific toolbar composition; absent children do
+not reserve vertical space.
