@@ -4,6 +4,28 @@ import { readCompiledColumnValue } from "./cell-value";
 import { compileColumns } from "./compile-columns";
 
 describe("readCompiledColumnValue", () => {
+  it("reads fields admitted by primitive and tuple row types", () => {
+    const [stringColumn] = compileColumns([
+      {
+        columnId: "COL_ID_LENGTH",
+        field: "length",
+        headerName: "Length",
+        valueType: "number",
+      },
+    ]);
+    const [tupleColumn] = compileColumns([
+      {
+        columnId: "COL_ID_FIRST",
+        field: "0",
+        headerName: "First",
+        valueType: "text",
+      },
+    ]);
+
+    expect(readCompiledColumnValue(stringColumn!, "Ada")).toBe(3);
+    expect(readCompiledColumnValue(tupleColumn!, ["Grace"] as const)).toBe("Grace");
+  });
+
   it("preserves __proto__ as an own computed-column dependency", () => {
     const [column] = compileColumns([
       {

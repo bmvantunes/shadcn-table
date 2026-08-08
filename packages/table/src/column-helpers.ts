@@ -252,6 +252,7 @@ const commonColumnOptionKeys = new Set<PropertyKey>([
   "columnId",
   "headerName",
   "width",
+  "pinned",
   "cellAlign",
   "editorLayout",
   "valueFormatter",

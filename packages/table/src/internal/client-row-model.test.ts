@@ -61,6 +61,22 @@ describe("Client row model", () => {
         columns,
       ),
     ).toEqual([{ columnId: "COL_ID_NAME", direction: "asc" }]);
+
+    const sortFreeColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        enableSorting: false,
+      },
+    ]);
+    expect(() =>
+      sanitizeClientInitialOrderBy(
+        [{ columnId: "COL_ID_NAME", direction: "asc" }],
+        sortFreeColumns,
+      ),
+    ).toThrow(/requires at least one sortable column/u);
   });
 
   it("keeps nullable text rows for notContains and applies half-open numeric ranges", () => {
@@ -114,5 +130,39 @@ describe("Client row model", () => {
     expect(sanitized).toEqual(filter);
     expect(filterReferencesColumn(sanitized, "COL_ID_NAME")).toBe(true);
     expect(filterReferencesColumn(sanitized, "COL_ID_MISSING")).toBe(false);
+  });
+
+  it("reuses already-sanitized filter references for an equivalent column plan", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const first = sanitizeClientInitialFilters(
+      [
+        {
+          type: "AND",
+          conditions: [
+            { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+            { columnId: "COL_ID_NAME", type: "notBlank" },
+          ],
+        },
+      ],
+      columns,
+    );
+    const replacement = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Display name",
+        valueType: "text",
+        width: 240,
+      },
+    ]);
+
+    expect(sanitizeClientInitialFilters(first, replacement)).toBe(first);
   });
 });

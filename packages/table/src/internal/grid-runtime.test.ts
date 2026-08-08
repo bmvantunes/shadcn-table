@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableClientRuntime } from "./grid-runtime";
 
-type Row = { readonly id: string; readonly name: string };
+type Row = { readonly id: string; readonly name: string; readonly note?: string };
 
 const source = (
   rows: readonly Row[],
@@ -47,11 +47,12 @@ describe("BrunoTableClientRuntime", () => {
     const bodyListener = vi.fn();
     const chromeListener = vi.fn();
     const rowsListener = vi.fn();
+    const rowsStore = runtime.createRowsStore(() => true);
     const firstListener = vi.fn();
     const secondListener = vi.fn();
     runtime.subscribeBody(bodyListener);
     runtime.subscribeChrome(chromeListener);
-    runtime.subscribeRows(rowsListener);
+    rowsStore.subscribe(rowsListener);
     runtime.subscribeRow("first", firstListener);
     runtime.subscribeRow("second", secondListener);
     const bodySnapshot = runtime.getBodySnapshot();
@@ -66,9 +67,77 @@ describe("BrunoTableClientRuntime", () => {
     expect(secondListener).toHaveBeenCalledOnce();
     expect(runtime.getBodySnapshot()).toBe(bodySnapshot);
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
-    expect(runtime.getView().getRowsSnapshot()).toEqual([first, nextSecond]);
+    expect(rowsStore.getSnapshot()).toEqual([first, nextSecond]);
     expect(Object.isFrozen(runtime.getBodySnapshot())).toBe(true);
     expect(runtime.getView()).toBe(runtime.getView());
+  });
+
+  it("advances a derived row-order snapshot only with its notification", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const runtime = createRuntime(source([first, second]));
+    const changes: unknown[] = [];
+    const rowsStore = runtime.createRowsStore((previousRows, nextRows, change) => {
+      changes.push(change);
+      if (change.rowIdsChanged) return true;
+      return change.changedIndexes.some(
+        (index) =>
+          (previousRows[index] as Row | undefined)?.name !==
+          (nextRows[index] as Row | undefined)?.name,
+      );
+    });
+    const listener = vi.fn();
+    rowsStore.subscribe(listener);
+    const initialSnapshot = rowsStore.getSnapshot();
+    const unrelatedUpdate = { id: "second", name: "Grace", note: "updated" } satisfies Row;
+
+    runtime.publish(source([first, unrelatedUpdate]));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(rowsStore.getSnapshot()).toBe(initialSnapshot);
+    expect(changes).toEqual([{ rowIdsChanged: false, changedIndexes: [1] }]);
+
+    const orderingUpdate = { ...unrelatedUpdate, name: "Hopper" } satisfies Row;
+    runtime.publish(source([first, orderingUpdate]));
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(rowsStore.getSnapshot()).toEqual([first, orderingUpdate]);
+    expect(changes).toEqual([
+      { rowIdsChanged: false, changedIndexes: [1] },
+      { rowIdsChanged: false, changedIndexes: [1] },
+    ]);
+  });
+
+  it("retains and silences unchanged column-command snapshots", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const runtime = new BrunoTableClientRuntime(
+      source([{ id: "first", name: "Ada", note: "math" }]),
+      (row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const unchangedListener = vi.fn();
+    const previous = runtime.getColumnCommandSnapshot("COL_ID_NOTE");
+    runtime.subscribeColumnCommands("COL_ID_NOTE", unchangedListener);
+
+    runtime.toggleColumnSort("COL_ID_NAME", false);
+
+    expect(runtime.getColumnCommandSnapshot("COL_ID_NOTE")).toBe(previous);
+    expect(unchangedListener).not.toHaveBeenCalled();
   });
 
   it("keeps unsubscribe functions idempotent after a subscription key is reused", () => {
@@ -109,6 +178,83 @@ describe("BrunoTableClientRuntime", () => {
     expect(() => runtime.publish(source([], "loading"))).toThrow("listener failed");
     expect(laterListener).toHaveBeenCalledOnce();
     expect(runtime.getChromeSnapshot().status).toBe("loading");
+  });
+
+  it("finishes state and query notifications before rethrowing a listener error", () => {
+    const runtime = createRuntime(source([{ id: "first", name: "Ada" }]));
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const bodyListener = vi.fn();
+    const queryListener = vi.fn();
+    const aliasCommandListener = vi.fn();
+    runtime.subscribeChrome(() => {
+      throw new Error("chrome failed");
+    });
+    runtime.subscribeBody(bodyListener);
+    runtime.subscribeQuery(queryListener);
+    runtime.subscribeColumnCommands("COL_ID_ALIAS", aliasCommandListener);
+
+    expect(() =>
+      runtime.reconcile(
+        source([], "loading", { totalRows: 1 }),
+        (row) => row.id,
+        replacementColumns,
+      ),
+    ).toThrow("chrome failed");
+
+    expect(bodyListener).toHaveBeenCalledOnce();
+    expect(queryListener).toHaveBeenCalledOnce();
+    expect(aliasCommandListener).toHaveBeenCalledOnce();
+    expect(runtime.getQuerySnapshot()).toMatchObject({
+      orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
+      generation: 1,
+    });
+  });
+
+  it("finishes row and query notifications when a row-order detector throws", () => {
+    const runtime = createRuntime(source([{ id: "first", name: "Ada" }]));
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const throwingRowsListener = vi.fn();
+    const laterRowsListener = vi.fn();
+    const changedRowListener = vi.fn();
+    const queryListener = vi.fn();
+    const aliasCommandListener = vi.fn();
+    const throwingRowsStore = runtime.createRowsStore(() => {
+      throw new Error("detector failed");
+    });
+    const laterRowsStore = runtime.createRowsStore(() => true);
+    throwingRowsStore.subscribe(throwingRowsListener);
+    laterRowsStore.subscribe(laterRowsListener);
+    runtime.subscribeRow("first", changedRowListener);
+    runtime.subscribeQuery(queryListener);
+    runtime.subscribeColumnCommands("COL_ID_ALIAS", aliasCommandListener);
+
+    expect(() =>
+      runtime.reconcile(
+        source([{ id: "first", name: "Ada Lovelace" }]),
+        (row) => row.id,
+        replacementColumns,
+      ),
+    ).toThrow("detector failed");
+
+    expect(throwingRowsListener).toHaveBeenCalledOnce();
+    expect(laterRowsListener).toHaveBeenCalledOnce();
+    expect(changedRowListener).toHaveBeenCalledOnce();
+    expect(queryListener).toHaveBeenCalledOnce();
+    expect(aliasCommandListener).toHaveBeenCalledOnce();
   });
 
   it("reuses row collections when a source publishes the same row references", () => {
@@ -153,7 +299,8 @@ describe("BrunoTableClientRuntime", () => {
 
     expect(getRowId).toHaveBeenCalledTimes(nextRows.length);
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
-    expect(runtime.getView().getRowsSnapshot()).toEqual(nextRows);
+    const rowsStore = runtime.createRowsStore(() => true);
+    expect(rowsStore.getSnapshot()).toEqual(nextRows);
   });
 
   it("notifies simultaneous source, identity, and column replacement as one coherent state", () => {
@@ -206,7 +353,8 @@ describe("BrunoTableClientRuntime", () => {
     const previousBody = runtime.getBodySnapshot();
     const previousChrome = runtime.getChromeSnapshot();
     const previousQuery = runtime.getQuerySnapshot();
-    const previousRows = runtime.getView().getRowsSnapshot();
+    const rowsStore = runtime.createRowsStore(() => true);
+    const previousRows = rowsStore.getSnapshot();
     const previousRow = runtime.getRowSnapshot("initial");
     const previousNameCommand = runtime.getColumnCommandSnapshot("COL_ID_NAME");
     const previousAliasCommand = runtime.getColumnCommandSnapshot("COL_ID_ALIAS");
@@ -220,7 +368,7 @@ describe("BrunoTableClientRuntime", () => {
     runtime.subscribeChrome(chromeListener);
     runtime.subscribeQuery(queryListener);
     runtime.subscribeBody(bodyListener);
-    runtime.subscribeRows(rowsListener);
+    rowsStore.subscribe(rowsListener);
     runtime.subscribeRow("initial", rowListener);
     runtime.subscribeColumnCommands("COL_ID_NAME", nameCommandListener);
     runtime.subscribeColumnCommands("COL_ID_ALIAS", aliasCommandListener);
@@ -239,7 +387,7 @@ describe("BrunoTableClientRuntime", () => {
     expect(runtime.getBodySnapshot()).toBe(previousBody);
     expect(runtime.getChromeSnapshot()).toBe(previousChrome);
     expect(runtime.getQuerySnapshot()).toBe(previousQuery);
-    expect(runtime.getView().getRowsSnapshot()).toBe(previousRows);
+    expect(rowsStore.getSnapshot()).toBe(previousRows);
     expect(runtime.getRowSnapshot("initial")).toBe(previousRow);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME")).toBe(previousNameCommand);
     expect(runtime.getColumnCommandSnapshot("COL_ID_ALIAS")).toBe(previousAliasCommand);
@@ -284,6 +432,9 @@ describe("BrunoTableClientRuntime", () => {
   it("keeps complete authoritative rows visible during loading refreshes", () => {
     const row = { id: "first", name: "Ada" } satisfies Row;
     const runtime = createRuntime(source([], "loading", { totalRows: 1 }));
+    const zeroRowLoading = createRuntime(source([], "loading"));
+
+    expect(zeroRowLoading.getBodySnapshot()).toMatchObject({ kind: "loading" });
 
     runtime.publish(source([row], "loading", { totalRows: 1 }));
 
@@ -387,6 +538,58 @@ describe("BrunoTableClientRuntime", () => {
       orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
       generation: 1,
     });
+  });
+
+  it("rejects a sort-free replacement before changing observable state", () => {
+    const runtime = createRuntime(source([{ id: "first", name: "Ada" }]));
+    const previousQuery = runtime.getQuerySnapshot();
+    const previousBody = runtime.getBodySnapshot();
+    const sortFreeColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        enableSorting: false,
+      },
+    ]);
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    expect(() => runtime.configure((row) => row.id, sortFreeColumns)).toThrow(
+      /requires at least one sortable column/u,
+    );
+
+    expect(runtime.getQuerySnapshot()).toBe(previousQuery);
+    expect(runtime.getBodySnapshot()).toBe(previousBody);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("preserves query state across layout-only column replacement", () => {
+    const runtime = new BrunoTableClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const previousQuery = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Display name",
+        valueType: "text",
+        width: 240,
+      },
+    ]);
+
+    runtime.configure((row) => row.id, replacementColumns);
+
+    expect(runtime.getQuerySnapshot()).toBe(previousQuery);
+    expect(queryListener).not.toHaveBeenCalled();
   });
 
   it("retains coherent rows for terminal lifecycle states and delegates only explicit retry", () => {

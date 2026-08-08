@@ -89,4 +89,41 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.setShape(["second", "first"], columns);
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
   });
+
+  it("keeps empty-result headers reachable while query-cleared body focus stays empty", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape([], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+
+    navigation.activateForFocus();
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_NAME",
+    });
+    navigation.move(0, 1);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_SCORE",
+    });
+
+    navigation.setShape(["first"], columns);
+    navigation.move(1, 0);
+    navigation.clearForQuery();
+    navigation.setShape(["first"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
 });

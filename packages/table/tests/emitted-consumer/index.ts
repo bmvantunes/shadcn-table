@@ -392,7 +392,10 @@ const noSortingProps = {
     version: 0,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+} as const;
+
+// @ts-expect-error emitted Client props always require a typed non-empty Initial Order By.
+const invalidNoSortingProps: BrunoTableClientProps<Order, NoSortingColumns> = noSortingProps;
 
 const widenedColumns: BrunoTableColumns<Order> = columns;
 const widenedEditableProps = {
@@ -558,7 +561,7 @@ const invalidNoCapabilitySort = [
 const invalidInitialOrderByWithoutSortingCapability = {
   tableId: "unsortable-orders",
   columns: noSortingColumns,
-  // @ts-expect-error emitted props omit Initial Order By when sorting capability is absent.
+  // @ts-expect-error no valid Initial Order By exists when sorting capability is absent.
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
@@ -732,6 +735,7 @@ void filters;
 void props;
 void editableProps;
 void noSortingProps;
+void invalidNoSortingProps;
 void widenedEditableProps;
 void invalidProps;
 void invalidServerEditing;

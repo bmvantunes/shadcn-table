@@ -26,10 +26,10 @@ import {
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import type {
-  BrunoTableClientProps,
+  BrunoTableClientSource,
+  BrunoTableFilterExpressions,
   BrunoTableColumns,
   BrunoTableReadOnlyCapability,
-  BrunoTableSortableColumnId,
   BrunoTableSortBy,
 } from "./public-types";
 import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
@@ -45,6 +45,7 @@ import {
   type BrunoTableClientRuntimeView,
   type BrunoTableRowOrderChangeDetector,
 } from "./internal/grid-runtime";
+import { recordBrunoTableClientGridSurfaceRender } from "./internal/render-instrumentation";
 import {
   BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -153,17 +154,19 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   );
 }
 
-type BrunoTableClientRenderProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  BrunoTableClientProps<TRow, TColumns>,
-  "initialOrderBy"
-> &
-  BrunoTableReadOnlyCapability & {
-    readonly initialOrderBy?: [BrunoTableSortableColumnId<TColumns>] extends [never]
-      ? never
-      : BrunoTableSortBy<TColumns>;
-  } & ([BrunoTableSortableColumnId<TColumns>] extends [never]
-    ? unknown
-    : { readonly initialOrderBy: BrunoTableSortBy<TColumns> });
+type BrunoTableClientRenderProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableReadOnlyCapability & {
+  readonly tableId: string;
+  readonly columns: TColumns;
+  readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
+  readonly children?: ReactNode;
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
+  readonly getRowId: (row: TRow) => string;
+  readonly clientSource: BrunoTableClientSource<TRow>;
+  readonly viewportSource?: never;
+};
 
 type BrunoTableViewProps = {
   readonly runtime: BrunoTableClientRuntimeView;
@@ -382,26 +385,18 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   queryGeneration,
 }: ClientResolvedRowOrderProps) {
   const rowOrderDetector = useMemo<BrunoTableRowOrderChangeDetector>(
-    () => (previousRows, nextRows, previousRowIds, nextRowIds) =>
-      rowOrderChanged(
-        previousRows,
-        nextRows,
-        previousRowIds,
-        nextRowIds,
-        columns,
-        filters,
-        orderBy,
-      ),
+    () => (previousRows, nextRows, change) =>
+      rowOrderChanged(previousRows, nextRows, change, columns, filters, orderBy),
     [columns, filters, orderBy],
   );
-  const subscribeRowOrder = useMemo(
-    () => (listener: () => void) => runtime.subscribeRows(listener, rowOrderDetector),
+  const rowsStore = useMemo(
+    () => runtime.createRowsStore(rowOrderDetector),
     [rowOrderDetector, runtime],
   );
   const rows = useSyncExternalStore(
-    subscribeRowOrder,
-    runtime.getRowsSnapshot,
-    runtime.getRowsSnapshot,
+    rowsStore.subscribe,
+    rowsStore.getSnapshot,
+    rowsStore.getSnapshot,
   );
   const nextRowIds = useClientRowIds(rows, columns, orderBy, runtime.resolveRowId, filters);
   const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
@@ -458,7 +453,7 @@ const ViewportAdapter = memo(function ViewportAdapter({
     if (queryGenerationRef.current === queryGeneration) return;
     queryGenerationRef.current = queryGeneration;
     viewport.resetVertical();
-    navigation.reset();
+    if (navigation.getSnapshot()?.region !== "header") navigation.clearForQuery();
     navigation.setShape(rowIds, columns);
   }, [columns, navigation, queryGeneration, rowIds, viewport]);
   useLayoutEffect(() => {
@@ -504,42 +499,44 @@ const ClientGridSurface = memo(function ClientGridSurface({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly revealCell: (rowIndex: number, columnId: string, region?: "header" | "body") => void;
 }) {
+  recordBrunoTableClientGridSurfaceRender();
   const virtualWindow = viewportSnapshot.virtualWindow;
   const tableWidth = virtualWindow.totalWidth;
-  const activeCell = useSyncExternalStore(
-    navigation.subscribe,
-    navigation.getSnapshot,
-    navigation.getSnapshot,
-  );
-  const activeColumnMounted =
-    activeCell === undefined ||
-    [virtualWindow.pinnedStart, virtualWindow.center, virtualWindow.pinnedEnd].some((columns) =>
-      columns.some((column) => column.columnId === activeCell.columnId),
-    );
-  const activeRowMounted =
-    activeCell === undefined ||
-    activeCell.region === "header" ||
-    (activeCell.rowIndex >= virtualWindow.rowStart && activeCell.rowIndex < virtualWindow.rowEnd);
-  const activeProxyNeeded = activeCell !== undefined && (!activeColumnMounted || !activeRowMounted);
   const logicalColumns = useMemo(() => orderBrunoTableLogicalColumns(columns), [columns]);
+  const gridElement = useRef<HTMLDivElement | null>(null);
+  const attachGrid = useMemo(
+    () => (element: HTMLDivElement | null) => {
+      gridElement.current = element;
+      attach(element);
+    },
+    [attach],
+  );
+  const activateHeaderCommand = useMemo(
+    () => (columnId: string) => {
+      navigation.activateHeader(columnId);
+      gridElement.current?.focus({ preventScroll: true });
+    },
+    [navigation],
+  );
 
   return (
     <div
-      ref={attach}
+      ref={attachGrid}
       role="grid"
       aria-label={`Data for ${tableId}`}
       tabIndex={0}
-      aria-activedescendant={
-        activeCell === undefined ? undefined : activeDomId(instanceId, tableId, activeCell)
-      }
       aria-rowcount={rowIds.length + 1}
       aria-colcount={
         virtualWindow.pinnedStart.length +
         virtualWindow.centerCount +
         virtualWindow.pinnedEnd.length
       }
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) navigation.activateForFocus();
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
+        navigation.activateForFocus();
         if (event.key === "Enter" || event.key === " ") {
           const active = navigation.getSnapshot();
           const column = logicalColumns.find(
@@ -547,7 +544,11 @@ const ClientGridSurface = memo(function ClientGridSurface({
           );
           if (active?.region !== "header" || column === undefined) return;
           const command = runtime.getColumnCommandSnapshot(column.columnId);
-          if (command.sortable) {
+          if (event.altKey && event.key === "Enter" && command.filterBaselineAvailable) {
+            event.preventDefault();
+            if (command.filterActive) runtime.clearColumnFilters(column.columnId);
+            else runtime.resetColumnFilters(column.columnId);
+          } else if (command.sortable) {
             event.preventDefault();
             runtime.toggleColumnSort(column.columnId, event.shiftKey);
           } else if (command.filterBaselineAvailable) {
@@ -570,6 +571,12 @@ const ClientGridSurface = memo(function ClientGridSurface({
         position: "relative",
       }}
     >
+      <NavigationActiveDescendantAdapter
+        gridElement={gridElement}
+        instanceId={instanceId}
+        navigation={navigation}
+        tableId={tableId}
+      />
       <table role="presentation" style={{ tableLayout: "fixed", width: tableWidth }}>
         <thead
           role="rowgroup"
@@ -598,6 +605,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
                       columnIndex={index}
                       column={column}
                       runtime={runtime}
+                      activateHeaderCommand={activateHeaderCommand}
                       style={{ width: column.semantics.width }}
                     />
                   ))}
@@ -619,6 +627,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
                 }
                 column={column}
                 runtime={runtime}
+                activateHeaderCommand={activateHeaderCommand}
                 style={{ width: column.semantics.width }}
               />
             ))}
@@ -643,6 +652,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
                       }
                       column={column}
                       runtime={runtime}
+                      activateHeaderCommand={activateHeaderCommand}
                       style={{ width: column.semantics.width }}
                     />
                   ))}
@@ -682,23 +692,93 @@ const ClientGridSurface = memo(function ClientGridSurface({
           ))}
         </tbody>
       </table>
-      {activeProxyNeeded && activeCell !== undefined ? (
-        <ActiveDescendantProxy
-          activeCell={activeCell}
-          column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
-          columnIndex={logicalColumns.findIndex(
-            (column) => column.columnId === activeCell.columnId,
-          )}
-          instanceId={instanceId}
-          runtime={runtime}
-          tableId={tableId}
-        />
-      ) : null}
+      <ActiveDescendantOutlet
+        instanceId={instanceId}
+        logicalColumns={logicalColumns}
+        navigation={navigation}
+        runtime={runtime}
+        tableId={tableId}
+        virtualWindow={virtualWindow}
+      />
     </div>
   );
 });
 
+// Active Cell movement updates the composite attribute without waking the structural grid tree.
+// oxlint-disable react/react-compiler
+const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescendantAdapter({
+  gridElement,
+  instanceId,
+  navigation,
+  tableId,
+}: {
+  readonly gridElement: Readonly<{ current: HTMLDivElement | null }>;
+  readonly instanceId: string;
+  readonly navigation: BrunoTableNavigationRuntime;
+  readonly tableId: string;
+}) {
+  "use no memo";
+  useLayoutEffect(() => {
+    const synchronize = () => {
+      const element = gridElement.current;
+      if (element === null) return;
+      const activeCell = navigation.getSnapshot();
+      const id =
+        activeCell === undefined ? undefined : activeDomId(instanceId, tableId, activeCell);
+      if (id === undefined) element.removeAttribute("aria-activedescendant");
+      else element.setAttribute("aria-activedescendant", id);
+    };
+    synchronize();
+    return navigation.subscribe(synchronize);
+  }, [gridElement, instanceId, navigation, tableId]);
+  return null;
+});
+// oxlint-enable react/react-compiler
+
+const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
+  instanceId,
+  logicalColumns,
+  navigation,
+  runtime,
+  tableId,
+  virtualWindow,
+}: {
+  readonly instanceId: string;
+  readonly logicalColumns: readonly CompiledColumn[];
+  readonly navigation: BrunoTableNavigationRuntime;
+  readonly runtime: BrunoTableClientRuntimeView;
+  readonly tableId: string;
+  readonly virtualWindow: BrunoTableViewportSnapshot["virtualWindow"];
+}) {
+  const activeCell = useSyncExternalStore(
+    navigation.subscribe,
+    navigation.getSnapshot,
+    navigation.getSnapshot,
+  );
+  if (activeCell === undefined) return null;
+  const activeColumnMounted = [
+    virtualWindow.pinnedStart,
+    virtualWindow.center,
+    virtualWindow.pinnedEnd,
+  ].some((columns) => columns.some((column) => column.columnId === activeCell.columnId));
+  const activeRowMounted =
+    activeCell.region === "header" ||
+    (activeCell.rowIndex >= virtualWindow.rowStart && activeCell.rowIndex < virtualWindow.rowEnd);
+  if (activeColumnMounted && activeRowMounted) return null;
+  return (
+    <ActiveDescendantProxy
+      activeCell={activeCell}
+      column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
+      columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
+      instanceId={instanceId}
+      runtime={runtime}
+      tableId={tableId}
+    />
+  );
+});
+
 const ClientHeaderCell = memo(function ClientHeaderCell({
+  activateHeaderCommand,
   instanceId,
   tableId,
   columnIndex,
@@ -707,6 +787,7 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
   runtime,
   style,
 }: {
+  readonly activateHeaderCommand: (columnId: string) => void;
   readonly instanceId: string;
   readonly tableId: string;
   readonly columnIndex: number;
@@ -744,7 +825,15 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
           size="xs"
           type="button"
           variant="ghost"
-          onClick={(event) => runtime.toggleColumnSort(column.columnId, event.shiftKey)}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            activateHeaderCommand(column.columnId);
+          }}
+          onClick={(event) => {
+            activateHeaderCommand(column.columnId);
+            runtime.toggleColumnSort(column.columnId, event.shiftKey);
+          }}
         >
           <span className="truncate">{column.headerName}</span>
           {command.sortPriority === undefined ? null : (
@@ -761,7 +850,13 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
           size="xs"
           type="button"
           variant="ghost"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            activateHeaderCommand(column.columnId);
+          }}
           onClick={() => {
+            activateHeaderCommand(column.columnId);
             if (command.filterActive) runtime.clearColumnFilters(column.columnId);
             else runtime.resetColumnFilters(column.columnId);
           }}
@@ -775,6 +870,7 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
     id: headerDomId(instanceId, tableId, column.columnId),
     "aria-label": column.headerName,
     "aria-colindex": columnIndex + 1,
+    "aria-keyshortcuts": command.filterBaselineAvailable ? "Alt+Enter" : undefined,
     "aria-sort": command.sortPriority === 1 ? ariaSort : undefined,
     role: "columnheader",
     style: {
@@ -1090,16 +1186,12 @@ function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): 
 
 function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
   if (column.cellRenderer !== undefined) return resolveCellRenderer(column, row, value);
-  if (column.valueType === "boolean" && typeof value === "boolean") {
-    return (
-      <input
-        aria-label={`${column.headerName}: ${value ? "checked" : "not checked"}`}
-        checked={value}
-        disabled
-        tabIndex={-1}
-        type="checkbox"
-      />
-    );
+  if (
+    column.valueFormatter === undefined &&
+    column.valueType === "boolean" &&
+    typeof value === "boolean"
+  ) {
+    return <input aria-label={column.headerName} checked={value} disabled type="checkbox" />;
   }
   return resolveCellText(column, row, value);
 }
@@ -1107,18 +1199,20 @@ function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown
 function rowOrderChanged(
   previousRows: readonly unknown[],
   nextRows: readonly unknown[],
-  previousRowIds: readonly string[],
-  nextRowIds: readonly string[],
+  change: Readonly<{
+    readonly rowIdsChanged: boolean;
+    readonly changedIndexes: readonly number[];
+  }>,
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
   orderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
 ): boolean {
-  if (!sameRowIds(previousRowIds, nextRowIds)) return true;
+  if (change.rowIdsChanged) return true;
   const relevantIds = new Set(orderBy.map((sort) => sort.columnId));
   for (const filter of filters ?? EMPTY_ORDER_BY) collectFilterColumnIds(filter, relevantIds);
   const relevantColumns = columns.filter((column) => relevantIds.has(column.columnId));
   if (relevantColumns.length === 0) return false;
-  for (let index = 0; index < previousRows.length; index += 1) {
+  for (const index of change.changedIndexes) {
     const previousRow = previousRows[index];
     const nextRow = nextRows[index];
     if (previousRow === nextRow) continue;
@@ -1172,16 +1266,12 @@ class ClientRowOrderStore {
   };
 
   public readonly publish = (nextRowIds: readonly string[], queryGeneration: number): void => {
-    if (
-      this.snapshot.queryGeneration === queryGeneration &&
-      sameRowIds(this.snapshot.rowIds, nextRowIds)
-    ) {
+    const rowIdsUnchanged = sameRowIds(this.snapshot.rowIds, nextRowIds);
+    if (this.snapshot.queryGeneration === queryGeneration && rowIdsUnchanged) {
       return;
     }
     this.snapshot = Object.freeze({
-      rowIds: sameRowIds(this.snapshot.rowIds, nextRowIds)
-        ? this.snapshot.rowIds
-        : Object.freeze(Array.from(nextRowIds)),
+      rowIds: rowIdsUnchanged ? this.snapshot.rowIds : Object.freeze(Array.from(nextRowIds)),
       queryGeneration,
     });
     for (const listener of this.listeners) listener();

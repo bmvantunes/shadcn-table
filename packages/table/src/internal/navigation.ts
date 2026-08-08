@@ -24,6 +24,7 @@ export class BrunoTableNavigationRuntime {
   private rowIds: readonly string[] = [];
   private columns: readonly CompiledColumn[] = [];
   private activeCell: BrunoTableActiveCell | undefined;
+  private bodyInitializationBlocked = false;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
 
@@ -32,7 +33,38 @@ export class BrunoTableNavigationRuntime {
     return () => this.listeners.delete(listener);
   };
 
-  public readonly reset = (): void => this.setActive(undefined);
+  public readonly reset = (): void => {
+    this.bodyInitializationBlocked = false;
+    this.setActive(undefined);
+  };
+
+  public readonly clearForQuery = (): void => {
+    this.bodyInitializationBlocked = true;
+    this.setActive(undefined);
+  };
+
+  public readonly activateForFocus = (): void => {
+    if (this.activeCell !== undefined) return;
+    const firstColumn = this.columns[0];
+    if (firstColumn === undefined) return;
+    this.bodyInitializationBlocked = false;
+    if (this.rowIds.length === 0) {
+      this.setActive({ region: "header", rowIndex: 0, columnId: firstColumn.columnId });
+      return;
+    }
+    this.setActive({
+      region: "body",
+      rowIndex: 0,
+      rowId: this.rowIds[0]!,
+      columnId: firstColumn.columnId,
+    });
+  };
+
+  public readonly activateHeader = (columnId: string): void => {
+    if (!this.columns.some((column) => column.columnId === columnId)) return;
+    this.bodyInitializationBlocked = false;
+    this.setActive({ region: "header", rowIndex: 0, columnId });
+  };
 
   public readonly setShape = (
     rowIds: readonly string[],
@@ -41,7 +73,7 @@ export class BrunoTableNavigationRuntime {
     this.rowIds = rowIds;
     this.columns = orderBrunoTableLogicalColumns(columns);
     const firstColumn = this.columns[0];
-    if (rowIds.length === 0 || firstColumn === undefined) {
+    if (firstColumn === undefined) {
       this.setActive(undefined);
       return;
     }
@@ -60,42 +92,38 @@ export class BrunoTableNavigationRuntime {
     );
     if (this.activeCell?.region === "header") {
       this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
-    } else {
-      this.setActive({
-        region: "body",
-        rowIndex,
-        rowId: rowIds[rowIndex]!,
-        columnId: column.columnId,
-      });
+      return;
     }
+    if (this.bodyInitializationBlocked) return;
+    if (rowIds.length === 0) {
+      this.setActive(undefined);
+      return;
+    }
+    this.setActive({
+      region: "body",
+      rowIndex,
+      rowId: rowIds[rowIndex]!,
+      columnId: column.columnId,
+    });
   };
 
   public readonly move = (rowDelta: number, columnDelta: number): void => {
-    if (this.activeCell === undefined || this.columns.length === 0 || this.rowIds.length === 0)
-      return;
+    if (this.activeCell === undefined || this.columns.length === 0) return;
     const currentColumn = Math.max(
       this.columns.findIndex((column) => column.columnId === this.activeCell?.columnId),
       0,
     );
     const nextColumn = Math.max(0, Math.min(this.columns.length - 1, currentColumn + columnDelta));
-    if (rowDelta < 0 && this.activeCell.region === "body" && this.activeCell.rowIndex === 0) {
-      this.setActive({
-        region: "header",
-        rowIndex: 0,
-        columnId: this.columns[nextColumn]!.columnId,
-      });
-      return;
-    }
-    if (rowDelta > 0 && this.activeCell.region === "header") {
-      this.setActive({
-        region: "body",
-        rowIndex: 0,
-        rowId: this.rowIds[0]!,
-        columnId: this.columns[nextColumn]!.columnId,
-      });
-      return;
-    }
     if (this.activeCell.region === "header") {
+      if (rowDelta > 0 && this.rowIds.length > 0) {
+        this.setActive({
+          region: "body",
+          rowIndex: 0,
+          rowId: this.rowIds[0]!,
+          columnId: this.columns[nextColumn]!.columnId,
+        });
+        return;
+      }
       if (rowDelta === 0 && columnDelta !== 0) {
         this.setActive({
           region: "header",
@@ -103,6 +131,18 @@ export class BrunoTableNavigationRuntime {
           columnId: this.columns[nextColumn]!.columnId,
         });
       }
+      return;
+    }
+    if (this.rowIds.length === 0) {
+      this.setActive(undefined);
+      return;
+    }
+    if (rowDelta < 0 && this.activeCell.rowIndex === 0) {
+      this.setActive({
+        region: "header",
+        rowIndex: 0,
+        columnId: this.columns[nextColumn]!.columnId,
+      });
       return;
     }
     const rowIndex = Math.max(

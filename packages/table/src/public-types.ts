@@ -1007,8 +1007,9 @@ export type BrunoTableClientProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TRowVersion = never,
-> = BrunoTableCommonProps<TRow, TColumns> &
+> = Omit<BrunoTableCommonProps<TRow, TColumns>, "initialOrderBy"> &
   BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
+    readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
     readonly viewportSource?: never;

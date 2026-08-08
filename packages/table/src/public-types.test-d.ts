@@ -295,7 +295,7 @@ describe("BrunoTable public types", () => {
     expectTypeOf<BrunoTableSortableColumnId<NoSortingColumns>>().toBeNever();
   });
 
-  it("omits sorting props when no column exposes sorting capability", () => {
+  it("rejects a Client renderer when no column can supply its required order", () => {
     const props = {
       tableId: "unsortable-orders",
       columns: noSortingColumns,
@@ -306,9 +306,12 @@ describe("BrunoTable public types", () => {
         version: 1,
         status: "ready",
       },
-    } satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+    } as const;
 
-    expectTypeOf(props.columns).toEqualTypeOf<NoSortingColumns>();
+    // @ts-expect-error BrunoTableClient always requires a typed non-empty Initial Order By.
+    const invalidProps: BrunoTableClientProps<Order, NoSortingColumns> = props;
+
+    expectTypeOf(invalidProps).toEqualTypeOf<BrunoTableClientProps<Order, NoSortingColumns>>();
   });
 
   it("keeps widened runtime columns conservatively editable", () => {
@@ -502,6 +505,7 @@ describe("BrunoTable public types", () => {
         enableSorting: false,
       },
     ] as const satisfies BrunoTableColumns<Order>;
+    // @ts-expect-error BrunoTableClient cannot omit its required non-empty Initial Order By.
     void BrunoTableClient({
       tableId: "orders-no-sort",
       columns: noSortColumns,

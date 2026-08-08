@@ -34,6 +34,9 @@ describe("BrunoTableViewportRuntime", () => {
 
     viewport.setLayout(2, columns);
     expect(listener).toHaveBeenCalledOnce();
+
+    viewport.setLayout(2, Object.freeze(Array.from(columns)));
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("batches midpoint reveals and keeps segmented same-window scroll out of React", () => {
@@ -252,5 +255,33 @@ describe("BrunoTableViewportRuntime", () => {
     callback!(0);
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("clamps a deep scroll before publishing a shrunken live layout", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 3_000,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+
+    viewport.setLayout(2, columns);
+
+    expect(element.scrollTop).toBe(0);
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({ rowStart: 0, rowEnd: 2 });
   });
 });

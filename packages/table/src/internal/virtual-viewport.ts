@@ -105,7 +105,11 @@ export class BrunoTableViewportRuntime {
       );
       return;
     }
-    this.setLogicalScrollTop(element, previousLogicalScrollTop);
+    const clampedLogicalScrollTop = Math.min(
+      previousLogicalScrollTop,
+      logicalScrollMaximum(this.layout, element.clientHeight),
+    );
+    this.setLogicalScrollTop(element, clampedLogicalScrollTop);
     this.publishFromElement();
   };
 
