@@ -122,7 +122,6 @@ function ToastClose({
     <ToastPrimitive.Close
       data-slot="toast-close"
       aria-label="Close toast"
-      aria-hidden={false}
       render={render}
       className={cn(
         "relative shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-foreground",
@@ -172,31 +171,47 @@ function ToastIcon({ type }: { type: string | undefined }) {
   );
 }
 
-function ToastList() {
+function ToastList({ timeout }: { timeout: number }) {
   const { toasts } = ToastPrimitive.useToastManager();
 
-  return toasts.map((toastItem) => (
-    <Toast key={toastItem.id} toast={toastItem}>
-      <ToastContent>
-        <ToastIcon type={toastItem.type} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <ToastTitle />
-          <ToastDescription />
-        </div>
-        <ToastAction />
-        <ToastClose />
-      </ToastContent>
-    </Toast>
-  ));
+  return toasts.map((toastItem) => {
+    const isPersistent = toastItem.type === "loading" || (toastItem.timeout ?? timeout) <= 0;
+    const closeProps = isPersistent ? { "aria-hidden": false } : {};
+    const rootProps =
+      isPersistent && toastItem.priority === "high"
+        ? { role: "presentation" as const, "aria-hidden": false, "aria-live": "off" as const }
+        : {};
+
+    return (
+      <Toast key={toastItem.id} toast={toastItem} {...rootProps}>
+        <ToastContent>
+          <ToastIcon type={toastItem.type} />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <ToastTitle />
+            <ToastDescription />
+          </div>
+          <ToastAction />
+          {/* Base UI hides collapsed Close controls by default; persistent
+              workflow notifications must stay in the accessibility tree. */}
+          <ToastClose {...closeProps} />
+        </ToastContent>
+      </Toast>
+    );
+  });
 }
 
-function Toaster({ children, toastManager = toast, ...props }: ToastPrimitive.Provider.Props) {
+function Toaster({
+  children,
+  toastManager = toast,
+  timeout = 5000,
+  ...props
+}: ToastPrimitive.Provider.Props) {
   return (
-    <ToastProvider toastManager={toastManager} {...props}>
+    <ToastProvider toastManager={toastManager} timeout={timeout} {...props}>
       {children}
       <ToastPortal>
         <ToastViewport>
-          <ToastList />
+          <ToastList timeout={timeout} />
         </ToastViewport>
       </ToastPortal>
     </ToastProvider>
