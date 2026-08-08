@@ -61,11 +61,11 @@ Before opening or updating a pull request with repository changes, follow the lo
    - Specification and domain correctness
    - Verification, public API, and regression safety
 2. Require every reviewer to label findings as blocking or non-blocking and to report explicit counts.
-3. Fix every blocking finding, rerun the relevant validation, then restart all three reviewers from the updated diff.
+3. Fix every blocking finding. Also fix accepted actionable non-blocking findings from local agents or other reviewers; if a non-blocking finding is disputed, record the rationale instead of silently dropping it. Rerun the relevant validation, then restart all three reviewers from the updated diff.
 4. Commit and push only after one complete round reports zero blockers from all three reviewers and required local checks pass.
-5. Wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. A missing, pending, or skipped Codex or CodeRabbit review is incomplete work; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
+5. Wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. Codex and CodeRabbit are explicit repository minimums even when no checked-in integration configuration exists; trigger them through the supported pull-request integrations or commands. A missing, pending, skipped, or unavailable required review is incomplete work and blocks publication; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
 6. After any code or documentation change made for remote feedback, rerun local validation and the complete three-reviewer loop before pushing again.
-7. Merge only when local reviewers, required checks, and required GitHub reviewers are clean.
+7. Merge only when local reviewers, required checks, and required GitHub reviewers are clean. Blocking findings cannot be waived; disputed non-blocking findings require a recorded rationale.
 
 Do not make review ceremonial. Every blocking finding needs concrete evidence, a repository rule or requirement it violates, and a smallest credible fix. Non-blocking suggestions do not prevent publication unless the user promotes them to requirements.
 

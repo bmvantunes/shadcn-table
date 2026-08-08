@@ -119,6 +119,7 @@ async function assertPackedConsumer() {
             "@types/react-dom": requiredDevDependency("@types/react-dom"),
             react: requiredDevDependency("react"),
             "react-dom": requiredDevDependency("react-dom"),
+            tailwindcss: requiredDevDependency("tailwindcss"),
             typescript: requiredDevDependency("typescript"),
           },
         }),
@@ -142,8 +143,34 @@ async function assertPackedConsumer() {
       await writeFile(
         join(consumerRoot, "src/index.tsx"),
         `import { Button } from "@bruno/shadcn/button";
-import { Toaster, toast } from "@bruno/shadcn/toast";
+import {
+  Toast,
+  ToastAction,
+  ToastClose,
+  ToastContent,
+  ToastDescription,
+  ToastPortal,
+  ToastProvider,
+  ToastTitle,
+  ToastViewport,
+  Toaster,
+  createToastManager,
+  toast,
+  useToastManager,
+} from "@bruno/shadcn/toast";
 import "@bruno/shadcn/styles.css";
+
+void Toast;
+void ToastAction;
+void ToastClose;
+void ToastContent;
+void ToastDescription;
+void ToastPortal;
+void ToastProvider;
+void ToastTitle;
+void ToastViewport;
+void createToastManager;
+void useToastManager;
 
 export function CleanConsumer() {
   return (
@@ -159,8 +186,31 @@ export function CleanConsumer() {
         join(consumerRoot, "runtime.mjs"),
         `const button = await import("@bruno/shadcn/button");
 const toast = await import("@bruno/shadcn/toast");
-if (typeof button.Button !== "function" || typeof toast.Toaster !== "function") {
-  throw new Error("Packed direct-subpath exports are empty.");
+const requiredToastComponents = [
+  "Toast",
+  "ToastAction",
+  "ToastClose",
+  "ToastContent",
+  "ToastDescription",
+  "ToastPortal",
+  "ToastProvider",
+  "ToastTitle",
+  "ToastViewport",
+  "Toaster",
+];
+if (
+  typeof button.Button !== "function" ||
+  typeof button.buttonVariants !== "function" ||
+  typeof toast.toast?.add !== "function" ||
+  requiredToastComponents.some((exportName) => typeof toast[exportName] !== "function") ||
+  typeof toast.createToastManager !== "function" ||
+  typeof toast.useToastManager !== "function"
+) {
+  throw new Error("Packed direct-subpath exports are incomplete.");
+}
+const stylesheetUrl = import.meta.resolve("@bruno/shadcn/styles.css");
+if (!stylesheetUrl.endsWith("/src/styles/globals.css")) {
+  throw new Error("Packed styles.css direct-subpath export is invalid.");
 }
 `,
       );
@@ -171,9 +221,7 @@ if (typeof button.Button !== "function" || typeof toast.Toaster !== "function") 
         consumerRoot,
         "packed consumer install",
       );
-      const typescriptCli = fileURLToPath(
-        new URL("../../../node_modules/typescript/bin/tsc", import.meta.url),
-      );
+      const typescriptCli = join(consumerRoot, "node_modules/typescript/bin/tsc");
       runCommand(
         process.execPath,
         [typescriptCli, "--project", "tsconfig.json"],
@@ -193,6 +241,7 @@ function runCommand(command, parameters, cwd, label) {
   const result = spawnSync(command, parameters, {
     cwd,
     encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
     env: { ...process.env, CI: "true" },
   });
   if (result.error || result.status !== 0 || result.signal !== null) {
