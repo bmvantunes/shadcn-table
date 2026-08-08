@@ -3,7 +3,9 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
+    "lib": ["esnext", "dom"],
     "noEmit": true,
+    "skipLibCheck": false,
     "types": []
   },
   "include": ["index.ts"]

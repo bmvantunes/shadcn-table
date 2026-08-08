@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "vp test",
+    "test:browser": "vp test --project browser --run",
     "check": "vp check",
     "prepare": "vp config"
   },

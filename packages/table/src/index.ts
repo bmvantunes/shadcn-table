@@ -10,6 +10,10 @@ export {
 export type { BrunoTableSelectValue } from "./column-helpers";
 
 export type {
+  BrunoTableAggFunc,
+  BrunoTableAggregateCellParams,
+  BrunoTableAggregateResultKind,
+  BrunoTableAggregateResults,
   BrunoTableBuiltInValueType,
   BrunoTableCellAlign,
   BrunoTableClientProps,
@@ -30,8 +34,12 @@ export type {
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpression,
   BrunoTableFilterExpressions,
+  BrunoTableFieldColumnDefinition,
   BrunoTableNoGroupingCapability,
   BrunoTableJsonValue,
+  BrunoTableGroupKeyCellParams,
+  BrunoTableGroupKeyValue,
+  BrunoTableGroupKeyValues,
   BrunoTableNumberFormat,
   BrunoTableOrdering,
   BrunoTableRowId,

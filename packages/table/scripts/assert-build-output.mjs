@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,14 +7,21 @@ import { spawnSync } from "node:child_process";
 
 class UninspectableWildcardExportError extends Error {}
 
-const [declarations, effectDeclarations, rootRuntime, compilerOutput, packageJsonSource] =
-  await Promise.all([
-    readFile(new URL("../dist/index.d.mts", import.meta.url), "utf8"),
-    readFile(new URL("../dist/effect.d.mts", import.meta.url), "utf8"),
-    readFile(new URL("../dist/index.mjs", import.meta.url), "utf8"),
-    readFile(new URL("../dist/internal/compiler-smoke.mjs", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-  ]);
+const [
+  declarations,
+  effectDeclarations,
+  rootRuntime,
+  effectRuntime,
+  compilerOutput,
+  packageJsonSource,
+] = await Promise.all([
+  readFile(new URL("../dist/index.d.mts", import.meta.url), "utf8"),
+  readFile(new URL("../dist/effect.d.mts", import.meta.url), "utf8"),
+  readFile(new URL("../dist/index.mjs", import.meta.url), "utf8"),
+  readFile(new URL("../dist/effect.mjs", import.meta.url), "utf8"),
+  readFile(new URL("../dist/internal/compiler-smoke.mjs", import.meta.url), "utf8"),
+  readFile(new URL("../package.json", import.meta.url), "utf8"),
+]);
 
 if (!compilerOutput.includes("react/compiler-runtime")) {
   throw new Error("React Compiler did not transform the @bruno/table smoke fixture.");
@@ -28,10 +35,30 @@ if (/tanstack/iu.test(declarations)) {
   throw new Error("A TanStack implementation type leaked into the @bruno/table declarations.");
 }
 
-if (/\beffect(?:\/|["'])/u.test(declarations) || /\beffect(?:\/|["'])/u.test(rootRuntime)) {
+if (
+  /\beffect(?:\/|["'])/u.test(declarations) ||
+  /\beffect(?:\/|["'])/u.test(rootRuntime) ||
+  /effect-view-server/u.test(declarations) ||
+  /effect-view-server/u.test(rootRuntime)
+) {
   throw new Error(
-    "The @bruno/table root entry imports or declares the optional Effect integration.",
+    "The @bruno/table root entry imports or declares the optional Effect/View Server integration.",
   );
+}
+
+if (/@effect-view-server/u.test(effectRuntime) || /@effect-view-server/u.test(effectDeclarations)) {
+  throw new Error("The optional Effect entry leaks a private effect-view-server package path.");
+}
+
+if (/(?:from\s+|import\s*)["']effect-view-server(?:\/|["'])/u.test(effectRuntime)) {
+  throw new Error("The optional Effect entry leaves effect-view-server as a consumer dependency.");
+}
+
+if (
+  /(?:from\s+|import\s*)["']effect["']/u.test(effectRuntime) ||
+  /(?:from\s+|import\s*)["']effect\/Schema["']/u.test(effectRuntime)
+) {
+  throw new Error("The optional Effect entry imports the broad Effect or Schema entrypoint.");
 }
 
 const exportedNames = collectDeclarationExportNames(declarations);
@@ -139,12 +166,26 @@ if (JSON.stringify(packageJson.files) !== JSON.stringify(["dist"])) {
   throw new Error("The @bruno/table package must publish its complete dist directory.");
 }
 
-await assertRootConsumerDoesNotInstallEffect(packageJsonSource);
+await assertPackedConsumers();
 
 if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0") {
   throw new Error(
     "The private TanStack Table engine is not pinned to the audited stable v9.0.0 version.",
   );
+}
+
+if (packageJson.devDependencies?.["effect-view-server"] !== "2.3.0") {
+  throw new Error(
+    "The optional Effect build is not pinned to the audited public value-semantics contract.",
+  );
+}
+
+if (
+  !hasExactStringRecord(packageJson.inlinedDependencies, {
+    "effect-view-server": "2.3.0",
+  })
+) {
+  throw new Error("The audited View Server value semantics are not explicitly inlined.");
 }
 
 const publicModule = await import("@bruno/table");
@@ -257,20 +298,26 @@ function hasExactStringRecord(actual, expected) {
   );
 }
 
-async function assertRootConsumerDoesNotInstallEffect(packageSource) {
-  const consumerRoot = await mkdtemp(join(tmpdir(), "bruno-table-root-consumer-"));
+async function assertPackedConsumers() {
+  const packRoot = await mkdtemp(join(tmpdir(), "bruno-table-pack-"));
   try {
-    const packageRoot = join(consumerRoot, "node_modules", "@bruno", "table");
-    const reactRoot = join(consumerRoot, "node_modules", "react");
-    await mkdir(packageRoot, { recursive: true });
-    await mkdir(reactRoot, { recursive: true });
-    await cp(new URL("../dist", import.meta.url), join(packageRoot, "dist"), { recursive: true });
-    await writeFile(join(packageRoot, "package.json"), packageSource);
-    await writeFile(
-      join(reactRoot, "package.json"),
-      JSON.stringify({ name: "react", version: "0.0.0-test", types: "./index.d.ts" }),
-    );
-    await writeFile(join(reactRoot, "index.d.ts"), "export type ReactNode = unknown;\n");
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    runCommand("pnpm", ["pack", "--pack-destination", packRoot], packageRoot, "package tarball");
+    const tarball = join(packRoot, "bruno-table-0.0.0.tgz");
+    if (!existsSync(tarball)) {
+      throw new Error("pnpm pack did not produce the expected @bruno/table tarball.");
+    }
+
+    await assertPackedRootConsumer(tarball);
+    await assertPackedEffectConsumer(tarball);
+  } finally {
+    await rm(packRoot, { recursive: true, force: true });
+  }
+}
+
+async function assertPackedRootConsumer(tarball) {
+  const consumerRoot = await createPackedConsumer("bruno-table-root-consumer-", tarball, false);
+  try {
     await writeFile(
       join(consumerRoot, "index.ts"),
       `import { BrunoTableTextColumn } from "@bruno/table";
@@ -283,38 +330,151 @@ const columns = [
 void columns;
 `,
     );
-    await writeFile(
-      join(consumerRoot, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          noEmit: true,
-          module: "esnext",
-          moduleResolution: "bundler",
-          types: [],
-          skipLibCheck: false,
-        },
-        include: ["index.ts"],
-      }),
-    );
+    await writeFile(join(consumerRoot, "runtime.mjs"), 'await import("@bruno/table");\n');
 
-    if (existsSync(join(consumerRoot, "node_modules", "effect"))) {
-      throw new Error("The clean root consumer unexpectedly contains Effect.");
-    }
-
-    const typescriptCli = fileURLToPath(
-      new URL("../../../node_modules/typescript/bin/tsc", import.meta.url),
-    );
-    const typecheck = spawnSync(process.execPath, [typescriptCli, "--project", "tsconfig.json"], {
-      cwd: consumerRoot,
-      encoding: "utf8",
-    });
-    if (typecheck.status !== 0) {
-      throw new Error(
-        `The Effect-free @bruno/table root consumer failed to type-check.\n${typecheck.stdout}${typecheck.stderr}`,
-      );
-    }
+    await assertInstalledGraphExcludesEffect(consumerRoot);
+    runTypeScriptConsumer(consumerRoot, "Effect-free @bruno/table root consumer");
+    runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "Effect-free root runtime");
   } finally {
     await rm(consumerRoot, { recursive: true, force: true });
+  }
+}
+
+async function assertPackedEffectConsumer(tarball) {
+  const consumerRoot = await createPackedConsumer("bruno-table-effect-consumer-", tarball, true);
+  try {
+    await writeFile(
+      join(consumerRoot, "index.ts"),
+      `import * as BigDecimal from "effect/BigDecimal";
+import { BrunoTableBigDecimalColumn } from "@bruno/table/effect";
+import type { BrunoTableColumns } from "@bruno/table";
+
+type Row = { readonly price: BigDecimal.BigDecimal };
+const columns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    aggFunc: "sum",
+    aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+  }),
+] satisfies BrunoTableColumns<Row>;
+void columns;
+`,
+    );
+    await writeFile(
+      join(consumerRoot, "runtime.mjs"),
+      `import assert from "node:assert/strict";
+import * as BigDecimal from "effect/BigDecimal";
+import { BrunoTableBigDecimalValueType } from "@bruno/table/effect";
+
+const large = BigDecimal.fromStringUnsafe("-9007199254740993123456789.0000000000000000001");
+assert.equal(
+  BrunoTableBigDecimalValueType.formatCanonicalText(large),
+  "-9.0071992547409931234567890000000000000000001e+24",
+);
+const fractional = BrunoTableBigDecimalValueType.parseCanonicalText("-0.000000000000000000125");
+assert.equal(fractional._tag, "Success");
+const onePointFive = BigDecimal.fromStringUnsafe("1.5");
+const differentlyScaled = BigDecimal.make(1500n, 3);
+assert.equal(BrunoTableBigDecimalValueType.equivalent(onePointFive, differentlyScaled), true);
+assert.equal(BrunoTableBigDecimalValueType.compare(large, onePointFive), -1);
+assert.equal(BrunoTableBigDecimalValueType.parseCanonicalText("not-a-decimal")._tag, "Failure");
+assert.equal(BrunoTableBigDecimalValueType.decodeRuntime({ value: 15n, scale: 1 })._tag, "Failure");
+
+const foreignPrototype = Object.create(null, {
+  "~effect/BigDecimal": { value: "~effect/BigDecimal" },
+});
+const foreign = Object.create(foreignPrototype, {
+  value: { value: 150n, enumerable: true },
+  scale: { value: 2, enumerable: true },
+});
+const admitted = BrunoTableBigDecimalValueType.decodeRuntime(foreign);
+assert.equal(admitted._tag, "Success");
+if (admitted._tag === "Success") {
+  assert.notEqual(admitted.value, foreign);
+  assert.equal(Object.isFrozen(admitted.value), true);
+  assert.equal(BigDecimal.format(admitted.value), "1.5");
+}
+`,
+    );
+
+    runTypeScriptConsumer(consumerRoot, "packed @bruno/table/effect consumer");
+    runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "packed BigDecimal runtime");
+  } finally {
+    await rm(consumerRoot, { recursive: true, force: true });
+  }
+}
+
+async function createPackedConsumer(prefix, tarball, includeEffect) {
+  const consumerRoot = await mkdtemp(join(tmpdir(), prefix));
+  await writeFile(
+    join(consumerRoot, "package.json"),
+    JSON.stringify({
+      private: true,
+      type: "module",
+      dependencies: {
+        "@bruno/table": `file:${tarball}`,
+        "@types/react": "19.2.18",
+        ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
+        react: "19.2.8",
+        "react-dom": "19.2.8",
+      },
+    }),
+  );
+  await writeFile(
+    join(consumerRoot, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        noEmit: true,
+        module: "esnext",
+        moduleResolution: "bundler",
+        lib: ["esnext", "dom"],
+        types: [],
+        skipLibCheck: false,
+      },
+      include: ["index.ts"],
+    }),
+  );
+  runCommand(
+    "pnpm",
+    ["install", "--prefer-offline", "--ignore-scripts", "--no-frozen-lockfile"],
+    consumerRoot,
+    "packed consumer install",
+  );
+  return consumerRoot;
+}
+
+async function assertInstalledGraphExcludesEffect(consumerRoot) {
+  if (
+    existsSync(join(consumerRoot, "node_modules", "effect")) ||
+    existsSync(join(consumerRoot, "node_modules", "effect-view-server"))
+  ) {
+    throw new Error("The clean root consumer unexpectedly installed Effect or View Server.");
+  }
+
+  const virtualStore = join(consumerRoot, "node_modules", ".pnpm");
+  const entries = existsSync(virtualStore) ? await readdir(virtualStore) : [];
+  if (entries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))) {
+    throw new Error("The clean root consumer dependency graph contains Effect or View Server.");
+  }
+}
+
+function runTypeScriptConsumer(consumerRoot, label) {
+  const typescriptCli = fileURLToPath(
+    new URL("../../../node_modules/typescript/bin/tsc", import.meta.url),
+  );
+  runCommand(process.execPath, [typescriptCli, "--project", "tsconfig.json"], consumerRoot, label);
+}
+
+function runCommand(command, parameters, cwd, label) {
+  const result = spawnSync(command, parameters, {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, CI: "true" },
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed.\n${result.stdout ?? ""}${result.stderr ?? ""}`);
   }
 }

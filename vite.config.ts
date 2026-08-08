@@ -2,11 +2,21 @@ import { defineConfig, type UserConfig } from "vite-plus";
 
 const config: UserConfig = defineConfig({
   test: {
-    include: [
-      "src/**/*.test.ts",
-      "tests/**/*.test.ts",
-      "packages/**/*.test.ts",
-      "packages/**/*.test.tsx",
+    projects: [
+      {
+        test: {
+          name: "node",
+          environment: "node",
+          include: [
+            "src/**/*.test.ts",
+            "tests/**/*.test.ts",
+            "packages/**/*.test.ts",
+            "packages/**/*.test.tsx",
+          ],
+          exclude: ["packages/**/*.browser.test.tsx"],
+        },
+      },
+      "./packages/shadcn/vitest.browser.config.ts",
     ],
   },
   staged: {

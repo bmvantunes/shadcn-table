@@ -4,7 +4,10 @@ import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@brun
 import type {
   BrunoTableColumnValue,
   BrunoTableColumns,
+  BrunoTableFieldColumnDefinition,
   BrunoTableFilterExpressions,
+  BrunoTableGroupKeyValues,
+  BrunoTableValueType,
 } from "@bruno/table";
 
 type PriceRow = {
@@ -97,6 +100,266 @@ const invalidField = BrunoTableBigDecimalColumn<PriceRow, "symbol">({
   headerName: "Symbol",
 });
 void invalidField;
+
+type GroupedPriceRow = {
+  readonly price: BigDecimal.BigDecimal;
+  readonly optionalPrice?: BigDecimal.BigDecimal;
+  readonly nullablePrice: BigDecimal.BigDecimal | null;
+  readonly absent?: never;
+};
+
+const groupedColumns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_GROUP_PRICE",
+    field: "price",
+    headerName: "Price group",
+    groupBy: true,
+    groupKeyValueFormatter: ({ columnId, value, rowCount }) => {
+      columnId satisfies "COL_ID_GROUP_PRICE";
+      BigDecimal.format(value);
+      rowCount satisfies bigint;
+      return BigDecimal.format(value);
+    },
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_TOTAL_PRICE",
+    field: "price",
+    headerName: "Total price",
+    aggFunc: "sum",
+    aggregateValueFormatter: (parameters) => {
+      const { aggFunc, columnId, value, rowCount } = parameters;
+      aggFunc satisfies "sum";
+      columnId satisfies "COL_ID_TOTAL_PRICE";
+      rowCount satisfies bigint;
+      // @ts-expect-error Aggregate cells never fabricate one raw source row.
+      void parameters.row;
+      return BigDecimal.format(value);
+    },
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_DISTINCT_PRICE",
+    field: "price",
+    headerName: "Distinct prices",
+    aggFunc: "countDistinct",
+    aggregateValueFormatter: ({ value }) => value.toString(),
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_OPTIONAL_MIN_PRICE",
+    field: "optionalPrice",
+    headerName: "Minimum optional price",
+    aggFunc: "min",
+    aggregateValueFormatter: ({ value }) => {
+      value satisfies BigDecimal.BigDecimal | undefined;
+      return value === undefined ? "" : BigDecimal.format(value);
+    },
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_NULLABLE_MIN_PRICE",
+    field: "nullablePrice",
+    headerName: "Minimum nullable price",
+    aggFunc: "min",
+    aggregateValueFormatter: ({ value }) => {
+      value satisfies BigDecimal.BigDecimal | null;
+      return value === null ? "" : BigDecimal.format(value);
+    },
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void groupedColumns;
+
+const groupEvidenceColumns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_PRIMARY_PRICE_GROUP",
+    field: "price",
+    headerName: "Primary price group",
+    groupBy: true,
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_SECONDARY_PRICE_GROUP",
+    field: "price",
+    headerName: "Secondary price group",
+    groupBy: true,
+  }),
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_NOT_GROUPABLE_PRICE",
+    field: "price",
+    headerName: "Not groupable price",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+const exactGroupKeyValues: BrunoTableGroupKeyValues<GroupedPriceRow, typeof groupEvidenceColumns> =
+  [
+    {
+      columnId: "COL_ID_PRIMARY_PRICE_GROUP",
+      field: "price",
+      value: BigDecimal.make(1n, 0),
+    },
+    {
+      columnId: "COL_ID_SECONDARY_PRICE_GROUP",
+      field: "price",
+      value: BigDecimal.make(2n, 0),
+    },
+  ];
+void exactGroupKeyValues;
+const invalidGroupKeyValues: BrunoTableGroupKeyValues<
+  GroupedPriceRow,
+  typeof groupEvidenceColumns
+> = [
+  {
+    // @ts-expect-error Exact group-key evidence excludes non-groupable Column Identities.
+    columnId: "COL_ID_NOT_GROUPABLE_PRICE",
+    field: "price",
+    value: BigDecimal.make(1n, 0),
+  },
+];
+void invalidGroupKeyValues;
+
+const rawGroupedPrice = {
+  columnId: "COL_ID_RAW_GROUP_PRICE",
+  field: "price",
+  headerName: "Raw grouped price",
+  valueType: BrunoTableBigDecimalValueType,
+  groupBy: true,
+  aggFunc: "max",
+  aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+} satisfies BrunoTableFieldColumnDefinition<
+  GroupedPriceRow,
+  "price",
+  typeof BrunoTableBigDecimalValueType,
+  { readonly groupBy: true; readonly aggFunc: "max" },
+  "COL_ID_RAW_GROUP_PRICE"
+>;
+[rawGroupedPrice] satisfies BrunoTableColumns<GroupedPriceRow>;
+
+const { aggregateResults: ignoredAggregateResults, ...noAggregateBigDecimalValueType } =
+  BrunoTableBigDecimalValueType;
+void ignoredAggregateResults;
+noAggregateBigDecimalValueType satisfies BrunoTableValueType<
+  BigDecimal.BigDecimal,
+  "numeric",
+  "bigdecimal"
+>;
+const invalidRawAggregate = [
+  {
+    columnId: "COL_ID_INVALID_RAW_AGGREGATE",
+    field: "price",
+    headerName: "Invalid raw aggregate",
+    valueType: noAggregateBigDecimalValueType,
+    // @ts-expect-error A raw custom Value Type must declare the selected aggregate capability.
+    aggFunc: "sum",
+  },
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void invalidRawAggregate;
+
+const invalidOptionalSum = BrunoTableBigDecimalColumn({
+  columnId: "COL_ID_INVALID_OPTIONAL_SUM",
+  // @ts-expect-error View Server sum and avg reject optional or nullish fields.
+  field: "optionalPrice",
+  headerName: "Invalid optional sum",
+  aggFunc: "sum",
+});
+void invalidOptionalSum;
+
+const invalidNullableAverage = BrunoTableBigDecimalColumn({
+  columnId: "COL_ID_INVALID_NULLABLE_AVERAGE",
+  // @ts-expect-error View Server sum and avg reject optional or nullish fields.
+  field: "nullablePrice",
+  headerName: "Invalid nullable average",
+  aggFunc: "avg",
+});
+void invalidNullableAverage;
+
+const aggregatePreset = BrunoTableBigDecimalColumn.withDefaults({
+  headerName: "Total price",
+  aggFunc: "sum",
+  aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+});
+const [distinctFromPreset] = [
+  aggregatePreset({
+    columnId: "COL_ID_PRESET_DISTINCT",
+    field: "price",
+    aggFunc: "countDistinct",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+// @ts-expect-error Changing aggFunc removes the incompatible preset formatter capability.
+distinctFromPreset.aggregateValueFormatter({});
+
+const invalidOptionalAggregatePreset = [
+  aggregatePreset({
+    columnId: "COL_ID_INVALID_OPTIONAL_PRESET",
+    // @ts-expect-error Capability-bearing presets conservatively reject optional fields.
+    field: "optionalPrice",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void invalidOptionalAggregatePreset;
+
+const nullableMinPreset = BrunoTableBigDecimalColumn.withDefaults({
+  headerName: "Nullable minimum",
+  aggFunc: "min",
+});
+const nullableMinFromPreset = [
+  nullableMinPreset({
+    columnId: "COL_ID_NULLABLE_MIN_PRESET",
+    field: "nullablePrice",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void nullableMinFromPreset;
+
+const unsafeNullableMinPreset = BrunoTableBigDecimalColumn.withDefaults({
+  headerName: "Unsafe nullable minimum",
+  aggFunc: "min",
+  aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+});
+const invalidUnsafeNullableMinPreset = [
+  unsafeNullableMinPreset({
+    columnId: "COL_ID_INVALID_NULLABLE_MIN_PRESET",
+    // @ts-expect-error Inherited min presentation must be replaced for a nullable field.
+    field: "nullablePrice",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void invalidUnsafeNullableMinPreset;
+const groupPreset = BrunoTableBigDecimalColumn.withDefaults({
+  headerName: "Grouped price",
+  groupBy: true,
+  groupKeyValueFormatter: ({ value }) => BigDecimal.format(value),
+});
+const [ungroupedFromPreset] = [
+  groupPreset({
+    columnId: "COL_ID_PRESET_UNGROUPED",
+    field: "price",
+    groupBy: false,
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+// @ts-expect-error Disabling groupBy removes the inherited group presentation capability.
+ungroupedFromPreset.groupKeyValueFormatter({});
+
+const invalidNullableGroupPreset = [
+  groupPreset({
+    columnId: "COL_ID_INVALID_NULLABLE_GROUP_PRESET",
+    // @ts-expect-error Capability-bearing presets conservatively reject nullable fields.
+    field: "nullablePrice",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void invalidNullableGroupPreset;
+
+const presentationFreeGroupPreset = BrunoTableBigDecimalColumn.withDefaults({
+  headerName: "Nullable group",
+  groupBy: true,
+});
+const nullableGroupFromPreset = [
+  presentationFreeGroupPreset({
+    columnId: "COL_ID_NULLABLE_GROUP_PRESET",
+    field: "nullablePrice",
+  }),
+] satisfies BrunoTableColumns<GroupedPriceRow>;
+void nullableGroupFromPreset;
+
+const invalidAggregatePresentation = BrunoTableBigDecimalColumn({
+  columnId: "COL_ID_INVALID_AGGREGATE",
+  // @ts-expect-error Aggregate presentation requires one supported aggFunc.
+  field: "price",
+  headerName: "Invalid aggregate",
+  aggregateCellClassName: "invalid",
+});
+void invalidAggregatePresentation;
 
 // @ts-expect-error Effect-specific exports are isolated from the root package.
 import { BrunoTableBigDecimalColumn as InvalidRootImport } from "@bruno/table";

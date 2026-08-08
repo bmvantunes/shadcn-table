@@ -1,9 +1,8 @@
-// @vitest-environment jsdom
-
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CalendarDay } from "react-day-picker";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
+import { cleanup, render } from "vitest-browser-react";
 
 import {
   AlertDialog,
@@ -29,14 +28,14 @@ vi.mock("embla-carousel-react", () => ({
   default: () => [vi.fn(), carouselApi],
 }));
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  await cleanup();
   vi.clearAllMocks();
 });
 
 describe("reviewed component interactions", () => {
-  test("gives the Carousel region a named focus owner and handles only its own arrows", () => {
-    render(
+  test("gives the Carousel region a named focus owner and handles only its own arrows", async () => {
+    const screen = await render(
       <Carousel>
         <button type="button">Nested control</button>
       </Carousel>,
@@ -45,11 +44,13 @@ describe("reviewed component interactions", () => {
     const carousel = screen.getByRole("region", { name: "Carousel" });
     const nestedControl = screen.getByRole("button", { name: "Nested control" });
 
-    expect(carousel).toHaveProperty("tabIndex", 0);
-    fireEvent.keyDown(carousel, { key: "ArrowRight" });
+    await expect.element(carousel).toHaveAttribute("tabindex", "0");
+    await carousel.click();
+    await userEvent.keyboard("{ArrowRight}");
     expect(carouselApi.scrollNext).toHaveBeenCalledOnce();
 
-    fireEvent.keyDown(nestedControl, { key: "ArrowRight" });
+    await nestedControl.click();
+    await userEvent.keyboard("{ArrowRight}");
     expect(carouselApi.scrollNext).toHaveBeenCalledOnce();
   });
 
@@ -68,53 +69,51 @@ describe("reviewed component interactions", () => {
       );
     }
 
-    render(<AlertDialogHarness />);
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    const screen = await render(<AlertDialogHarness />);
+    await screen.getByRole("button", { name: "Submit" }).click();
 
-    await waitFor(() => {
-      expect(screen.queryByRole("alertdialog")).toBeNull();
-    });
+    await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   test("moves DOM focus to a Calendar day when it becomes focused", async () => {
     const date = new Date(2026, 7, 7);
     const day = new CalendarDay(date, date);
 
-    const { rerender } = render(<CalendarDayButton day={day} modifiers={{}} />);
+    const screen = await render(<CalendarDayButton day={day} modifiers={{}} />);
     const dayButton = screen.getByRole("button");
-    expect(dayButton).not.toBe(document.activeElement);
+    await expect.element(dayButton).not.toHaveFocus();
 
-    rerender(<CalendarDayButton day={day} modifiers={{ focused: true }} />);
+    await screen.rerender(<CalendarDayButton day={day} modifiers={{ focused: true }} />);
 
-    await waitFor(() => {
-      expect(dayButton).toBe(document.activeElement);
-    });
+    await expect.element(dayButton).toHaveFocus();
   });
 
   test.each([
     ["input", <InputGroupInput key="input" aria-label="Price" />],
     ["textarea", <InputGroupTextarea key="textarea" aria-label="Notes" />],
-  ])("focuses the %s control when an Input Group addon is clicked", (_name, control) => {
-    render(
+  ])("focuses the %s control when an Input Group addon is clicked", async (_name, control) => {
+    const screen = await render(
       <InputGroup>
-        <InputGroupAddon>Prefix</InputGroupAddon>
+        <InputGroupAddon aria-label="Prefix">Prefix</InputGroupAddon>
         {control}
       </InputGroup>,
     );
 
-    fireEvent.click(screen.getByText("Prefix"));
-    expect(screen.getByRole("textbox")).toBe(document.activeElement);
+    await screen.getByRole("group", { name: "Prefix" }).click();
+    await expect.element(screen.getByRole("textbox")).toHaveFocus();
   });
 
-  test("honours a consumer-cancelled Input Group addon click", () => {
-    render(
+  test("honours a consumer-cancelled Input Group addon click", async () => {
+    const screen = await render(
       <InputGroup>
-        <InputGroupAddon onClick={(event) => event.preventDefault()}>Prefix</InputGroupAddon>
+        <InputGroupAddon aria-label="Prefix" onClick={(event) => event.preventDefault()}>
+          Prefix
+        </InputGroupAddon>
         <InputGroupInput aria-label="Price" />
       </InputGroup>,
     );
 
-    fireEvent.click(screen.getByText("Prefix"));
-    expect(screen.getByRole("textbox")).not.toBe(document.activeElement);
+    await screen.getByRole("group", { name: "Prefix" }).click();
+    await expect.element(screen.getByRole("textbox")).not.toHaveFocus();
   });
 });

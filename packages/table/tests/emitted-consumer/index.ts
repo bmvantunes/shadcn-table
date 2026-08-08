@@ -13,6 +13,7 @@ import {
   type BrunoTableDecodeResult,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
+  type BrunoTableGroupKeyCellParams,
   type BrunoTableSaveCellChange,
   type BrunoTableSaveChangeSet,
   type BrunoTableServerProps,
@@ -137,6 +138,22 @@ const helperColumns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type HelperColumns = typeof helperColumns;
+
+type NarrowEmittedGroupParams = BrunoTableGroupKeyCellParams<string, "COL_ID_NARROW_GROUP"> & {
+  readonly groupKeys: readonly [{ readonly field: "symbol"; readonly value: string }];
+};
+
+const narrowEmittedGroupFormatter = (_params: NarrowEmittedGroupParams) => "symbol";
+
+BrunoTableTextColumn({
+  columnId: "COL_ID_NARROW_GROUP",
+  // @ts-expect-error Emitted helpers reject callbacks that require unavailable sibling evidence.
+  field: "symbol",
+  headerName: "Narrow group",
+  groupBy: true,
+  groupKeyValueFormatter: narrowEmittedGroupFormatter,
+});
+
 type HelperPrice = Expect<
   Equal<BrunoTableColumnValue<Order, HelperColumns, "COL_ID_PRICE">, number>
 >;

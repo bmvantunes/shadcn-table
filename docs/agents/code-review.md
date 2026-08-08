@@ -31,6 +31,12 @@ Check whether tests and validation prove the changed behavior. Inspect behaviora
 
 Use conditional expertise where the diff requires it. For example, load the Effect skill for Effect adapters, the Vitest skill for test infrastructure, the shadcn skill for shared UI, and the relevant TanStack Intent skill for table behavior. The three axes stay the same even when their supporting expertise changes.
 
+DOM-dependent component behavior must run in Playwright-backed Vitest Browser Mode and use the
+framework renderer plus role-based browser locators. Do not install or use JSDOM or React Testing
+Library. Browser component tests do not use test IDs or non-role `getBy...`, `findBy...`, or
+`queryBy...` queries. Pure logic, type, package-boundary, and server-rendering tests may stay in the
+Node project.
+
 ## Finding contract
 
 Every reviewer reports:
@@ -44,6 +50,8 @@ A blocking finding is a correctness, contract, architecture, performance, securi
 ## Local convergence loop
 
 1. Run relevant focused tests, followed by `vp check` and `vp test`.
+   When the diff contains DOM-facing behavior or Browser Mode infrastructure, also run
+   `vp run test:browser`; the Node project intentionally does not collect `*.browser.test.tsx`.
 2. Start the three reviewers from the same pinned review target.
 3. Wait for all three reports.
 4. Aggregate reports by axis without hiding disagreement or collapsing severity.

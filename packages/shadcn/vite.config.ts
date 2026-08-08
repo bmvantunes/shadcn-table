@@ -19,7 +19,22 @@ const reactCompilerForLibrary = await babel({
 const config: UserConfig = defineConfig({
   plugins: [react(), reactCompilerForVite, tailwindcss()],
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    projects: [
+      {
+        test: {
+          name: "node",
+          environment: "node",
+          include: [
+            "src/**/*.test.ts",
+            "src/**/*.test.tsx",
+            "tests/**/*.test.ts",
+            "tests/**/*.test.tsx",
+          ],
+          exclude: ["src/**/*.browser.test.tsx", "tests/**/*.browser.test.tsx"],
+        },
+      },
+      "./vitest.browser.config.ts",
+    ],
   },
   pack: {
     entry: {

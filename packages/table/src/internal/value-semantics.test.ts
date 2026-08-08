@@ -280,20 +280,84 @@ describe("compiled Column Value Semantics", () => {
           ? { _tag: "Success", value: String(input.value) }
           : { _tag: "Failure", message: "Invalid persisted text." },
     };
-    const mutableCustom = { ...custom };
+    const mutableAggregateResults = { min: "self" as const };
+    const mutableCustom = { ...custom, aggregateResults: mutableAggregateResults };
+    const aggregateValueFormatter = () => "minimum";
     const [compiled] = compileColumns([
       {
         columnId: "COL_ID_CODE",
         field: "code",
         headerName: "Code",
         valueType: mutableCustom,
+        groupBy: true,
+        aggFunc: "min",
+        aggregateValueFormatter,
       },
     ]);
     const semantics = compiled!.semantics;
     mutableCustom.formatCanonicalText = () => "mutated";
+    Reflect.set(mutableAggregateResults, "min", "bigint");
 
     expect(semantics.formatCanonicalText("abc")).toBe("ABC");
     expect(semantics.parseCanonicalText("ABC")).toEqual({ _tag: "Success", value: "abc" });
+    expect(semantics.aggregateResults).toEqual({ min: "self" });
+    expect(Object.isFrozen(semantics.aggregateResults)).toBe(true);
+    expect(compiled).toMatchObject({
+      kind: "field",
+      groupBy: true,
+      aggFunc: "min",
+      aggregateValueFormatter,
+    });
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_UNSUPPORTED_SUM",
+          field: "code",
+          headerName: "Unsupported sum",
+          valueType: custom,
+          aggFunc: "sum",
+        },
+      ]),
+    ).toThrow("does not support sum aggregation");
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_UNKNOWN_AGGREGATE",
+          field: "code",
+          headerName: "Unknown aggregate",
+          valueType: { ...custom, aggregateResults: { median: "self" } },
+        },
+      ]),
+    ).toThrow("aggregateResults does not accept median");
+
+    const accessorAggregateResults = {};
+    Object.defineProperty(accessorAggregateResults, "min", {
+      enumerable: true,
+      get: () => "self",
+    });
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_ACCESSOR_AGGREGATE",
+          field: "code",
+          headerName: "Accessor aggregate",
+          valueType: { ...custom, aggregateResults: accessorAggregateResults },
+        },
+      ]),
+    ).toThrow("aggregateResults must contain enumerable data properties");
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_INVALID_AGGREGATE_RESULT",
+          field: "code",
+          headerName: "Invalid aggregate result",
+          valueType: { ...custom, aggregateResults: { min: "number" } },
+        },
+      ]),
+    ).toThrow("aggregateResults.min is invalid");
 
     const sparseCustom = {
       ...custom,

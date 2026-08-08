@@ -45,7 +45,9 @@
     "@vitejs/plugin-react": "^6.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
     "effect": "4.0.0-beta.100",
+    "effect-view-server": "2.3.0",
     "react": "^19.2.8",
+    "react-dom": "19.2.8",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
@@ -59,5 +61,8 @@
     "effect": {
       "optional": true
     }
+  },
+  "inlinedDependencies": {
+    "effect-view-server": "2.3.0"
   }
 }
