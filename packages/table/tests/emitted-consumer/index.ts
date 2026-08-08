@@ -1,6 +1,7 @@
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
+  BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
@@ -324,6 +325,20 @@ const props = {
   ] satisfies BrunoTableSortBy<Columns>,
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+
+const emittedClient = BrunoTableClient({
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 0,
+    status: "ready",
+  },
+});
+void emittedClient;
 
 const editableProps = {
   tableId: "orders",

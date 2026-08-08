@@ -1,3 +1,4 @@
+export { BrunoTableClient } from "./bruno-table-client";
 export { BrunoTableComputedColumn } from "./public-types";
 export {
   BrunoTableBigIntColumn,
@@ -54,6 +55,7 @@ export type {
   BrunoTableSortableColumnId,
   BrunoTableSortBy,
   BrunoTableSourceChrome,
+  BrunoTableSourceRetry,
   BrunoTableSourceStatus,
   BrunoTableValueType,
   BrunoTableValueTypeValue,

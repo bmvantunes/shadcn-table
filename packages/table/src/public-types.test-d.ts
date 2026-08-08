@@ -3,6 +3,7 @@ import { describe, expectTypeOf, it } from "vitest";
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
+  BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
@@ -173,6 +174,66 @@ const invalidMixedCaseColumnId: BrunoTableColumnId = "COL_ID_Price";
 void invalidMixedCaseColumnId;
 
 describe("BrunoTable public types", () => {
+  it("infers the strict live Client component surface without exposing a table object", () => {
+    const rendered = BrunoTableClient({
+      tableId: "orders",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    });
+
+    expectTypeOf(rendered).not.toBeNever();
+
+    const missingTableId = {
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    };
+    // @ts-expect-error tableId is mandatory for every public Client Table.
+    const invalidMissingTableId: BrunoTableClientProps<Order, Columns> = missingTableId;
+    void invalidMissingTableId;
+
+    const missingRowIdentity = {
+      tableId: "orders",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }] as const,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    };
+    // @ts-expect-error Client identity is mandatory and cannot be replaced by a row index.
+    const invalidMissingRowIdentity: BrunoTableClientProps<Order, Columns> = missingRowIdentity;
+    void invalidMissingRowIdentity;
+
+    // @ts-expect-error the first Client renderer requires a non-empty typed order baseline.
+    void BrunoTableClient({
+      tableId: "orders",
+      columns,
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    });
+  });
+
   it("preserves exact identities and values", () => {
     expectTypeOf<"COL_ID_Price" extends BrunoTableColumnId ? true : false>().toEqualTypeOf<false>();
     expectTypeOf<BrunoTableColumnIdOf<Columns>>().toEqualTypeOf<
@@ -369,6 +430,58 @@ describe("BrunoTable public types", () => {
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
     expectTypeOf(editableClientProps.getRowVersion).returns.toEqualTypeOf<bigint>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
+
+    void BrunoTableClient({
+      ...clientProps,
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
+    });
+    void BrunoTableClient({
+      tableId: "orders",
+      // @ts-expect-error Inference cannot satisfy a client without columns.
+      getRowId: (row: Order) => row.id,
+      // @ts-expect-error Inference cannot satisfy a client without columns.
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
+      clientSource: clientProps.clientSource,
+    });
+    void BrunoTableClient({
+      tableId: "orders",
+      // @ts-expect-error Inference cannot satisfy this incomplete client.
+      columns,
+      // @ts-expect-error Inference cannot satisfy this incomplete client.
+      getRowId: (row: Order) => row.id,
+      // @ts-expect-error Inference cannot satisfy this incomplete client.
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
+    });
+    void BrunoTableClient({
+      ...clientProps,
+      // @ts-expect-error initialOrderBy is a non-empty typed tuple.
+      initialOrderBy: [],
+    });
+
+    const noSortColumns = [
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        isEditable: true,
+        enableSorting: false,
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    void BrunoTableClient({
+      tableId: "orders-no-sort",
+      columns: noSortColumns,
+      getRowId: (row: Order) => row.id,
+      clientSource: clientProps.clientSource,
+    });
+    void BrunoTableClient({
+      tableId: "orders-no-sort",
+      columns: noSortColumns,
+      // @ts-expect-error initialOrderBy is forbidden when no column is sortable.
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: clientProps.clientSource,
+    });
   });
 });
 

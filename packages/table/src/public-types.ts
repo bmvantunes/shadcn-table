@@ -120,12 +120,18 @@ export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
 
 export type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
+export type BrunoTableSourceRetry = {
+  readonly run: (this: void) => void;
+  readonly pending: boolean;
+};
+
 export type BrunoTableSourceChrome = {
   readonly totalRows: number;
   readonly version: number;
   readonly status: BrunoTableSourceStatus;
   readonly statusCode?: string | undefined;
   readonly message?: string | undefined;
+  readonly retry?: BrunoTableSourceRetry | undefined;
 };
 
 export type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
@@ -334,6 +340,7 @@ type ColumnLayout = {
   readonly width?: number;
   readonly cellAlign?: BrunoTableCellAlign;
   readonly editorLayout?: BrunoTableEditorLayout;
+  readonly pinned?: "start" | "end";
 };
 
 type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {

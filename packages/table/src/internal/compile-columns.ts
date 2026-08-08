@@ -1,5 +1,9 @@
 import type { BrunoTableAggFunc, BrunoTableColumnId } from "../public-types";
-import { compileColumnValueSemantics, ValueSemanticsConfigurationError } from "./value-semantics";
+import {
+  compileColumnValueSemantics,
+  ValueSemanticsConfigurationError,
+  type CompiledColumnValueSemantics,
+} from "./value-semantics";
 
 const columnIdPrefix = "COL_ID_";
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
@@ -9,6 +13,7 @@ type RuntimeCallback = (...parameters: never[]) => unknown;
 type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
+  readonly pinned?: "start" | "end";
   readonly valueType: unknown;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly enableFilter: boolean;
@@ -67,6 +72,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasEditorLayout = Object.hasOwn(candidate, "editorLayout");
   const hasWidth = Object.hasOwn(candidate, "width");
   const hasFormat = Object.hasOwn(candidate, "format");
+  const hasPinned = Object.hasOwn(candidate, "pinned");
   const hasGroupBy = Object.hasOwn(candidate, "groupBy");
   const hasAggFunc = Object.hasOwn(candidate, "aggFunc");
   const columnId = candidate["columnId"];
@@ -96,6 +102,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const editorLayout = hasEditorLayout ? candidate["editorLayout"] : undefined;
   const width = hasWidth ? candidate["width"] : undefined;
   const format = hasFormat ? candidate["format"] : undefined;
+  const pinned = hasPinned ? candidate["pinned"] : undefined;
+  if (pinned !== undefined && pinned !== "start" && pinned !== "end") {
+    throw new ColumnConfigurationError(
+      `BrunoTable pinned must be start or end when provided: ${columnId}`,
+    );
+  }
   let semantics: ReturnType<typeof compileColumnValueSemantics>;
   try {
     semantics = compileColumnValueSemantics(valueType, { cellAlign, editorLayout, width, format });
@@ -103,6 +115,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     if (!(error instanceof ValueSemanticsConfigurationError)) throw error;
     throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
+  semantics = nullableSafeSemantics(semantics);
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {
@@ -197,6 +210,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       kind: "field",
       columnId,
       headerName,
+      ...(pinned === undefined ? {} : { pinned }),
       valueType,
       semantics,
       field,
@@ -280,6 +294,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     kind: "computed",
     columnId,
     headerName,
+    ...(pinned === undefined ? {} : { pinned }),
     valueType,
     semantics,
     enableFilter: false,
@@ -295,6 +310,27 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     ...(typeof cellRenderer === "function"
       ? { cellRenderer: cellRenderer as RuntimeCallback }
       : {}),
+  });
+}
+
+function nullableSafeSemantics(
+  semantics: CompiledColumnValueSemantics,
+): CompiledColumnValueSemantics {
+  return Object.freeze({
+    ...semantics,
+    equivalent: (left, right) =>
+      left == null || right == null
+        ? left == null && right == null
+        : semantics.equivalent(left, right),
+    compare: (left, right) =>
+      left == null || right == null
+        ? left == null
+          ? right == null
+            ? 0
+            : -1
+          : 1
+        : semantics.compare(left, right),
+    formatDisplay: (value) => (value == null ? "" : semantics.formatDisplay(value)),
   });
 }
 
