@@ -122,8 +122,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    runtime.configure(props.getRowId, compiledColumns);
-    runtime.publish(props.clientSource);
+    runtime.reconcile(props.clientSource, props.getRowId, compiledColumns);
   }, [compiledColumns, props.clientSource, props.getRowId, runtime]);
 
   useLayoutEffect(() => {
@@ -444,7 +443,7 @@ const ClientSortedRowOrder = memo(function ClientSortedRowOrder({
     runtime.getRowsSnapshot,
   );
   const nextRowIds = useClientRowIds(rows, columns, orderBy, runtime.resolveRowId, filters);
-  const [orderStore] = useState(() => new ClientRowOrderStore());
+  const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds));
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds);
   }, [nextRowIds, orderStore]);
@@ -630,7 +629,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
             zIndex: 1,
           }}
         >
-          <tr aria-rowindex={1} role="row">
+          <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
             {virtualWindow.pinnedStart.length > 0 ? (
               <th
                 data-pinned-region="start"
@@ -823,7 +822,13 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
     "aria-colindex": columnIndex + 1,
     "aria-sort": command.sortable ? ariaSort : undefined,
     role: "columnheader",
-    style: { boxSizing: "border-box", overflow: "hidden", ...style } satisfies CSSProperties,
+    style: {
+      boxSizing: "border-box",
+      height: ROW_HEIGHT,
+      maxHeight: ROW_HEIGHT,
+      overflow: "hidden",
+      ...style,
+    } satisfies CSSProperties,
   } as const;
   return regionCell ? (
     <div {...headerProps}>{content}</div>
@@ -880,7 +885,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
         aria-colindex={columnIndex + 1}
         role="gridcell"
       >
-        {row === undefined ? "Unavailable row" : resolveCellText(column, row, value)}
+        {row === undefined ? "Unavailable row" : resolveCellContent(column, row, value)}
       </div>
     </div>
   );
@@ -1030,10 +1035,7 @@ const ClientCell = memo(function ClientCell({
 }) {
   const value = readCompiledColumnValue(column, row);
   const className = resolveCellClassName(column, row, value);
-  const content =
-    column.cellRenderer === undefined
-      ? resolveCellText(column, row, value)
-      : resolveCellRenderer(column, row, value);
+  const content = resolveCellContent(column, row, value);
   const id =
     instanceId === undefined || tableId === undefined || columnIndex === undefined
       ? undefined
@@ -1088,6 +1090,8 @@ function pinnedRegionStyle(side: "start" | "end", width: number): CSSProperties 
   return {
     background: "Canvas",
     boxSizing: "border-box",
+    height: ROW_HEIGHT,
+    maxHeight: ROW_HEIGHT,
     minWidth: width,
     padding: 0,
     position: "sticky",
@@ -1112,6 +1116,22 @@ function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): 
     if (typeof formatted === "string") return formatted;
   }
   return column.semantics.formatDisplay(value);
+}
+
+function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
+  if (column.cellRenderer !== undefined) return resolveCellRenderer(column, row, value);
+  if (column.valueType === "boolean" && typeof value === "boolean") {
+    return (
+      <input
+        aria-label={`${column.headerName}: ${value ? "checked" : "not checked"}`}
+        checked={value}
+        disabled
+        tabIndex={-1}
+        type="checkbox"
+      />
+    );
+  }
+  return resolveCellText(column, row, value);
 }
 
 function rowOrderChanged(
@@ -1162,7 +1182,11 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 
 class ClientRowOrderStore {
   private readonly listeners = new Set<() => void>();
-  private snapshot: readonly string[] = EMPTY_ORDER_BY;
+  private snapshot: readonly string[];
+
+  public constructor(initialSnapshot: readonly string[]) {
+    this.snapshot = Object.freeze(Array.from(initialSnapshot));
+  }
 
   public readonly getSnapshot = (): readonly string[] => this.snapshot;
 

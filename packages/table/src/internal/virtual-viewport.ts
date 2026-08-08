@@ -119,7 +119,12 @@ export class BrunoTableViewportRuntime {
       element.clientWidth - this.layout.pinnedStartWidth - this.layout.pinnedEndWidth,
       0,
     );
-    if (centerOffset < centerScrollLeft) {
+    const columnWidth = centerEnd - centerOffset;
+    if (columnWidth > centerViewportWidth) {
+      const viewportEnd = centerScrollLeft + centerViewportWidth;
+      if (centerEnd < centerScrollLeft) element.scrollLeft = centerEnd;
+      else if (centerOffset > viewportEnd) element.scrollLeft = centerOffset - centerViewportWidth;
+    } else if (centerOffset < centerScrollLeft) {
       element.scrollLeft = centerOffset;
     } else if (centerEnd > centerScrollLeft + centerViewportWidth) {
       element.scrollLeft = centerEnd - centerViewportWidth;

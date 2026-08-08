@@ -4,8 +4,9 @@ export function readCompiledColumnValue(column: CompiledColumn, row: unknown): u
   const record = asRecord(row);
   if (column.kind === "field") return record[column.field];
 
-  const dependencies: Record<string, unknown> = {};
-  for (const field of column.fields) dependencies[field] = record[field];
+  const dependencies = Object.fromEntries(
+    column.fields.map((field) => [field, record[field]] as const),
+  );
   return Reflect.apply(column.valueGetter, undefined, [{ row: dependencies }]);
 }
 

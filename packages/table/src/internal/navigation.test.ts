@@ -28,4 +28,27 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.reset();
     expect(navigation.getSnapshot()).toBeUndefined();
   });
+
+  it("falls back to the active row's previous display position when its identity disappears", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move(2, 0);
+
+    navigation.setShape(["first", "second", "replacement"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 2,
+      rowId: "replacement",
+      columnId: "COL_ID_NAME",
+    });
+  });
 });

@@ -116,6 +116,20 @@ type RuntimeState<TRow> = Readonly<{
   readonly coherent: CoherentRows<TRow> | undefined;
 }>;
 
+type QueryTransition = Readonly<{
+  readonly queryChanged: boolean;
+  readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
+}>;
+
+type ColumnConfiguration = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly baselineFilters: readonly unknown[];
+  readonly baselineOrderBy: ClientOrderBy;
+  readonly query: BrunoTableClientQuerySnapshot;
+  readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
+  readonly transition: QueryTransition;
+}>;
+
 export class BrunoTableClientRuntime<TRow> {
   private readonly chromeListeners = new Set<Listener>();
   private readonly bodyListeners = new Set<Listener>();
@@ -158,7 +172,7 @@ export class BrunoTableClientRuntime<TRow> {
     });
     this.columnCommands = createColumnCommandSnapshots(columns, this.query, this.baselineFilters);
     this.source = snapshotSource(source);
-    this.state = this.createState(this.source, undefined);
+    this.state = this.createState(this.source, undefined, getRowId);
   }
 
   public readonly getView = (): BrunoTableClientRuntimeView => {
@@ -187,9 +201,34 @@ export class BrunoTableClientRuntime<TRow> {
   };
 
   public readonly publish = (source: BrunoTableClientSource<TRow>): void => {
+    this.reconcile(source, this.getRowId, this.columns);
+  };
+
+  public readonly reconcile = (
+    source: BrunoTableClientSource<TRow>,
+    getRowId: (row: TRow) => BrunoTableRowId,
+    columns: readonly CompiledColumn[],
+  ): void => {
     const previous = this.state;
-    this.source = snapshotSource(source);
-    const next = this.createState(this.source, previous.coherent);
+    const configuration = this.columns === columns ? undefined : this.stageColumns(columns);
+    const resolveRowIds = this.getRowId !== getRowId;
+    const sourceSnapshot = snapshotSource(source);
+    const next = this.createState(sourceSnapshot, previous.coherent, getRowId, resolveRowIds);
+
+    if (configuration !== undefined) {
+      this.columns = configuration.columns;
+      this.baselineFilters = configuration.baselineFilters;
+      this.baselineOrderBy = configuration.baselineOrderBy;
+      this.query = configuration.query;
+      this.columnCommands = configuration.columnCommands;
+    }
+    this.getRowId = getRowId;
+    this.source = sourceSnapshot;
+    this.commitState(previous, next);
+    if (configuration !== undefined) this.notifyQueryTransition(configuration.transition);
+  };
+
+  private commitState(previous: RuntimeState<TRow>, next: RuntimeState<TRow>): void {
     const chromeChanged = !sameChrome(previous.chrome, next.chrome);
     const bodyChanged = !sameBody(previous.body, next.body);
     this.state = Object.freeze({
@@ -206,28 +245,14 @@ export class BrunoTableClientRuntime<TRow> {
     }
     this.notifyRows(previous.coherent, next.coherent);
     this.notifyChangedRows(previous.coherent, next.coherent);
-  };
+  }
 
   public readonly configure = (
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): void => {
-    if (this.columns !== columns) this.configureColumns(columns);
-    if (this.getRowId === getRowId) return;
-    const previous = this.state;
-    this.getRowId = getRowId;
-    const next = this.createState(this.source, previous.coherent, true);
-    const chromeChanged = !sameChrome(previous.chrome, next.chrome);
-    const bodyChanged = !sameBody(previous.body, next.body);
-    this.state = Object.freeze({
-      chrome: chromeChanged ? next.chrome : previous.chrome,
-      body: bodyChanged ? next.body : previous.body,
-      coherent: next.coherent,
-    });
-    if (chromeChanged) notify(this.chromeListeners);
-    if (bodyChanged) notify(this.bodyListeners);
-    this.notifyRows(previous.coherent, next.coherent);
-    this.notifyChangedRows(previous.coherent, next.coherent);
+    if (this.columns === columns && this.getRowId === getRowId) return;
+    this.reconcile(this.source, getRowId, columns);
   };
 
   public readonly getChromeSnapshot = (): BrunoTableClientChromeSnapshot => this.state.chrome;
@@ -328,20 +353,23 @@ export class BrunoTableClientRuntime<TRow> {
 
   public readonly retry = (): void => {
     const retry = this.state.chrome.retry;
-    if (retry !== undefined && !retry.pending) retry.run();
+    if (retry !== undefined && !retry.pending) {
+      const run = retry.run;
+      run();
+    }
   };
 
   private createState(
-    source: BrunoTableClientSource<TRow>,
+    sourceSnapshot: BrunoTableClientSource<TRow>,
     previousCoherent: CoherentRows<TRow> | undefined,
+    getRowId: (row: TRow) => BrunoTableRowId,
     resolveRowIds = false,
   ): RuntimeState<TRow> {
-    const sourceSnapshot = snapshotSource(source);
     const complete = isCompleteSource(sourceSnapshot);
     const incomplete =
       (sourceSnapshot.status === "ready" || sourceSnapshot.status === "stale") && !complete;
     const currentCoherent = complete
-      ? createCoherent(sourceSnapshot.rows, this.getRowId, previousCoherent, resolveRowIds)
+      ? createCoherent(sourceSnapshot.rows, getRowId, previousCoherent, resolveRowIds)
       : undefined;
     const terminal = sourceSnapshot.status === "closed" || sourceSnapshot.status === "error";
     const retainPrevious = terminal || sourceSnapshot.status === "stale";
@@ -389,17 +417,34 @@ export class BrunoTableClientRuntime<TRow> {
     return Object.freeze({ chrome, body, coherent });
   }
 
-  private configureColumns(columns: readonly CompiledColumn[]): void {
-    this.columns = columns;
-    this.baselineFilters = sanitizeClientInitialFilters(this.initialFilters, columns);
-    this.baselineOrderBy = reconcileClientOrderBy(
+  private stageColumns(columns: readonly CompiledColumn[]): ColumnConfiguration {
+    const baselineFilters = sanitizeClientInitialFilters(this.initialFilters, columns);
+    const baselineOrderBy = reconcileClientOrderBy(
       this.initialOrderBy,
       this.initialOrderBy,
       columns,
     );
     const nextFilters = sanitizeClientInitialFilters(this.query.filters, columns);
-    const nextOrderBy = reconcileClientOrderBy(this.query.orderBy, this.baselineOrderBy, columns);
-    this.publishQuery(nextFilters, nextOrderBy, true);
+    const nextOrderBy = reconcileClientOrderBy(this.query.orderBy, baselineOrderBy, columns);
+    const queryChanged =
+      !sameReferences(this.query.filters, nextFilters) ||
+      !sameOrderBy(this.query.orderBy, nextOrderBy);
+    const query = queryChanged
+      ? Object.freeze({
+          filters: nextFilters,
+          orderBy: nextOrderBy,
+          generation: this.query.generation + 1,
+        })
+      : this.query;
+    const columnCommands = createColumnCommandSnapshots(columns, query, baselineFilters);
+    return Object.freeze({
+      columns,
+      baselineFilters,
+      baselineOrderBy,
+      query,
+      columnCommands,
+      transition: Object.freeze({ queryChanged, previousCommands: this.columnCommands }),
+    });
   }
 
   private publishQuery(
@@ -407,9 +452,18 @@ export class BrunoTableClientRuntime<TRow> {
     orderBy: ClientOrderBy,
     forceColumnRefresh = false,
   ): void {
+    const transition = this.updateQuery(filters, orderBy, forceColumnRefresh);
+    if (transition !== undefined) this.notifyQueryTransition(transition);
+  }
+
+  private updateQuery(
+    filters: readonly unknown[],
+    orderBy: ClientOrderBy,
+    forceColumnRefresh = false,
+  ): QueryTransition | undefined {
     const queryChanged =
       !sameReferences(this.query.filters, filters) || !sameOrderBy(this.query.orderBy, orderBy);
-    if (!queryChanged && !forceColumnRefresh) return;
+    if (!queryChanged && !forceColumnRefresh) return undefined;
     const previousCommands = this.columnCommands;
     if (queryChanged) {
       this.query = Object.freeze({
@@ -423,10 +477,22 @@ export class BrunoTableClientRuntime<TRow> {
       this.query,
       this.baselineFilters,
     );
-    if (queryChanged) notify(this.queryListeners);
-    const columnIds = new Set([...previousCommands.keys(), ...this.columnCommands.keys()]);
+    return Object.freeze({ queryChanged, previousCommands });
+  }
+
+  private notifyQueryTransition(transition: QueryTransition): void {
+    if (transition.queryChanged) notify(this.queryListeners);
+    const columnIds = new Set([
+      ...transition.previousCommands.keys(),
+      ...this.columnCommands.keys(),
+    ]);
     for (const columnId of columnIds) {
-      if (!sameColumnCommand(previousCommands.get(columnId), this.columnCommands.get(columnId))) {
+      if (
+        !sameColumnCommand(
+          transition.previousCommands.get(columnId),
+          this.columnCommands.get(columnId),
+        )
+      ) {
         const listeners = this.columnCommandListeners.get(columnId);
         if (listeners !== undefined) notify(listeners);
       }

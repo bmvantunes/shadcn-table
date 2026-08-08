@@ -98,6 +98,120 @@ describe("BrunoTableClientRuntime", () => {
     expect(runtime.getRowSnapshot("first")).toBe(firstSnapshot);
   });
 
+  it("reconciles a new source and identity callback in one row pass", () => {
+    const runtime = createRuntime(source([{ id: "initial", name: "Initial" }]));
+    const nextRows = [
+      { id: "first", name: "Ada" },
+      { id: "second", name: "Grace" },
+    ] satisfies readonly Row[];
+    const getRowId = vi.fn((row: Row) => row.id);
+
+    runtime.reconcile(source(nextRows), getRowId, runtimeColumns);
+
+    expect(getRowId).toHaveBeenCalledTimes(nextRows.length);
+    expect(runtime.getBodySnapshot()).toMatchObject({
+      kind: "rows",
+      rowIds: ["first", "second"],
+    });
+  });
+
+  it("notifies simultaneous source, identity, and column replacement as one coherent state", () => {
+    const runtime = createRuntime(source([{ id: "initial", name: "Initial" }]));
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const nextRow = { id: "next", name: "Ada" } satisfies Row;
+    const observations: unknown[] = [];
+    runtime.subscribeQuery(() => {
+      observations.push({
+        body: runtime.getBodySnapshot(),
+        query: runtime.getQuerySnapshot(),
+        resolvedRowId: runtime.resolveRowId(nextRow),
+        row: runtime.getRowSnapshot("next:next"),
+      });
+    });
+
+    runtime.reconcile(source([nextRow]), (row) => `next:${row.id}`, replacementColumns);
+
+    expect(observations).toEqual([
+      {
+        body: expect.objectContaining({ kind: "rows", rowIds: ["next:next"] }),
+        query: {
+          filters: [],
+          orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
+          generation: 1,
+        },
+        resolvedRowId: "next:next",
+        row: nextRow,
+      },
+    ]);
+  });
+
+  it("leaves every observable projection unchanged when reconciliation validation fails", () => {
+    const runtime = createRuntime(source([{ id: "initial", name: "Initial" }]));
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const previousBody = runtime.getBodySnapshot();
+    const previousChrome = runtime.getChromeSnapshot();
+    const previousQuery = runtime.getQuerySnapshot();
+    const previousRows = runtime.getView().getRowsSnapshot();
+    const previousRow = runtime.getRowSnapshot("initial");
+    const previousNameCommand = runtime.getColumnCommandSnapshot("COL_ID_NAME");
+    const previousAliasCommand = runtime.getColumnCommandSnapshot("COL_ID_ALIAS");
+    const chromeListener = vi.fn();
+    const queryListener = vi.fn();
+    const bodyListener = vi.fn();
+    const rowsListener = vi.fn();
+    const rowListener = vi.fn();
+    const nameCommandListener = vi.fn();
+    const aliasCommandListener = vi.fn();
+    runtime.subscribeChrome(chromeListener);
+    runtime.subscribeQuery(queryListener);
+    runtime.subscribeBody(bodyListener);
+    runtime.subscribeRows(rowsListener);
+    runtime.subscribeRow("initial", rowListener);
+    runtime.subscribeColumnCommands("COL_ID_NAME", nameCommandListener);
+    runtime.subscribeColumnCommands("COL_ID_ALIAS", aliasCommandListener);
+
+    expect(() =>
+      runtime.reconcile(
+        source([
+          { id: "first", name: "Ada" },
+          { id: "second", name: "Grace" },
+        ]),
+        () => "duplicate",
+        replacementColumns,
+      ),
+    ).toThrow(/duplicate row identity/u);
+
+    expect(runtime.getBodySnapshot()).toBe(previousBody);
+    expect(runtime.getChromeSnapshot()).toBe(previousChrome);
+    expect(runtime.getQuerySnapshot()).toBe(previousQuery);
+    expect(runtime.getView().getRowsSnapshot()).toBe(previousRows);
+    expect(runtime.getRowSnapshot("initial")).toBe(previousRow);
+    expect(runtime.getColumnCommandSnapshot("COL_ID_NAME")).toBe(previousNameCommand);
+    expect(runtime.getColumnCommandSnapshot("COL_ID_ALIAS")).toBe(previousAliasCommand);
+    expect(runtime.resolveRowId({ id: "still-old", name: "Old getter" })).toBe("still-old");
+    expect(chromeListener).not.toHaveBeenCalled();
+    expect(queryListener).not.toHaveBeenCalled();
+    expect(bodyListener).not.toHaveBeenCalled();
+    expect(rowsListener).not.toHaveBeenCalled();
+    expect(rowListener).not.toHaveBeenCalled();
+    expect(nameCommandListener).not.toHaveBeenCalled();
+    expect(aliasCommandListener).not.toHaveBeenCalled();
+  });
+
   it("rejects incomplete ready and stale source snapshots visibly", () => {
     const row = { id: "first", name: "Ada" } satisfies Row;
     const runtime = createRuntime(source([row]));
@@ -247,6 +361,18 @@ describe("BrunoTableClientRuntime", () => {
     expect(runtime.getBodySnapshot().kind).toBe("rows");
     runtime.retry();
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("invokes source retry with an undefined receiver", () => {
+    const receivers: unknown[] = [];
+    const run = function (this: void): void {
+      receivers.push(this);
+    };
+    const runtime = createRuntime(source([], "error", { retry: { run, pending: false } }));
+
+    runtime.retry();
+
+    expect(receivers).toEqual([undefined]);
   });
 
   it("retains prior coherent rows when a complete terminal publication is empty", () => {

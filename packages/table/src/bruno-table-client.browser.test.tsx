@@ -410,6 +410,59 @@ describe("BrunoTableClient browser surface", () => {
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(wideColumns.length);
   });
 
+  test("reveals oversized columns with only the minimum geometry delta", async () => {
+    const oversizedColumns = [
+      {
+        columnId: "COL_ID_BEFORE_OVERSIZED",
+        field: "name",
+        headerName: "Before oversized",
+        valueType: "text",
+        width: 1200,
+      },
+      {
+        columnId: "COL_ID_OVERSIZED",
+        field: "name",
+        headerName: "Oversized",
+        valueType: "text",
+        width: 2000,
+      },
+      {
+        columnId: "COL_ID_AFTER_OVERSIZED",
+        field: "name",
+        headerName: "After oversized",
+        valueType: "text",
+        width: 2000,
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_OVERSIZED"
+        getRowId={(row: Row) => row.id}
+        columns={oversizedColumns}
+        initialOrderBy={[{ columnId: "COL_ID_BEFORE_OVERSIZED", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_OVERSIZED" });
+    expect(grid.element().clientWidth).toBeLessThan(2000);
+    expect(grid.element().scrollLeft).toBe(0);
+
+    grid.element().focus();
+    grid
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+
+    await vi.waitFor(() =>
+      expect(grid.element().scrollLeft).toBe(1200 - grid.element().clientWidth),
+    );
+
+    grid.element().scrollLeft = 4000;
+    grid.element().dispatchEvent(new Event("scroll"));
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+
+    await vi.waitFor(() => expect(grid.element().scrollLeft).toBe(3200));
+  });
+
   test("virtualizes both axes after scrolling while pinned columns remain mounted", async () => {
     const manyRows = Array.from({ length: 100 }, (_, index) => ({
       id: `row-${index}`,
@@ -494,7 +547,77 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("columnheader", { name: "Pinned end" })
       .element()
       .getBoundingClientRect();
+    const centerBounds = screen
+      .getByRole("columnheader", { name: "Score" })
+      .element()
+      .getBoundingClientRect();
     expect(Math.abs(gridBounds.right - endBounds.right)).toBeLessThanOrEqual(2);
+    expect(endBounds.height).toBe(36);
+    expect(centerBounds.height).toBe(36);
+  });
+
+  test("renders boolean values as read-only checkbox semantics", async () => {
+    type BooleanRow = { readonly id: string; readonly active: boolean };
+    const booleanRows = [
+      { id: "enabled", active: true },
+      { id: "disabled", active: false },
+    ] satisfies readonly BooleanRow[];
+    const booleanColumns = [
+      {
+        columnId: "COL_ID_ACTIVE",
+        field: "active",
+        headerName: "Active",
+        valueType: "boolean",
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_BOOLEAN"
+        getRowId={(row: BooleanRow) => row.id}
+        columns={booleanColumns}
+        initialOrderBy={[{ columnId: "COL_ID_ACTIVE", direction: "desc" }]}
+        clientSource={{
+          rows: booleanRows,
+          totalRows: booleanRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    const checked = screen.getByRole("checkbox", { name: "Active: checked" });
+    await expect.element(checked).toBeChecked();
+    await expect.element(checked).toBeDisabled();
+    checked.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect.element(checked).toBeChecked();
+    await expect
+      .element(screen.getByRole("checkbox", { name: "Active: not checked" }))
+      .not.toBeChecked();
+
+    const customBooleanColumns = [
+      {
+        ...booleanColumns[0],
+        cellRenderer: ({ value }: { readonly value: boolean }) => (
+          <span role="status">{value ? "Enabled" : "Disabled"}</span>
+        ),
+      },
+    ] as const;
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_BOOLEAN"
+        getRowId={(row: BooleanRow) => row.id}
+        columns={customBooleanColumns}
+        initialOrderBy={[{ columnId: "COL_ID_ACTIVE", direction: "desc" }]}
+        clientSource={{
+          rows: booleanRows,
+          totalRows: booleanRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+    await expect.element(screen.getByRole("status").nth(0)).toHaveTextContent("Enabled");
+    await expect.element(screen.getByRole("checkbox")).not.toBeInTheDocument();
   });
 
   test("keeps pinned custom renderers semantic and interactive", async () => {
@@ -584,6 +707,51 @@ describe("BrunoTableClient browser surface", () => {
     const proxyCell = screen.getByRole("gridcell", { name: "Row 0" });
     await expect.element(proxyCell).toHaveAttribute("aria-colindex", "1");
     expect(proxyCell.element().parentElement?.getAttribute("aria-rowindex")).toBe("2");
+  });
+
+  test("preserves boolean checkbox semantics in a virtualized active-cell proxy", async () => {
+    type BooleanRow = { readonly id: string; readonly active: boolean };
+    const booleanRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${String(index).padStart(3, "0")}`,
+      active: true,
+    })) satisfies readonly BooleanRow[];
+    const booleanColumns = [
+      {
+        columnId: "COL_ID_ACTIVE",
+        field: "active",
+        headerName: "Active",
+        valueType: "boolean",
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_BOOLEAN_PROXY"
+        getRowId={(row: BooleanRow) => row.id}
+        columns={booleanColumns}
+        initialOrderBy={[{ columnId: "COL_ID_ACTIVE", direction: "desc" }]}
+        clientSource={{
+          rows: booleanRows,
+          totalRows: booleanRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BOOLEAN_PROXY" });
+    grid.element().focus();
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    expect(activeId).not.toBeNull();
+
+    await grid.wheel({ delta: { y: 1200 } });
+
+    await vi.waitFor(() => {
+      const activeCheckboxes = screen
+        .getByRole("checkbox", { name: "Active: checked" })
+        .all()
+        .filter((checkbox) => checkbox.element().closest('[role="gridcell"]')?.id === activeId);
+      expect(activeCheckboxes).toHaveLength(1);
+      expect(activeCheckboxes[0]!.element()).toBeDisabled();
+    });
   });
 
   test("updates live sort and filter state through accessible header commands", async () => {

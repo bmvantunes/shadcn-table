@@ -43,13 +43,13 @@ export class BrunoTableNavigationRuntime {
       (column) => column.columnId === this.activeCell?.columnId,
     );
     const column = this.columns[previousColumnIndex >= 0 ? previousColumnIndex : 0]!;
+    const matchingRowIndex =
+      this.activeCell?.rowId === undefined ? -1 : rowIds.indexOf(this.activeCell.rowId);
     const rowIndex = Math.max(
       0,
       Math.min(
         rowIds.length - 1,
-        this.activeCell?.rowId === undefined
-          ? (this.activeCell?.rowIndex ?? 0)
-          : Math.max(rowIds.indexOf(this.activeCell.rowId), 0),
+        matchingRowIndex >= 0 ? matchingRowIndex : (this.activeCell?.rowIndex ?? 0),
       ),
     );
     if (this.activeCell?.region === "header") {
