@@ -5,11 +5,11 @@ import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
 import type { BrunoTableRowPipelineProps } from "./bruno-table-view";
 import type {
+  BrunoTableClientAdmittedRow,
   BrunoTableClientRowOrderChangeDetector,
   BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
-import { readCompiledColumnValue } from "./cell-value";
 import { collectClientFilterColumnIds } from "./client-row-model";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
@@ -81,13 +81,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     rowsStore.getSnapshot,
     rowsStore.getSnapshot,
   );
-  const nextRowIds = useClientRowIds(
-    rows,
-    columns,
-    orderBy,
-    rowPipelineAdapter.resolveRowId,
-    filters,
-  );
+  const nextRowIds = useClientRowIds(rows, columns, orderBy, filters);
   const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
@@ -102,8 +96,8 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
 });
 
 function rowOrderChanged(
-  previousRows: readonly unknown[],
-  nextRows: readonly unknown[],
+  previousRows: readonly BrunoTableClientAdmittedRow[],
+  nextRows: readonly BrunoTableClientAdmittedRow[],
   change: Readonly<{
     readonly rowIdsChanged: boolean;
     readonly changedIndexes: readonly number[];
@@ -126,8 +120,8 @@ function rowOrderChanged(
     for (const column of relevantColumns) {
       if (
         !column.semantics.equivalent(
-          readCompiledColumnValue(column, previousRow),
-          readCompiledColumnValue(column, nextRow),
+          previousRow?.values.get(column.columnId),
+          nextRow?.values.get(column.columnId),
         )
       ) {
         return true;

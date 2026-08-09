@@ -88,6 +88,42 @@ describe("BrunoTableViewportRuntime", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("rebases a queued identity-owned reveal when a same-shape row space is published", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+
+    viewport.revealCell(75, "COL_ID_NAME", "body", "row-75");
+    viewport.setLayout(100, columns, (rowId) => (rowId === "row-75" ? 50 : undefined));
+    callback!(0);
+
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeGreaterThan(30);
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeLessThan(40);
+  });
+
   it("keeps a thousand-column horizontal window bounded", () => {
     const columns = compileColumns(
       Array.from({ length: 1_000 }, (_, index) => ({

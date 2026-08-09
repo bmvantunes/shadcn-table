@@ -114,10 +114,12 @@ export function filterClientRows<TRow>(
 export function createClientFilterPredicate<TRow>(
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
+  readValue: (column: CompiledColumn, row: TRow) => unknown = readCompiledColumnValue,
 ): ((row: TRow) => boolean) | undefined {
   if (filters === undefined || filters.length === 0) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  return (row) => filters.every((filter) => evaluateFilter(filter, row, columnsById));
+  const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
+  return (row) => filters.every((filter) => evaluateFilter(filter, row, columnsById, readUnknown));
 }
 
 export function filterReferencesColumn(candidate: unknown, columnId: string): boolean {
@@ -251,16 +253,19 @@ function sanitizeFilter(
     type === "endsWith"
   ) {
     const validSensitivity = hasValidTextSensitivity(filter, true);
+    const decoded = decode(operand);
     const normalizedOperand =
-      typeof operand === "string" && validSensitivity
+      decoded._tag === "Success" && typeof decoded.value === "string" && validSensitivity
         ? normalizeText(
-            operand,
+            decoded.value,
             filter["caseSensitive"] === true,
             filter["accentSensitive"] === true,
           )
         : "";
     return column.semantics.filterFamily === "text" && normalizedOperand.length > 0
-      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"])
+      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"], {
+          filter: decoded._tag === "Success" ? decoded.value : undefined,
+        })
       : undefined;
   }
   return undefined;
@@ -296,23 +301,26 @@ function evaluateFilter(
   candidate: unknown,
   row: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  readValue: (column: CompiledColumn, row: unknown) => unknown,
 ): boolean {
   const filter = asRecord(candidate);
   const type = filter["type"];
   if (type === "AND" || type === "OR") {
     const conditions = Array.isArray(filter["conditions"]) ? filter["conditions"] : [];
     return type === "AND"
-      ? conditions.every((condition) => evaluateFilter(condition, row, columnsById))
-      : conditions.some((condition) => evaluateFilter(condition, row, columnsById));
+      ? conditions.every((condition) => evaluateFilter(condition, row, columnsById, readValue))
+      : conditions.some((condition) => evaluateFilter(condition, row, columnsById, readValue));
   }
-  if (type === "NOT") return !evaluateFilter(filter["condition"], row, columnsById);
+  if (type === "NOT") {
+    return !evaluateFilter(filter["condition"], row, columnsById, readValue);
+  }
   const columnId = filter["columnId"];
   const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
   if (column === undefined || column.enableFilter === false || column.kind !== "field") {
     return false;
   }
 
-  const value = readCompiledColumnValue(column, row);
+  const value = readValue(column, row);
   const operand = filter["filter"];
   const caseSensitive = filter["caseSensitive"] === true;
   const accentSensitive = filter["accentSensitive"] === true;

@@ -13,11 +13,18 @@ import {
 } from "./grid-query";
 
 type Listener = () => void;
-export type BrunoTableInvalidSourceSnapshot = Readonly<{
-  readonly kind: "row-count-mismatch";
-  readonly expectedRows: number;
-  readonly receivedRows: number;
-}>;
+export type BrunoTableInvalidSourceSnapshot =
+  | Readonly<{
+      readonly kind: "row-count-mismatch";
+      readonly expectedRows: number;
+      readonly receivedRows: number;
+    }>
+  | Readonly<{
+      readonly kind: "invalid-value";
+      readonly rowIndex: number;
+      readonly columnId: string;
+      readonly message: string;
+    }>;
 
 export type BrunoTableChromeSnapshot = Readonly<{
   readonly status: BrunoTableSourceStatus;
@@ -45,6 +52,7 @@ export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
   readonly loadedRows: number;
   readonly getRowId: (index: number) => BrunoTableRowId | undefined;
   readonly getRow: (rowId: BrunoTableRowId) => TRow | undefined;
+  readonly getCellValue: (rowId: BrunoTableRowId, columnId: string) => unknown;
 }>;
 
 export type BrunoTableRuntimeView = {
@@ -53,6 +61,7 @@ export type BrunoTableRuntimeView = {
   readonly getBodySnapshot: () => BrunoTableBodySnapshot;
   readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
+  readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly subscribeChrome: (listener: Listener) => () => void;
   readonly subscribeSource: (listener: Listener) => () => void;
@@ -175,6 +184,7 @@ export class BrunoTableGridRuntime<TRow> {
         getBodySnapshot: this.getBodySnapshot,
         getRowSpaceSnapshot: this.getRowSpaceSnapshot,
         getRowSnapshot: this.getRowSnapshot,
+        getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
         subscribeChrome: this.subscribeChrome,
@@ -274,6 +284,9 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly getRowSnapshot = (rowId: BrunoTableRowId): TRow | undefined =>
     this.state.rowSpace?.getRow(rowId);
+
+  public readonly getCellValueSnapshot = (rowId: BrunoTableRowId, columnId: string): unknown =>
+    this.state.rowSpace?.getCellValue(rowId, columnId);
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 
@@ -512,9 +525,27 @@ function sameChrome(previous: BrunoTableChromeSnapshot, next: BrunoTableChromeSn
     previous.retry?.run === next.retry?.run &&
     previous.retry?.pending === next.retry?.pending &&
     previous.hasCoherentRows === next.hasCoherentRows &&
-    previous.invalid?.kind === next.invalid?.kind &&
-    previous.invalid?.expectedRows === next.invalid?.expectedRows &&
-    previous.invalid?.receivedRows === next.invalid?.receivedRows
+    sameInvalidSource(previous.invalid, next.invalid)
+  );
+}
+
+function sameInvalidSource(
+  previous: BrunoTableInvalidSourceSnapshot | undefined,
+  next: BrunoTableInvalidSourceSnapshot | undefined,
+): boolean {
+  if (previous?.kind !== next?.kind) return false;
+  if (previous === undefined || next === undefined) return previous === next;
+  if (previous.kind === "row-count-mismatch" && next.kind === "row-count-mismatch") {
+    return (
+      previous.expectedRows === next.expectedRows && previous.receivedRows === next.receivedRows
+    );
+  }
+  return (
+    previous.kind === "invalid-value" &&
+    next.kind === "invalid-value" &&
+    previous.rowIndex === next.rowIndex &&
+    previous.columnId === next.columnId &&
+    previous.message === next.message
   );
 }
 
@@ -538,6 +569,12 @@ function bodySnapshot<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
 ): BrunoTableBodySnapshot {
   if (publication.rowSpace !== undefined && publication.rowSpace.totalRows > 0) return BODY_ROWS;
+  if (
+    publication.invalid?.kind === "invalid-value" &&
+    (publication.status === "closed" || publication.status === "error")
+  ) {
+    return BODY_EMPTY;
+  }
   if (publication.invalid !== undefined) return BODY_INVALID;
   if (publication.status === "loading" && publication.rowSpace === undefined) {
     return Object.freeze({ kind: "loading", totalRows: publication.totalRows });

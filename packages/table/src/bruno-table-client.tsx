@@ -43,7 +43,11 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
 
   useLayoutEffect(() => {
     const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
-    const publication = rowPipelineAdapter.reconcile(props.clientSource, props.getRowId);
+    const publication = rowPipelineAdapter.reconcile(
+      props.clientSource,
+      props.getRowId,
+      compiledColumns,
+    );
     runtime.reconcile(publication, compiledColumns, queryConfiguration);
   }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
 

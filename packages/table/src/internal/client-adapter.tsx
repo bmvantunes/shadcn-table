@@ -11,9 +11,9 @@ import { useMemo } from "react";
 import type { ColumnDef, RowData } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { ClientOrderBy } from "./client-row-model";
 import { createClientFilterPredicate } from "./client-row-model";
-import { readCompiledColumnValue } from "./cell-value";
 
 const clientFeatures = tableFeatures({
   columnFilteringFeature,
@@ -22,21 +22,21 @@ const clientFeatures = tableFeatures({
   sortedRowModel: createSortedRowModel(),
 });
 
-type AdapterRow = RowData;
+type AdapterRow = BrunoTableClientAdmittedRow & RowData;
 type ClientColumn = ColumnDef<typeof clientFeatures, AdapterRow, unknown>;
 const INTERNAL_FILTER_COLUMN_ID = "__BRUNO_TABLE_FILTERS__";
 
-export function useClientRowIds<TRow>(
-  rows: readonly TRow[],
+export function useClientRowIds(
+  rows: readonly BrunoTableClientAdmittedRow[],
   compiledColumns: readonly CompiledColumn[],
   orderBy: ClientOrderBy,
-  getRowId: (row: TRow) => string,
   filters?: readonly unknown[],
 ): readonly string[] {
   const tieBreaker = orderBy.at(-1);
   const filterPredicate = useMemo(() => {
-    const predicate = createClientFilterPredicate<TRow>(compiledColumns, filters);
-    return predicate === undefined ? undefined : (row: AdapterRow) => predicate(row as TRow);
+    return createClientFilterPredicate<AdapterRow>(compiledColumns, filters, (column, row) =>
+      row.values.get(column.columnId),
+    );
   }, [compiledColumns, filters]);
   const adapterColumns = useMemo(
     () => buildAdapterColumns(compiledColumns, tieBreaker, filterPredicate),
@@ -55,13 +55,12 @@ export function useClientRowIds<TRow>(
       })),
     [orderBy],
   );
-  const data = rows as readonly AdapterRow[];
   const table = useTable(
     {
       features: clientFeatures,
       columns: adapterColumns,
-      data,
-      getRowId: (row) => getRowId(row as TRow),
+      data: rows,
+      getRowId: (row) => row.rowId,
       state: { columnFilters, sorting },
     },
     () => null,
@@ -80,7 +79,7 @@ function buildAdapterColumns(
     (column): ClientColumn => ({
       id: column.columnId,
       header: column.headerName,
-      accessorFn: (row: AdapterRow) => readCompiledColumnValue(column, row),
+      accessorFn: (row: AdapterRow) => row.values.get(column.columnId),
       sortUndefined: false,
       sortFn: (rowA, rowB) => {
         const comparison = column.semantics.compare(

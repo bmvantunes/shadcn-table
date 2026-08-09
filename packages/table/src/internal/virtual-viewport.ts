@@ -48,6 +48,7 @@ type ViewportLayout = Readonly<{
 
 type RevealTarget = Readonly<{
   readonly rowIndex: number;
+  readonly rowId?: string;
   readonly columnId: string;
   readonly region: "header" | "body";
 }>;
@@ -83,7 +84,12 @@ export class BrunoTableViewportRuntime {
     return () => this.listeners.delete(listener);
   };
 
-  public readonly setLayout = (rowCount: number, columns: readonly CompiledColumn[]): void => {
+  public readonly setLayout = (
+    rowCount: number,
+    columns: readonly CompiledColumn[],
+    findRowIndex?: (rowId: string) => number | undefined,
+  ): void => {
+    this.rebasePendingReveal(findRowIndex);
     const nextLayoutKey = `${rowCount}|${columns
       .map((column) => `${column.columnId}:${column.pinned ?? "center"}:${column.semantics.width}`)
       .join(",")}`;
@@ -128,11 +134,30 @@ export class BrunoTableViewportRuntime {
     rowIndex: number,
     columnId: string,
     region: "header" | "body" = "body",
+    rowId?: string,
   ): void => {
     if (this.element === null) return;
-    this.pendingReveal = Object.freeze({ rowIndex, columnId, region });
+    this.pendingReveal = Object.freeze({
+      rowIndex,
+      columnId,
+      region,
+      ...(rowId === undefined ? {} : { rowId }),
+    });
     this.schedulePublish();
   };
+
+  private rebasePendingReveal(
+    findRowIndex: ((rowId: string) => number | undefined) | undefined,
+  ): void {
+    const pending = this.pendingReveal;
+    if (pending === undefined || pending.region === "header") return;
+    const rowIndex =
+      pending.rowId === undefined || findRowIndex === undefined
+        ? undefined
+        : findRowIndex(pending.rowId);
+    this.pendingReveal =
+      rowIndex === undefined ? undefined : Object.freeze({ ...pending, rowIndex });
+  }
 
   private applyReveal(target: RevealTarget): void {
     const element = this.element;

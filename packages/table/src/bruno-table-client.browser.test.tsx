@@ -3,7 +3,7 @@ import { cleanup, render } from "vitest-browser-react";
 import { useEffect } from "react";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
-import type { BrunoTableColumns } from "./public-types";
+import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -358,6 +358,164 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
   });
 
+  test("presents invalid source values without letting semantic rendering throw", async () => {
+    const invalidRows = [
+      { id: "invalid", name: "Invalid", score: Number.NaN },
+    ] satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(invalidRows)} />,
+    );
+
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Source row 1, column COL_ID_SCORE: Expected a finite number value.");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
+  });
+
+  test("renders, sorts, and filters with canonical runtime-decoder values", async () => {
+    const canonicalText: BrunoTableValueType<string, "text", "text"> = {
+      codecId: "test/canonical-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input.trim().toUpperCase() }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text.trim().toUpperCase() }),
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input.trim().toUpperCase() }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    };
+    const canonicalColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: canonicalText,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const canonicalRows = [
+      { id: "canonical-a", name: "a", score: 1 },
+      { id: "canonical-b", name: "B", score: 2 },
+    ] satisfies readonly Row[];
+    const screen = await render(
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_CANONICAL_SORT"
+          getRowId={(row: Row) => row.id}
+          columns={canonicalColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource(canonicalRows)}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_CANONICAL_FILTER"
+          getRowId={(row: Row) => row.id}
+          columns={canonicalColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_NAME",
+              type: "contains",
+              filter: " a ",
+              caseSensitive: true,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource(canonicalRows)}
+        />
+      </>,
+    );
+
+    const sortGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_CANONICAL_SORT" });
+    await expect
+      .element(sortGrid.getByRole("row").nth(1).getByRole("gridcell", { name: "A", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(sortGrid.getByRole("row").nth(2).getByRole("gridcell", { name: "B", exact: true }))
+      .toBeInTheDocument();
+    const filterGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_CANONICAL_FILTER" });
+    await expect
+      .element(filterGrid.getByRole("gridcell", { name: "A", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(filterGrid.getByRole("gridcell", { name: "B", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  test("retains coherent rows for a terminal publication after rejecting ready data", async () => {
+    const retry = vi.fn();
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [{ id: "invalid", name: "Invalid", score: Number.NaN }],
+          totalRows: 1,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [],
+          totalRows: 0,
+          version: 3,
+          status: "error",
+          retry: { run: retry, pending: false },
+        }}
+      />,
+    );
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data error");
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+    await screen.getByRole("button", { name: "Retry" }).click();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  test("keeps terminal lifecycle and Retry authoritative for malformed terminal rows", async () => {
+    const retry = vi.fn();
+    const invalidRows = [
+      { id: "invalid", name: "Invalid", score: Number.POSITIVE_INFINITY },
+    ] satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        tableId="TABLE_ID_INVALID_TERMINAL"
+        clientSource={{
+          rows: invalidRows,
+          totalRows: invalidRows.length,
+          version: 1,
+          status: "error",
+          retry: { run: retry, pending: false },
+        }}
+      />,
+    );
+
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data error");
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Expected a finite number value.");
+    await screen.getByRole("button", { name: "Retry" }).click();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   test("renders and navigates a sparse row space while publishing required ranges", async () => {
     const compiledColumns = compileColumns([
       {
@@ -384,6 +542,7 @@ describe("BrunoTableClient browser surface", () => {
           loadedRows: 0,
           getRowId: () => undefined,
           getRow: () => undefined,
+          getCellValue: () => undefined,
         }),
         hasCoherentRows: false,
       }),
@@ -2053,6 +2212,33 @@ describe("BrunoTableClient browser surface", () => {
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(
       screen.getByRole("columnheader", { name: "Score" }).element().id,
     );
+  });
+
+  test("rebases a queued keyboard reveal through a same-frame live reorder", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(largeRows)} />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    grid.element().focus();
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+
+    const reorderedRows = largeRows.map((row) =>
+      row.id === "row-12" ? { ...row, score: 1_000 } : row,
+    );
+    await screen.rerender(
+      <BrunoTableClient {...props} clientSource={readySource(reorderedRows)} />,
+    );
+
+    await vi.waitFor(() => expect(grid.element().scrollTop).toBeGreaterThan(2_000));
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    const destination = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    expect(activeId).toBe(destination.element().id);
+    expect(destination.element()).not.toHaveAttribute("data-bruno-active-proxy");
   });
 
   test("re-sanitizes filters and ordering after replacing the column definitions", async () => {
