@@ -258,7 +258,7 @@ function SourceLifecycle({ runtime, focusFallback }: RuntimeProps) {
     runtime.getChromeSnapshot,
   );
 
-  if (chrome.invalid?.kind === "row-count-mismatch") {
+  if (chrome.invalid?.kind === "row-count-mismatch" && chrome.status !== "stale") {
     return (
       <Alert variant="destructive">
         <AlertTitle>Incomplete source</AlertTitle>
@@ -495,7 +495,9 @@ function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): str
     ? `Unsupported source status: ${invalid.receivedStatus}.`
     : invalid?.kind === "invalid-rows"
       ? `Invalid Client Source rows: ${invalid.receivedRows}.`
-      : undefined;
+      : invalid?.kind === "row-count-mismatch"
+        ? `Expected ${String(invalid.expectedRows)} rows but received ${String(invalid.receivedRows)}.`
+        : undefined;
 }
 
 function FocusFallbackOnUnmount({
@@ -1484,13 +1486,14 @@ const BrunoTableCell = memo(function BrunoTableCell({
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
   const row = rowAware ? snapshot : undefined;
+  const rowMissing = rowAware && row === undefined;
   const value = rowAware
     ? runtime.getCellValueSnapshot(rowId, column.columnId)
     : cellSnapshot?.value;
   recordBrunoTableClientCellRender(rowId, column.columnId);
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const className = invalid ? undefined : resolveCellClassName(column, row, value);
-  const content = invalid ? (
+  const className = invalid || rowMissing ? undefined : resolveCellClassName(column, row, value);
+  const content = rowMissing ? null : invalid ? (
     <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
   ) : (
     resolveCellContent(column, row, value)
@@ -1519,7 +1522,7 @@ const BrunoTableCell = memo(function BrunoTableCell({
         width: "100%",
       }}
     >
-      {invalid || column.cellRenderer === undefined ? (
+      {rowMissing || invalid || column.cellRenderer === undefined ? (
         content
       ) : (
         <NonTabbableCellContent>{content}</NonTabbableCellContent>

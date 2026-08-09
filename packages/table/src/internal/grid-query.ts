@@ -41,7 +41,7 @@ export function sanitizeClientInitialOrderBy(
   const sanitized = sanitizeClientOrderBy(orderBy, columns);
   if (sanitized.length === 0) {
     throw new TypeError(
-      orderBy === undefined || orderBy.length === 0
+      orderBy === undefined || (Array.isArray(orderBy) && orderBy.length === 0)
         ? "BrunoTable initialOrderBy is required when sorting is available."
         : hasSortableColumns(columns)
           ? "BrunoTable initialOrderBy contains no valid sortable column."
@@ -72,17 +72,20 @@ export function sanitizeClientOrderBy(
   orderBy: ClientOrderBy | undefined,
   columns: readonly CompiledColumn[],
 ): ClientOrderBy {
-  if (orderBy === undefined) return EMPTY_ORDER_BY;
+  if (!Array.isArray(orderBy)) return EMPTY_ORDER_BY;
   const sortable = new Set<string>(
     columns.filter((column) => column.enableSorting !== false).map((column) => column.columnId),
   );
   const seen = new Set<string>();
   return Object.freeze(
-    orderBy.flatMap((sort) => {
-      if (sort.direction !== "asc" && sort.direction !== "desc") return [];
-      if (!sortable.has(sort.columnId) || seen.has(sort.columnId)) return [];
-      seen.add(sort.columnId);
-      return [Object.freeze({ columnId: sort.columnId, direction: sort.direction })];
+    orderBy.flatMap((candidate: unknown) => {
+      const sort = asRecord(candidate);
+      const direction = sort["direction"];
+      const columnId = sort["columnId"];
+      if (direction !== "asc" && direction !== "desc") return [];
+      if (typeof columnId !== "string" || !sortable.has(columnId) || seen.has(columnId)) return [];
+      seen.add(columnId);
+      return [Object.freeze({ columnId, direction })];
     }),
   );
 }
@@ -91,7 +94,7 @@ export function sanitizeClientInitialFilters(
   filters: readonly unknown[] | undefined,
   columns: readonly CompiledColumn[],
 ): readonly unknown[] {
-  if (filters === undefined) return EMPTY_FILTERS;
+  if (!Array.isArray(filters)) return EMPTY_FILTERS;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   const sanitized = filters.flatMap((filter) => {
     const next = sanitizeFilter(filter, columnsById);
@@ -204,9 +207,7 @@ function sanitizeFilter(
     if (column.semantics.filterFamily !== "numeric") return undefined;
     const from = decode(operand);
     const to = decode(filter["filterTo"]);
-    return from._tag === "Success" &&
-      to._tag === "Success" &&
-      column.semantics.compare(from.value, to.value) < 0
+    return from._tag === "Success" && to._tag === "Success"
       ? snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
           filter: from.value,
           filterTo: to.value,

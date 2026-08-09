@@ -419,10 +419,19 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
-        clientSource={{ rows: [], totalRows: 0, version: 4, status: "stale", message: "Delayed" }}
+        clientSource={{
+          rows: [rows[0]!],
+          totalRows: 2,
+          version: 4,
+          status: "stale",
+          message: "Delayed",
+        }}
       />,
     );
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
+    const staleAlert = screen.getByRole("alert");
+    await expect.element(staleAlert).toHaveTextContent("Live data delayed");
+    await expect.element(staleAlert).toHaveTextContent("Delayed");
+    await expect.element(staleAlert).toHaveTextContent("Expected 2 rows but received 1");
   });
 
   test("presents invalid non-query values without letting semantic rendering throw", async () => {
@@ -4355,6 +4364,14 @@ describe("BrunoTableClient browser surface", () => {
       );
       expect(cellRenderCounts.get("grace:COL_ID_NAME")).toBe(initialNameCellRenders + 1);
       expect(cellRenderCounts.get("grace:COL_ID_SCORE")).toBe(initialScoreCellRenders);
+
+      await screen.rerender(
+        <BrunoTableClient {...instrumentedProps} clientSource={readySource([rows[0]!])} />,
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace Hopper" }))
+        .not.toBeInTheDocument();
     } finally {
       removeCellRenderListener();
       removeRenderListener();

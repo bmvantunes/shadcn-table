@@ -73,6 +73,24 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialOrderBy([{ columnId: "COL_ID_MISSING", direction: "asc" }], columns),
     ).toThrow(/no valid sortable column/u);
+    expect(() =>
+      sanitizeClientInitialOrderBy(
+        null as unknown as Parameters<typeof sanitizeClientInitialOrderBy>[0],
+        columns,
+      ),
+    ).toThrow(/no valid sortable column/u);
+    expect(() =>
+      sanitizeClientInitialOrderBy(
+        [null] as unknown as Parameters<typeof sanitizeClientInitialOrderBy>[0],
+        columns,
+      ),
+    ).toThrow(/no valid sortable column/u);
+    expect(
+      sanitizeClientInitialFilters(
+        null as unknown as Parameters<typeof sanitizeClientInitialFilters>[0],
+        columns,
+      ),
+    ).toEqual([]);
     expect(
       sanitizeClientOrderBy(
         [
@@ -201,7 +219,7 @@ describe("Client row model", () => {
     ).toEqual(["low", "middle"]);
   });
 
-  it("drops invalid ranges, text operands, sensitivities, and sparse inclusion arrays", () => {
+  it("retains empty ranges and drops invalid text operands, sensitivities, and sparse arrays", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -225,13 +243,16 @@ describe("Client row model", () => {
     const sparseCandidates = Array<string>(2);
     sparseCandidates[1] = "Ada";
 
+    const emptyRanges = [
+      { columnId: "COL_ID_SCORE", type: "inRange", filter: 5, filterTo: 5 },
+      { columnId: "COL_ID_SCORE", type: "inRange", filter: 6, filterTo: 5 },
+      { columnId: "COL_ID_COUNT", type: "inRange", filter: 5n, filterTo: 5n },
+      { columnId: "COL_ID_COUNT", type: "inRange", filter: 6n, filterTo: 5n },
+    ] as const;
     expect(
       sanitizeClientInitialFilters(
         [
-          { columnId: "COL_ID_SCORE", type: "inRange", filter: 5, filterTo: 5 },
-          { columnId: "COL_ID_SCORE", type: "inRange", filter: 6, filterTo: 5 },
-          { columnId: "COL_ID_COUNT", type: "inRange", filter: 5n, filterTo: 5n },
-          { columnId: "COL_ID_COUNT", type: "inRange", filter: 6n, filterTo: 5n },
+          ...emptyRanges,
           { columnId: "COL_ID_NAME", type: "contains", filter: "" },
           { columnId: "COL_ID_NAME", type: "startsWith", filter: "\u0301" },
           {
@@ -250,7 +271,11 @@ describe("Client row model", () => {
         ],
         columns,
       ),
-    ).toEqual([]);
+    ).toEqual(emptyRanges);
+    const rows = [{ id: "middle", name: "Ada", score: 5, count: 5n }] as const;
+    for (const range of emptyRanges) {
+      expect(filterClientRows(rows, columns, [range])).toEqual([]);
+    }
 
     expect(
       sanitizeClientInitialFilters(
