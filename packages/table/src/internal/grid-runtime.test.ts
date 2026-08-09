@@ -12,6 +12,7 @@ const source = (
   status: "loading" | "ready" | "stale" | "closed" | "error" = "ready",
   extra: Partial<{
     readonly totalRows: number;
+    readonly statusCode: string;
     readonly message: string;
     readonly retry: { readonly run: () => void; readonly pending: boolean };
   }> = {},
@@ -20,6 +21,7 @@ const source = (
   totalRows: extra.totalRows ?? rows.length,
   version: 1,
   status,
+  ...(extra.statusCode === undefined ? {} : { statusCode: extra.statusCode }),
   ...(extra.message === undefined ? {} : { message: extra.message }),
   ...(extra.retry === undefined ? {} : { retry: extra.retry }),
 });
@@ -231,6 +233,28 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(nameSnapshot);
     expect(runtime.getCellSnapshot("first", "COL_ID_NOTE")).not.toBe(noteSnapshot);
     expect(runtime.getCellValueSnapshot("first", "COL_ID_NOTE")).toBe("Changed");
+  });
+
+  it("indexes columns before reconciling subscribed cells", () => {
+    const indexedColumns = [...runtimeColumns];
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createClientRuntime(
+      source([first]),
+      (row) => row.id,
+      indexedColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const find = vi.spyOn(indexedColumns, "find");
+    const listener = vi.fn();
+    runtime.subscribeCell("first", "COL_ID_NAME", listener);
+    runtime.getCellSnapshot("first", "COL_ID_NAME");
+
+    runtime.publish(source([{ ...first, name: "Augusta" }]));
+
+    expect(find).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Augusta");
   });
 
   it("refreshes abandoned cell reads and bounds pending snapshots", () => {
@@ -1266,6 +1290,30 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getBodySnapshot().kind).toBe("rows");
     runtime.retry();
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("admits only bounded string lifecycle metadata", () => {
+    const row = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([row]));
+    const malformed = {
+      ...source([row], "stale"),
+      statusCode: 503,
+      message: null,
+    } as unknown as ReturnType<typeof source>;
+
+    expect(() => runtime.publish(malformed)).not.toThrow();
+    expect(runtime.getChromeSnapshot()).toMatchObject({ status: "stale" });
+    expect(runtime.getChromeSnapshot()).not.toHaveProperty("statusCode");
+    expect(runtime.getChromeSnapshot()).not.toHaveProperty("message");
+
+    runtime.publish(
+      source([row], "stale", {
+        statusCode: "s".repeat(256),
+        message: "m".repeat(1_024),
+      }),
+    );
+    expect(runtime.getChromeSnapshot().statusCode).toHaveLength(128);
+    expect(runtime.getChromeSnapshot().message).toHaveLength(512);
   });
 
   it("partitions source metrics and chrome without waking rows or body", () => {

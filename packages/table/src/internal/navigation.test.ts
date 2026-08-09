@@ -55,17 +55,17 @@ describe("BrunoTableNavigationRuntime", () => {
   it("moves through the coherent header/body space and preserves row identity across reorder", () => {
     const columns = compileColumns([
       {
-        columnId: "COL_ID_NAME",
-        field: "name",
-        headerName: "Name",
-        valueType: "text",
-      },
-      {
         columnId: "COL_ID_SCORE",
         field: "score",
         headerName: "Score",
         pinned: "start",
         valueType: "number",
+      },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();

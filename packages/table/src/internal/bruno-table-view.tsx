@@ -32,11 +32,7 @@ import type {
 } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
-import {
-  BrunoTableNavigationRuntime,
-  orderBrunoTableLogicalColumns,
-  type BrunoTableActiveCell,
-} from "./navigation";
+import { BrunoTableNavigationRuntime, type BrunoTableActiveCell } from "./navigation";
 import type {
   BrunoTableCellSnapshot,
   BrunoTableChromeSnapshot,
@@ -435,16 +431,18 @@ const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }
     runtime.getChromeSnapshot,
     runtime.getChromeSnapshot,
   );
+  const title = emptyTitle(chrome.status);
   const announcement =
-    chrome.status === "closed" ? "status" : chrome.status === "error" ? "alert" : undefined;
+    chrome.status === "closed" ? "status" : chrome.status === "error" ? "alert" : "region";
   const retry = chrome.status === "closed" || chrome.status === "error" ? chrome.retry : undefined;
   return (
     <Empty
+      aria-label={announcement === "region" ? title : undefined}
       className={announcement === "alert" ? "border-destructive text-destructive" : undefined}
       role={announcement}
     >
       <EmptyHeader>
-        <EmptyTitle>{emptyTitle(chrome.status)}</EmptyTitle>
+        <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>
           {emptyDescription(chrome) ?? "No rows are available for this table."}
         </EmptyDescription>
@@ -646,7 +644,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useLayoutEffect(recordBrunoTableClientGridSurfaceRender);
   const virtualWindow = viewportSnapshot.virtualWindow;
   const tableWidth = virtualWindow.totalWidth;
-  const logicalColumns = useMemo(() => orderBrunoTableLogicalColumns(columns), [columns]);
+  const logicalColumns = columns;
   const gridElement = useRef<HTMLDivElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
   const attachGrid = useMemo(
@@ -960,7 +958,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 });
 
 // Active Cell movement updates the composite attribute without waking the structural grid tree.
-// oxlint-disable react/react-compiler
 const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescendantAdapter({
   gridElement,
   instanceId,
@@ -972,7 +969,6 @@ const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescenda
   readonly navigation: BrunoTableNavigationRuntime;
   readonly tableId: string;
 }) {
-  "use no memo";
   useLayoutEffect(() => {
     const synchronize = () => {
       const element = gridElement.current;
@@ -988,7 +984,6 @@ const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescenda
   }, [gridElement, instanceId, navigation, tableId]);
   return null;
 });
-// oxlint-enable react/react-compiler
 
 const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   instanceId,
@@ -1784,7 +1779,8 @@ const DEFAULT_LOADING_ROW_COUNT = 5;
 // oxlint-disable react/react-compiler
 const LoadingRows = memo(function LoadingRows({ totalRows }: { readonly totalRows: number }) {
   "use no memo";
-  const logicalRowCount = totalRows > 0 ? totalRows : DEFAULT_LOADING_ROW_COUNT;
+  const logicalRowCount =
+    Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : DEFAULT_LOADING_ROW_COUNT;
   const [viewport] = useState(() => {
     const next = new BrunoTableViewportRuntime(0);
     next.setLayout(logicalRowCount, EMPTY_LOADING_COLUMNS);

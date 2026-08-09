@@ -197,6 +197,7 @@ export class BrunoTableGridRuntime<TRow> {
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private columns: readonly CompiledColumn[];
+  private columnsById: ReadonlyMap<string, CompiledColumn>;
   private baselineFilters: readonly unknown[];
   private baselineOrderBy: BrunoTableOrderBy;
   private query: BrunoTableQuerySnapshot;
@@ -208,6 +209,7 @@ export class BrunoTableGridRuntime<TRow> {
     queryConfiguration: BrunoTableQueryConfiguration,
   ) {
     this.columns = columns;
+    this.columnsById = indexColumns(columns);
     this.baselineFilters = queryConfiguration.baselineFilters;
     this.baselineOrderBy = queryConfiguration.baselineOrderBy;
     this.query = Object.freeze({
@@ -273,6 +275,7 @@ export class BrunoTableGridRuntime<TRow> {
 
     if (configuration !== undefined) {
       this.columns = configuration.columns;
+      this.columnsById = indexColumns(configuration.columns);
       this.baselineFilters = configuration.baselineFilters;
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
@@ -607,8 +610,8 @@ export class BrunoTableGridRuntime<TRow> {
       for (const [columnId, listeners] of columns) {
         const previousSnapshot =
           this.cellSnapshots.get(rowId)?.get(columnId) ??
-          readCellSnapshot(previous, this.columns, rowId, columnId);
-        const nextSnapshot = readCellSnapshot(next, this.columns, rowId, columnId);
+          readCellSnapshot(previous, this.columnsById, rowId, columnId);
+        const nextSnapshot = readCellSnapshot(next, this.columnsById, rowId, columnId);
         if (previousSnapshot.column !== nextSnapshot.column) {
           this.installCellSnapshot(rowId, columnId, nextSnapshot);
           continue;
@@ -622,7 +625,7 @@ export class BrunoTableGridRuntime<TRow> {
   }
 
   private currentCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
-    const column = findColumn(this.columns, columnId);
+    const column = this.columnsById.get(columnId);
     const current = this.cellSnapshots.get(rowId)?.get(columnId);
     const subscribed = this.cellListeners.get(rowId)?.has(columnId) ?? false;
     if (
@@ -640,7 +643,7 @@ export class BrunoTableGridRuntime<TRow> {
   }
 
   private readCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
-    return readCellSnapshot(this.state.rowSpace, this.columns, rowId, columnId);
+    return readCellSnapshot(this.state.rowSpace, this.columnsById, rowId, columnId);
   }
 
   private installCellSnapshot(
@@ -693,11 +696,11 @@ export class BrunoTableGridRuntime<TRow> {
 
 function readCellSnapshot<TRow>(
   rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
-  columns: readonly CompiledColumn[],
+  columnsById: ReadonlyMap<string, CompiledColumn>,
   rowId: BrunoTableRowId,
   columnId: string,
 ): BrunoTableCellSnapshot {
-  const column = findColumn(columns, columnId);
+  const column = columnsById.get(columnId);
   const rowPresent = rowSpace?.getRow(rowId) !== undefined;
   return Object.freeze({
     column,
@@ -707,11 +710,8 @@ function readCellSnapshot<TRow>(
   });
 }
 
-function findColumn(
-  columns: readonly CompiledColumn[],
-  columnId: string,
-): CompiledColumn | undefined {
-  return columns.find((column) => column.columnId === columnId);
+function indexColumns(columns: readonly CompiledColumn[]): ReadonlyMap<string, CompiledColumn> {
+  return new Map(columns.map((column) => [column.columnId, column]));
 }
 
 function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
@@ -794,7 +794,9 @@ function stabilizeRuntimeState<TRow>(
 function bodySnapshot<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
 ): BrunoTableBodySnapshot {
-  if (publication.rowSpace !== undefined && publication.rowSpace.totalRows > 0) return BODY_ROWS;
+  if (publication.rowSpace !== undefined) {
+    return publication.rowSpace.totalRows > 0 ? BODY_ROWS : BODY_EMPTY;
+  }
   if (
     publication.invalid?.kind === "invalid-value" &&
     (publication.status === "closed" || publication.status === "error")

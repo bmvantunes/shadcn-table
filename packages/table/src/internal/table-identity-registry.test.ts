@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
+import type { BrunoTableColumns } from "../public-types";
+
 import { compileColumns } from "./compile-columns";
 import { registerBrunoTableIdentity } from "./table-identity-registry";
 
@@ -151,6 +154,44 @@ describe("BrunoTable Table Identity registry", () => {
         ...valueType,
         equivalent: (left, right) => left.toLowerCase() === right.toLowerCase(),
       }),
+      report,
+    );
+    expect(report).toHaveBeenCalledOnce();
+
+    disposeIncompatible();
+    disposeCompatible();
+    disposeFirst();
+  });
+
+  it("fingerprints generated Select semantics by their exact option domain", () => {
+    type SelectRow = { readonly status: "active" | "paused" };
+    const compile = (options: readonly ["active", ...("active" | "paused")[]]) => {
+      const definitions = [
+        BrunoTableSelectColumn({
+          columnId: "COL_ID_STATUS",
+          field: "status",
+          headerName: "Status",
+          options,
+        }),
+      ] satisfies BrunoTableColumns<SelectRow>;
+      return compileColumns(definitions);
+    };
+    const report = vi.fn();
+    const disposeFirst = registerBrunoTableIdentity(
+      "TABLE_ID_SELECT_SEMANTICS",
+      compile(["active", "paused"]),
+      report,
+    );
+    const disposeCompatible = registerBrunoTableIdentity(
+      "TABLE_ID_SELECT_SEMANTICS",
+      compile(["active", "paused"]),
+      report,
+    );
+    expect(report).not.toHaveBeenCalled();
+
+    const disposeIncompatible = registerBrunoTableIdentity(
+      "TABLE_ID_SELECT_SEMANTICS",
+      compile(["active"]),
       report,
     );
     expect(report).toHaveBeenCalledOnce();

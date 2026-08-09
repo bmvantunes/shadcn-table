@@ -22,6 +22,16 @@ import type {
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
+const selectValueTypeFingerprints = new WeakMap<object, readonly string[]>();
+
+export function getBrunoTableSelectValueTypeFingerprint(
+  valueType: unknown,
+): readonly string[] | undefined {
+  return typeof valueType === "object" && valueType !== null
+    ? selectValueTypeFingerprints.get(valueType)
+    : undefined;
+}
+
 type FieldOfKind<TRow, TValueKind> = {
   readonly [TField in BrunoTableFieldKey<TRow>]: [BrunoTableNonNullish<TRow[TField]>] extends [
     never,
@@ -1120,6 +1130,7 @@ function createSelectValueType(
       return decodeOption(decodeSelectPrimitive(input["value"]));
     },
   };
+  selectValueTypeFingerprints.set(descriptor, Object.freeze([kind, ...canonicalOptions]));
   return Object.freeze(descriptor);
 }
 

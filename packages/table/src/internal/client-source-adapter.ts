@@ -59,6 +59,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    this.acceptEmptyCoherent();
     this.sourceColumns = columns;
     this.queryColumns = columns;
     this.queryConfiguration = Object.freeze({
@@ -111,6 +112,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
       this.coherent !== previousCoherent &&
@@ -147,6 +149,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
       this.coherent !== previousCoherent &&
@@ -170,6 +173,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
     if (this.coherent?.admittedRows === rows) this.acceptedCoherent = this.coherent;
+  };
+
+  private readonly acceptEmptyCoherent = (): void => {
+    if (this.coherent?.admittedRows.length === 0) this.acceptedCoherent = this.coherent;
   };
 
   public readonly createRowsStore = (
@@ -630,13 +637,15 @@ function snapshotSource<TRow>(
   source: BrunoTableClientSource<TRow>,
   stableRows?: readonly TRow[],
 ): BrunoTableClientSource<TRow> {
+  const statusCode = boundedOptionalText(source.statusCode, 128);
+  const message = boundedOptionalText(source.message, 512);
   return Object.freeze({
     rows: stableRows ?? source.rows,
     totalRows: source.totalRows,
     version: source.version,
     status: source.status,
-    ...(source.statusCode === undefined ? {} : { statusCode: boundedText(source.statusCode, 128) }),
-    ...(source.message === undefined ? {} : { message: boundedText(source.message, 512) }),
+    ...(statusCode === undefined ? {} : { statusCode }),
+    ...(message === undefined ? {} : { message }),
     ...(source.retry === undefined
       ? {}
       : { retry: Object.freeze({ run: source.retry.run, pending: source.retry.pending }) }),
@@ -662,6 +671,10 @@ function nextCoherent<TRow>(
 
 function boundedText(value: string, limit: number): string {
   return value.length <= limit ? value : value.slice(0, limit);
+}
+
+function boundedOptionalText(value: unknown, limit: number): string | undefined {
+  return typeof value === "string" ? boundedText(value, limit) : undefined;
 }
 
 function isCompleteSource<TRow>(source: BrunoTableClientSource<TRow>): boolean {

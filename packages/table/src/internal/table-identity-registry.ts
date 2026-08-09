@@ -1,3 +1,5 @@
+import { getBrunoTableSelectValueTypeFingerprint } from "../column-helpers";
+
 import type { CompiledColumn } from "./compile-columns";
 
 type Registration = Readonly<{
@@ -76,6 +78,8 @@ function fingerprintCustomValueSemantics(
   valueType: unknown,
 ): readonly (number | string)[] | undefined {
   if (typeof valueType !== "object" || valueType === null) return undefined;
+  const selectFingerprint = getBrunoTableSelectValueTypeFingerprint(valueType);
+  if (selectFingerprint !== undefined) return selectFingerprint;
   const descriptor = valueType as Readonly<Record<string, unknown>>;
   const keys = [
     "decodeRuntime",

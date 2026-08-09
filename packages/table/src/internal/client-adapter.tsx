@@ -1,4 +1,6 @@
 import {
+  columnOrderingFeature,
+  columnPinningFeature,
   columnFilteringFeature,
   createFilteredRowModel,
   createSortedRowModel,
@@ -8,7 +10,7 @@ import {
 } from "@tanstack/react-table";
 import { useMemo } from "react";
 
-import type { ColumnDef, Row, RowData } from "@tanstack/react-table";
+import type { ColumnDef, Row, RowData, Table } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
@@ -18,6 +20,8 @@ import type { ClientOrderBy } from "./client-row-model";
 import { collectClientFilterColumnIds, createClientFilterPredicate } from "./client-row-model";
 
 const clientFeatures = tableFeatures({
+  columnOrderingFeature,
+  columnPinningFeature,
   columnFilteringFeature,
   rowSortingFeature,
   filteredRowModel: createFilteredRowModel(),
@@ -27,6 +31,7 @@ const clientFeatures = tableFeatures({
 type AdapterRow = BrunoTableClientAdmittedRow & RowData;
 type ClientRow = Row<typeof clientFeatures, AdapterRow>;
 type ClientColumn = ColumnDef<typeof clientFeatures, AdapterRow, unknown>;
+type ClientTable = Table<typeof clientFeatures, AdapterRow>;
 const INTERNAL_FILTER_COLUMN_ID = "__BRUNO_TABLE_FILTERS__";
 
 export function useClientRowIds(
@@ -65,16 +70,32 @@ export function useClientRowIds(
       })),
     [orderBy],
   );
+  const columnOrder = useMemo(
+    () => compiledColumns.map((column) => column.columnId),
+    [compiledColumns],
+  );
+  const columnPinning = useMemo(
+    () => ({
+      start: compiledColumns
+        .filter((column) => column.pinned === "start")
+        .map((column) => column.columnId),
+      end: compiledColumns
+        .filter((column) => column.pinned === "end")
+        .map((column) => column.columnId),
+    }),
+    [compiledColumns],
+  );
   const table = useTable(
     {
       features: clientFeatures,
       columns: adapterColumns,
       data: rows,
       getRowId: (row) => row.rowId,
-      state: { columnFilters, sorting },
+      state: { columnFilters, columnOrder, columnPinning, sorting },
     },
     () => null,
   );
+  const logicalColumns = stableLogicalColumns(table, compiledColumns);
 
   let rowModel: ReturnType<typeof table.getRowModel> | undefined;
   let invalid: BrunoTableInvalidCellValue["invalid"] | undefined;
@@ -89,16 +110,58 @@ export function useClientRowIds(
   }
   const rowIds = rowModel === undefined ? EMPTY_ROW_IDS : stableRowIds(rowModel);
   return invalid === undefined
-    ? Object.freeze({ kind: "ready" as const, rowIds })
-    : Object.freeze({ kind: "invalid" as const, invalid });
+    ? Object.freeze({ kind: "ready" as const, columns: logicalColumns, rowIds })
+    : Object.freeze({ kind: "invalid" as const, columns: logicalColumns, invalid });
 }
 
 export type BrunoTableClientRowModelResult =
-  | Readonly<{ readonly kind: "ready"; readonly rowIds: readonly string[] }>
+  | Readonly<{
+      readonly kind: "ready";
+      readonly columns: readonly CompiledColumn[];
+      readonly rowIds: readonly string[];
+    }>
   | Readonly<{
       readonly kind: "invalid";
+      readonly columns: readonly CompiledColumn[];
       readonly invalid: BrunoTableInvalidCellValue["invalid"];
     }>;
+
+function readLogicalColumns(
+  table: ClientTable,
+  compiledColumns: readonly CompiledColumn[],
+): readonly CompiledColumn[] {
+  const compiledById = new Map<string, CompiledColumn>(
+    compiledColumns.map((column) => [column.columnId, column]),
+  );
+  const ordered = [
+    ...table.getStartLeafColumns(),
+    ...table.getCenterLeafColumns(),
+    ...table.getEndLeafColumns(),
+  ].flatMap((column) => {
+    const compiled = compiledById.get(column.id);
+    return compiled === undefined ? [] : [compiled];
+  });
+  if (ordered.length !== compiledColumns.length) {
+    throw new TypeError("BrunoTable could not resolve its private Logical Column Order.");
+  }
+  return Object.freeze(ordered);
+}
+
+const LOGICAL_COLUMNS_BY_DEFINITION = new WeakMap<
+  readonly CompiledColumn[],
+  readonly CompiledColumn[]
+>();
+
+function stableLogicalColumns(
+  table: ClientTable,
+  compiledColumns: readonly CompiledColumn[],
+): readonly CompiledColumn[] {
+  const current = LOGICAL_COLUMNS_BY_DEFINITION.get(compiledColumns);
+  if (current !== undefined) return current;
+  const next = readLogicalColumns(table, compiledColumns);
+  LOGICAL_COLUMNS_BY_DEFINITION.set(compiledColumns, next);
+  return next;
+}
 
 function buildAdapterColumns(
   compiledColumns: readonly CompiledColumn[],

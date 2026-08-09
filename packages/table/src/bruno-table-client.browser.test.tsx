@@ -360,6 +360,32 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
+        clientSource={{
+          rows: [],
+          totalRows: Number.POSITIVE_INFINITY,
+          version: 2,
+          status: "loading",
+        }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toHaveAttribute("aria-rowcount", "5");
+    expect(screen.getByRole("row").all().length).toBeLessThan(100);
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [], totalRows: 1.5, version: 2, status: "loading" }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toHaveAttribute("aria-rowcount", "5");
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
         clientSource={{ rows, totalRows: rows.length, version: 2, status: "loading" }}
       />,
     );
@@ -945,6 +971,35 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
   });
 
+  test("retains a coherent empty result while rejecting an incomplete stale publication", async () => {
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [], totalRows: 0, version: 1, status: "ready" }}
+      />,
+    );
+    await expect.element(screen.getByRole("region", { name: "No rows" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [rows[0]!],
+          totalRows: 2,
+          version: 2,
+          status: "stale",
+          message: "Partial delivery",
+        }}
+      />,
+    );
+
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Expected 2 rows");
+    await expect
+      .element(screen.getByRole("region", { name: "No rows" }))
+      .toHaveTextContent("Partial delivery");
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+  });
+
   test("applies the typed initial filter without changing source identity", async () => {
     const screen = await render(
       <BrunoTableClient
@@ -1385,7 +1440,6 @@ describe("BrunoTableClient browser surface", () => {
         getRowId={(row: Row) => row.id}
         columns={
           [
-            { ...columns[0], columnId: "COL_ID_PINNED_START", pinned: "start" },
             columns[1],
             {
               ...columns[0],
@@ -1393,6 +1447,7 @@ describe("BrunoTableClient browser surface", () => {
               headerName: "Pinned end",
               pinned: "end",
             },
+            { ...columns[0], columnId: "COL_ID_PINNED_START", pinned: "start" },
           ] as const
         }
         initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" as const }]}
@@ -1406,6 +1461,12 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PINNED" }))
       .toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("columnheader")
+        .all()
+        .map((header) => header.element().textContent),
+    ).toEqual(["Name", "Score↑1", "Pinned end"]);
     const gridBounds = screen
       .getByRole("grid", { name: "Data for TABLE_ID_PINNED" })
       .element()

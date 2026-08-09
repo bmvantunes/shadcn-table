@@ -110,8 +110,12 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
 
   return children(
     invalid !== undefined
-      ? Object.freeze({ kind: "invalid" as const, columns, invalid })
-      : Object.freeze({ kind: "rows" as const, ...orderSnapshot, columns }),
+      ? Object.freeze({ kind: "invalid" as const, columns: rowModel.columns, invalid })
+      : Object.freeze({
+          kind: "rows" as const,
+          ...orderSnapshot,
+          columns: rowModel.columns,
+        }),
   );
 });
 
