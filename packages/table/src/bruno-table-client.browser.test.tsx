@@ -2496,8 +2496,16 @@ describe("BrunoTableClient browser surface", () => {
 
   test("rejects an offscreen newly active query value until its source row is repaired", async () => {
     const queryReads: string[] = [];
+    const mirroredQueryReads: string[] = [];
+    const queryTableIds = new Set<string>();
     const restoreQueryReadListener = installBrunoTableClientQueryValueReadListener(
-      (_rowId, columnId) => queryReads.push(columnId),
+      (_rowId, columnId, tableId) => {
+        queryReads.push(columnId);
+        queryTableIds.add(tableId);
+      },
+    );
+    const restoreMirroredQueryReadListener = installBrunoTableClientQueryValueReadListener(
+      (_rowId, columnId) => mirroredQueryReads.push(columnId),
     );
     const secondaryDecode = vi.fn((input: unknown) =>
       typeof input === "number" && Number.isFinite(input)
@@ -2642,7 +2650,10 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
       await vi.waitFor(() => expect(queryReads).toContain("COL_ID_LAZY_075"));
       expect(queryReads).not.toContain("COL_ID_LAZY_000");
+      expect(mirroredQueryReads).toContain("COL_ID_LAZY_075");
+      expect([...queryTableIds]).toEqual(["TABLE_ID_LAZY_SECONDARY_SORT"]);
     } finally {
+      restoreMirroredQueryReadListener();
       restoreQueryReadListener();
     }
   });
@@ -3920,6 +3931,50 @@ describe("BrunoTableClient browser surface", () => {
     const proxyCell = screen.getByRole("gridcell", { name: "Row 0" });
     await expect.element(proxyCell).toHaveAttribute("aria-colindex", "1");
     expect(proxyCell.element().parentElement?.getAttribute("aria-rowindex")).toBe("2");
+  });
+
+  test("indexes active-descendant proxies in pinned-region order", async () => {
+    const interleavedColumns = [
+      {
+        ...columns[1],
+        columnId: "COL_ID_INTERLEAVED_CENTER",
+        headerName: "Centre score",
+      },
+      {
+        ...columns[1],
+        columnId: "COL_ID_INTERLEAVED_END",
+        headerName: "End score",
+        pinned: "end" as const,
+      },
+      {
+        ...columns[0],
+        columnId: "COL_ID_INTERLEAVED_START",
+        headerName: "Start name",
+        pinned: "start" as const,
+      },
+    ] as BrunoTableColumns<Row>;
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_INTERLEAVED_PINNING"
+        getRowId={(row: Row) => row.id}
+        columns={interleavedColumns}
+        initialOrderBy={[{ columnId: "COL_ID_INTERLEAVED_CENTER", direction: "asc" }]}
+        clientSource={readySource(largeRows)}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_INTERLEAVED_PINNING" });
+    grid.element().focus();
+
+    await grid.wheel({ delta: { y: 1200 } });
+
+    const proxyCell = screen.getByRole("gridcell", { name: "Row 0" });
+    await expect.element(proxyCell).toHaveAttribute("data-bruno-active-proxy", "");
+    await expect.element(proxyCell).toHaveAttribute("aria-colindex", "1");
   });
 
   test("makes interactive custom-renderer proxies inert while retaining a cell name", async () => {

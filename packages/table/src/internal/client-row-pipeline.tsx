@@ -72,6 +72,7 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
 
 const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   runtime,
+  tableId,
   columns,
   rowPipelineAdapter,
   children,
@@ -79,11 +80,18 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   orderBy,
   queryGeneration,
 }: ClientResolvedRowOrderProps) {
-  const rowOrderDetector = useMemo<BrunoTableClientRowOrderChangeDetector>(
-    () => (previousRows, nextRows, change) =>
-      rowOrderChanged(previousRows, nextRows, change, columns, filters, orderBy),
-    [columns, filters, orderBy],
-  );
+  const rowOrderDetector = useMemo<BrunoTableClientRowOrderChangeDetector>(() => {
+    const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
+    const filteredIds = new Set<string>();
+    for (const filter of filters ?? EMPTY_FILTERS) {
+      collectClientFilterColumnIds(filter, filteredIds);
+    }
+    const relevantColumns = columns.filter(
+      (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
+    );
+    return (previousRows, nextRows, change) =>
+      rowOrderChanged(previousRows, nextRows, change, relevantColumns, filteredIds);
+  }, [columns, filters, orderBy]);
   const rowsStore = useMemo(
     () => rowPipelineAdapter.createRowsStore(runtime, rowOrderDetector),
     [rowOrderDetector, rowPipelineAdapter, runtime],
@@ -93,7 +101,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     rowsStore.getSnapshot,
     rowsStore.getSnapshot,
   );
-  const rowModel = useClientRowIds(rows, columns, orderBy, filters);
+  const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId);
   const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
   const nextRowIds =
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
@@ -137,19 +145,10 @@ function rowOrderChanged(
     readonly rowIdsChanged: boolean;
     readonly changedIndexes: readonly number[];
   }>,
-  columns: readonly CompiledColumn[],
-  filters: readonly unknown[] | undefined,
-  orderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
+  relevantColumns: readonly CompiledColumn[],
+  filteredIds: ReadonlySet<string>,
 ): boolean {
   if (change.rowIdsChanged) return true;
-  const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
-  const filteredIds = new Set<string>();
-  for (const filter of filters ?? EMPTY_FILTERS) {
-    collectClientFilterColumnIds(filter, filteredIds);
-  }
-  const relevantColumns = columns.filter(
-    (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
-  );
   if (relevantColumns.length === 0) return false;
   for (const index of change.changedIndexes) {
     const previousRow = previousRows[index];

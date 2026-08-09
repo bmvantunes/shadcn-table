@@ -157,11 +157,15 @@ export class BrunoTableViewportRuntime {
     findRowIndex: ((rowId: string) => number | undefined) | undefined,
   ): void {
     const pending = this.pendingReveal;
-    if (pending === undefined || pending.region === "header") return;
-    const rowIndex =
-      pending.rowId === undefined || findRowIndex === undefined
-        ? undefined
-        : findRowIndex(pending.rowId);
+    if (
+      pending === undefined ||
+      pending.region === "header" ||
+      pending.rowId === undefined ||
+      findRowIndex === undefined
+    ) {
+      return;
+    }
+    const rowIndex = findRowIndex(pending.rowId);
     this.pendingReveal =
       rowIndex === undefined ? undefined : Object.freeze({ ...pending, rowIndex });
   }

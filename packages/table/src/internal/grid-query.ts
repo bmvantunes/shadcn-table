@@ -578,7 +578,7 @@ function evaluateFilterRecord(
       column.semantics.compare(value, filter["filterTo"]) < 0
     );
   }
-  if (typeof operand !== "string") return false;
+  if (typeof operand !== "string") return filter["type"] === "notContains";
   if (typeof value !== "string") return filter["type"] === "notContains";
   const left = normalizeText(value, caseSensitive, accentSensitive);
   const right = normalizeText(operand, caseSensitive, accentSensitive);

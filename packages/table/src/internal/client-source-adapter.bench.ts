@@ -1,4 +1,4 @@
-import { afterAll, bench, describe, expect, vi } from "vitest";
+import { afterAll, beforeAll, bench, describe, expect, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
 import {
@@ -11,14 +11,28 @@ type Row = Readonly<{ id: string; name: string }>;
 
 const rowCount = 1_000_000;
 const changedIndex = Math.floor(rowCount / 2);
-const baseRows = Array.from({ length: rowCount }, (_unused, index) => ({
-  id: `row-${String(index)}`,
-  name: `Name ${String(index)}`,
-})) satisfies readonly Row[];
-const replacementRows = baseRows.with(changedIndex, {
-  id: `row-${String(changedIndex)}`,
-  name: "Changed",
-});
+let fixtures:
+  | Readonly<{
+      baseRows: readonly Row[];
+      replacementRows: readonly Row[];
+    }>
+  | undefined;
+const getFixtures = () => {
+  fixtures ??= (() => {
+    const baseRows = Array.from({ length: rowCount }, (_unused, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    return Object.freeze({
+      baseRows,
+      replacementRows: baseRows.with(changedIndex, {
+        id: `row-${String(changedIndex)}`,
+        name: "Changed",
+      }),
+    });
+  })();
+  return fixtures;
+};
 const columns = compileColumns([
   {
     columnId: "COL_ID_NAME",
@@ -34,24 +48,35 @@ const source = (rows: readonly Row[], version: number) => ({
   version,
   status: "ready" as const,
 });
-const adapter = new BrunoTableClientRowPipelineAdapter(
-  source(baseRows, 1),
-  getRowId,
-  columns,
-  undefined,
-  [{ columnId: "COL_ID_NAME", direction: "asc" }],
-);
+let adapter: BrunoTableClientRowPipelineAdapter<Row> | undefined;
+const getAdapter = () => {
+  adapter ??= new BrunoTableClientRowPipelineAdapter(
+    source(getFixtures().baseRows, 1),
+    getRowId,
+    columns,
+    undefined,
+    [{ columnId: "COL_ID_NAME", direction: "asc" }],
+  );
+  return adapter;
+};
 let publishReplacement = false;
 let version = 1;
-let lastEvent: BrunoTableClientReconciliationEvent | undefined;
+let patchEvent: BrunoTableClientReconciliationEvent | undefined;
+let capturePatchEvent = false;
+let patchRuns = 0;
 const restoreInstrumentation = installBrunoTableClientReconciliationListener((event) => {
-  lastEvent = event;
+  if (capturePatchEvent) patchEvent = event;
 });
 
 describe("BrunoTable Client Source reconciliation", () => {
+  beforeAll(() => {
+    getFixtures();
+  });
+
   bench(
     "constructs one million resident rows",
     () => {
+      const { baseRows } = getFixtures();
       const initial = new BrunoTableClientRowPipelineAdapter(
         source(baseRows, 1),
         (row: Row) => row.id,
@@ -69,6 +94,7 @@ describe("BrunoTable Client Source reconciliation", () => {
   bench(
     "admits one million resident rows after loading",
     () => {
+      const { baseRows } = getFixtures();
       const initial = new BrunoTableClientRowPipelineAdapter(
         {
           rows: baseRows,
@@ -90,16 +116,25 @@ describe("BrunoTable Client Source reconciliation", () => {
   );
 
   bench("patches one replacement among one million resident rows", () => {
+    const { baseRows, replacementRows } = getFixtures();
+    const patchAdapter = getAdapter();
     publishReplacement = !publishReplacement;
     version += 1;
     getRowId.mockClear();
-    adapter.publish(source(publishReplacement ? replacementRows : baseRows, version));
+    capturePatchEvent = true;
+    try {
+      patchAdapter.publish(source(publishReplacement ? replacementRows : baseRows, version));
+      patchRuns += 1;
+    } finally {
+      capturePatchEvent = false;
+    }
   });
 
   afterAll(() => {
     restoreInstrumentation();
+    if (patchRuns === 0) return;
     expect(getRowId).toHaveBeenCalledOnce();
-    expect(lastEvent).toEqual({
+    expect(patchEvent).toEqual({
       residentRows: rowCount,
       changedRows: 1,
       resolvedRowIds: 1,

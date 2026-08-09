@@ -166,6 +166,11 @@ describe("Client row model", () => {
         { columnId: "COL_ID_SCORE", type: "notEqual", filter: 2 },
       ]).map((row) => row.id),
     ).toEqual(["blank", "upper"]);
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_NAME", type: "notContains", filter: 2 },
+      ]).map((row) => row.id),
+    ).toEqual(["blank", "middle", "upper"]);
   });
 
   it("excludes nullish Number and BigInt values from every ordered filter", () => {

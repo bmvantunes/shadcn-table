@@ -124,6 +124,41 @@ describe("BrunoTableViewportRuntime", () => {
     expect(viewport.getSnapshot().virtualWindow.rowStart).toBeLessThan(40);
   });
 
+  it("preserves a queued index-only reveal across a layout publication", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+
+    viewport.revealCell(75, "COL_ID_NAME");
+    viewport.setLayout(101, columns);
+    callback!(0);
+
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeGreaterThan(50);
+  });
+
   it("keeps a thousand-column horizontal window bounded", () => {
     const columns = compileColumns(
       Array.from({ length: 1_000 }, (_, index) => ({

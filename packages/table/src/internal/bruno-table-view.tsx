@@ -155,6 +155,7 @@ export type BrunoTableRowPipelineProps<
   TAdapter = unknown,
 > = {
   readonly runtime: TRuntime;
+  readonly tableId: string;
   readonly columns: readonly CompiledColumn[];
   readonly rowPipelineAdapter: TAdapter;
   readonly children: (snapshot: BrunoTableRowPipelineSnapshot) => ReactElement;
@@ -407,6 +408,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
     <RowPipeline
       key="row-pipeline"
       runtime={runtime}
+      tableId={tableId}
       columns={compiledColumns}
       rowPipelineAdapter={rowPipelineAdapter}
     >

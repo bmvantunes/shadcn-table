@@ -33,15 +33,15 @@ type ClientRow = Row<typeof clientFeatures, AdapterRow>;
 type ClientColumn = ColumnDef<typeof clientFeatures, AdapterRow, unknown>;
 type ClientTable = Table<typeof clientFeatures, AdapterRow>;
 const INTERNAL_FILTER_COLUMN_ID = "__BRUNO_TABLE_FILTERS__";
-let queryValueReadListener: ((rowId: string, columnId: string) => void) | undefined;
+const queryValueReadListeners = new Set<
+  (rowId: string, columnId: string, tableId: string) => void
+>();
 
 export function installBrunoTableClientQueryValueReadListener(
-  listener: (rowId: string, columnId: string) => void,
+  listener: (rowId: string, columnId: string, tableId: string) => void,
 ): () => void {
-  queryValueReadListener = listener;
-  return () => {
-    if (queryValueReadListener === listener) queryValueReadListener = undefined;
-  };
+  queryValueReadListeners.add(listener);
+  return () => queryValueReadListeners.delete(listener);
 }
 
 export function useClientRowIds(
@@ -49,6 +49,7 @@ export function useClientRowIds(
   compiledColumns: readonly CompiledColumn[],
   orderBy: ClientOrderBy,
   filters?: readonly unknown[],
+  tableId = "",
 ): BrunoTableClientRowModelResult {
   const tieBreaker = orderBy.at(-1);
   const filterPredicate = useMemo(() => {
@@ -57,8 +58,8 @@ export function useClientRowIds(
     );
   }, [compiledColumns, filters]);
   const adapterColumns = useMemo(
-    () => buildAdapterColumns(compiledColumns, tieBreaker, filterPredicate),
-    [compiledColumns, filterPredicate, tieBreaker],
+    () => buildAdapterColumns(compiledColumns, tieBreaker, filterPredicate, tableId),
+    [compiledColumns, filterPredicate, tableId, tieBreaker],
   );
   const columnFilters = useMemo(
     () =>
@@ -167,12 +168,13 @@ function buildAdapterColumns(
   compiledColumns: readonly CompiledColumn[],
   tieBreaker: { readonly columnId: string; readonly direction: "asc" | "desc" } | undefined,
   filterPredicate: ((row: ClientRow) => boolean) | undefined,
+  tableId: string,
 ): ClientColumn[] {
   const columns = compiledColumns.map(
     (column): ClientColumn => ({
       id: column.columnId,
       header: column.headerName,
-      accessorFn: (row: AdapterRow) => readCanonicalValue(row, column),
+      accessorFn: (row: AdapterRow) => readCanonicalValue(row, column, tableId),
       sortUndefined: false,
       sortFn: (rowA, rowB) => {
         const comparison = column.semantics.compare(
@@ -202,8 +204,8 @@ class ClientInvalidValueError extends Error {
   }
 }
 
-function readCanonicalValue(row: AdapterRow, column: CompiledColumn): unknown {
-  queryValueReadListener?.(row.rowId, column.columnId);
+function readCanonicalValue(row: AdapterRow, column: CompiledColumn, tableId: string): unknown {
+  for (const listener of queryValueReadListeners) listener(row.rowId, column.columnId, tableId);
   const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
   if (isBrunoTableInvalidCellValue(value)) throw new ClientInvalidValueError(value.invalid);
   return value;
