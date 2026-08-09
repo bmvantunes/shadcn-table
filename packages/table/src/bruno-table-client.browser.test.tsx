@@ -592,7 +592,11 @@ describe("BrunoTableClient browser surface", () => {
           ? { _tag: "Success", value: input }
           : { _tag: "Failure", message: "Expected text." },
       equivalent: (left, right) => left.toLocaleLowerCase() === right.toLocaleLowerCase(),
-      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      compare: (left, right) => {
+        const normalizedLeft = left.toLocaleLowerCase();
+        const normalizedRight = right.toLocaleLowerCase();
+        return normalizedLeft === normalizedRight ? 0 : normalizedLeft < normalizedRight ? -1 : 1;
+      },
       formatCanonicalText: (value) => value,
       parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
       formatDisplay: (value) => value,
@@ -2874,6 +2878,87 @@ describe("BrunoTableClient browser surface", () => {
       expect(activeCheckboxes).toHaveLength(1);
       expect(activeCheckboxes[0]!.element()).toBeDisabled();
     });
+  });
+
+  test("presents invalid values in a virtualized active-cell proxy without formatting them", async () => {
+    type InvalidProxyRow = {
+      readonly id: string;
+      readonly name: string;
+      readonly score: number;
+    };
+    const validRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${String(index).padStart(3, "0")}`,
+      name: `Row ${String(index).padStart(3, "0")}`,
+      score: index,
+    })) satisfies readonly InvalidProxyRow[];
+    const invalidProxyColumns = [
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_INVALID_PROXY"
+        getRowId={(row: InvalidProxyRow) => row.id}
+        columns={invalidProxyColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: validRows,
+          totalRows: validRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_INVALID_PROXY" });
+    grid.element().focus();
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+
+    await grid.wheel({ delta: { y: 1200 } });
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("gridcell", { name: "0" })
+          .all()
+          .some((cell) => cell.element().id === activeId),
+      ).toBe(true),
+    );
+
+    const invalidRows = [
+      { ...validRows[0]!, score: Number.NaN },
+      ...validRows.slice(1),
+    ] satisfies readonly InvalidProxyRow[];
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_INVALID_PROXY"
+        getRowId={(row: InvalidProxyRow) => row.id}
+        columns={invalidProxyColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: invalidRows,
+          totalRows: invalidRows.length,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+
+    const invalidProxy = screen.getByRole("gridcell", {
+      name: "Source row 1, column COL_ID_SCORE: Expected a finite number value.",
+    });
+    await expect.element(invalidProxy).toBeInTheDocument();
+    await expect.element(invalidProxy).toHaveAttribute("data-bruno-active-proxy", "");
+    expect(invalidProxy.element().id).toBe(activeId);
+    expect(document.activeElement).toBe(grid.element());
   });
 
   test("updates live sort and filter state through accessible header commands", async () => {

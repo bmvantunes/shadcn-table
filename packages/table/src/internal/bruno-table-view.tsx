@@ -353,10 +353,11 @@ function LifecycleAlert({
             type="button"
             size="xs"
             variant="outline"
-            onClick={retry.pending ? undefined : onRetry}
-            aria-disabled={retry.pending}
+            disabled={retry.pending}
+            focusableWhenDisabled
+            onClick={onRetry}
           >
-            {retry.pending ? <Spinner /> : null}
+            {retry.pending ? <Spinner data-icon="inline-start" /> : null}
             Retry
           </Button>
         </FocusFallbackOnUnmount>
@@ -453,10 +454,11 @@ const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }
             <Button
               type="button"
               variant="outline"
-              onClick={retry.pending ? undefined : () => runtime.retry()}
-              aria-disabled={retry.pending}
+              disabled={retry.pending}
+              focusableWhenDisabled
+              onClick={runtime.retry}
             >
-              {retry.pending ? <Spinner /> : null}
+              {retry.pending ? <Spinner data-icon="inline-start" /> : null}
               Retry
             </Button>
           </FocusFallbackOnUnmount>
@@ -1261,7 +1263,12 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
     rowAware && rowId !== undefined
       ? runtime.getCellValueSnapshot(rowId, column.columnId)
       : cellSnapshot?.value;
-  const content = rowPresent ? resolveProxyCellContent(column, row, value) : "Loading row";
+  const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
+  const content = !rowPresent
+    ? "Loading row"
+    : invalid
+      ? invalidSourceDetails(invalid.invalid)
+      : resolveProxyCellContent(column, row, value);
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
