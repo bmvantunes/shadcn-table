@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { compileColumns, type CompiledColumn } from "./compile-columns";
-import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
+import {
+  BrunoTableClientRowPipelineAdapter,
+  type BrunoTableClientReconciliationEvent,
+  installBrunoTableClientReconciliationListener,
+} from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 
@@ -198,6 +202,75 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rawRows(rowsStore.getSnapshot())).toEqual([first, nextSecond]);
     expect(Object.isFrozen(runtime.getBodySnapshot())).toBe(true);
     expect(runtime.getView()).toBe(runtime.getView());
+  });
+
+  it("observes replacements, insertions, removals, and reorders in a reused source array", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const reusedRows: Row[] = [first, second];
+    const runtime = createRuntime(source(reusedRows));
+    const rowsStore = runtime.createRowsStore(() => true);
+    rowsStore.subscribe(() => undefined);
+
+    const replacement = { id: "second", name: "Grace Hopper" } satisfies Row;
+    reusedRows[1] = replacement;
+    runtime.publish(source(reusedRows));
+    expect(rawRows(rowsStore.getSnapshot())).toEqual([first, replacement]);
+    expect(runtime.getRowSnapshot("second")).toBe(replacement);
+
+    const third = { id: "third", name: "Katherine" } satisfies Row;
+    reusedRows.push(third);
+    runtime.publish(source(reusedRows));
+    expect(rawRows(rowsStore.getSnapshot())).toEqual([first, replacement, third]);
+    expect(runtime.getRowSnapshot("third")).toBe(third);
+
+    reusedRows.reverse();
+    runtime.publish(source(reusedRows));
+    expect(rawRows(rowsStore.getSnapshot())).toEqual([third, replacement, first]);
+    expect(runtime.getRowSpaceSnapshot()?.getRowId(0)).toBe("third");
+    expect(runtime.getRowSpaceSnapshot()?.getRowId(2)).toBe("first");
+
+    reusedRows.splice(1, 1);
+    runtime.publish(source(reusedRows));
+    expect(rawRows(rowsStore.getSnapshot())).toEqual([third, first]);
+    expect(runtime.getRowSnapshot("second")).toBeUndefined();
+  });
+
+  it("patches only isolated row evidence in a large resident source", () => {
+    const residentRows = Array.from({ length: 100_000 }, (_unused, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    const getRowId = vi.fn((row: Row) => row.id);
+    const reconciliationEvents: BrunoTableClientReconciliationEvent[] = [];
+    const restoreInstrumentation = installBrunoTableClientReconciliationListener((event) => {
+      reconciliationEvents.push(event);
+    });
+
+    try {
+      const runtime = createRuntime(source(residentRows), getRowId);
+      const unchanged = runtime.getRowSnapshot("row-99999");
+      getRowId.mockClear();
+      reconciliationEvents.length = 0;
+      const replacement = { id: "row-50000", name: "Changed" } satisfies Row;
+
+      runtime.publish(source(residentRows.with(50_000, replacement)));
+
+      expect(getRowId).toHaveBeenCalledOnce();
+      expect(reconciliationEvents).toEqual([
+        {
+          residentRows: 100_000,
+          changedRows: 1,
+          resolvedRowIds: 1,
+          identityPatches: 1,
+          rebuiltIdentityIndex: false,
+        },
+      ]);
+      expect(runtime.getRowSnapshot("row-50000")).toBe(replacement);
+      expect(runtime.getRowSnapshot("row-99999")).toBe(unchanged);
+    } finally {
+      restoreInstrumentation();
+    }
   });
 
   it("publishes stable per-cell snapshots for unchanged canonical values", () => {
@@ -514,8 +587,11 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const runtime = createRuntime(source(rows));
     const bodyListener = vi.fn();
     const firstListener = vi.fn();
+    const rowsListener = vi.fn();
+    const rowsStore = runtime.createRowsStore((_previous, _next, change) => change.rowIdsChanged);
     runtime.subscribeBody(bodyListener);
     runtime.subscribeRow("first", firstListener);
+    rowsStore.subscribe(rowsListener);
     const firstSnapshot = runtime.getRowSnapshot("first");
 
     const replacementGetRowId = vi.fn((row: Row) => row.id);
@@ -523,6 +599,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     expect(bodyListener).not.toHaveBeenCalled();
     expect(firstListener).not.toHaveBeenCalled();
+    expect(rowsListener).not.toHaveBeenCalled();
     expect(runtime.getRowSnapshot("first")).toBe(firstSnapshot);
     expect(replacementGetRowId).toHaveBeenCalledTimes(rows.length);
 
@@ -547,6 +624,23 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rawRows(rowsStore.getSnapshot())).toEqual(rows);
     expect(runtime.getRowSnapshot("first")).toBeUndefined();
     expect(runtime.getRowSnapshot("next:first")).toBe(row);
+  });
+
+  it("accepts a unique identity swap when getRowId changes for unchanged rows", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const runtime = createRuntime(source([first, second]));
+    const rowsStore = runtime.createRowsStore((_previous, _next, change) => change.rowIdsChanged);
+    const listener = vi.fn();
+    rowsStore.subscribe(listener);
+
+    runtime.configure((row) => (row.id === "first" ? "second" : "first"), runtimeColumns);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(runtime.getRowSpaceSnapshot()?.getRowId(0)).toBe("second");
+    expect(runtime.getRowSpaceSnapshot()?.getRowId(1)).toBe("first");
+    expect(runtime.getRowSnapshot("second")).toBe(first);
+    expect(runtime.getRowSnapshot("first")).toBe(second);
   });
 
   it("reconciles a new source and identity callback in one row pass", () => {
@@ -662,6 +756,11 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rowListener).not.toHaveBeenCalled();
     expect(nameCommandListener).not.toHaveBeenCalled();
     expect(aliasCommandListener).not.toHaveBeenCalled();
+
+    const recovered = { id: "recovered", name: "Recovered" } satisfies Row;
+    runtime.reconcile(source([recovered]), (row) => row.id, runtimeColumns);
+    expect(runtime.getRowSnapshot("initial")).toBeUndefined();
+    expect(runtime.getRowSnapshot("recovered")).toBe(recovered);
   });
 
   it("rejects incomplete ready and stale source snapshots visibly", () => {

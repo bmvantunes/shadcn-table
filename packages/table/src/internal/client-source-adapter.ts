@@ -16,9 +16,28 @@ import {
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 
+export type BrunoTableClientReconciliationEvent = Readonly<{
+  readonly residentRows: number;
+  readonly changedRows: number;
+  readonly resolvedRowIds: number;
+  readonly identityPatches: number;
+  readonly rebuiltIdentityIndex: boolean;
+}>;
+
+let reconciliationListener: ((event: BrunoTableClientReconciliationEvent) => void) | undefined;
+
+export function installBrunoTableClientReconciliationListener(
+  listener: (event: BrunoTableClientReconciliationEvent) => void,
+): () => void {
+  reconciliationListener = listener;
+  return () => {
+    if (reconciliationListener === listener) reconciliationListener = undefined;
+  };
+}
+
 export class BrunoTableClientRowPipelineAdapter<TRow> {
-  private sourceRowsInput: readonly TRow[];
-  private source: BrunoTableClientSource<TRow>;
+  private readonly observedRows: TRow[];
+  private source: ClientSourceSnapshot<TRow>;
   private getRowId: (row: TRow) => BrunoTableRowId;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private coherent: ClientCoherentSnapshot<TRow> | undefined;
@@ -46,7 +65,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.activeFilters = this.initialFilters;
     this.activeOrderBy = this.initialOrderBy;
     this.validationColumnIds = queryColumnIds(this.initialFilters, this.initialOrderBy);
-    this.sourceRowsInput = source.rows;
+    this.observedRows = Array.from(source.rows);
     this.source = snapshotSource(source);
     this.getRowId = getRowId;
     this.publication = createPublication(
@@ -99,10 +118,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
     const previousCoherent = this.coherent;
-    const sourceSnapshot = snapshotSource(
-      source,
-      source.rows === this.sourceRowsInput ? this.source.rows : undefined,
-    );
+    const sourceSnapshot = snapshotSource(source, this.source, this.observedRows);
     this.publication = createPublication(
       sourceSnapshot,
       getRowId,
@@ -124,8 +140,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     ) {
       this.valueCache.retainRowIds(this.coherent.hasRowId);
     }
+    commitObservedRows(source.rows, sourceSnapshot.rows.changedIndexes, this.observedRows);
     this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
-    this.sourceRowsInput = source.rows;
     this.source = sourceSnapshot;
     this.getRowId = getRowId;
     this.sourceColumns = columns;
@@ -182,7 +198,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.validationColumnIds = next;
   };
 
-  private readonly recordQueryValidation = (source: BrunoTableClientSource<TRow>): void => {
+  private readonly recordQueryValidation = (source: ClientSourceSnapshot<TRow>): void => {
     if (this.publication.invalid?.kind === "invalid-value") {
       this.queryValidationPending = true;
     } else if (canValidateSource(source)) {
@@ -191,7 +207,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   };
 
   public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
-    if (this.coherent?.admittedRows === rows) this.acceptedCoherent = this.coherent;
+    if (this.coherent?.admittedRows.asArray() === rows) this.acceptedCoherent = this.coherent;
   };
 
   private readonly acceptEmptyCoherent = (): void => {
@@ -203,13 +219,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     detector: BrunoTableClientRowOrderChangeDetector,
   ): BrunoTableClientRowsStore => {
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
-      this.coherent?.admittedRows ?? EMPTY_ROWS;
+      this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
     const listeners = new Set<() => void>();
     let unsubscribeRuntime: (() => void) | undefined;
     const publish = () => {
       const previousRows = snapshot;
       const nextCoherent = this.coherent;
-      const nextRows = nextCoherent?.admittedRows ?? EMPTY_ROWS;
+      const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
       const change =
         nextCoherent?.changeFromPrevious ??
         Object.freeze({ rowIdsChanged: previousRows.length > 0, changedIndexes: EMPTY_ROWS });
@@ -231,7 +247,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       subscribe: (listener: () => void) => {
         listeners.add(listener);
         if (unsubscribeRuntime === undefined) {
-          snapshot = this.coherent?.admittedRows ?? EMPTY_ROWS;
+          snapshot = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
           unsubscribeRuntime = runtime.subscribeRowSpace(publish);
         }
         let subscribed = true;
@@ -283,23 +299,281 @@ export type BrunoTableClientValueCache = Readonly<{
 
 type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
   Readonly<{
-    readonly rows: readonly TRow[];
-    readonly admittedRows: readonly BrunoTableClientAdmittedRow[];
-    readonly rowIds: readonly BrunoTableRowId[];
+    readonly rows: ClientPersistentSequence<TRow>;
+    readonly admittedRows: ClientPersistentSequence<BrunoTableClientAdmittedRow>;
+    readonly rowIds: ClientPersistentSequence<BrunoTableRowId>;
+    readonly admittedById: ClientPersistentIdentityIndex;
+    readonly columnsById: ReadonlyMap<string, CompiledColumn>;
     readonly hasRowId: (rowId: BrunoTableRowId) => boolean;
     readonly identityResolver: (row: TRow) => BrunoTableRowId;
     readonly changeFromPrevious: BrunoTableClientRowOrderChange;
     readonly validatedColumns: readonly CompiledColumn[];
   }>;
 
+type ClientSourceSnapshot<TRow> = Omit<BrunoTableClientSource<TRow>, "rows"> &
+  Readonly<{ readonly rows: ClientPersistentSequence<TRow> }>;
+
+type ClientPersistentSequence<T> = Readonly<{
+  readonly length: number;
+  readonly token: object;
+  readonly parentToken?: object;
+  readonly chunks: readonly (readonly T[])[];
+  readonly changedIndexes: readonly number[];
+  readonly get: (index: number) => T | undefined;
+  readonly asArray: () => readonly T[];
+}>;
+
+type ClientPersistentIdentityIndex = Readonly<{
+  readonly buckets: ReadonlyMap<number, ReadonlyMap<BrunoTableRowId, BrunoTableClientAdmittedRow>>;
+  readonly get: (rowId: BrunoTableRowId) => BrunoTableClientAdmittedRow | undefined;
+  readonly has: (rowId: BrunoTableRowId) => boolean;
+}>;
+
 const EMPTY_ROWS: readonly [] = Object.freeze([]);
+const EMPTY_ROW_ORDER_CHANGE: BrunoTableClientRowOrderChange = Object.freeze({
+  rowIdsChanged: false,
+  changedIndexes: EMPTY_ROWS,
+});
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
 const EMPTY_ADMITTED_ROWS: readonly BrunoTableClientAdmittedRow[] = Object.freeze([]);
 const NOT_FOUND = Object.freeze({ found: false as const });
 const CLIENT_BOUNDED_VALUE_CACHE_LIMIT = 16_384;
+const CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE = 256;
+const CLIENT_PERSISTENT_SEQUENCE_CHUNK_SHIFT = 8;
+const CLIENT_PERSISTENT_SEQUENCE_CHUNK_MASK = CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE - 1;
+const CLIENT_PERSISTENT_IDENTITY_BUCKETS = 4_096;
+
+function snapshotObservedPersistentSequence<T>(
+  input: readonly T[],
+  previous: ClientPersistentSequence<T>,
+  observed: T[],
+): ClientPersistentSequence<T> {
+  const changedIndexes: number[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (index >= observed.length || observed[index] !== input[index]) {
+      changedIndexes.push(index);
+    }
+  }
+  if (previous.length === input.length && changedIndexes.length === 0) return previous;
+  const patches = new Map(changedIndexes.map((index) => [index, input[index]!]));
+  return patchPersistentSequence(
+    previous,
+    input.length,
+    patches,
+    changedIndexes,
+    (index) => input[index]!,
+  );
+}
+
+function commitObservedRows<T>(
+  input: readonly T[],
+  changedIndexes: readonly number[],
+  observed: T[],
+): void {
+  for (const index of changedIndexes) observed[index] = input[index]!;
+  observed.length = input.length;
+}
+
+function patchPersistentSequence<T>(
+  previous: ClientPersistentSequence<T>,
+  length: number,
+  patches: ReadonlyMap<number, T>,
+  changedIndexes: readonly number[],
+  materialize: (index: number) => T,
+): ClientPersistentSequence<T> {
+  if (previous.length === length && patches.size === 0) return previous;
+  const chunkCount = Math.ceil(length / CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE);
+  const chunks = Array.from({ length: chunkCount }, (_unused, chunkIndex) =>
+    previous.chunks[chunkIndex] === undefined
+      ? Object.freeze([] as T[])
+      : previous.chunks[chunkIndex]!,
+  );
+  const changedChunks = new Set<number>();
+  for (const index of patches.keys()) {
+    changedChunks.add(Math.floor(index / CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE));
+  }
+  if (
+    length < previous.length &&
+    length > 0 &&
+    length % CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE !== 0
+  ) {
+    changedChunks.add(Math.floor((length - 1) / CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE));
+  }
+  for (const chunkIndex of changedChunks) {
+    const start = chunkIndex * CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE;
+    const chunkLength = Math.min(CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE, length - start);
+    chunks[chunkIndex] = Object.freeze(
+      Array.from({ length: chunkLength }, (_unused, offset) => {
+        const index = start + offset;
+        if (patches.has(index)) return patches.get(index)!;
+        return index < previous.length ? previous.get(index)! : materialize(index);
+      }),
+    );
+  }
+  return persistentSequence(
+    Object.freeze(chunks),
+    length,
+    Object.freeze(Array.from(changedIndexes)),
+    previous.token,
+  );
+}
+
+function basePersistentSequence<T>(
+  input: readonly T[],
+  changedIndexes: readonly number[] = EMPTY_ROWS,
+): ClientPersistentSequence<T> {
+  const chunks: (readonly T[])[] = [];
+  for (let start = 0; start < input.length; start += CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE) {
+    chunks.push(
+      Object.freeze(Array.from(input.slice(start, start + CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE))),
+    );
+  }
+  return persistentSequence(
+    Object.freeze(chunks),
+    input.length,
+    Object.freeze(Array.from(changedIndexes)),
+  );
+}
+
+function persistentSequence<T>(
+  chunks: readonly (readonly T[])[],
+  length: number,
+  changedIndexes: readonly number[],
+  parentToken?: object,
+): ClientPersistentSequence<T> {
+  const token = Object.freeze({});
+  let arrayView: readonly T[] | undefined;
+  const sequence: ClientPersistentSequence<T> = Object.freeze({
+    length,
+    token,
+    ...(parentToken === undefined ? {} : { parentToken }),
+    chunks,
+    changedIndexes,
+    get: (index: number) =>
+      index < 0 || index >= length
+        ? undefined
+        : chunks[index >>> CLIENT_PERSISTENT_SEQUENCE_CHUNK_SHIFT]?.[
+            index & CLIENT_PERSISTENT_SEQUENCE_CHUNK_MASK
+          ],
+    asArray: () => (arrayView ??= persistentSequenceArray(sequence)),
+  });
+  return sequence;
+}
+
+function persistentSequenceArray<T>(sequence: ClientPersistentSequence<T>): readonly T[] {
+  const target: T[] = [];
+  return new Proxy(target, {
+    get: (_target, property, receiver) => {
+      if (property === "length") return sequence.length;
+      if (property === Symbol.iterator) {
+        return function* iteratePersistentSequence() {
+          for (let index = 0; index < sequence.length; index += 1) yield sequence.get(index)!;
+        };
+      }
+      const index = arrayIndex(property);
+      return index === undefined ? Reflect.get(target, property, receiver) : sequence.get(index);
+    },
+    has: (_target, property) => {
+      const index = arrayIndex(property);
+      return index === undefined ? Reflect.has(target, property) : index < sequence.length;
+    },
+    set: () => false,
+    deleteProperty: () => false,
+  });
+}
+
+function arrayIndex(property: string | symbol): number | undefined {
+  if (typeof property !== "string" || !/^(0|[1-9]\d*)$/u.test(property)) return undefined;
+  const index = Number(property);
+  return Number.isSafeInteger(index) ? index : undefined;
+}
+
+function persistentSequenceChange<T>(
+  previous: ClientPersistentSequence<T>,
+  next: ClientPersistentSequence<T>,
+): Readonly<{
+  readonly changedIndexes: readonly number[];
+  readonly removedIndexes: readonly number[];
+}> {
+  if (previous === next) {
+    return Object.freeze({ changedIndexes: EMPTY_ROWS, removedIndexes: EMPTY_ROWS });
+  }
+  const removedIndexes =
+    previous.length <= next.length
+      ? EMPTY_ROWS
+      : Object.freeze(
+          Array.from(
+            { length: previous.length - next.length },
+            (_unused, offset) => next.length + offset,
+          ),
+        );
+  if (next.parentToken === previous.token) {
+    return Object.freeze({ changedIndexes: next.changedIndexes, removedIndexes });
+  }
+  const changedIndexes: number[] = [];
+  for (let index = 0; index < next.length; index += 1) {
+    if (previous.get(index) !== next.get(index)) changedIndexes.push(index);
+  }
+  return Object.freeze({
+    changedIndexes: Object.freeze(changedIndexes),
+    removedIndexes,
+  });
+}
+
+function patchPersistentIdentityIndex(
+  previous: ClientPersistentIdentityIndex,
+  patches: ReadonlyMap<BrunoTableRowId, BrunoTableClientAdmittedRow>,
+  removedRowIds: ReadonlySet<BrunoTableRowId>,
+): ClientPersistentIdentityIndex {
+  if (patches.size === 0 && removedRowIds.size === 0) return previous;
+  const buckets = new Map(previous.buckets);
+  const removalsByBucket = new Map<number, BrunoTableRowId[]>();
+  const patchesByBucket = new Map<number, [BrunoTableRowId, BrunoTableClientAdmittedRow][]>();
+  for (const rowId of removedRowIds) {
+    const bucketIndex = clientIdentityBucket(rowId);
+    const removals = removalsByBucket.get(bucketIndex) ?? [];
+    removals.push(rowId);
+    removalsByBucket.set(bucketIndex, removals);
+  }
+  for (const patch of patches) {
+    const bucketIndex = clientIdentityBucket(patch[0]);
+    const bucketPatches = patchesByBucket.get(bucketIndex) ?? [];
+    bucketPatches.push(patch);
+    patchesByBucket.set(bucketIndex, bucketPatches);
+  }
+  const changedBuckets = new Set([...removalsByBucket.keys(), ...patchesByBucket.keys()]);
+  for (const bucketIndex of changedBuckets) {
+    const bucket = new Map(previous.buckets.get(bucketIndex));
+    for (const rowId of removalsByBucket.get(bucketIndex) ?? EMPTY_ROWS) bucket.delete(rowId);
+    for (const [rowId, admitted] of patchesByBucket.get(bucketIndex) ?? EMPTY_ROWS) {
+      bucket.set(rowId, admitted);
+    }
+    if (bucket.size === 0) buckets.delete(bucketIndex);
+    else buckets.set(bucketIndex, bucket);
+  }
+  return persistentIdentityIndex(buckets);
+}
+
+function persistentIdentityIndex(
+  buckets: ReadonlyMap<number, ReadonlyMap<BrunoTableRowId, BrunoTableClientAdmittedRow>>,
+): ClientPersistentIdentityIndex {
+  return Object.freeze({
+    buckets,
+    get: (rowId: BrunoTableRowId) => buckets.get(clientIdentityBucket(rowId))?.get(rowId),
+    has: (rowId: BrunoTableRowId) => buckets.get(clientIdentityBucket(rowId))?.has(rowId) ?? false,
+  });
+}
+
+function clientIdentityBucket(rowId: BrunoTableRowId): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < rowId.length; index += 1) {
+    hash = Math.imul(hash ^ rowId.charCodeAt(index), 16_777_619);
+  }
+  return (hash >>> 0) % CLIENT_PERSISTENT_IDENTITY_BUCKETS;
+}
 
 function createPublication<TRow>(
-  source: BrunoTableClientSource<TRow>,
+  source: ClientSourceSnapshot<TRow>,
   getRowId: (row: TRow) => BrunoTableRowId,
   columns: readonly CompiledColumn[],
   previousCoherent: ClientCoherentSnapshot<TRow> | undefined,
@@ -358,7 +632,9 @@ function createPublication<TRow>(
     fallbackCandidate === undefined
       ? fallbackResult?.invalid
       : validateAdmittedRows(
-          queryValidation === "none" ? EMPTY_ADMITTED_ROWS : fallbackCandidate.admittedRows,
+          queryValidation === "none"
+            ? EMPTY_ADMITTED_ROWS
+            : fallbackCandidate.admittedRows.asArray(),
           validationColumns,
         );
   const coherent = useFallback
@@ -393,12 +669,12 @@ function rowsRequiringQueryValidation<TRow>(
     previous === undefined ||
     previous.validatedColumns !== columns
   ) {
-    return coherent.admittedRows;
+    return coherent.admittedRows.asArray();
   }
   if (coherent === previous) return EMPTY_ADMITTED_ROWS;
   return Object.freeze(
     coherent.changeFromPrevious.changedIndexes.flatMap((index) => {
-      const row = coherent.admittedRows[index];
+      const row = coherent.admittedRows.get(index);
       return row === undefined ? [] : [row];
     }),
   );
@@ -414,92 +690,213 @@ type CoherentResult<TRow> = Readonly<{
   }>;
 }>;
 
+function createInitialCoherent<TRow>(
+  rows: ClientPersistentSequence<TRow>,
+  getRowId: (row: TRow) => BrunoTableRowId,
+  columns: readonly CompiledColumn[],
+  valueCache: ClientCanonicalValueCache,
+): CoherentResult<TRow> {
+  const rowIdValues = Array.from<BrunoTableRowId>({ length: rows.length });
+  const admittedValues = Array.from<BrunoTableClientAdmittedRow>({ length: rows.length });
+  const identityBuckets = new Map<number, Map<BrunoTableRowId, BrunoTableClientAdmittedRow>>();
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows.get(index)!;
+    const rowId = getRowId(row);
+    if (typeof rowId !== "string" || rowId.length === 0) {
+      throw new TypeError("BrunoTable getRowId must return a non-empty string.");
+    }
+    const bucketIndex = clientIdentityBucket(rowId);
+    const bucket = identityBuckets.get(bucketIndex) ?? new Map();
+    if (bucket.has(rowId)) {
+      throw new TypeError(`BrunoTable getRowId returned a duplicate row identity: ${rowId}`);
+    }
+    const admitted = Object.freeze({ raw: row, rowId, rowIndex: index, values: valueCache });
+    rowIdValues[index] = rowId;
+    admittedValues[index] = admitted;
+    bucket.set(rowId, admitted);
+    identityBuckets.set(bucketIndex, bucket);
+  }
+  reconciliationListener?.(
+    Object.freeze({
+      residentRows: rows.length,
+      changedRows: rows.length,
+      resolvedRowIds: rows.length,
+      identityPatches: rows.length,
+      rebuiltIdentityIndex: true,
+    }),
+  );
+  return coherentResult(
+    rows,
+    basePersistentSequence(rowIdValues),
+    basePersistentSequence(admittedValues),
+    persistentIdentityIndex(identityBuckets),
+    new Map(columns.map((column) => [column.columnId, column])),
+    getRowId,
+    Object.freeze({ rowIdsChanged: true, changedIndexes: EMPTY_ROWS }),
+    columns,
+  );
+}
+
 function createCoherent<TRow>(
-  rows: readonly TRow[],
+  rows: ClientPersistentSequence<TRow>,
   getRowId: (row: TRow) => BrunoTableRowId,
   columns: readonly CompiledColumn[],
   previous: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
   valueCache: ClientCanonicalValueCache,
 ): CoherentResult<TRow> {
-  const resolveCurrentRowIds =
-    resolveRowIds || (previous !== undefined && previous.identityResolver !== getRowId);
-  if (
-    previous !== undefined &&
-    !resolveCurrentRowIds &&
-    previous.rows === rows &&
-    previous.validatedColumns === columns
-  ) {
+  if (previous === undefined) return createInitialCoherent(rows, getRowId, columns, valueCache);
+  const resolveCurrentRowIds = resolveRowIds || previous.identityResolver !== getRowId;
+  if (!resolveCurrentRowIds && previous.rows === rows && previous.validatedColumns === columns) {
     return Object.freeze({ coherent: previous });
   }
-  if (
-    previous !== undefined &&
-    !resolveCurrentRowIds &&
-    previous.validatedColumns === columns &&
-    previous.rows.length === rows.length &&
-    rows.every((row, index) => previous.rows[index] === row)
-  ) {
-    return Object.freeze({ coherent: previous });
+  const sourceChange = persistentSequenceChange(previous.rows, rows);
+  const indexesToResolve = resolveCurrentRowIds
+    ? Array.from({ length: rows.length }, (_unused, index) => index)
+    : sourceChange.changedIndexes;
+  const changedIndexSet = new Set([...sourceChange.changedIndexes, ...sourceChange.removedIndexes]);
+  const rowIdPatches = new Map<number, BrunoTableRowId>();
+  const admittedPatches = new Map<number, BrunoTableClientAdmittedRow>();
+  const identityPatches = new Map<BrunoTableRowId, BrunoTableClientAdmittedRow>();
+  const removedRowIds = new Set<BrunoTableRowId>();
+  const resolvedRowIds = new Set<BrunoTableRowId>();
+  let rowIdsChanged = previous.rows.length !== rows.length;
+  for (const index of sourceChange.removedIndexes) {
+    const removedRowId = previous.rowIds.get(index);
+    if (removedRowId !== undefined) removedRowIds.add(removedRowId);
   }
-  const rowIds = Array.from({ length: rows.length }, () => "" as BrunoTableRowId);
-  const admittedRows = Array.from<BrunoTableClientAdmittedRow>({ length: rows.length });
-  const admittedById = new Map<BrunoTableRowId, BrunoTableClientAdmittedRow>();
-  const columnsById = new Map<string, CompiledColumn>(
-    columns.map((column) => [column.columnId, column]),
-  );
-  let rowIdsChanged = previous === undefined || previous.rows.length !== rows.length;
-  const changedIndexes: number[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index]!;
-    const previousRow = previous?.rows[index];
-    const rowId =
-      previous !== undefined && previousRow === row && !resolveCurrentRowIds
-        ? previous.rowIds[index]!
-        : getRowId(row);
+  for (const index of indexesToResolve) {
+    const row = rows.get(index)!;
+    const previousRowId = previous.rowIds.get(index);
+    const rowId = getRowId(row);
     if (typeof rowId !== "string" || rowId.length === 0) {
       throw new TypeError("BrunoTable getRowId must return a non-empty string.");
     }
-    if (admittedById.has(rowId)) {
+    if (previousRowId !== undefined && previousRowId !== rowId) {
+      removedRowIds.add(previousRowId);
+      rowIdsChanged = true;
+    }
+    const existing = previous.admittedById.get(rowId);
+    if (
+      resolvedRowIds.has(rowId) ||
+      (!resolveCurrentRowIds &&
+        existing !== undefined &&
+        existing.rowIndex !== index &&
+        !changedIndexSet.has(existing.rowIndex))
+    ) {
       throw new TypeError(`BrunoTable getRowId returned a duplicate row identity: ${rowId}`);
     }
-    const previousAdmitted = previous?.admittedRows[index];
+    resolvedRowIds.add(rowId);
+    const previousAdmitted = previous.admittedRows.get(index);
     const admitted =
-      previousRow === row && previousAdmitted !== undefined
+      previousAdmitted?.raw === row && previousAdmitted !== undefined
         ? previousAdmitted.rowId === rowId
           ? previousAdmitted
           : Object.freeze({ ...previousAdmitted, rowId })
         : Object.freeze({ raw: row, rowId, rowIndex: index, values: valueCache });
-    rowIds[index] = rowId;
-    admittedRows[index] = admitted;
-    admittedById.set(rowId, admitted);
-    if (previousRow !== row) changedIndexes.push(index);
-    if (previous?.rowIds[index] !== rowId) rowIdsChanged = true;
+    if (previousRowId !== rowId) rowIdPatches.set(index, rowId);
+    if (previousAdmitted !== admitted) admittedPatches.set(index, admitted);
+    if (previousRowId !== rowId || previousAdmitted !== admitted) {
+      identityPatches.set(rowId, admitted);
+    }
   }
+  const rowIds = patchPersistentSequence(
+    previous.rowIds,
+    rows.length,
+    rowIdPatches,
+    sourceChange.changedIndexes,
+    (index) => previous.rowIds.get(index) ?? getRowId(rows.get(index)!),
+  );
+  const patchedAdmittedRows = patchPersistentSequence(
+    previous.admittedRows,
+    rows.length,
+    admittedPatches,
+    sourceChange.changedIndexes,
+    (index) => {
+      const row = rows.get(index)!;
+      const rowId = rowIds.get(index)!;
+      return Object.freeze({ raw: row, rowId, rowIndex: index, values: valueCache });
+    },
+  );
+  const admittedRows =
+    previous.validatedColumns !== columns && patchedAdmittedRows === previous.admittedRows
+      ? persistentSequence(
+          previous.admittedRows.chunks,
+          previous.admittedRows.length,
+          sourceChange.changedIndexes,
+          previous.admittedRows.token,
+        )
+      : patchedAdmittedRows;
+  const admittedById = patchPersistentIdentityIndex(
+    previous.admittedById,
+    identityPatches,
+    removedRowIds,
+  );
+  reconciliationListener?.(
+    Object.freeze({
+      residentRows: rows.length,
+      changedRows: sourceChange.changedIndexes.length,
+      resolvedRowIds: indexesToResolve.length,
+      identityPatches: identityPatches.size,
+      rebuiltIdentityIndex: false,
+    }),
+  );
   if (
     !rowIdsChanged &&
-    changedIndexes.length === 0 &&
-    previous !== undefined &&
+    sourceChange.changedIndexes.length === 0 &&
     previous.validatedColumns === columns
   ) {
     return Object.freeze({
       coherent:
         previous.identityResolver === getRowId
           ? previous
-          : Object.freeze({ ...previous, identityResolver: getRowId }),
+          : Object.freeze({
+              ...previous,
+              identityResolver: getRowId,
+              changeFromPrevious: EMPTY_ROW_ORDER_CHANGE,
+            }),
     });
   }
   const changeFromPrevious: BrunoTableClientRowOrderChange = Object.freeze({
     rowIdsChanged,
-    changedIndexes: Object.freeze(changedIndexes),
+    changedIndexes: sourceChange.changedIndexes,
   });
+  const columnsById =
+    previous.validatedColumns === columns
+      ? previous.columnsById
+      : new Map(columns.map((column) => [column.columnId, column]));
+  return coherentResult(
+    rows,
+    rowIds,
+    admittedRows,
+    admittedById,
+    columnsById,
+    getRowId,
+    changeFromPrevious,
+    columns,
+  );
+}
+
+function coherentResult<TRow>(
+  rows: ClientPersistentSequence<TRow>,
+  rowIds: ClientPersistentSequence<BrunoTableRowId>,
+  admittedRows: ClientPersistentSequence<BrunoTableClientAdmittedRow>,
+  admittedById: ClientPersistentIdentityIndex,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  getRowId: (row: TRow) => BrunoTableRowId,
+  changeFromPrevious: BrunoTableClientRowOrderChange,
+  columns: readonly CompiledColumn[],
+): CoherentResult<TRow> {
   return Object.freeze({
     coherent: Object.freeze({
       rows,
-      admittedRows: Object.freeze(admittedRows),
-      rowIds: Object.freeze(rowIds),
+      admittedRows,
+      rowIds,
+      admittedById,
+      columnsById,
       totalRows: rows.length,
       loadedRows: rows.length,
-      getRowId: (index: number) => rowIds[index],
+      getRowId: (index: number) => rowIds.get(index),
       hasRowId: (rowId: BrunoTableRowId) => admittedById.has(rowId),
       identityResolver: getRowId,
       getRow: (rowId: BrunoTableRowId) => admittedById.get(rowId)?.raw as TRow | undefined,
@@ -692,12 +1089,16 @@ function notifyRowsStoreListeners(listeners: Set<() => void>, initialError?: unk
 
 function snapshotSource<TRow>(
   source: BrunoTableClientSource<TRow>,
-  stableRows?: readonly TRow[],
-): BrunoTableClientSource<TRow> {
+  previous?: ClientSourceSnapshot<TRow>,
+  observedRows?: TRow[],
+): ClientSourceSnapshot<TRow> {
   const statusCode = boundedOptionalText(source.statusCode, 128);
   const message = boundedOptionalText(source.message, 512);
   return Object.freeze({
-    rows: stableRows ?? source.rows,
+    rows:
+      previous === undefined || observedRows === undefined
+        ? basePersistentSequence(source.rows)
+        : snapshotObservedPersistentSequence(source.rows, previous.rows, observedRows),
     totalRows: source.totalRows,
     version: source.version,
     status: source.status,
@@ -719,7 +1120,7 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
   return left.size === right.size && Array.from(left).every((value) => right.has(value));
 }
 
-function canValidateSource<TRow>(source: BrunoTableClientSource<TRow>): boolean {
+function canValidateSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
   return source.status !== "loading" && isCompleteSource(source);
 }
 
@@ -742,7 +1143,7 @@ function boundedOptionalText(value: unknown, limit: number): string | undefined 
   return typeof value === "string" ? boundedText(value, limit) : undefined;
 }
 
-function isCompleteSource<TRow>(source: BrunoTableClientSource<TRow>): boolean {
+function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
   return (
     Number.isSafeInteger(source.totalRows) &&
     source.totalRows >= 0 &&
