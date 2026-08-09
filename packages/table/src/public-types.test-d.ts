@@ -223,6 +223,23 @@ expectTypeOf<BrunoTableColumnId<"COL_ID_A B">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\tB">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\u3000B">>().toEqualTypeOf<never>();
 
+const rawWhitespaceIdentityColumns = [
+  {
+    columnId: "COL_ID_UNIT PRICE",
+    field: "price",
+    headerName: "Unit price",
+    valueType: "number",
+  },
+] satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-raw-whitespace-identity",
+  // @ts-expect-error Raw Column Identity literals are validated after tuple inference.
+  columns: rawWhitespaceIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_UNIT PRICE", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
 const invalidWhitespaceHelperOptions = {
   columnId: "COL_ID_UNIT PRICE",
   field: "price",

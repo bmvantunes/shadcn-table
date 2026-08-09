@@ -59,6 +59,27 @@ const clientSource = {
   status: "ready" as const,
 };
 
+const whitespaceIdentityColumns = [
+  {
+    columnId: "COL_ID_DISPLAY NAME",
+    field: "name",
+    headerName: "Display name",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Row>;
+
+const invalidWhitespaceIdentityClient = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_INVALID_WHITESPACE_IDENTITY"
+    getRowId={(row) => row.id}
+    // @ts-expect-error Raw Column Identity literals are validated after tuple inference.
+    columns={whitespaceIdentityColumns}
+    initialOrderBy={[{ columnId: "COL_ID_DISPLAY NAME", direction: "asc" }]}
+    clientSource={clientSource}
+  />
+);
+void invalidWhitespaceIdentityClient;
+
 const validClient = (
   <BrunoTableClient
     tableId="TABLE_ID_JSX_VALID"

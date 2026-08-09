@@ -694,6 +694,19 @@ type Column<TRow> = EraseGroupedPresentationCallbacks<FieldColumns<TRow>> | AnyC
  */
 export type BrunoTableColumns<TRow> = readonly Column<TRow>[];
 
+type InvalidColumnIdentity<TColumn> = TColumn extends {
+  readonly columnId: infer TColumnId extends ColumnIdPattern;
+}
+  ? TColumnId extends BrunoTableColumnId<TColumnId>
+    ? never
+    : TColumnId
+  : never;
+
+/** @internal Validates exact identities after a consumer tuple has been inferred. */
+export type BrunoTableColumnIdentityGuard<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = [InvalidColumnIdentity<TColumns[number]>] extends [never] ? unknown : never;
+
 export type BrunoTableColumnIdOf<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = TColumns[number]["columnId"];
@@ -1000,7 +1013,7 @@ type InitialOrderByCapability<
 
 export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
-  readonly columns: TColumns;
+  readonly columns: TColumns & BrunoTableColumnIdentityGuard<NoInfer<TColumns>>;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;

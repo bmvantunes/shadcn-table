@@ -27,8 +27,9 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import type {
   BrunoTableClientSource,
-  BrunoTableFilterExpressions,
+  BrunoTableColumnIdentityGuard,
   BrunoTableColumns,
+  BrunoTableFilterExpressions,
   BrunoTableReadOnlyCapability,
   BrunoTableSortBy,
 } from "./public-types";
@@ -168,7 +169,7 @@ type BrunoTableClientRenderProps<
   TColumns extends BrunoTableColumns<TRow>,
 > = BrunoTableReadOnlyCapability & {
   readonly tableId: string;
-  readonly columns: TColumns;
+  readonly columns: TColumns & BrunoTableColumnIdentityGuard<NoInfer<TColumns>>;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   readonly children?: ReactNode;
   readonly initialOrderBy: BrunoTableSortBy<TColumns>;
@@ -190,7 +191,7 @@ const BrunoTableView = memo(function BrunoTableView({
   compiledColumns,
   toolbar,
 }: BrunoTableViewProps) {
-  recordBrunoTableClientViewRender();
+  useLayoutEffect(recordBrunoTableClientViewRender);
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
     () => () => tableElement.current?.focus({ preventScroll: true }),
@@ -579,7 +580,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly revealCell: (rowIndex: number, columnId: string, region?: "header" | "body") => void;
 }) {
-  recordBrunoTableClientGridSurfaceRender();
+  useLayoutEffect(recordBrunoTableClientGridSurfaceRender);
   const virtualWindow = viewportSnapshot.virtualWindow;
   const tableWidth = virtualWindow.totalWidth;
   const logicalColumns = useMemo(() => orderBrunoTableLogicalColumns(columns), [columns]);
