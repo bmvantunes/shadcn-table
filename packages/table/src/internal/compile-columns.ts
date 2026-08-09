@@ -6,6 +6,7 @@ import {
 } from "./value-semantics";
 
 const columnIdPrefix = "COL_ID_";
+const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS";
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
 const columnIdWhitespacePattern = /\s/u;
 type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
@@ -79,6 +80,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const columnId = candidate["columnId"];
   const groupPresentation = compilePresentationCallbacks(candidate, columnId, "groupKey");
   const aggregatePresentation = compilePresentationCallbacks(candidate, columnId, "aggregate");
+
+  if (columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
+    throw new ColumnConfigurationError(
+      `BrunoTable columnId is reserved for the Rows System Column: ${columnId}`,
+    );
+  }
 
   if (!isColumnId(columnId)) {
     throw new ColumnConfigurationError(

@@ -223,6 +223,7 @@ void validUnicodeColumnId;
 expectTypeOf<BrunoTableColumnId<"COL_ID_A B">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\tB">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\u3000B">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROWS">>().toEqualTypeOf<never>();
 
 const rawWhitespaceIdentityColumns = [
   {
@@ -264,6 +265,34 @@ const invalidWhitespaceComputedColumn = [
   BrunoTableComputedColumn(invalidWhitespaceComputedOptions),
 ] satisfies BrunoTableColumns<Order>;
 void invalidWhitespaceComputedColumn;
+
+const rawReservedIdentityColumns = [
+  {
+    columnId: "COL_ID_BRUNO_TABLE_ROWS",
+    field: "price",
+    headerName: "Rows",
+    valueType: "number",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-raw-reserved-identity",
+  // @ts-expect-error Consumers cannot claim the Rows System Column identity.
+  columns: rawReservedIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
+const invalidReservedHelperOptions = {
+  columnId: "COL_ID_BRUNO_TABLE_ROWS",
+  field: "price",
+  headerName: "Rows",
+} as const;
+const invalidReservedHelperColumn = [
+  // @ts-expect-error Column Helper inputs reject the reserved Rows identity.
+  BrunoTableNumberColumn(invalidReservedHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidReservedHelperColumn;
 
 // @ts-expect-error A stable column identity must have a non-empty suffix.
 const emptyColumnId: BrunoTableColumnId = "COL_ID_";

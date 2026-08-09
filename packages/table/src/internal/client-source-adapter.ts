@@ -165,6 +165,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.lifecycleFallbackCoherent = undefined;
     } else if (
       sourceSnapshot.invalidRows !== undefined ||
+      sourceSnapshot.invalidLifecycle !== undefined ||
       sourceSnapshot.invalidStatus !== undefined ||
       !retainsPreviousRows(this.source) ||
       this.source.rows !== sourceSnapshot.rows ||
@@ -419,6 +420,7 @@ type ClientSourceSnapshot<TRow> = Omit<BrunoTableClientSource<TRow>, "rows" | "s
     readonly rows: ClientPersistentSequence<TRow>;
     readonly status: BrunoTableSourceStatus;
     readonly invalidStatus?: string;
+    readonly invalidLifecycle?: "status" | "totalRows" | "version";
     readonly invalidRows?: string;
     readonly inputRows?: readonly TRow[];
   }>;
@@ -758,20 +760,26 @@ function createPublication<TRow>(
           kind: "invalid-rows" as const,
           receivedRows: source.invalidRows,
         })
-      : source.invalidStatus !== undefined
+      : source.invalidLifecycle !== undefined
         ? Object.freeze({
-            kind: "invalid-status" as const,
-            receivedStatus: source.invalidStatus,
+            kind: "invalid-lifecycle" as const,
+            field: source.invalidLifecycle,
           })
-        : (source.status === "ready" || source.status === "stale") && !complete
+        : source.invalidStatus !== undefined
           ? Object.freeze({
-              kind: "row-count-mismatch" as const,
-              expectedRows: source.totalRows,
-              receivedRows: source.rows.length,
+              kind: "invalid-status" as const,
+              receivedStatus: source.invalidStatus,
             })
-          : undefined;
+          : (source.status === "ready" || source.status === "stale") && !complete
+            ? Object.freeze({
+                kind: "row-count-mismatch" as const,
+                expectedRows: source.totalRows,
+                receivedRows: source.rows.length,
+              })
+            : undefined;
   const coherentResult =
     source.invalidRows === undefined &&
+    source.invalidLifecycle === undefined &&
     source.invalidStatus === undefined &&
     complete &&
     source.status !== "loading"
@@ -1221,11 +1229,27 @@ function snapshotSource<TRow>(
   previous?: ClientSourceSnapshot<TRow>,
   observedRows?: TRow[],
 ): ClientSourceSnapshot<TRow> {
-  const sourceStatus: unknown = source.status;
+  const required = snapshotRequiredSourceEnvelope(source);
+  if ("invalidLifecycle" in required) {
+    return Object.freeze({
+      rows: previous?.rows ?? (EMPTY_PERSISTENT_SEQUENCE as ClientPersistentSequence<TRow>),
+      totalRows: previous?.totalRows ?? 0,
+      version: previous?.version ?? 0,
+      status: "error",
+      invalidLifecycle: required.invalidLifecycle,
+    });
+  }
+  const { sourceStatus, totalRows, version } = required;
   const status = snapshotSourceStatus(sourceStatus);
-  const statusCode = boundedOptionalText(source.statusCode, 128);
-  const message = boundedOptionalText(source.message, 512);
-  const retry = snapshotRetry(source.retry);
+  const statusCode = boundedOptionalText(
+    readOptionalSourceField(() => source.statusCode),
+    128,
+  );
+  const message = boundedOptionalText(
+    readOptionalSourceField(() => source.message),
+    512,
+  );
+  const retry = snapshotRetry(readOptionalSourceField(() => source.retry));
   const rowInput =
     status === undefined || status === "loading" ? undefined : snapshotSourceRows(source);
   const inputRows = rowInput?.inputRows;
@@ -1248,8 +1272,8 @@ function snapshotSource<TRow>(
     sequenceRows ?? previous?.rows ?? (EMPTY_PERSISTENT_SEQUENCE as ClientPersistentSequence<TRow>);
   return Object.freeze({
     rows,
-    totalRows: source.totalRows,
-    version: source.version,
+    totalRows,
+    version,
     status: invalidRows === undefined ? (status ?? "error") : "error",
     ...(status === undefined ? { invalidStatus: describeInvalidStatus(sourceStatus) } : {}),
     ...(invalidRows === undefined ? {} : { invalidRows }),
@@ -1258,6 +1282,46 @@ function snapshotSource<TRow>(
     ...(message === undefined ? {} : { message }),
     ...(retry === undefined ? {} : { retry }),
   });
+}
+
+type ClientRequiredSourceEnvelope = Readonly<{
+  readonly sourceStatus: unknown;
+  readonly totalRows: number;
+  readonly version: number;
+}>;
+
+function snapshotRequiredSourceEnvelope<TRow>(
+  source: BrunoTableClientSource<TRow>,
+):
+  | ClientRequiredSourceEnvelope
+  | Readonly<{ readonly invalidLifecycle: "status" | "totalRows" | "version" }> {
+  let sourceStatus: unknown;
+  try {
+    sourceStatus = source.status;
+  } catch {
+    return Object.freeze({ invalidLifecycle: "status" });
+  }
+  let totalRows: number;
+  try {
+    totalRows = source.totalRows;
+  } catch {
+    return Object.freeze({ invalidLifecycle: "totalRows" });
+  }
+  let version: number;
+  try {
+    version = source.version;
+  } catch {
+    return Object.freeze({ invalidLifecycle: "version" });
+  }
+  return Object.freeze({ sourceStatus, totalRows, version });
+}
+
+function readOptionalSourceField(read: () => unknown): unknown {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
 }
 
 function snapshotSourceRows<TRow>(
@@ -1349,9 +1413,11 @@ function retainedSourceInvalidSnapshot<TRow>(
 ): BrunoTableRowPipelinePublication<TRow>["invalid"] {
   return source.invalidRows !== undefined
     ? Object.freeze({ kind: "invalid-rows" as const, receivedRows: source.invalidRows })
-    : source.invalidStatus !== undefined
-      ? Object.freeze({ kind: "invalid-status" as const, receivedStatus: source.invalidStatus })
-      : undefined;
+    : source.invalidLifecycle !== undefined
+      ? Object.freeze({ kind: "invalid-lifecycle" as const, field: source.invalidLifecycle })
+      : source.invalidStatus !== undefined
+        ? Object.freeze({ kind: "invalid-status" as const, receivedStatus: source.invalidStatus })
+        : undefined;
 }
 
 function rejectPublicationRows<TRow>(

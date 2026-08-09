@@ -1284,6 +1284,84 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rowsRead).not.toHaveBeenCalled();
   });
 
+  it.each(["status", "totalRows", "version"] as const)(
+    "contains an unreadable required Client Source %s getter and retains accepted rows",
+    (property) => {
+      const unreadable = (version: number) => {
+        const candidate = {
+          rows: [{ id: "candidate", name: "Untrusted" }],
+          totalRows: 1,
+          version,
+          status: "ready" as const,
+        };
+        Object.defineProperty(candidate, property, {
+          get: () => {
+            throw new Error(`Unreadable ${property}.`);
+          },
+        });
+        return candidate as ReturnType<typeof source>;
+      };
+      const getRowId = vi.fn((row: Row) => row.id);
+      const initialRuntime = createRuntime(unreadable(1), getRowId);
+      const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+      const updatedRuntime = createRuntime(source([accepted]), getRowId);
+      const identityReads = getRowId.mock.calls.length;
+
+      expect(() => updatedRuntime.publish(unreadable(2))).not.toThrow();
+
+      expect(initialRuntime.getChromeSnapshot()).toEqual({
+        status: "error",
+        hasCoherentRows: false,
+        invalid: { kind: "invalid-lifecycle", field: property },
+      });
+      expect(initialRuntime.getBodySnapshot()).toEqual({ kind: "empty" });
+      expect(updatedRuntime.getChromeSnapshot()).toEqual({
+        status: "error",
+        hasCoherentRows: true,
+        invalid: { kind: "invalid-lifecycle", field: property },
+      });
+      expect(updatedRuntime.getRowSnapshot("accepted")).toBe(accepted);
+      expect(updatedRuntime.getRowSnapshot("candidate")).toBeUndefined();
+      expect(getRowId).toHaveBeenCalledTimes(identityReads);
+    },
+  );
+
+  it.each(["statusCode", "message", "retry"] as const)(
+    "omits an unreadable optional Client Source %s getter while admitting ready rows",
+    (property) => {
+      const candidate = { id: "candidate", name: "Trusted" } satisfies Row;
+      const ready = source([candidate]);
+      Object.defineProperty(ready, property, {
+        get: () => {
+          throw new Error(`Unreadable ${property}.`);
+        },
+      });
+
+      const runtime = createRuntime(ready);
+
+      expect(runtime.getChromeSnapshot()).toEqual({ status: "ready", hasCoherentRows: true });
+      expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+      expect(runtime.getRowSnapshot("candidate")).toBe(candidate);
+    },
+  );
+
+  it.each(["statusCode", "message", "retry"] as const)(
+    "preserves loading skeletons when the optional Client Source %s getter is unreadable",
+    (property) => {
+      const loading = source([], "loading", { totalRows: 2 });
+      Object.defineProperty(loading, property, {
+        get: () => {
+          throw new Error(`Unreadable ${property}.`);
+        },
+      });
+
+      const runtime = createRuntime(loading);
+
+      expect(runtime.getChromeSnapshot()).toEqual({ status: "loading", hasCoherentRows: false });
+      expect(runtime.getBodySnapshot()).toEqual({ kind: "loading", totalRows: 2 });
+    },
+  );
+
   it("rejects a malformed Client Source row collection without throwing", () => {
     const malformed = {
       rows: null,

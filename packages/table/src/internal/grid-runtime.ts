@@ -31,6 +31,10 @@ export type BrunoTableInvalidSourceSnapshot =
       readonly receivedStatus: string;
     }>
   | Readonly<{
+      readonly kind: "invalid-lifecycle";
+      readonly field: "status" | "totalRows" | "version";
+    }>
+  | Readonly<{
       readonly kind: "invalid-rows";
       readonly receivedRows: string;
     }>;
@@ -769,6 +773,9 @@ function sameInvalidSource(
   if (previous.kind === "invalid-status" && next.kind === "invalid-status") {
     return previous.receivedStatus === next.receivedStatus;
   }
+  if (previous.kind === "invalid-lifecycle" && next.kind === "invalid-lifecycle") {
+    return previous.field === next.field;
+  }
   if (previous.kind === "invalid-rows" && next.kind === "invalid-rows") {
     return previous.receivedRows === next.receivedRows;
   }
@@ -818,6 +825,7 @@ function bodySnapshot<TRow>(
   if (
     (publication.invalid?.kind === "invalid-value" ||
       publication.invalid?.kind === "invalid-status" ||
+      publication.invalid?.kind === "invalid-lifecycle" ||
       publication.invalid?.kind === "invalid-rows") &&
     (publication.status === "closed" || publication.status === "error")
   ) {

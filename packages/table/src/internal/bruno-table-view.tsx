@@ -493,11 +493,13 @@ function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): str
   }
   return invalid?.kind === "invalid-status"
     ? `Unsupported source status: ${invalid.receivedStatus}.`
-    : invalid?.kind === "invalid-rows"
-      ? `Invalid Client Source rows: ${invalid.receivedRows}.`
-      : invalid?.kind === "row-count-mismatch"
-        ? `Expected ${String(invalid.expectedRows)} rows but received ${String(invalid.receivedRows)}.`
-        : undefined;
+    : invalid?.kind === "invalid-lifecycle"
+      ? `Unreadable Client Source lifecycle field: ${invalid.field}.`
+      : invalid?.kind === "invalid-rows"
+        ? `Invalid Client Source rows: ${invalid.receivedRows}.`
+        : invalid?.kind === "row-count-mismatch"
+          ? `Expected ${String(invalid.expectedRows)} rows but received ${String(invalid.receivedRows)}.`
+          : undefined;
 }
 
 function FocusFallbackOnUnmount({

@@ -66,9 +66,14 @@ type ColumnIdWhitespace =
   | "\u3000"
   | "\ufeff";
 type ColumnIdPattern = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
+type BrunoTableReservedColumnId = "COL_ID_BRUNO_TABLE_ROWS";
 
 export type BrunoTableColumnId<TColumnId extends ColumnIdPattern = ColumnIdPattern> =
-  TColumnId extends `${string}${ColumnIdWhitespace}${string}` ? never : TColumnId;
+  TColumnId extends BrunoTableReservedColumnId
+    ? never
+    : TColumnId extends `${string}${ColumnIdWhitespace}${string}`
+      ? never
+      : TColumnId;
 
 /** @internal Applies literal Column Identity validation at inference boundaries. */
 export type BrunoTableColumnIdentityInput<TOptions> = TOptions extends {

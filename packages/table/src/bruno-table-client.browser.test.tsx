@@ -2055,6 +2055,69 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("omits an unreadable optional lifecycle field and admits ready rows", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const unreadable = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
+    Object.defineProperty(unreadable, "message", {
+      get: () => {
+        throw new Error("Unreadable message.");
+      },
+    });
+
+    await expect(
+      screen.rerender(<BrunoTableClient {...props} clientSource={unreadable} />),
+    ).resolves.toBeUndefined();
+
+    await expect.element(screen.getByRole("gridcell", { name: "Untrusted" })).toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+    await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+  });
+
+  test("preserves loading skeletons when an optional lifecycle field is unreadable", async () => {
+    const unreadable = {
+      rows: [],
+      totalRows: 2,
+      version: 1,
+      status: "loading" as const,
+    };
+    Object.defineProperty(unreadable, "retry", {
+      get: () => {
+        throw new Error("Unreadable Retry.");
+      },
+    });
+
+    const screen = await render(<BrunoTableClient {...props} clientSource={unreadable} />);
+
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toHaveAttribute("aria-rowcount", "2");
+    await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+  });
+
+  test("retains accepted rows when a required lifecycle field is unreadable", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const acceptedAdaCell = screen.getByRole("gridcell", { name: "Ada" }).element();
+    const unreadable = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
+    Object.defineProperty(unreadable, "totalRows", {
+      get: () => {
+        throw new Error("Unreadable totalRows.");
+      },
+    });
+
+    await expect(
+      screen.rerender(<BrunoTableClient {...props} clientSource={unreadable} />),
+    ).resolves.toBeUndefined();
+
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Unreadable Client Source lifecycle field: totalRows.");
+    expect(screen.getByRole("gridcell", { name: "Ada" }).element()).toBe(acceptedAdaCell);
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Untrusted" }))
+      .not.toBeInTheDocument();
+  });
+
   test("rejects a malformed runtime row collection with visible error chrome", async () => {
     const malformedSource = {
       rows: null,

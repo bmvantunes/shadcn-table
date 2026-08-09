@@ -37,6 +37,10 @@ type Expect<TValue extends true> = TValue;
 const emittedWhitespaceColumnIdRejected: Expect<Equal<BrunoTableColumnId<"COL_ID_A B">, never>> =
   true;
 void emittedWhitespaceColumnIdRejected;
+const emittedReservedColumnIdRejected: Expect<
+  Equal<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROWS">, never>
+> = true;
+void emittedReservedColumnIdRejected;
 
 type Order = {
   readonly id: string;
@@ -59,6 +63,16 @@ const emittedInvalidWhitespaceHelperColumn = [
   BrunoTableNumberColumn(emittedInvalidWhitespaceHelperOptions),
 ] satisfies BrunoTableColumns<Order>;
 void emittedInvalidWhitespaceHelperColumn;
+const emittedInvalidReservedHelperOptions = {
+  columnId: "COL_ID_BRUNO_TABLE_ROWS",
+  field: "price",
+  headerName: "Rows",
+} as const;
+const emittedInvalidReservedHelperColumn = [
+  // @ts-expect-error Emitted Column Helper declarations reject the reserved Rows identity.
+  BrunoTableNumberColumn(emittedInvalidReservedHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void emittedInvalidReservedHelperColumn;
 
 const columns = [
   {
