@@ -724,11 +724,7 @@ function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCell
       sameInvalidSource(previous.value.invalid, next.value.invalid)
     );
   }
-  try {
-    return previous.column?.semantics.equivalent(previous.value, next.value) ?? false;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 function sameChrome(previous: BrunoTableChromeSnapshot, next: BrunoTableChromeSnapshot): boolean {

@@ -353,8 +353,8 @@ function LifecycleAlert({
             type="button"
             size="xs"
             variant="outline"
-            onClick={onRetry}
-            disabled={retry.pending}
+            onClick={retry.pending ? undefined : onRetry}
+            aria-disabled={retry.pending}
           >
             {retry.pending ? <Spinner /> : null}
             Retry
@@ -453,8 +453,8 @@ const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }
             <Button
               type="button"
               variant="outline"
-              onClick={() => runtime.retry()}
-              disabled={retry.pending}
+              onClick={retry.pending ? undefined : () => runtime.retry()}
+              aria-disabled={retry.pending}
             >
               {retry.pending ? <Spinner /> : null}
               Retry

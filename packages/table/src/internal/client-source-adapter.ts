@@ -481,7 +481,12 @@ function createCoherent<TRow>(
     previous !== undefined &&
     previous.validatedColumns === columns
   ) {
-    return Object.freeze({ coherent: previous });
+    return Object.freeze({
+      coherent:
+        previous.identityResolver === getRowId
+          ? previous
+          : Object.freeze({ ...previous, identityResolver: getRowId }),
+    });
   }
   const changeFromPrevious: BrunoTableClientRowOrderChange = Object.freeze({
     rowIdsChanged,

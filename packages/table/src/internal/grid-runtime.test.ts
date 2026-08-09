@@ -510,18 +510,25 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   it("keeps unchanged row subscriptions quiet when the identity callback is recreated", () => {
     const first = { id: "first", name: "Ada" } satisfies Row;
     const second = { id: "second", name: "Grace" } satisfies Row;
-    const runtime = createRuntime(source([first, second]));
+    const rows = [first, second] as const;
+    const runtime = createRuntime(source(rows));
     const bodyListener = vi.fn();
     const firstListener = vi.fn();
     runtime.subscribeBody(bodyListener);
     runtime.subscribeRow("first", firstListener);
     const firstSnapshot = runtime.getRowSnapshot("first");
 
-    runtime.configure((row) => row.id, runtimeColumns);
+    const replacementGetRowId = vi.fn((row: Row) => row.id);
+    runtime.configure(replacementGetRowId, runtimeColumns);
 
     expect(bodyListener).not.toHaveBeenCalled();
     expect(firstListener).not.toHaveBeenCalled();
     expect(runtime.getRowSnapshot("first")).toBe(firstSnapshot);
+    expect(replacementGetRowId).toHaveBeenCalledTimes(rows.length);
+
+    replacementGetRowId.mockClear();
+    runtime.publish(source(Array.from(rows)));
+    expect(replacementGetRowId).not.toHaveBeenCalled();
   });
 
   it("publishes an identity revision when getRowId changes for the same row array", () => {

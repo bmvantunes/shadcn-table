@@ -578,6 +578,63 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("refreshes presentation when domain-equivalent canonical values differ", async () => {
+    const casePreservingText: BrunoTableValueType<string, "text", "text"> = {
+      codecId: "test/case-preserving-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left.toLocaleLowerCase() === right.toLocaleLowerCase(),
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    };
+    const presentationColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: casePreservingText,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_PRESENTATION_IDENTITY"
+        getRowId={(row: Row) => row.id}
+        columns={presentationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([{ id: "row", name: "a", score: 1 }])}
+      />,
+    );
+
+    await expect.element(screen.getByRole("gridcell", { name: "a", exact: true })).toBeVisible();
+
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_PRESENTATION_IDENTITY"
+        getRowId={(row: Row) => row.id}
+        columns={presentationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([{ id: "row", name: "A", score: 1 }])}
+      />,
+    );
+
+    await expect.element(screen.getByRole("gridcell", { name: "A", exact: true })).toBeVisible();
+  });
+
   test("retains coherent rows for a terminal publication after rejecting ready data", async () => {
     const retry = vi.fn();
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
@@ -949,6 +1006,24 @@ describe("BrunoTableClient browser surface", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(retry.element());
 
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [],
+          totalRows: 0,
+          version: 2,
+          status: "error",
+          message: "Connection lost",
+          retry: { run, pending: true },
+        }}
+      />,
+    );
+    expect(document.activeElement).toBe(retry.element());
+    await expect.element(retry).toHaveAttribute("aria-disabled", "true");
+    (retry.element() as HTMLButtonElement).click();
+    expect(run).toHaveBeenCalledOnce();
+
     await screen.rerender(<BrunoTableClient {...props} clientSource={readySource()} />);
 
     await vi.waitFor(() => expect(document.activeElement).toBe(tableRegion.element()));
@@ -1124,9 +1199,22 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
   });
 
-  test("disables source-owned Retry and exposes pending progress", async () => {
+  test("keeps source-owned Retry focused and inert while pending", async () => {
     const run = vi.fn();
     const screen = await render(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          ...readySource(),
+          status: "error",
+          retry: { run, pending: false },
+        }}
+      />,
+    );
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.element().focus();
+    await screen.rerender(
       <BrunoTableClient
         {...props}
         clientSource={{
@@ -1137,7 +1225,9 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
 
-    await expect.element(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(document.activeElement).toBe(retry.element());
+    await expect.element(retry).toHaveAttribute("aria-disabled", "true");
+    (retry.element() as HTMLButtonElement).click();
     await expect.element(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
     expect(run).not.toHaveBeenCalled();
   });
