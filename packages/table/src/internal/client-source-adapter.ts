@@ -1094,6 +1094,7 @@ function snapshotSource<TRow>(
 ): ClientSourceSnapshot<TRow> {
   const statusCode = boundedOptionalText(source.statusCode, 128);
   const message = boundedOptionalText(source.message, 512);
+  const retry = snapshotRetry(source.retry);
   return Object.freeze({
     rows:
       previous === undefined || observedRows === undefined
@@ -1104,10 +1105,22 @@ function snapshotSource<TRow>(
     status: source.status,
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(message === undefined ? {} : { message }),
-    ...(source.retry === undefined
-      ? {}
-      : { retry: Object.freeze({ run: source.retry.run, pending: source.retry.pending }) }),
+    ...(retry === undefined ? {} : { retry }),
   });
+}
+
+function snapshotRetry(value: unknown): BrunoTableClientSource<unknown>["retry"] {
+  if (typeof value !== "object" || value === null) return undefined;
+  try {
+    const candidate = value as { readonly run?: unknown; readonly pending?: unknown };
+    const run = candidate.run;
+    const pending = candidate.pending;
+    return typeof run === "function" && typeof pending === "boolean"
+      ? Object.freeze({ run: run as (this: void) => void, pending })
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function queryColumnIds(filters: readonly unknown[], orderBy: ClientOrderBy): ReadonlySet<string> {

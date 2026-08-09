@@ -4,8 +4,16 @@ import { playwright } from "vite-plus/test/browser-playwright";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: { dedupe: ["react", "react-dom"] },
   optimizeDeps: {
-    include: ["vite-plus/test/browser", "vitest-browser-react"],
+    include: [
+      "react",
+      "react/jsx-runtime",
+      "react-dom/client",
+      "react-dom/server.browser",
+      "vite-plus/test/browser",
+      "vitest-browser-react",
+    ],
   },
   test: {
     name: "table-emitted-browser",

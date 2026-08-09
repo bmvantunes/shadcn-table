@@ -2197,6 +2197,7 @@ describe("BrunoTableClient browser surface", () => {
     await vi.waitFor(() => {
       expect(action.element().tabIndex).toBe(-1);
       expect(input.element().tabIndex).toBe(-1);
+      expect(action.element().closest("[inert]")).toBeNull();
     });
     await action.click();
     expect(activate).toHaveBeenCalledWith("grace");

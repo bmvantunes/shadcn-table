@@ -1,4 +1,8 @@
 import { afterEach, expect, test, vi } from "vite-plus/test";
+import { page, userEvent } from "vitest/browser";
+import { act } from "react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server.browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "../../dist/index.mjs";
@@ -12,7 +16,10 @@ const source = Object.freeze({
   status: "ready" as const,
 });
 
-afterEach(() => cleanup());
+afterEach(async () => {
+  await cleanup();
+  vi.restoreAllMocks();
+});
 
 test("reports incompatible Table Identity reuse from the emitted browser runtime", async () => {
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -58,4 +65,97 @@ test("reports incompatible Table Identity reuse from the emitted browser runtime
   expect(
     screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_CONFLICT" }).all(),
   ).toHaveLength(2);
+});
+
+test("hydrates emitted custom controls after removing their inert server boundary", async () => {
+  const actEnvironment = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  const activate = vi.fn();
+  const recoverableErrors: unknown[] = [];
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const columns = [
+    {
+      columnId: "COL_ID_ACTION",
+      field: "name",
+      headerName: "Action",
+      valueType: "text",
+      cellRenderer: ({ value }: { readonly value: string }) => (
+        <button type="button" onClick={() => activate(value)}>
+          Hydrate {value}
+        </button>
+      ),
+    },
+  ] as const;
+  const element = (
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_HYDRATION"
+      getRowId={(row: Row) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_ACTION", direction: "asc" }]}
+      clientSource={source}
+    />
+  );
+  const serverMarkup = renderToString(element);
+  expect(serverMarkup).toContain('inert=""');
+  const container = document.createElement("div");
+  const beforeHydration = document.createElement("button");
+  beforeHydration.textContent = "Before hydration";
+  const hydrationHost = document.createElement("div");
+  hydrationHost.innerHTML = serverMarkup;
+  const afterHydration = document.createElement("button");
+  afterHydration.textContent = "After hydration";
+  container.append(beforeHydration, hydrationHost, afterHydration);
+  document.body.append(container);
+  const before = page.getByRole("button", { name: "Before hydration" });
+  const grid = page.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_HYDRATION" });
+  const after = page.getByRole("button", { name: "After hydration" });
+  before.element().focus();
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(grid.element());
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(after.element());
+  const mutations: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.attributeName === "tabindex" && record.target instanceof HTMLButtonElement) {
+        mutations.push("tabindex");
+      }
+      if (record.attributeName === "inert") mutations.push("inert");
+    }
+  });
+  observer.observe(hydrationHost, {
+    attributes: true,
+    attributeFilter: ["inert", "tabindex"],
+    subtree: true,
+  });
+  let root: Root | undefined;
+
+  try {
+    await act(async () => {
+      root = hydrateRoot(hydrationHost, element, {
+        onRecoverableError: (error) => recoverableErrors.push(error),
+      });
+      await Promise.resolve();
+    });
+    const action = page.getByRole("button", { name: "Hydrate Ada" });
+    await vi.waitFor(() => {
+      expect(action.element().tabIndex).toBe(-1);
+      expect(action.element().closest("[inert]")).toBeNull();
+      expect(mutations).toContain("tabindex");
+      expect(mutations).toContain("inert");
+    });
+    expect(mutations.indexOf("tabindex")).toBeLessThan(mutations.indexOf("inert"));
+    expect(recoverableErrors).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
+    await action.click();
+    expect(activate).toHaveBeenCalledWith("Ada");
+  } finally {
+    observer.disconnect();
+    await act(async () => root?.unmount());
+    container.remove();
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
 });

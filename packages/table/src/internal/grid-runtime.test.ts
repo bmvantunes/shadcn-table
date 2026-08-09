@@ -1459,6 +1459,66 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getChromeSnapshot().message).toHaveLength(512);
   });
 
+  it("omits malformed source Retry capabilities", () => {
+    const row = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([row]));
+    const malformedRetries = [null, { run: null, pending: false }, { run: vi.fn(), pending: 1 }];
+
+    for (const retry of malformedRetries) {
+      const malformed = { ...source([row], "error"), retry } as unknown as ReturnType<
+        typeof source
+      >;
+      expect(() => runtime.publish(malformed)).not.toThrow();
+      expect(runtime.getChromeSnapshot()).not.toHaveProperty("retry");
+      expect(() => runtime.retry()).not.toThrow();
+    }
+
+    const run = vi.fn();
+    let runReads = 0;
+    let pendingReads = 0;
+    const changingRetry = {
+      get run() {
+        runReads += 1;
+        return runReads === 1 ? run : null;
+      },
+      get pending() {
+        pendingReads += 1;
+        return pendingReads === 1 ? false : "invalid";
+      },
+    };
+    runtime.publish({
+      ...source([row], "error"),
+      retry: changingRetry,
+    } as unknown as ReturnType<typeof source>);
+    runtime.retry();
+    expect(runReads).toBe(1);
+    expect(pendingReads).toBe(1);
+    expect(runtime.getChromeSnapshot().retry?.pending).toBe(false);
+    expect(run).toHaveBeenCalledOnce();
+
+    const throwingRetries = [
+      {
+        get run(): never {
+          throw new Error("run getter failed");
+        },
+        pending: false,
+      },
+      {
+        run,
+        get pending(): never {
+          throw new Error("pending getter failed");
+        },
+      },
+    ];
+    for (const retry of throwingRetries) {
+      const malformed = { ...source([row], "error"), retry } as unknown as ReturnType<
+        typeof source
+      >;
+      expect(() => runtime.publish(malformed)).not.toThrow();
+      expect(runtime.getChromeSnapshot()).not.toHaveProperty("retry");
+    }
+  });
+
   it("partitions source metrics and chrome without waking rows or body", () => {
     const rows = [{ id: "first", name: "Ada" }] as const;
     const iterateRows = vi.spyOn(rows, Symbol.iterator);

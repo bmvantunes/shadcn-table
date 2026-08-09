@@ -1636,6 +1636,7 @@ function NonTabbableCellContent({ children }: { readonly children: ReactNode }) 
       subtree: true,
     });
     removeFromTabOrder();
+    root.removeAttribute("inert");
     return () => {
       observer.disconnect();
       root.removeEventListener("focusin", trackFocusedCandidate);
@@ -1647,7 +1648,7 @@ function NonTabbableCellContent({ children }: { readonly children: ReactNode }) 
     };
   }, []);
   return (
-    <span ref={ref} style={{ display: "contents" }}>
+    <span ref={ref} inert style={{ display: "contents" }}>
       {children}
     </span>
   );
