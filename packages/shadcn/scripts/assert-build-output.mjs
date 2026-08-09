@@ -1,4 +1,8 @@
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const [buttonOutput, compilerOutput, packageJsonSource, componentFiles] = await Promise.all([
   readFile(new URL("../dist/button.mjs", import.meta.url), "utf8"),
@@ -85,4 +89,177 @@ const stylesheetUrl = import.meta.resolve("@bruno/shadcn/styles.css");
 
 if (!stylesheetUrl.endsWith("/src/styles/globals.css")) {
   throw new Error("The @bruno/shadcn/styles.css runtime export is invalid.");
+}
+
+await assertPackedConsumer();
+
+async function assertPackedConsumer() {
+  const packRoot = await mkdtemp(join(tmpdir(), "bruno-shadcn-pack-"));
+  try {
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    runCommand("pnpm", ["pack", "--pack-destination", packRoot], packageRoot, "package tarball");
+    const tarballNames = (await readdir(packRoot)).filter((fileName) => fileName.endsWith(".tgz"));
+    if (tarballNames.length !== 1) {
+      throw new Error(
+        `pnpm pack produced ${tarballNames.length} tarballs; expected exactly one (${tarballNames.join(", ") || "none"}).`,
+      );
+    }
+
+    const consumerRoot = await mkdtemp(join(tmpdir(), "bruno-shadcn-consumer-"));
+    try {
+      const tarball = join(packRoot, tarballNames[0]);
+      await writeFile(
+        join(consumerRoot, "package.json"),
+        JSON.stringify({
+          private: true,
+          type: "module",
+          dependencies: {
+            "@bruno/shadcn": `file:${tarball}`,
+            "@types/react": requiredDevDependency("@types/react"),
+            "@types/react-dom": requiredDevDependency("@types/react-dom"),
+            react: requiredDevDependency("react"),
+            "react-dom": requiredDevDependency("react-dom"),
+            tailwindcss: requiredDevDependency("tailwindcss"),
+            typescript: requiredDevDependency("typescript"),
+          },
+        }),
+      );
+      await writeFile(
+        join(consumerRoot, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            jsx: "react-jsx",
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            noEmit: true,
+            strict: true,
+            skipLibCheck: true,
+          },
+          include: ["src"],
+        }),
+      );
+      await mkdir(join(consumerRoot, "src"));
+      await writeFile(join(consumerRoot, "src/styles.d.ts"), 'declare module "*.css";\n');
+      await writeFile(
+        join(consumerRoot, "src/index.tsx"),
+        `import { Button } from "@bruno/shadcn/button";
+import {
+  Toast,
+  ToastAction,
+  ToastClose,
+  ToastContent,
+  ToastDescription,
+  ToastPortal,
+  ToastProvider,
+  ToastTitle,
+  ToastViewport,
+  Toaster,
+  createToastManager,
+  toast,
+  useToastManager,
+} from "@bruno/shadcn/toast";
+import "@bruno/shadcn/styles.css";
+
+void Toast;
+void ToastAction;
+void ToastClose;
+void ToastContent;
+void ToastDescription;
+void ToastPortal;
+void ToastProvider;
+void ToastTitle;
+void ToastViewport;
+void createToastManager;
+void useToastManager;
+
+export function CleanConsumer() {
+  return (
+    <>
+      <Button onClick={() => toast.add({ title: "Saved", timeout: 0 })}>Save</Button>
+      <Toaster />
+    </>
+  );
+}
+`,
+      );
+      await writeFile(
+        join(consumerRoot, "runtime.mjs"),
+        `const button = await import("@bruno/shadcn/button");
+const toast = await import("@bruno/shadcn/toast");
+const requiredToastComponents = [
+  "Toast",
+  "ToastAction",
+  "ToastClose",
+  "ToastContent",
+  "ToastDescription",
+  "ToastPortal",
+  "ToastProvider",
+  "ToastTitle",
+  "ToastViewport",
+  "Toaster",
+];
+if (
+  typeof button.Button !== "function" ||
+  typeof button.buttonVariants !== "function" ||
+  typeof toast.toast?.add !== "function" ||
+  requiredToastComponents.some((exportName) => typeof toast[exportName] !== "function") ||
+  typeof toast.createToastManager !== "function" ||
+  typeof toast.useToastManager !== "function"
+) {
+  throw new Error("Packed direct-subpath exports are incomplete.");
+}
+const stylesheetUrl = import.meta.resolve("@bruno/shadcn/styles.css");
+if (!stylesheetUrl.endsWith("/src/styles/globals.css")) {
+  throw new Error("Packed styles.css direct-subpath export is invalid.");
+}
+`,
+      );
+
+      runCommand(
+        "pnpm",
+        ["install", "--prefer-offline", "--ignore-scripts", "--no-frozen-lockfile"],
+        consumerRoot,
+        "packed consumer install",
+      );
+      const typescriptCli = join(consumerRoot, "node_modules/typescript/bin/tsc");
+      runCommand(
+        process.execPath,
+        [typescriptCli, "--project", "tsconfig.json"],
+        consumerRoot,
+        "packed consumer types",
+      );
+      runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "packed consumer runtime");
+    } finally {
+      await rm(consumerRoot, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(packRoot, { recursive: true, force: true });
+  }
+}
+
+function runCommand(command, parameters, cwd, label) {
+  const result = spawnSync(command, parameters, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 5 * 60 * 1000,
+    env: { ...process.env, CI: "true" },
+  });
+  if (result.error || result.status !== 0 || result.signal !== null) {
+    const commandLine = [command, ...parameters].join(" ");
+    const failure =
+      result.error?.message ??
+      `exit status ${result.status ?? "unknown"}${result.signal ? ` (signal ${result.signal})` : ""}`;
+    throw new Error(
+      `${label} failed: ${commandLine}\n${failure}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+    );
+  }
+}
+
+function requiredDevDependency(name) {
+  const version = packageJson.devDependencies?.[name];
+  if (!version) {
+    throw new Error(`The packed consumer requires ${name} in @bruno/shadcn devDependencies.`);
+  }
+  return version;
 }

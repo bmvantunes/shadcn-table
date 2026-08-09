@@ -81,13 +81,13 @@ If the user requested only a review, stop after the report.
 
 If the user authorized fixes or publication:
 
-1. Fix every blocking finding.
+1. Fix every blocking finding. Also fix accepted actionable non-blocking findings from local agents or other remote reviewers; disputed non-blocking findings require a recorded rationale rather than silent omission.
 2. Run affected focused validation, then the repository-required checks.
 3. Start a fresh round with all three reviewers against the updated complete target.
 4. Repeat until one complete round reports zero blockers on all axes and validation is green.
 5. Commit and push only after that clean round.
-6. Wait for required GitHub checks and GitHub Codex review.
-7. If remote feedback causes any change, fix it locally, rerun validation, and restart the complete three-reviewer loop before pushing.
+6. Wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. Codex and CodeRabbit are explicit repository minimums even when no checked-in integration configuration exists; trigger them through supported pull-request integrations or commands. A missing, pending, skipped, or unavailable required review is incomplete work and blocks publication; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
+7. If remote feedback causes any change, fix the findings locally, rerun validation, and restart the complete three-reviewer loop before pushing. Blocking findings cannot be waived; record the rationale for disputed non-blocking findings.
 8. Merge only when local review, required checks, and required GitHub reviews are clean.
 
 An earlier clean report is stale as soon as the reviewed files change.

@@ -1175,6 +1175,8 @@ TanStack Table v9 is an implementation detail behind BrunoTable's interface:
 
 Consumers should not need to register TanStack features or manipulate its table instance for the common grid path.
 
+External implementation references may guide internal presentation without widening this seam. In particular, the [ReUI data-grid pattern note](research/reui-data-grid-patterns.md) records useful header-menu, Set Filter, skeleton, resize, and decorative-scrollbar ideas together with explicit prohibitions on copying ReUI's public TanStack table prop, broad layout boolean bag, pagination, append-only infinite loading, unsorted cycle, or destructive CRUD behavior.
+
 ## React Compiler and hot-path rules
 
 - Module-scope column arrays are the default stable input.

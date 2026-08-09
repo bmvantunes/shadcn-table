@@ -55,7 +55,7 @@ A blocking finding is a correctness, contract, architecture, performance, securi
 2. Start the three reviewers from the same pinned review target.
 3. Wait for all three reports.
 4. Aggregate reports by axis without hiding disagreement or collapsing severity.
-5. Fix every blocking finding and rerun affected validation.
+5. Fix every blocking finding. Also fix accepted actionable non-blocking findings; disputed non-blocking findings require a recorded rationale. Rerun affected validation.
 6. Start a fresh round of all three reviewers. A clean verdict from an earlier diff never carries forward.
 7. Repeat until one complete round reports zero blockers on every axis and required local checks pass.
 8. Record unresolved non-blocking findings in the pull request when they materially affect future work.
@@ -65,8 +65,15 @@ If the user requested review only, stop after reporting the three axes. Do not m
 
 ## GitHub convergence loop
 
-1. Wait for required GitHub checks and GitHub Codex review. Also wait for any other reviewer configured as required by the repository.
-2. Address every actionable blocking finding locally.
+1. Trigger or request the remote reviewers, then wait for required GitHub checks and, at minimum, completed GitHub Codex and CodeRabbit reviews. Codex and CodeRabbit are explicit repository minimums even when no checked-in integration configuration exists. For this repository, trigger them with `gh pr comment <number> --body '@codex review'` and `gh pr comment <number> --body '@coderabbitai review'`. Inspect review submissions with `gh pr view <number> --json reviews` and thread state with the supported GitHub CLI GraphQL API:
+
+   ```bash
+   gh api graphql -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { reviewThreads(first:100) { nodes { isResolved isOutdated path line comments(first:20) { nodes { author { login } body } } } } } } }' -f owner='<owner>' -f repo='<repo>' -F number='<number>'
+   ```
+
+   A missing, pending, skipped, or unavailable required review is incomplete work and blocks publication; do not treat the absence of feedback as approval. Also wait for any other reviewer configured as required by the repository.
+
+2. Address every blocking finding locally, including findings from CodeRabbit, other configured reviewers, or local agents. Also address accepted actionable non-blocking findings. Blocking findings cannot be waived; disputed non-blocking findings require a recorded rationale rather than silent omission.
 3. Rerun affected validation and the complete three-reviewer local loop.
 4. Commit and push only after the new local round is clean.
 5. Repeat until local review, required checks, and required GitHub reviews are all clean.

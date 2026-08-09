@@ -16,51 +16,112 @@ import {
 
 const toast = ToastPrimitive.createToastManager();
 
-function ToastProvider({ ...props }: ToastPrimitive.Provider.Props) {
-  return <ToastPrimitive.Provider {...props} />;
+const ToastAccessibilityContext = React.createContext({
+  timeout: 5000,
+  isPersistent: false,
+  isViewportFocused: false,
+});
+type ToastViewportFocusEvent = Parameters<NonNullable<ToastPrimitive.Viewport.Props["onFocus"]>>[0];
+type ToastViewportBlurEvent = Parameters<NonNullable<ToastPrimitive.Viewport.Props["onBlur"]>>[0];
+
+function isPersistentToast(
+  toastItem: { timeout?: number | undefined; type?: string | undefined } | null | undefined,
+  timeout: number,
+) {
+  return toastItem?.type === "loading" || (toastItem?.timeout ?? timeout) <= 0;
+}
+
+function ToastProvider({ children, timeout = 5000, ...props }: ToastPrimitive.Provider.Props) {
+  return (
+    <ToastAccessibilityContext.Provider
+      value={{ timeout, isPersistent: false, isViewportFocused: false }}
+    >
+      <ToastPrimitive.Provider timeout={timeout} {...props}>
+        {children}
+      </ToastPrimitive.Provider>
+    </ToastAccessibilityContext.Provider>
+  );
 }
 
 function ToastPortal({ ...props }: ToastPrimitive.Portal.Props) {
   return <ToastPrimitive.Portal data-slot="toast-portal" {...props} />;
 }
 
-function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
+function ToastViewport({ className, onBlur, onFocus, ...props }: ToastPrimitive.Viewport.Props) {
+  const accessibility = React.useContext(ToastAccessibilityContext);
+  const [isViewportFocused, setIsViewportFocused] = React.useState(false);
+
+  const handleFocus = (event: ToastViewportFocusEvent) => {
+    onFocus?.(event);
+    if (event.target instanceof HTMLElement && event.target.matches(":focus-visible")) {
+      setIsViewportFocused(true);
+    }
+  };
+
+  const handleBlur = (event: ToastViewportBlurEvent) => {
+    onBlur?.(event);
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsViewportFocused(false);
+    }
+  };
+
   return (
-    <ToastPrimitive.Viewport
-      data-slot="toast-viewport"
-      className={cn(
-        "pointer-events-none fixed inset-x-4 bottom-4 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
-        className,
-      )}
-      {...props}
-    />
+    <ToastAccessibilityContext.Provider value={{ ...accessibility, isViewportFocused }}>
+      <ToastPrimitive.Viewport
+        data-slot="toast-viewport"
+        className={cn(
+          "pointer-events-none fixed inset-x-4 bottom-4 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
+          className,
+        )}
+        {...props}
+        onBlur={handleBlur}
+        onFocus={handleFocus}
+      />
+    </ToastAccessibilityContext.Provider>
   );
 }
 
 function Toast({ className, ...props }: ToastPrimitive.Root.Props) {
+  const { isViewportFocused, timeout } = React.useContext(ToastAccessibilityContext);
+  const isPersistent = isPersistentToast(props.toast, timeout);
+  const persistentRootProps =
+    isPersistent && props.toast?.priority === "high"
+      ? isViewportFocused
+        ? { role: "alertdialog" as const, "aria-hidden": false }
+        : {
+            role: "presentation" as const,
+            tabIndex: -1,
+            "aria-hidden": false,
+            "aria-live": "off" as const,
+          }
+      : {};
+
   return (
-    <ToastPrimitive.Root
-      data-slot="toast"
-      className={cn(
-        "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-md border bg-popover text-popover-foreground shadow-lg will-change-transform outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        "[--gap:0.75rem] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] [--peek:0.75rem] [--scale:calc(max(0,1-(var(--toast-index)*0.1)))] [--shrink:calc(1-var(--scale))]",
-        "h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))] [transition:transform_500ms_cubic-bezier(0.22,1,0.36,1),opacity_500ms,height_150ms]",
-        "after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
-        "data-expanded:h-(--toast-height) data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))]",
-        "data-limited:opacity-0 data-starting-style:[transform:translateY(150%)]",
-        "[&[data-ending-style]:not([data-limited]):not([data-swipe-direction])]:[transform:translateY(150%)]",
-        "data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
-        "data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
-        "data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
-        "data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
-        "data-expanded:data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
-        "data-expanded:data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
-        "data-expanded:data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
-        "data-expanded:data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
-        className,
-      )}
-      {...props}
-    />
+    <ToastAccessibilityContext.Provider value={{ timeout, isPersistent, isViewportFocused }}>
+      <ToastPrimitive.Root
+        data-slot="toast"
+        className={cn(
+          "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-md border bg-popover text-popover-foreground shadow-lg will-change-transform outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          "[--gap:0.75rem] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] [--peek:0.75rem] [--scale:calc(max(0,1-(var(--toast-index)*0.1)))] [--shrink:calc(1-var(--scale))]",
+          "h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))] [transition:transform_500ms_cubic-bezier(0.22,1,0.36,1),opacity_500ms,height_150ms]",
+          "after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
+          "data-expanded:h-(--toast-height) data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))]",
+          "data-limited:opacity-0 data-starting-style:[transform:translateY(150%)]",
+          "[&[data-ending-style]:not([data-limited]):not([data-swipe-direction])]:[transform:translateY(150%)]",
+          "data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
+          "data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
+          "data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
+          "data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
+          "data-expanded:data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
+          "data-expanded:data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
+          "data-expanded:data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
+          "data-expanded:data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
+          className,
+        )}
+        {...props}
+        {...persistentRootProps}
+      />
+    </ToastAccessibilityContext.Provider>
   );
 }
 
@@ -118,17 +179,19 @@ function ToastClose({
   render = <Button variant="ghost" size="icon-sm" />,
   ...props
 }: ToastPrimitive.Close.Props) {
+  const { isPersistent } = React.useContext(ToastAccessibilityContext);
+
   return (
     <ToastPrimitive.Close
       data-slot="toast-close"
       aria-label="Close toast"
-      aria-hidden={false}
       render={render}
       className={cn(
         "relative shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-foreground",
         className,
       )}
       {...props}
+      {...(isPersistent ? { "aria-hidden": false } : {})}
     >
       {children ?? <XIcon aria-hidden="true" />}
     </ToastPrimitive.Close>
@@ -184,15 +247,22 @@ function ToastList() {
           <ToastDescription />
         </div>
         <ToastAction />
+        {/* Base UI hides collapsed Close controls by default; persistent
+              workflow notifications must stay in the accessibility tree. */}
         <ToastClose />
       </ToastContent>
     </Toast>
   ));
 }
 
-function Toaster({ children, toastManager = toast, ...props }: ToastPrimitive.Provider.Props) {
+function Toaster({
+  children,
+  toastManager = toast,
+  timeout = 5000,
+  ...props
+}: ToastPrimitive.Provider.Props) {
   return (
-    <ToastProvider toastManager={toastManager} {...props}>
+    <ToastProvider toastManager={toastManager} timeout={timeout} {...props}>
       {children}
       <ToastPortal>
         <ToastViewport>
