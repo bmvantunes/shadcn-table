@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
 import {
+  createClientFilterPredicate,
   filterClientRows,
   filterReferencesColumn,
   sanitizeClientInitialFilters,
@@ -406,6 +407,449 @@ describe("Client row model", () => {
 
     expect(sanitized).toEqual([shared]);
     expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([]);
+  });
+
+  it("sanitizes and evaluates a deep shared filter DAG once per distinct node", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let sourceReads = 0;
+    const counted = <T extends Readonly<Record<string, unknown>>>(record: T): T =>
+      new Proxy(Object.freeze(record), {
+        get: (target, property, receiver) => {
+          sourceReads += 1;
+          if (sourceReads > 500) throw new Error("Shared filter DAG expanded exponentially.");
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      });
+    let shared: Readonly<Record<string, unknown>> = counted({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals",
+    });
+    const depth = 32;
+    for (let index = 0; index < depth; index += 1) {
+      shared = counted({ conditions: Object.freeze([shared, shared]), type: "AND" });
+    }
+
+    const sanitized = sanitizeClientInitialFilters([shared], columns);
+
+    expect(sanitized).toHaveLength(1);
+    expect(sourceReads).toBeLessThan(500);
+    let sanitizedNode = sanitized[0] as Readonly<Record<string, unknown>>;
+    for (let index = 0; index < depth; index += 1) {
+      const conditions = sanitizedNode["conditions"] as readonly Readonly<
+        Record<string, unknown>
+      >[];
+      expect(conditions[0]).toBe(conditions[1]);
+      sanitizedNode = conditions[0]!;
+    }
+
+    let valueReads = 0;
+    const predicate = createClientFilterPredicate(columns, sanitized, () => {
+      valueReads += 1;
+      if (valueReads > 100) throw new Error("Shared filter evaluation expanded exponentially.");
+      return "Ada";
+    });
+    expect(predicate?.({})).toBe(true);
+    expect(valueReads).toBe(1);
+  });
+
+  it("captures a nested source array once when its owner appears at different depths", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    let indexedReads = 0;
+    const sourceConditions = new Proxy(Object.freeze([leaf]), {
+      get: (target, property, receiver) => {
+        if (property === "0") {
+          indexedReads += 1;
+          if (indexedReads > 1) throw new Error("Nested source array was read twice.");
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const shared = Object.freeze({ conditions: sourceConditions, type: "AND" });
+    const root = Object.freeze({
+      conditions: Object.freeze([shared, Object.freeze({ condition: shared, type: "NOT" })]),
+      type: "AND",
+    });
+
+    const sanitized = sanitizeClientInitialFilters([root], columns);
+
+    expect(sanitized).toHaveLength(1);
+    expect(indexedReads).toBe(1);
+  });
+
+  it("propagates internal Value Type decoder failures", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const throwingColumns = columns.map((column) => ({
+      ...column,
+      semantics: Object.freeze({
+        ...column.semantics,
+        decodeRuntime: () => {
+          throw new Error("Decoder implementation failed.");
+        },
+      }),
+    }));
+
+    expect(() =>
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" }],
+        throwingColumns,
+      ),
+    ).toThrow("Decoder implementation failed.");
+  });
+
+  it("drops a filter whose properties cannot be read", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const unreadable = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        get: (target, property, receiver) => {
+          if (property === "type") throw new Error("Unreadable filter type.");
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      },
+    );
+    const valid = Object.freeze({ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" });
+
+    const sanitized = sanitizeClientInitialFilters([unreadable, valid], columns);
+
+    expect(sanitized).toEqual([valid]);
+  });
+
+  it("captures each relevant filter property once before validation", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const reads = {
+      accentSensitive: 0,
+      caseSensitive: 0,
+      columnId: 0,
+      filter: 0,
+      type: 0,
+    };
+    const stateful = Object.defineProperties<Record<string, unknown>>(
+      {},
+      {
+        accentSensitive: {
+          enumerable: true,
+          get: () => {
+            reads.accentSensitive += 1;
+            return reads.accentSensitive === 1 ? false : true;
+          },
+        },
+        caseSensitive: {
+          enumerable: true,
+          get: () => {
+            reads.caseSensitive += 1;
+            return reads.caseSensitive === 1 ? false : true;
+          },
+        },
+        columnId: {
+          enumerable: true,
+          get: () => {
+            reads.columnId += 1;
+            return reads.columnId === 1 ? "COL_ID_NAME" : "COL_ID_MISSING";
+          },
+        },
+        filter: {
+          enumerable: true,
+          get: () => {
+            reads.filter += 1;
+            return reads.filter === 1 ? "Ada" : "Grace";
+          },
+        },
+        type: {
+          enumerable: true,
+          get: () => {
+            reads.type += 1;
+            return reads.type === 1 ? "equals" : "blank";
+          },
+        },
+      },
+    );
+
+    const sanitized = sanitizeClientInitialFilters([stateful], columns);
+
+    expect(reads).toEqual({
+      accentSensitive: 1,
+      caseSensitive: 1,
+      columnId: 1,
+      filter: 1,
+      type: 1,
+    });
+    expect(sanitized).toEqual([
+      {
+        accentSensitive: false,
+        caseSensitive: false,
+        columnId: "COL_ID_NAME",
+        filter: "Ada",
+        type: "equals",
+      },
+    ]);
+    expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([
+      { name: "Ada" },
+    ]);
+  });
+
+  it("owns admitted filter records and arrays before later evaluation", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let denyFurtherReads = false;
+    const operands = new Proxy(Object.freeze(["Ada"]), {
+      get: (target, property, receiver) => {
+        if (denyFurtherReads && property === "0") throw new Error("Operand read escaped.");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const leaf = Object.freeze(
+      Object.defineProperties<Record<string, unknown>>(
+        {},
+        {
+          columnId: {
+            enumerable: true,
+            get: () => {
+              if (denyFurtherReads) throw new Error("Column read escaped.");
+              return "COL_ID_NAME";
+            },
+          },
+          filter: {
+            enumerable: true,
+            get: () => {
+              if (denyFurtherReads) throw new Error("Filter read escaped.");
+              return operands;
+            },
+          },
+          type: {
+            enumerable: true,
+            get: () => {
+              if (denyFurtherReads) throw new Error("Type read escaped.");
+              return "in";
+            },
+          },
+        },
+      ),
+    );
+    const conditions = new Proxy(Object.freeze([leaf]), {
+      get: (target, property, receiver) => {
+        if (denyFurtherReads && property === "0") throw new Error("Condition read escaped.");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const compound = Object.freeze({ conditions, type: "AND" });
+
+    const sanitized = sanitizeClientInitialFilters([compound], columns);
+    denyFurtherReads = true;
+
+    expect(Object.is(sanitized[0], compound)).toBe(false);
+    expect(() =>
+      filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized),
+    ).not.toThrow();
+    expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([
+      { name: "Ada" },
+    ]);
+  });
+
+  it("bounds root filter reads and preserves valid siblings around unreadable entries", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const root = Array<unknown>(1_000_000);
+    root[0] = { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" };
+    root[1] = { columnId: "COL_ID_NAME", type: "equals", filter: "blocked" };
+    root[2] = { columnId: "COL_ID_NAME", type: "notBlank" };
+    let indexedProbes = 0;
+    let ownKeyReads = 0;
+    const countIndexedProbe = (property: PropertyKey) => {
+      if (typeof property !== "string" || !/^\d+$/u.test(property)) return;
+      indexedProbes += 1;
+      if (indexedProbes > 1_024) throw new Error("Unbounded indexed root traversal.");
+    };
+    const hostileRoot = new Proxy(root, {
+      get: (target, property, receiver) => {
+        countIndexedProbe(property);
+        if (property === "1") throw new Error("Unreadable root entry.");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+      getOwnPropertyDescriptor: (target, property) => {
+        countIndexedProbe(property);
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+      has: (target, property) => {
+        countIndexedProbe(property);
+        return Reflect.has(target, property);
+      },
+      ownKeys: (target) => {
+        ownKeyReads += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    const sanitized = sanitizeClientInitialFilters(hostileRoot, columns);
+
+    expect(sanitized).toEqual([
+      { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+      { columnId: "COL_ID_NAME", type: "notBlank" },
+    ]);
+    expect(indexedProbes).toBeLessThanOrEqual(3);
+    expect(ownKeyReads).toBe(1);
+  });
+
+  it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const root = Array<unknown>(1_000_000);
+    root[0] = { columnId: "COL_ID_NAME", direction: "desc" };
+    root[1] = { columnId: "COL_ID_NAME", direction: "asc" };
+    let indexedProbes = 0;
+    let ownKeyReads = 0;
+    const countIndexedProbe = (property: PropertyKey) => {
+      if (typeof property !== "string" || !/^\d+$/u.test(property)) return;
+      indexedProbes += 1;
+      if (indexedProbes > 1_024) throw new Error("Unbounded indexed root traversal.");
+    };
+    const hostileRoot = new Proxy(root, {
+      get: (target, property, receiver) => {
+        countIndexedProbe(property);
+        if (property === "0") throw new Error("Unreadable root entry.");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+      getOwnPropertyDescriptor: (target, property) => {
+        countIndexedProbe(property);
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+      has: (target, property) => {
+        countIndexedProbe(property);
+        return Reflect.has(target, property);
+      },
+      ownKeys: (target) => {
+        ownKeyReads += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    expect(sanitizeClientOrderBy(hostileRoot as never, columns)).toEqual([
+      { columnId: "COL_ID_NAME", direction: "asc" },
+    ]);
+    expect(indexedProbes).toBeLessThanOrEqual(2);
+    expect(ownKeyReads).toBe(1);
+
+    const unreadableLength = new Proxy([], {
+      get: (target, property, receiver) => {
+        if (property === "length") throw new Error("Unreadable root length.");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    expect(() => sanitizeClientInitialOrderBy(unreadableLength as never, columns)).toThrow(
+      /no valid sortable column/u,
+    );
+  });
+
+  it("preserves public query collections larger than the hostile-input recursion depth", () => {
+    const columnCount = 1_025;
+    const columns = compileColumns(
+      Array.from({ length: columnCount }, (_, index) => ({
+        columnId: `COL_ID_FIELD_${index}`,
+        field: `field_${index}`,
+        headerName: `Field ${index}`,
+        valueType: "number" as const,
+      })),
+    );
+    const orderBy = Array.from({ length: columnCount }, (_, index) => ({
+      columnId: `COL_ID_FIELD_${index}`,
+      direction: "asc" as const,
+    }));
+    const filters = Array.from({ length: columnCount }, (_, index) => ({
+      columnId: `COL_ID_FIELD_${index}`,
+      filter: index,
+      type: "equals",
+    }));
+
+    expect(sanitizeClientInitialOrderBy(orderBy, columns)).toHaveLength(columnCount);
+    expect(sanitizeClientInitialFilters(filters, columns)).toHaveLength(columnCount);
+
+    const [inFilter] = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_FIELD_0",
+          filter: Array.from({ length: columnCount }, (_, index) => index),
+          type: "in",
+        },
+      ],
+      columns,
+    );
+    expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
+  });
+
+  it("constructs a predicate for a compound filter wider than the engine argument limit", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    const sanitized = sanitizeClientInitialFilters(
+      [{ conditions: Array.from({ length: 150_000 }, () => leaf), type: "AND" }],
+      columns,
+    );
+    const predicate = createClientFilterPredicate(columns, sanitized);
+
+    expect(sanitized).toHaveLength(1);
+    expect(predicate).toBeTypeOf("function");
+    expect(predicate?.({ name: "Ada" })).toBe(true);
+    expect(predicate?.({ name: "Grace" })).toBe(false);
   });
 
   it("reuses already-sanitized filter references for an equivalent column plan", () => {
