@@ -482,8 +482,11 @@ function emptyDescription(chrome: BrunoTableChromeSnapshot): string | undefined 
 }
 
 function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): string | undefined {
-  return invalid?.kind === "invalid-value"
-    ? `Source row ${String(invalid.rowIndex + 1)}, column ${invalid.columnId}: ${invalid.message}`
+  if (invalid?.kind === "invalid-value") {
+    return `Source row ${String(invalid.rowIndex + 1)}, column ${invalid.columnId}: ${invalid.message}`;
+  }
+  return invalid?.kind === "invalid-status"
+    ? `Unsupported source status: ${invalid.receivedStatus}.`
     : undefined;
 }
 

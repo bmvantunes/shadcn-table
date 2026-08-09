@@ -42,27 +42,14 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    const reconcile = () => {
-      const activeQuery = runtime.getQuerySnapshot();
-      rowPipelineAdapter.setActiveQuery(activeQuery.filters, activeQuery.orderBy);
-      const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
-      const publication = rowPipelineAdapter.reconcile(
-        props.clientSource,
-        props.getRowId,
-        compiledColumns,
-      );
-      runtime.reconcile(publication, compiledColumns, queryConfiguration);
-    };
-    reconcile();
-    return runtimeView.subscribeQuery(reconcile);
-  }, [
-    compiledColumns,
-    props.clientSource,
-    props.getRowId,
-    rowPipelineAdapter,
-    runtime,
-    runtimeView,
-  ]);
+    const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
+    const publication = rowPipelineAdapter.reconcile(
+      props.clientSource,
+      props.getRowId,
+      compiledColumns,
+    );
+    runtime.reconcile(publication, compiledColumns, queryConfiguration);
+  }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);

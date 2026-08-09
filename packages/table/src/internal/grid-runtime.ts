@@ -25,6 +25,10 @@ export type BrunoTableInvalidSourceSnapshot =
       readonly rowIndex: number;
       readonly columnId: string;
       readonly message: string;
+    }>
+  | Readonly<{
+      readonly kind: "invalid-status";
+      readonly receivedStatus: string;
     }>;
 
 const BRUNO_TABLE_INVALID_CELL_VALUE: unique symbol = Symbol("BrunoTableInvalidCellValue");
@@ -750,6 +754,9 @@ function sameInvalidSource(
       previous.expectedRows === next.expectedRows && previous.receivedRows === next.receivedRows
     );
   }
+  if (previous.kind === "invalid-status" && next.kind === "invalid-status") {
+    return previous.receivedStatus === next.receivedStatus;
+  }
   return (
     previous.kind === "invalid-value" &&
     next.kind === "invalid-value" &&
@@ -794,7 +801,8 @@ function bodySnapshot<TRow>(
     return publication.rowSpace.totalRows > 0 ? BODY_ROWS : BODY_EMPTY;
   }
   if (
-    publication.invalid?.kind === "invalid-value" &&
+    (publication.invalid?.kind === "invalid-value" ||
+      publication.invalid?.kind === "invalid-status") &&
     (publication.status === "closed" || publication.status === "error")
   ) {
     return BODY_EMPTY;

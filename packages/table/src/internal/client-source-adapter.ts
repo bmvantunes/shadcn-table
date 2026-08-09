@@ -1,4 +1,8 @@
-import type { BrunoTableClientSource, BrunoTableRowId } from "../public-types";
+import type {
+  BrunoTableClientSource,
+  BrunoTableRowId,
+  BrunoTableSourceStatus,
+} from "../public-types";
 import type {
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
@@ -10,7 +14,6 @@ import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
 import type { ClientOrderBy } from "./grid-query";
 import {
-  collectClientFilterColumnIds,
   reconcileClientOrderBy,
   sanitizeClientInitialFilters,
   sanitizeClientInitialOrderBy,
@@ -47,10 +50,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
-  private activeFilters: readonly unknown[];
-  private activeOrderBy: ClientOrderBy;
-  private validationColumnIds: ReadonlySet<string>;
-  private queryValidationPending = true;
   private readonly valueCache = new ClientCanonicalValueCache();
 
   public constructor(
@@ -62,9 +61,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   ) {
     this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
-    this.activeFilters = this.initialFilters;
-    this.activeOrderBy = this.initialOrderBy;
-    this.validationColumnIds = queryColumnIds(this.initialFilters, this.initialOrderBy);
     this.observedRows = Array.from(source.rows);
     this.source = snapshotSource(source);
     this.getRowId = getRowId;
@@ -75,8 +71,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       undefined,
       undefined,
       false,
-      this.validationColumnIds,
-      "none",
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
@@ -104,9 +98,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     if (baselineOrderBy.length === 0) {
       throw new TypeError("BrunoTableClient requires at least one sortable column.");
     }
-    this.activeFilters = sanitizeClientInitialFilters(this.activeFilters, columns);
-    this.activeOrderBy = reconcileClientOrderBy(this.activeOrderBy, baselineOrderBy, columns);
-    this.updateValidationColumnIds(queryColumnIds(this.activeFilters, this.activeOrderBy));
     this.queryColumns = columns;
     this.queryConfiguration = Object.freeze({ baselineFilters, baselineOrderBy });
     return this.queryConfiguration;
@@ -126,11 +117,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.coherent,
       this.acceptedCoherent,
       this.getRowId !== getRowId,
-      this.validationColumnIds,
-      this.queryValidationPending ? "all" : "changed",
       this.valueCache,
     );
-    this.recordQueryValidation(sourceSnapshot);
     this.coherent = nextCoherent(this.coherent, this.publication);
     this.acceptEmptyCoherent();
     if (
@@ -165,11 +153,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.coherent,
       this.acceptedCoherent,
       this.getRowId !== getRowId,
-      this.validationColumnIds,
-      this.queryValidationPending ? "all" : "changed",
       this.valueCache,
     );
-    this.recordQueryValidation(this.source);
     this.coherent = nextCoherent(this.coherent, this.publication);
     this.acceptEmptyCoherent();
     if (
@@ -186,25 +171,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   };
 
   public readonly resolveRowId = (row: unknown): BrunoTableRowId => this.getRowId(row as TRow);
-
-  public readonly setActiveQuery = (filters: readonly unknown[], orderBy: ClientOrderBy): void => {
-    this.activeFilters = filters;
-    this.activeOrderBy = orderBy;
-    this.updateValidationColumnIds(queryColumnIds(filters, orderBy));
-  };
-
-  private readonly updateValidationColumnIds = (next: ReadonlySet<string>): void => {
-    if (!sameStringSet(this.validationColumnIds, next)) this.queryValidationPending = true;
-    this.validationColumnIds = next;
-  };
-
-  private readonly recordQueryValidation = (source: ClientSourceSnapshot<TRow>): void => {
-    if (this.publication.invalid?.kind === "invalid-value") {
-      this.queryValidationPending = true;
-    } else if (canValidateSource(source)) {
-      this.queryValidationPending = false;
-    }
-  };
 
   public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
     if (this.coherent?.admittedRows.asArray() === rows) this.acceptedCoherent = this.coherent;
@@ -310,8 +276,12 @@ type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
     readonly validatedColumns: readonly CompiledColumn[];
   }>;
 
-type ClientSourceSnapshot<TRow> = Omit<BrunoTableClientSource<TRow>, "rows"> &
-  Readonly<{ readonly rows: ClientPersistentSequence<TRow> }>;
+type ClientSourceSnapshot<TRow> = Omit<BrunoTableClientSource<TRow>, "rows" | "status"> &
+  Readonly<{
+    readonly rows: ClientPersistentSequence<TRow>;
+    readonly status: BrunoTableSourceStatus;
+    readonly invalidStatus?: string;
+  }>;
 
 type ClientPersistentSequence<T> = Readonly<{
   readonly length: number;
@@ -335,7 +305,6 @@ const EMPTY_ROW_ORDER_CHANGE: BrunoTableClientRowOrderChange = Object.freeze({
   changedIndexes: EMPTY_ROWS,
 });
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
-const EMPTY_ADMITTED_ROWS: readonly BrunoTableClientAdmittedRow[] = Object.freeze([]);
 const NOT_FOUND = Object.freeze({ found: false as const });
 const CLIENT_BOUNDED_VALUE_CACHE_LIMIT = 16_384;
 const CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE = 256;
@@ -579,39 +548,28 @@ function createPublication<TRow>(
   previousCoherent: ClientCoherentSnapshot<TRow> | undefined,
   fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
-  validationColumnIds: ReadonlySet<string>,
-  queryValidation: "none" | "all" | "changed",
   valueCache: ClientCanonicalValueCache,
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =
-    (source.status === "ready" || source.status === "stale") && !complete
+    source.invalidStatus !== undefined
       ? Object.freeze({
-          kind: "row-count-mismatch" as const,
-          expectedRows: source.totalRows,
-          receivedRows: source.rows.length,
+          kind: "invalid-status" as const,
+          receivedStatus: source.invalidStatus,
         })
-      : undefined;
+      : (source.status === "ready" || source.status === "stale") && !complete
+        ? Object.freeze({
+            kind: "row-count-mismatch" as const,
+            expectedRows: source.totalRows,
+            receivedRows: source.rows.length,
+          })
+        : undefined;
   const coherentResult =
-    complete && source.status !== "loading"
+    source.invalidStatus === undefined && complete && source.status !== "loading"
       ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds, valueCache)
       : undefined;
   const terminal = source.status === "closed" || source.status === "error";
-  const validationColumns = columns.filter((column) => validationColumnIds.has(column.columnId));
-  const lifecycleCandidate = coherentResult?.coherent;
-  const invalidValue =
-    lifecycleCandidate !== undefined
-      ? validateAdmittedRows(
-          rowsRequiringQueryValidation(
-            lifecycleCandidate,
-            previousCoherent,
-            columns,
-            queryValidation,
-          ),
-          validationColumns,
-        )
-      : coherentResult?.invalid;
-  const currentCoherent = invalidValue === undefined ? lifecycleCandidate : undefined;
+  const currentCoherent = coherentResult?.coherent;
   const retainPrevious = terminal || source.status === "stale";
   const useFallback =
     fallbackCoherent !== undefined &&
@@ -627,23 +585,9 @@ function createPublication<TRow>(
         valueCache,
       )
     : undefined;
-  const fallbackCandidate = fallbackResult?.coherent;
-  const fallbackInvalidValue =
-    fallbackCandidate === undefined
-      ? fallbackResult?.invalid
-      : validateAdmittedRows(
-          queryValidation === "none"
-            ? EMPTY_ADMITTED_ROWS
-            : fallbackCandidate.admittedRows.asArray(),
-          validationColumns,
-        );
-  const coherent = useFallback
-    ? fallbackInvalidValue === undefined
-      ? fallbackCandidate
-      : undefined
-    : currentCoherent;
+  const coherent = useFallback ? fallbackResult?.coherent : currentCoherent;
   const hasCoherentRows = coherent !== undefined && (!terminal || coherent.rows.length > 0);
-  const resolvedInvalid = invalid ?? invalidValue ?? fallbackInvalidValue;
+  const resolvedInvalid = invalid ?? coherentResult?.invalid ?? fallbackResult?.invalid;
   return Object.freeze({
     status: source.status,
     totalRows: source.totalRows,
@@ -655,29 +599,6 @@ function createPublication<TRow>(
     hasCoherentRows,
     ...(resolvedInvalid === undefined ? {} : { invalid: resolvedInvalid }),
   });
-}
-
-function rowsRequiringQueryValidation<TRow>(
-  coherent: ClientCoherentSnapshot<TRow>,
-  previous: ClientCoherentSnapshot<TRow> | undefined,
-  columns: readonly CompiledColumn[],
-  queryValidation: "none" | "all" | "changed",
-): readonly BrunoTableClientAdmittedRow[] {
-  if (queryValidation === "none") return EMPTY_ADMITTED_ROWS;
-  if (
-    queryValidation === "all" ||
-    previous === undefined ||
-    previous.validatedColumns !== columns
-  ) {
-    return coherent.admittedRows.asArray();
-  }
-  if (coherent === previous) return EMPTY_ADMITTED_ROWS;
-  return Object.freeze(
-    coherent.changeFromPrevious.changedIndexes.flatMap((index) => {
-      const row = coherent.admittedRows.get(index);
-      return row === undefined ? [] : [row];
-    }),
-  );
 }
 
 type CoherentResult<TRow> = Readonly<{
@@ -1043,19 +964,6 @@ function currentInvalidRow(value: unknown, rowIndex: number, columnId: string): 
   return createBrunoTableInvalidCellValue(invalidValue(rowIndex, columnId, value.invalid.message));
 }
 
-function validateAdmittedRows(
-  rows: readonly BrunoTableClientAdmittedRow[],
-  columns: readonly CompiledColumn[],
-): NonNullable<CoherentResult<unknown>["invalid"]> | undefined {
-  for (const row of rows) {
-    for (const column of columns) {
-      const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
-      if (isBrunoTableInvalidCellValue(value)) return value.invalid;
-    }
-  }
-  return undefined;
-}
-
 function invalidValue(
   rowIndex: number,
   columnId: string,
@@ -1092,6 +1000,8 @@ function snapshotSource<TRow>(
   previous?: ClientSourceSnapshot<TRow>,
   observedRows?: TRow[],
 ): ClientSourceSnapshot<TRow> {
+  const sourceStatus: unknown = source.status;
+  const status = snapshotSourceStatus(sourceStatus);
   const statusCode = boundedOptionalText(source.statusCode, 128);
   const message = boundedOptionalText(source.message, 512);
   const retry = snapshotRetry(source.retry);
@@ -1102,11 +1012,28 @@ function snapshotSource<TRow>(
         : snapshotObservedPersistentSequence(source.rows, previous.rows, observedRows),
     totalRows: source.totalRows,
     version: source.version,
-    status: source.status,
+    status: status ?? "error",
+    ...(status === undefined ? { invalidStatus: describeInvalidStatus(sourceStatus) } : {}),
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(message === undefined ? {} : { message }),
     ...(retry === undefined ? {} : { retry }),
   });
+}
+
+function snapshotSourceStatus(value: unknown): BrunoTableSourceStatus | undefined {
+  return value === "loading" ||
+    value === "ready" ||
+    value === "stale" ||
+    value === "closed" ||
+    value === "error"
+    ? value
+    : undefined;
+}
+
+function describeInvalidStatus(value: unknown): string {
+  if (typeof value === "string") return boundedText(value, 128);
+  if (value === null) return "null";
+  return typeof value;
 }
 
 function snapshotRetry(value: unknown): BrunoTableClientSource<unknown>["retry"] {
@@ -1121,20 +1048,6 @@ function snapshotRetry(value: unknown): BrunoTableClientSource<unknown>["retry"]
   } catch {
     return undefined;
   }
-}
-
-function queryColumnIds(filters: readonly unknown[], orderBy: ClientOrderBy): ReadonlySet<string> {
-  const columnIds = new Set(orderBy.map((sort) => sort.columnId));
-  for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
-  return columnIds;
-}
-
-function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  return left.size === right.size && Array.from(left).every((value) => right.has(value));
-}
-
-function canValidateSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
-  return source.status !== "loading" && isCompleteSource(source);
 }
 
 function nextCoherent<TRow>(

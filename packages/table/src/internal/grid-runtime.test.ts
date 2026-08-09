@@ -829,7 +829,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
   });
 
-  it("defers exhaustive initial query decoding until post-construction reconciliation", () => {
+  it("leaves exhaustive query decoding to actual row-model reads", () => {
     const [baseColumn] = runtimeColumns;
     const decodeRuntime = vi.fn(baseColumn!.semantics.decodeRuntime);
     const instrumentedColumns = Object.freeze([
@@ -855,7 +855,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(decodeRuntime).not.toHaveBeenCalled();
 
     adapter.reconcile(initialSource, getRowId, instrumentedColumns);
-    expect(decodeRuntime).toHaveBeenCalledTimes(initialRows.length);
+    expect(decodeRuntime).not.toHaveBeenCalled();
   });
 
   it("decodes only changed source rows when column semantics stay installed", () => {
@@ -1149,6 +1149,46 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     });
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
+  });
+
+  it("rejects an unsupported source status without admitting its rows", () => {
+    const malformed = {
+      rows: [{ id: "invalid", name: "Untrusted" }],
+      totalRows: 1,
+      version: 1,
+      status: "offline",
+    } as unknown as ReturnType<typeof source>;
+    const runtime = createRuntime(malformed);
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-status", receivedStatus: "offline" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
+    expect(runtime.getRowSnapshot("invalid")).toBeUndefined();
+  });
+
+  it("retains coherent rows while rejecting an unsupported source status", () => {
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([accepted]));
+    const malformed = {
+      rows: [{ id: "candidate", name: "Untrusted" }],
+      totalRows: 1,
+      version: 2,
+      status: "offline",
+    } as unknown as ReturnType<typeof source>;
+
+    runtime.publish(malformed);
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-status", receivedStatus: "offline" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getRowSnapshot("accepted")).toBe(accepted);
+    expect(runtime.getRowSnapshot("candidate")).toBeUndefined();
   });
 
   it("keeps the last coherent rows available after a rejected ready publication", () => {

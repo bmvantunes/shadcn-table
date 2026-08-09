@@ -425,21 +425,24 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
   });
 
-  test("presents invalid source values without letting semantic rendering throw", async () => {
+  test("presents invalid non-query values without letting semantic rendering throw", async () => {
     const invalidRows = [
       { id: "invalid", name: "Invalid", score: Number.NaN },
     ] satisfies readonly Row[];
     const screen = await render(
-      <BrunoTableClient {...props} clientSource={readySource(invalidRows)} />,
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource(invalidRows)}
+      />,
     );
 
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
     await expect
       .element(screen.getByRole("alert"))
       .toHaveTextContent("Source row 1, column COL_ID_SCORE: Expected a finite number value.");
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
-      .not.toBeInTheDocument();
+      .toBeInTheDocument();
   });
 
   test("rejects a newly activated query column after its cell island reported an error", async () => {
@@ -462,11 +465,15 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("alert"))
       .toHaveTextContent("Source row 2, column COL_ID_SCORE: Expected a finite number value.");
 
-    screen
-      .getByRole("button", { name: "Sort by Score" })
-      .element()
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+    await screen.getByRole("button", { name: "Sort by Score" }).click();
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+      ).toBe(true),
+    );
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
       .not.toBeInTheDocument();
@@ -482,7 +489,14 @@ describe("BrunoTableClient browser surface", () => {
         clientSource={readySource(unrelatedUpdate)}
       />,
     );
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+      ).toBe(true),
+    );
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
       .not.toBeInTheDocument();
@@ -701,14 +715,24 @@ describe("BrunoTableClient browser surface", () => {
         {...props}
         getRowId={(row: Row) => `next:${row.id}`}
         clientSource={{
-          rows: [{ id: "invalid", name: "Invalid", score: Number.NaN }],
-          totalRows: 1,
+          rows: [
+            { id: "invalid", name: "Invalid", score: Number.NaN },
+            { id: "valid", name: "Valid", score: 1 },
+          ],
+          totalRows: 2,
           version: 2,
           status: "ready",
         }}
       />,
     );
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+      ).toBe(true),
+    );
 
     await screen.rerender(
       <BrunoTableClient
@@ -893,10 +917,24 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
 
-    await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data error");
-    await expect
-      .element(screen.getByRole("alert"))
-      .toHaveTextContent("Expected a finite number value.");
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) => alert.element().textContent?.includes("Live data error")),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) =>
+            alert.element().textContent?.includes("Expected a finite number value."),
+          ),
+      ).toBe(true),
+    );
     await screen.getByRole("button", { name: "Retry" }).click();
     expect(retry).toHaveBeenCalledOnce();
   });
@@ -1218,6 +1256,21 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Second");
   });
 
+  test("rejects an unsupported runtime source status with visible error chrome", async () => {
+    const malformedSource = {
+      ...readySource([{ id: "candidate", name: "Untrusted", score: 1 }]),
+      status: "offline",
+    } as unknown as ReturnType<typeof readySource>;
+    const screen = await render(<BrunoTableClient {...props} clientSource={malformedSource} />);
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("Live data error");
+    await expect.element(alert).toHaveTextContent("Unsupported source status: offline.");
+    await expect
+      .element(screen.getByRole("grid", { name: `Data for ${props.tableId}` }))
+      .not.toBeInTheDocument();
+  });
+
   test("announces an initially closed empty source as status", async () => {
     const screen = await render(
       <BrunoTableClient
@@ -1472,8 +1525,6 @@ describe("BrunoTableClient browser surface", () => {
     );
     const runtimeView = runtime.getView();
     const reconcile = () => {
-      const activeQuery = runtime.getQuerySnapshot();
-      rowPipelineAdapter.setActiveQuery(activeQuery.filters, activeQuery.orderBy);
       runtime.reconcile(
         rowPipelineAdapter.reconcile(currentSource, getRowId, compiledLazyColumns),
         compiledLazyColumns,
@@ -1481,7 +1532,6 @@ describe("BrunoTableClient browser surface", () => {
       );
     };
     reconcile();
-    const unsubscribeQuery = runtimeView.subscribeQuery(reconcile);
     const toolbar = new BrunoTableToolbarStore(undefined);
 
     try {
@@ -1505,8 +1555,10 @@ describe("BrunoTableClient browser surface", () => {
       expect(secondaryDecode).not.toHaveBeenCalled();
 
       queryReads.length = 0;
-      runtime.toggleColumnSort("COL_ID_LAZY_075", true);
-      expect(secondaryDecode).toHaveBeenCalledTimes(currentSource.rows.length);
+      runtime.toggleColumnSort("COL_ID_LAZY_075", false);
+      await vi.waitFor(() =>
+        expect(secondaryDecode).toHaveBeenCalledTimes(currentSource.rows.length),
+      );
       await expect
         .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
         .toBeInTheDocument();
@@ -1526,15 +1578,29 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
       await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
 
-      runtime.toggleColumnSort("COL_ID_LAZY_075", true);
+      runtime.toggleColumnSort("COL_ID_LAZY_075", false);
 
-      await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+        ).toBe(true),
+      );
       await expect
         .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
         .not.toBeInTheDocument();
       currentSource = { ...currentSource, version: currentSource.version + 1 };
       reconcile();
-      await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+        ).toBe(true),
+      );
       await expect
         .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
         .not.toBeInTheDocument();
@@ -1548,10 +1614,9 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
         .toBeInTheDocument();
-      await vi.waitFor(() => expect(queryReads).toContain("COL_ID_LAZY_000"));
-      expect(queryReads).not.toContain("COL_ID_LAZY_075");
+      await vi.waitFor(() => expect(queryReads).toContain("COL_ID_LAZY_075"));
+      expect(queryReads).not.toContain("COL_ID_LAZY_000");
     } finally {
-      unsubscribeQuery();
       restoreQueryReadListener();
     }
   });
@@ -3092,6 +3157,30 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("columnheader", { name: "Name" }))
       .toHaveTextContent("↑2");
+  });
+
+  test("does not revisit resident source rows for a query-only command", async () => {
+    const sourceIndexRead = vi.fn();
+    const instrumentedRows = new Proxy(Array.from(rows), {
+      get: (target, property, receiver) => {
+        if (typeof property === "string" && /^\d+$/.test(property)) sourceIndexRead(property);
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(instrumentedRows)} />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .toBeInTheDocument();
+    sourceIndexRead.mockClear();
+
+    await screen.getByRole("button", { name: "Sort by Name" }).click();
+
+    await expect
+      .element(screen.getByRole("columnheader", { name: "Name" }))
+      .toHaveAttribute("aria-sort", "ascending");
+    expect(sourceIndexRead).not.toHaveBeenCalled();
   });
 
   test("navigates and activates headers using only the keyboard with zero result rows", async () => {
