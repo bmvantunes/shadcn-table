@@ -184,9 +184,7 @@ function equivalentOrderedValue(
   previousValue: unknown,
   nextValue: unknown,
 ): boolean {
-  return previousValue == null || nextValue == null
-    ? previousValue == null && nextValue == null
-    : column.semantics.equivalent(previousValue, nextValue);
+  return column.semantics.compare(previousValue, nextValue) === 0;
 }
 
 export class ClientRowOrderStore {

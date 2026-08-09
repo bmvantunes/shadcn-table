@@ -187,7 +187,7 @@ describe("compiled Column Value Semantics", () => {
     expect(semantics.formatCanonicalText(-5.5)).toBe("-5.5");
     expect(semantics.parseCanonicalText("-5.5")).toEqual({ _tag: "Success", value: -5.5 });
     expect(semantics.formatDisplay(-5.5)).toBe(
-      new Intl.NumberFormat(undefined, definition.format).format(-5.5),
+      new Intl.NumberFormat("en-US", definition.format).format(-5.5),
     );
   });
 

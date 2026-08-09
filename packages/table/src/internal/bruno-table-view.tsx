@@ -384,6 +384,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   rowPipelineAdapter,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
+  const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
@@ -391,8 +392,17 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   );
   useLayoutEffect(() => {
     if (body.kind !== "rows") navigation.setShape([], compiledColumns);
-  }, [body.kind, compiledColumns, navigation]);
-  if (body.kind === "loading") return <LoadingRows totalRows={body.totalRows} />;
+    if (body.kind !== "rows" && body.kind !== "loading") focusHandoff.clear();
+  }, [body.kind, compiledColumns, focusHandoff, navigation]);
+  if (body.kind === "loading") {
+    return (
+      <LoadingRows
+        totalRows={body.totalRows}
+        focusFallback={focusFallback}
+        focusHandoff={focusHandoff}
+      />
+    );
+  }
   const rowPipeline = (
     <RowPipeline
       key="row-pipeline"
@@ -415,6 +425,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             runtime={runtime}
             columns={snapshot.columns}
             focusFallback={focusFallback}
+            focusHandoff={focusHandoff}
             navigation={navigation}
             queryGeneration={snapshot.queryGeneration}
           />
@@ -430,6 +441,24 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       {rowPipeline}
     </>
   );
+}
+
+class BrunoTableBodyFocusHandoff {
+  private pending = false;
+
+  public readonly release = (): void => {
+    this.pending = true;
+  };
+
+  public readonly claim = (): boolean => {
+    if (!this.pending) return false;
+    this.pending = false;
+    return true;
+  };
+
+  public readonly clear = (): void => {
+    this.pending = false;
+  };
 }
 
 const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }: RuntimeProps) {
@@ -533,6 +562,7 @@ type BrunoTableViewportAdapterProps = {
   readonly runtime: BrunoTableRuntimeView;
   readonly columns: readonly CompiledColumn[];
   readonly focusFallback: () => void;
+  readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
 };
@@ -544,6 +574,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     runtime,
     columns,
     focusFallback,
+    focusHandoff,
     navigation,
     queryGeneration,
   }: BrunoTableViewportAdapterProps): ReactElement {
@@ -622,6 +653,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         viewportSnapshot={viewportSnapshot}
         attach={viewport.attach}
         focusFallback={focusFallback}
+        focusHandoff={focusHandoff}
         navigation={navigation}
         revealCell={viewport.revealCell}
       />
@@ -639,6 +671,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   viewportSnapshot,
   attach,
   focusFallback,
+  focusHandoff,
   navigation,
   revealCell,
 }: {
@@ -650,6 +683,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly focusFallback: () => void;
+  readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly revealCell: (
     rowIndex: number,
@@ -674,12 +708,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         document.activeElement !== null &&
         gridElement.current?.contains(document.activeElement)
       ) {
+        focusHandoff.release();
         focusFallback();
       }
       gridElement.current = element;
       attach(element);
+      if (element !== null && focusHandoff.claim()) element.focus({ preventScroll: true });
     },
-    [attach, focusFallback],
+    [attach, focusFallback, focusHandoff],
   );
   const activateHeaderCommand = useMemo(
     () => (columnId: string) => {
@@ -1814,7 +1850,15 @@ const DEFAULT_LOADING_ROW_COUNT = 5;
 
 // Loading scroll attachment stays outside the compiler-managed render surface.
 // oxlint-disable react/react-compiler
-const LoadingRows = memo(function LoadingRows({ totalRows }: { readonly totalRows: number }) {
+const LoadingRows = memo(function LoadingRows({
+  totalRows,
+  focusFallback,
+  focusHandoff,
+}: {
+  readonly totalRows: number;
+  readonly focusFallback: () => void;
+  readonly focusHandoff: BrunoTableBodyFocusHandoff;
+}) {
   "use no memo";
   const logicalRowCount =
     Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : DEFAULT_LOADING_ROW_COUNT;
@@ -1833,15 +1877,33 @@ const LoadingRows = memo(function LoadingRows({ totalRows }: { readonly totalRow
     [logicalRowCount, viewport],
   );
   useEffect(() => () => viewport.dispose(), [viewport]);
+  const gridElement = useRef<HTMLDivElement | null>(null);
+  const attachGrid = useMemo(
+    () => (element: HTMLDivElement | null) => {
+      if (
+        element === null &&
+        document.activeElement !== null &&
+        gridElement.current?.contains(document.activeElement)
+      ) {
+        focusHandoff.release();
+        focusFallback();
+      }
+      gridElement.current = element;
+      viewport.attach(element);
+      if (element !== null && focusHandoff.claim()) element.focus({ preventScroll: true });
+    },
+    [focusFallback, focusHandoff, viewport],
+  );
   const virtualWindow = viewportSnapshot.virtualWindow;
   return (
     <div
-      ref={viewport.attach}
+      ref={attachGrid}
       aria-busy="true"
       aria-colcount={1}
       aria-label="Loading table rows"
       aria-rowcount={logicalRowCount}
       role="grid"
+      tabIndex={0}
       style={{
         maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
         overflow: "auto",

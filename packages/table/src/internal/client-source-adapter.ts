@@ -447,6 +447,7 @@ type ClientPersistentIdentityIndex = Readonly<{
 
 const EMPTY_ROWS: readonly [] = Object.freeze([]);
 const EMPTY_PERSISTENT_SEQUENCE = basePersistentSequence(EMPTY_ROWS);
+const CLIENT_MAX_PROTOTYPE_DEPTH = 64;
 const EMPTY_ROW_ORDER_CHANGE: BrunoTableClientRowOrderChange = Object.freeze({
   rowIdsChanged: false,
   changedIndexes: EMPTY_ROWS,
@@ -466,9 +467,11 @@ function snapshotObservedPersistentSequence<T>(
 ): ClientPersistentSequenceSnapshot<T> {
   const changedIndexes: number[] = [];
   const patches = new Map<number, T>();
+  let length = 0;
   try {
+    length = input.length;
     const indexedPrototype = hasIndexedPrototypeProperty(input);
-    for (let index = 0; index < input.length; index += 1) {
+    for (let index = 0; index < length; index += 1) {
       if (!(indexedPrototype ? Object.hasOwn(input, index) : index in input)) {
         return Object.freeze({ invalidRows: "sparse array" });
       }
@@ -481,16 +484,12 @@ function snapshotObservedPersistentSequence<T>(
   } catch {
     return Object.freeze({ invalidRows: "unreadable" });
   }
-  if (previous.length === input.length && changedIndexes.length === 0) {
+  if (previous.length === length && changedIndexes.length === 0) {
     return Object.freeze({ rows: previous });
   }
   return Object.freeze({
-    rows: patchPersistentSequence(
-      previous,
-      input.length,
-      patches,
-      changedIndexes,
-      (index) => input[index]!,
+    rows: patchPersistentSequence(previous, length, patches, changedIndexes, (index) =>
+      patches.get(index)!,
     ),
   });
 }
@@ -510,10 +509,12 @@ function snapshotBasePersistentSequence<T>(
   input: readonly T[],
 ): ClientPersistentSequenceSnapshot<T> {
   const chunks: (readonly T[])[] = [];
+  let length = 0;
   try {
+    length = input.length;
     const indexedPrototype = hasIndexedPrototypeProperty(input);
-    for (let start = 0; start < input.length; start += CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE) {
-      const end = Math.min(input.length, start + CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE);
+    for (let start = 0; start < length; start += CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE) {
+      const end = Math.min(length, start + CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE);
       const chunk: T[] = [];
       for (let index = start; index < end; index += 1) {
         if (!(indexedPrototype ? Object.hasOwn(input, index) : index in input)) {
@@ -527,13 +528,20 @@ function snapshotBasePersistentSequence<T>(
     return Object.freeze({ invalidRows: "unreadable" });
   }
   return Object.freeze({
-    rows: persistentSequence(Object.freeze(chunks), input.length, EMPTY_ROWS),
+    rows: persistentSequence(Object.freeze(chunks), length, EMPTY_ROWS),
   });
 }
 
 function hasIndexedPrototypeProperty(input: readonly unknown[]): boolean {
+  const visited = new WeakSet<object>();
+  let depth = 0;
   let prototype: object | null = Object.getPrototypeOf(input) as object | null;
   while (prototype !== null) {
+    if (visited.has(prototype) || depth >= CLIENT_MAX_PROTOTYPE_DEPTH) {
+      throw new TypeError("Client Source rows have an invalid prototype chain.");
+    }
+    visited.add(prototype);
+    depth += 1;
     for (const key of Object.getOwnPropertyNames(prototype)) {
       const index = Number(key);
       if (Number.isInteger(index) && index >= 0 && index < 4_294_967_295 && String(index) === key) {
@@ -1301,16 +1309,22 @@ function snapshotRequiredSourceEnvelope<TRow>(
   } catch {
     return Object.freeze({ invalidLifecycle: "status" });
   }
-  let totalRows: number;
+  let totalRows: unknown;
   try {
     totalRows = source.totalRows;
   } catch {
     return Object.freeze({ invalidLifecycle: "totalRows" });
   }
-  let version: number;
+  if (typeof totalRows !== "number" || !Number.isSafeInteger(totalRows) || totalRows < 0) {
+    return Object.freeze({ invalidLifecycle: "totalRows" });
+  }
+  let version: unknown;
   try {
     version = source.version;
   } catch {
+    return Object.freeze({ invalidLifecycle: "version" });
+  }
+  if (typeof version !== "number" || !Number.isFinite(version)) {
     return Object.freeze({ invalidLifecycle: "version" });
   }
   return Object.freeze({ sourceStatus, totalRows, version });

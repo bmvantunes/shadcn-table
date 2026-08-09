@@ -369,6 +369,45 @@ describe("Client row model", () => {
     ).toEqual([]);
   });
 
+  it("drops cyclic and over-depth compound filters without overflowing the stack", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const cyclic: { type: "NOT"; condition?: unknown } = { type: "NOT" };
+    cyclic.condition = cyclic;
+    let deep: unknown = { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" };
+    for (let depth = 0; depth < 1_000; depth += 1) deep = { type: "NOT", condition: deep };
+
+    expect(() => sanitizeClientInitialFilters([cyclic, deep], columns)).not.toThrow();
+    expect(sanitizeClientInitialFilters([cyclic, deep], columns)).toEqual([]);
+  });
+
+  it("accepts an acyclic compound filter that shares one immutable leaf", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" });
+    const shared = Object.freeze({
+      type: "AND",
+      conditions: Object.freeze([leaf, Object.freeze({ type: "NOT", condition: leaf })]),
+    });
+
+    const sanitized = sanitizeClientInitialFilters([shared], columns);
+
+    expect(sanitized).toEqual([shared]);
+    expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([]);
+  });
+
   it("reuses already-sanitized filter references for an equivalent column plan", () => {
     const columns = compileColumns([
       {

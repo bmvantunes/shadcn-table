@@ -96,8 +96,9 @@ export function sanitizeClientInitialFilters(
 ): readonly unknown[] {
   if (!Array.isArray(filters)) return EMPTY_FILTERS;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  const context: FilterSanitizationContext = { nodes: 0, visited: new WeakSet<object>() };
   const sanitized = filters.flatMap((filter) => {
-    const next = sanitizeFilter(filter, columnsById);
+    const next = sanitizeFilter(filter, columnsById, context, 0);
     return next === undefined ? [] : [next];
   });
   return Object.isFrozen(filters) && sameReferences(filters, sanitized)
@@ -145,131 +146,158 @@ export function collectClientFilterColumnIds(candidate: unknown, target: Set<str
 function sanitizeFilter(
   candidate: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  context: FilterSanitizationContext,
+  depth: number,
 ): Readonly<Record<string, unknown>> | undefined {
-  const filter = asRecord(candidate);
-  const type = filter["type"];
-  if (type === "AND" || type === "OR") {
-    const candidates = filter["conditions"];
-    if (!Array.isArray(candidates) || candidates.length === 0) return undefined;
-    for (let index = 0; index < candidates.length; index += 1) {
-      if (!Object.hasOwn(candidates, index)) return undefined;
-    }
-    const conditions = candidates.map((condition) => sanitizeFilter(condition, columnsById));
-    if (conditions.some((condition) => condition === undefined)) return undefined;
-    const columnIds = new Set<string>();
-    for (const condition of conditions) collectClientFilterColumnIds(condition, columnIds);
-    if (columnIds.size > 1) return undefined;
-    const sanitizedConditions =
-      Object.isFrozen(candidates) && sameReferences(candidates, conditions)
-        ? candidates
-        : Object.freeze(conditions);
-    return snapshotFilter(filter, ["type", "conditions"], { conditions: sanitizedConditions });
-  }
-  if (type === "NOT") {
-    const condition = sanitizeFilter(filter["condition"], columnsById);
-    return condition === undefined
-      ? undefined
-      : snapshotFilter(filter, ["type", "condition"], { condition });
-  }
-  const columnId = filter["columnId"];
-  const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
-  if (column === undefined || column.enableFilter === false || column.kind !== "field") {
+  if (
+    depth > CLIENT_FILTER_MAX_DEPTH ||
+    context.nodes >= CLIENT_FILTER_MAX_NODES ||
+    typeof candidate !== "object" ||
+    candidate === null ||
+    context.visited.has(candidate)
+  ) {
     return undefined;
   }
-  const operand = filter["filter"];
-  const decode = (value: unknown) => column.semantics.decodeRuntime(value);
-  if (type === "blank" || type === "notBlank") {
-    return snapshotFilter(filter, ["columnId", "type"]);
-  }
-  if (type === "in") {
-    if (
-      !Array.isArray(operand) ||
-      !isDenseArray(operand) ||
-      !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
-    ) {
+  context.nodes += 1;
+  context.visited.add(candidate);
+  try {
+    const filter = asRecord(candidate);
+    const type = filter["type"];
+    if (type === "AND" || type === "OR") {
+      const candidates = filter["conditions"];
+      if (!Array.isArray(candidates) || candidates.length === 0) return undefined;
+      const conditions: Readonly<Record<string, unknown>>[] = [];
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (!Object.hasOwn(candidates, index)) return undefined;
+        const condition = sanitizeFilter(candidates[index], columnsById, context, depth + 1);
+        if (condition === undefined) return undefined;
+        conditions.push(condition);
+      }
+      const columnIds = new Set<string>();
+      for (const condition of conditions) collectClientFilterColumnIds(condition, columnIds);
+      if (columnIds.size > 1) return undefined;
+      const sanitizedConditions =
+        Object.isFrozen(candidates) && sameReferences(candidates, conditions)
+          ? candidates
+          : Object.freeze(conditions);
+      return snapshotFilter(filter, ["type", "conditions"], { conditions: sanitizedConditions });
+    }
+    if (type === "NOT") {
+      const condition = sanitizeFilter(filter["condition"], columnsById, context, depth + 1);
+      return condition === undefined
+        ? undefined
+        : snapshotFilter(filter, ["type", "condition"], { condition });
+    }
+    const columnId = filter["columnId"];
+    const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
+    if (column === undefined || column.enableFilter === false || column.kind !== "field") {
       return undefined;
     }
-    const decoded = operand.map(decode);
-    const decodedValues = decoded.map((result) =>
-      result._tag === "Success" ? result.value : undefined,
-    );
-    const sanitizedValues =
-      Object.isFrozen(operand) && sameReferences(operand, decodedValues)
-        ? operand
-        : Object.freeze(decodedValues);
-    return decoded.every((result) => result._tag === "Success")
-      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"], {
-          filter: sanitizedValues,
-        })
-      : undefined;
-  }
-  if (type === "inRange") {
-    if (column.semantics.filterFamily !== "numeric") return undefined;
-    const from = decode(operand);
-    const to = decode(filter["filterTo"]);
-    return from._tag === "Success" && to._tag === "Success"
-      ? snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
-          filter: from.value,
-          filterTo: to.value,
-        })
-      : undefined;
-  }
-  if (
-    type === "equals" ||
-    type === "notEqual" ||
-    type === "greaterThan" ||
-    type === "greaterThanOrEqual" ||
-    type === "lessThan" ||
-    type === "lessThanOrEqual"
-  ) {
-    if (
-      (type === "greaterThan" ||
-        type === "greaterThanOrEqual" ||
-        type === "lessThan" ||
-        type === "lessThanOrEqual") &&
-      column.semantics.filterFamily !== "numeric"
-    ) {
-      return undefined;
+    const operand = filter["filter"];
+    const decode = (value: unknown) => column.semantics.decodeRuntime(value);
+    if (type === "blank" || type === "notBlank") {
+      return snapshotFilter(filter, ["columnId", "type"]);
     }
-    const result = decode(operand);
-    if (
-      result._tag !== "Success" ||
-      ((type === "equals" || type === "notEqual") &&
-        !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text"))
-    ) {
-      return undefined;
-    }
-    return snapshotFilter(
-      filter,
-      type === "equals" || type === "notEqual"
-        ? ["columnId", "type", "filter", "caseSensitive", "accentSensitive"]
-        : ["columnId", "type", "filter"],
-      { filter: result.value },
-    );
-  }
-  if (
-    type === "contains" ||
-    type === "notContains" ||
-    type === "startsWith" ||
-    type === "endsWith"
-  ) {
-    const validSensitivity = hasValidTextSensitivity(filter, true);
-    const decoded = decode(operand);
-    const normalizedOperand =
-      decoded._tag === "Success" && typeof decoded.value === "string" && validSensitivity
-        ? normalizeText(
-            decoded.value,
-            filter["caseSensitive"] === true,
-            filter["accentSensitive"] === true,
+    if (type === "in") {
+      if (
+        !Array.isArray(operand) ||
+        !isDenseArray(operand) ||
+        !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
+      ) {
+        return undefined;
+      }
+      const decoded = operand.map(decode);
+      const decodedValues = decoded.map((result) =>
+        result._tag === "Success" ? result.value : undefined,
+      );
+      const sanitizedValues =
+        Object.isFrozen(operand) && sameReferences(operand, decodedValues)
+          ? operand
+          : Object.freeze(decodedValues);
+      return decoded.every((result) => result._tag === "Success")
+        ? snapshotFilter(
+            filter,
+            ["columnId", "type", "filter", "caseSensitive", "accentSensitive"],
+            {
+              filter: sanitizedValues,
+            },
           )
-        : "";
-    return column.semantics.filterFamily === "text" && normalizedOperand.length > 0
-      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"], {
-          filter: decoded._tag === "Success" ? decoded.value : undefined,
-        })
-      : undefined;
+        : undefined;
+    }
+    if (type === "inRange") {
+      if (column.semantics.filterFamily !== "numeric") return undefined;
+      const from = decode(operand);
+      const to = decode(filter["filterTo"]);
+      return from._tag === "Success" && to._tag === "Success"
+        ? snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
+            filter: from.value,
+            filterTo: to.value,
+          })
+        : undefined;
+    }
+    if (
+      type === "equals" ||
+      type === "notEqual" ||
+      type === "greaterThan" ||
+      type === "greaterThanOrEqual" ||
+      type === "lessThan" ||
+      type === "lessThanOrEqual"
+    ) {
+      if (
+        (type === "greaterThan" ||
+          type === "greaterThanOrEqual" ||
+          type === "lessThan" ||
+          type === "lessThanOrEqual") &&
+        column.semantics.filterFamily !== "numeric"
+      ) {
+        return undefined;
+      }
+      const result = decode(operand);
+      if (
+        result._tag !== "Success" ||
+        ((type === "equals" || type === "notEqual") &&
+          !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text"))
+      ) {
+        return undefined;
+      }
+      return snapshotFilter(
+        filter,
+        type === "equals" || type === "notEqual"
+          ? ["columnId", "type", "filter", "caseSensitive", "accentSensitive"]
+          : ["columnId", "type", "filter"],
+        { filter: result.value },
+      );
+    }
+    if (
+      type === "contains" ||
+      type === "notContains" ||
+      type === "startsWith" ||
+      type === "endsWith"
+    ) {
+      const validSensitivity = hasValidTextSensitivity(filter, true);
+      const decoded = decode(operand);
+      const normalizedOperand =
+        decoded._tag === "Success" && typeof decoded.value === "string" && validSensitivity
+          ? normalizeText(
+              decoded.value,
+              filter["caseSensitive"] === true,
+              filter["accentSensitive"] === true,
+            )
+          : "";
+      return column.semantics.filterFamily === "text" && normalizedOperand.length > 0
+        ? snapshotFilter(
+            filter,
+            ["columnId", "type", "filter", "caseSensitive", "accentSensitive"],
+            {
+              filter: decoded._tag === "Success" ? decoded.value : undefined,
+            },
+          )
+        : undefined;
+    }
+    return undefined;
+  } finally {
+    context.visited.delete(candidate);
   }
-  return undefined;
 }
 
 function snapshotFilter(
@@ -427,3 +455,10 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 
 const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
+const CLIENT_FILTER_MAX_DEPTH = 64;
+const CLIENT_FILTER_MAX_NODES = 1_024;
+
+type FilterSanitizationContext = {
+  nodes: number;
+  readonly visited: WeakSet<object>;
+};

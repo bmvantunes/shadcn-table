@@ -1326,6 +1326,39 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     },
   );
 
+  it.each([
+    [
+      "totalRows",
+      {
+        [Symbol.toPrimitive]: () => {
+          throw new Error("Do not coerce.");
+        },
+      },
+    ],
+    ["totalRows", -1],
+    ["totalRows", 1.5],
+    ["version", "2"],
+    ["version", Number.NaN],
+    ["version", Number.POSITIVE_INFINITY],
+  ] as const)("contains an invalid required Client Source %s value", (property, value) => {
+    const malformed = {
+      rows: [{ id: "candidate", name: "Untrusted" }],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+      [property]: value,
+    } as unknown as ReturnType<typeof source>;
+
+    expect(() => createRuntime(malformed)).not.toThrow();
+    const runtime = createRuntime(malformed);
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-lifecycle", field: property },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
+  });
+
   it.each(["statusCode", "message", "retry"] as const)(
     "omits an unreadable optional Client Source %s getter while admitting ready rows",
     (property) => {
@@ -1393,6 +1426,70 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     });
     expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
     expect(getRowId).not.toHaveBeenCalled();
+  });
+
+  it("captures a published Array proxy length and entries exactly once inside the guarded snapshot", () => {
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const stable = { id: "stable", name: "Grace" } satisfies Row;
+    const updated = { id: "accepted", name: "Ada Lovelace" } satisfies Row;
+    const runtime = createRuntime(source([accepted, stable]));
+    let lengthReads = 0;
+    const entryReads = new Map<PropertyKey, number>();
+    const proxiedRows = new Proxy([updated, stable], {
+      get: (target, property, receiver) => {
+        if (property === "length") {
+          lengthReads += 1;
+          if (lengthReads > 1) throw new Error("Client Source rows length was reread.");
+        }
+        if (property === "0" || property === "1") {
+          const reads = (entryReads.get(property) ?? 0) + 1;
+          entryReads.set(property, reads);
+          if (reads > 1) throw new Error(`Client Source row ${property} was reread.`);
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    runtime.publish({
+      rows: proxiedRows,
+      totalRows: 2,
+      version: 2,
+      status: "ready",
+    });
+
+    expect(runtime.getChromeSnapshot()).toEqual({ status: "ready", hasCoherentRows: true });
+    expect(runtime.getRowSnapshot("accepted")).toBe(updated);
+    expect(runtime.getRowSnapshot("stable")).toBe(stable);
+    expect(lengthReads).toBe(1);
+    expect(entryReads).toEqual(
+      new Map<PropertyKey, number>([
+        ["0", 1],
+        ["1", 1],
+      ]),
+    );
+  });
+
+  it("contains a cyclic Client Source rows prototype chain", () => {
+    let cyclicRows: Row[];
+    cyclicRows = new Proxy([] as Row[], {
+      getPrototypeOf: () => cyclicRows,
+    });
+
+    expect(() =>
+      createRuntime({ rows: cyclicRows, totalRows: 0, version: 1, status: "ready" }),
+    ).not.toThrow();
+    const runtime = createRuntime({
+      rows: cyclicRows,
+      totalRows: 0,
+      version: 1,
+      status: "ready",
+    });
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-rows", receivedRows: "unreadable" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
   });
 
   it("retains coherent rows while rejecting a malformed later row collection", () => {

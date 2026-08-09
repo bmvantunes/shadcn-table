@@ -404,9 +404,8 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     await expect
-      .element(screen.getByRole("grid", { name: "Loading table rows" }))
-      .toHaveAttribute("aria-rowcount", "5");
-    expect(screen.getByRole("row").all().length).toBeLessThan(100);
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Unreadable Client Source lifecycle field: totalRows.");
 
     await screen.rerender(
       <BrunoTableClient
@@ -415,8 +414,8 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     await expect
-      .element(screen.getByRole("grid", { name: "Loading table rows" }))
-      .toHaveAttribute("aria-rowcount", "5");
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Unreadable Client Source lifecycle field: totalRows.");
 
     await screen.rerender(
       <BrunoTableClient
@@ -455,6 +454,30 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(staleAlert).toHaveTextContent("Live data delayed");
     await expect.element(staleAlert).toHaveTextContent("Delayed");
     await expect.element(staleAlert).toHaveTextContent("Expected 2 rows but received 1");
+  });
+
+  test("preserves grid focus across ready, loading, and ready lifecycle transitions", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const readyGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    readyGrid.element().focus();
+    expect(document.activeElement).toBe(readyGrid.element());
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [], totalRows: 2, version: 2, status: "loading" }}
+      />,
+    );
+
+    const loadingGrid = screen.getByRole("grid", { name: "Loading table rows" });
+    await vi.waitFor(() => expect(document.activeElement).toBe(loadingGrid.element()));
+
+    await screen.rerender(
+      <BrunoTableClient {...props} clientSource={{ ...readySource(), version: 3 }} />,
+    );
+
+    const restoredGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    await vi.waitFor(() => expect(document.activeElement).toBe(restoredGrid.element()));
   });
 
   test("presents invalid non-query values without letting semantic rendering throw", async () => {
@@ -735,6 +758,72 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(sensitiveFilterGrid.getByRole("gridcell", { name: "A", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("reorders a live publication with ordering semantics broader than equality", async () => {
+    const caseInsensitiveEquality: BrunoTableValueType<string, "text", "text"> = {
+      codecId: "test/case-insensitive-equality",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left.toLowerCase() === right.toLowerCase(),
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    };
+    const orderingColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: caseInsensitiveEquality,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_ORDERING_SEMANTICS"
+        getRowId={(row: Row) => row.id}
+        columns={orderingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([
+          { id: "changed", name: "a", score: 1 },
+          { id: "stable", name: "B", score: 2 },
+        ])}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ORDERING_SEMANTICS" });
+    await expect
+      .element(grid.getByRole("row").nth(1).getByRole("gridcell", { name: "B", exact: true }))
+      .toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_ORDERING_SEMANTICS"
+        getRowId={(row: Row) => row.id}
+        columns={orderingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([
+          { id: "changed", name: "A", score: 1 },
+          { id: "stable", name: "B", score: 2 },
+        ])}
+      />,
+    );
+    await expect
+      .element(grid.getByRole("row").nth(1).getByRole("gridcell", { name: "A", exact: true }))
+      .toBeInTheDocument();
   });
 
   test("retains coherent rows for a terminal publication after rejecting ready data", async () => {
@@ -2094,18 +2183,16 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
   });
 
-  test("retains accepted rows when a required lifecycle field is unreadable", async () => {
+  test("retains accepted rows when a required lifecycle value is invalid", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const acceptedAdaCell = screen.getByRole("gridcell", { name: "Ada" }).element();
-    const unreadable = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
-    Object.defineProperty(unreadable, "totalRows", {
-      get: () => {
-        throw new Error("Unreadable totalRows.");
-      },
-    });
+    const invalid = {
+      ...readySource([{ id: "candidate", name: "Untrusted", score: 1 }]),
+      totalRows: "one",
+    } as unknown as ReturnType<typeof readySource>;
 
     await expect(
-      screen.rerender(<BrunoTableClient {...props} clientSource={unreadable} />),
+      screen.rerender(<BrunoTableClient {...props} clientSource={invalid} />),
     ).resolves.toBeUndefined();
 
     await expect

@@ -10,7 +10,7 @@ import { BrunoTableClient } from "../../dist/index.mjs";
 type Row = Readonly<{ id: string; name: string; score: number }>;
 
 const source = Object.freeze({
-  rows: Object.freeze([{ id: "row", name: "Ada", score: 1 }]) satisfies readonly Row[],
+  rows: Object.freeze([{ id: "row", name: "Ada", score: 1_234.5 }]) satisfies readonly Row[],
   totalRows: 1,
   version: 1,
   status: "ready" as const,
@@ -88,6 +88,13 @@ test("hydrates emitted custom controls after removing their inert server boundar
         </button>
       ),
     },
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      format: { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+    },
   ] as const;
   const element = (
     <BrunoTableClient
@@ -100,6 +107,7 @@ test("hydrates emitted custom controls after removing their inert server boundar
   );
   const serverMarkup = renderToString(element);
   expect(serverMarkup).toContain('inert=""');
+  expect(serverMarkup).toContain("1,234.50");
   const container = document.createElement("div");
   const beforeHydration = document.createElement("button");
   beforeHydration.textContent = "Before hydration";
