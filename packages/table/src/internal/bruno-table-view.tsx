@@ -493,7 +493,9 @@ function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): str
   }
   return invalid?.kind === "invalid-status"
     ? `Unsupported source status: ${invalid.receivedStatus}.`
-    : undefined;
+    : invalid?.kind === "invalid-rows"
+      ? `Invalid Client Source rows: ${invalid.receivedRows}.`
+      : undefined;
 }
 
 function FocusFallbackOnUnmount({

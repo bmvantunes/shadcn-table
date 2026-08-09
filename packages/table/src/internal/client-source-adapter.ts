@@ -25,6 +25,7 @@ export type BrunoTableClientReconciliationEvent = Readonly<{
   readonly changedRows: number;
   readonly resolvedRowIds: number;
   readonly identityPatches: number;
+  readonly rebuiltSourceSequence: boolean;
   readonly rebuiltIdentityIndex: boolean;
 }>;
 
@@ -40,7 +41,7 @@ export function installBrunoTableClientReconciliationListener(
 }
 
 export class BrunoTableClientRowPipelineAdapter<TRow> {
-  private readonly observedRows: TRow[];
+  private observedRows: TRow[] | undefined;
   private source: ClientSourceSnapshot<TRow>;
   private getRowId: (row: TRow) => BrunoTableRowId;
   private publication: BrunoTableRowPipelinePublication<TRow>;
@@ -70,8 +71,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   ) {
     this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
-    this.observedRows = Array.from(source.rows);
     this.source = snapshotSource(source);
+    this.observedRows =
+      this.source.inputRows === undefined ? undefined : Array.from(this.source.inputRows);
     this.getRowId = getRowId;
     this.publication = createPublication(
       this.source,
@@ -119,23 +121,40 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   ): BrunoTableRowPipelinePublication<TRow> => {
     const sourceSnapshot = snapshotSource(source, this.source, this.observedRows);
     const queryRejected = this.queryRejected;
+    const retainedSourceInvalid = retainedSourceInvalidSnapshot(sourceSnapshot);
     const sameRetainedCandidate =
       this.queryFallbackActive &&
       queryRejected !== undefined &&
       retainsPreviousRows(this.source) &&
       retainsPreviousRows(sourceSnapshot) &&
-      this.source.invalidStatus === sourceSnapshot.invalidStatus &&
+      ((this.source.invalidStatus === sourceSnapshot.invalidStatus &&
+        this.source.invalidRows === sourceSnapshot.invalidRows) ||
+        retainedSourceInvalid !== undefined) &&
       this.source.rows === sourceSnapshot.rows &&
       this.source.totalRows === sourceSnapshot.totalRows &&
       this.getRowId === getRowId &&
       this.sourceColumns === columns;
     if (sameRetainedCandidate && queryRejected !== undefined) {
-      this.publication = refreshPublicationSource(this.publication, sourceSnapshot);
+      this.publication = refreshPublicationSource(
+        this.publication,
+        sourceSnapshot,
+        retainedSourceInvalid,
+      );
       this.queryRejected = Object.freeze({
         coherent: queryRejected.coherent,
-        publication: refreshPublicationSource(queryRejected.publication, sourceSnapshot),
+        publication: refreshPublicationSource(
+          queryRejected.publication,
+          sourceSnapshot,
+          retainedSourceInvalid,
+        ),
       });
-      commitObservedRows(source.rows, sourceSnapshot.rows.changedIndexes, this.observedRows);
+      if (sourceSnapshot.inputRows !== undefined) {
+        this.observedRows = commitObservedRows(
+          sourceSnapshot.inputRows,
+          sourceSnapshot.rows.changedIndexes,
+          this.observedRows,
+        );
+      }
       this.source = sourceSnapshot;
       return this.publication;
     }
@@ -145,6 +164,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     if (!retainsPreviousRows(sourceSnapshot)) {
       this.lifecycleFallbackCoherent = undefined;
     } else if (
+      sourceSnapshot.invalidRows !== undefined ||
+      sourceSnapshot.invalidStatus !== undefined ||
       !retainsPreviousRows(this.source) ||
       this.source.rows !== sourceSnapshot.rows ||
       this.source.totalRows !== sourceSnapshot.totalRows
@@ -175,7 +196,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     ) {
       this.valueCache.retainRowIds(this.coherent.hasRowId);
     }
-    commitObservedRows(source.rows, sourceSnapshot.rows.changedIndexes, this.observedRows);
+    if (sourceSnapshot.inputRows !== undefined) {
+      this.observedRows = commitObservedRows(
+        sourceSnapshot.inputRows,
+        sourceSnapshot.rows.changedIndexes,
+        this.observedRows,
+      );
+    }
     this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
     this.source = sourceSnapshot;
     this.getRowId = getRowId;
@@ -240,7 +267,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       return undefined;
     }
     if (this.queryFallbackActive) {
-      this.publication = rejectPublicationRows(this.publication, invalid);
+      this.publication = rejectPublicationRows(
+        this.publication,
+        retainedSourceInvalidSnapshot(this.source) ?? invalid,
+      );
       this.coherent = undefined;
       this.valueCache.retainColumns(this.sourceColumns);
       return this.publication;
@@ -389,6 +419,8 @@ type ClientSourceSnapshot<TRow> = Omit<BrunoTableClientSource<TRow>, "rows" | "s
     readonly rows: ClientPersistentSequence<TRow>;
     readonly status: BrunoTableSourceStatus;
     readonly invalidStatus?: string;
+    readonly invalidRows?: string;
+    readonly inputRows?: readonly TRow[];
   }>;
 
 type ClientPersistentSequence<T> = Readonly<{
@@ -408,6 +440,7 @@ type ClientPersistentIdentityIndex = Readonly<{
 }>;
 
 const EMPTY_ROWS: readonly [] = Object.freeze([]);
+const EMPTY_PERSISTENT_SEQUENCE = basePersistentSequence(EMPTY_ROWS);
 const EMPTY_ROW_ORDER_CHANGE: BrunoTableClientRowOrderChange = Object.freeze({
   rowIdsChanged: false,
   changedIndexes: EMPTY_ROWS,
@@ -445,10 +478,12 @@ function snapshotObservedPersistentSequence<T>(
 function commitObservedRows<T>(
   input: readonly T[],
   changedIndexes: readonly number[],
-  observed: T[],
-): void {
+  observed: T[] | undefined,
+): T[] {
+  if (observed === undefined) return Array.from(input);
   for (const index of changedIndexes) observed[index] = input[index]!;
   observed.length = input.length;
+  return observed;
 }
 
 function patchPersistentSequence<T>(
@@ -661,20 +696,28 @@ function createPublication<TRow>(
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =
-    source.invalidStatus !== undefined
+    source.invalidRows !== undefined
       ? Object.freeze({
-          kind: "invalid-status" as const,
-          receivedStatus: source.invalidStatus,
+          kind: "invalid-rows" as const,
+          receivedRows: source.invalidRows,
         })
-      : (source.status === "ready" || source.status === "stale") && !complete
+      : source.invalidStatus !== undefined
         ? Object.freeze({
-            kind: "row-count-mismatch" as const,
-            expectedRows: source.totalRows,
-            receivedRows: source.rows.length,
+            kind: "invalid-status" as const,
+            receivedStatus: source.invalidStatus,
           })
-        : undefined;
+        : (source.status === "ready" || source.status === "stale") && !complete
+          ? Object.freeze({
+              kind: "row-count-mismatch" as const,
+              expectedRows: source.totalRows,
+              receivedRows: source.rows.length,
+            })
+          : undefined;
   const coherentResult =
-    source.invalidStatus === undefined && complete && source.status !== "loading"
+    source.invalidRows === undefined &&
+    source.invalidStatus === undefined &&
+    complete &&
+    source.status !== "loading"
       ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds, valueCache)
       : undefined;
   const terminal = source.status === "closed" || source.status === "error";
@@ -762,6 +805,7 @@ function createInitialCoherent<TRow>(
       changedRows: rows.length,
       resolvedRowIds: rows.length,
       identityPatches: rows.length,
+      rebuiltSourceSequence: rows.parentToken === undefined,
       rebuiltIdentityIndex: true,
     }),
   );
@@ -878,6 +922,7 @@ function createCoherent<TRow>(
       changedRows: sourceChange.changedIndexes.length,
       resolvedRowIds: indexesToResolve.length,
       identityPatches: identityPatches.size,
+      rebuiltSourceSequence: previous.rows !== rows && rows.parentToken === undefined,
       rebuiltIdentityIndex: false,
     }),
   );
@@ -1124,19 +1169,41 @@ function snapshotSource<TRow>(
   const statusCode = boundedOptionalText(source.statusCode, 128);
   const message = boundedOptionalText(source.message, 512);
   const retry = snapshotRetry(source.retry);
+  const rowInput =
+    status === undefined || status === "loading" ? undefined : snapshotSourceRows(source);
+  const inputRows = rowInput?.inputRows;
+  const invalidRows = rowInput?.invalidRows;
+  const rows =
+    inputRows === undefined
+      ? (previous?.rows ?? (EMPTY_PERSISTENT_SEQUENCE as ClientPersistentSequence<TRow>))
+      : previous === undefined || observedRows === undefined
+        ? basePersistentSequence(inputRows)
+        : snapshotObservedPersistentSequence(inputRows, previous.rows, observedRows);
   return Object.freeze({
-    rows:
-      previous === undefined || observedRows === undefined
-        ? basePersistentSequence(source.rows)
-        : snapshotObservedPersistentSequence(source.rows, previous.rows, observedRows),
+    rows,
     totalRows: source.totalRows,
     version: source.version,
-    status: status ?? "error",
+    status: invalidRows === undefined ? (status ?? "error") : "error",
     ...(status === undefined ? { invalidStatus: describeInvalidStatus(sourceStatus) } : {}),
+    ...(invalidRows === undefined ? {} : { invalidRows }),
+    ...(inputRows === undefined ? {} : { inputRows }),
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(message === undefined ? {} : { message }),
     ...(retry === undefined ? {} : { retry }),
   });
+}
+
+function snapshotSourceRows<TRow>(
+  source: BrunoTableClientSource<TRow>,
+): Readonly<{ readonly inputRows?: readonly TRow[]; readonly invalidRows?: string }> {
+  try {
+    const rows: unknown = source.rows;
+    return Array.isArray(rows)
+      ? Object.freeze({ inputRows: rows as readonly TRow[] })
+      : Object.freeze({ invalidRows: describeInvalidRows(rows) });
+  } catch {
+    return Object.freeze({ invalidRows: "unreadable" });
+  }
 }
 
 function snapshotSourceStatus(value: unknown): BrunoTableSourceStatus | undefined {
@@ -1151,6 +1218,11 @@ function snapshotSourceStatus(value: unknown): BrunoTableSourceStatus | undefine
 
 function describeInvalidStatus(value: unknown): string {
   if (typeof value === "string") return boundedText(value, 128);
+  if (value === null) return "null";
+  return typeof value;
+}
+
+function describeInvalidRows(value: unknown): string {
   if (value === null) return "null";
   return typeof value;
 }
@@ -1188,6 +1260,7 @@ function refreshRowOrderEvidence<TRow>(
 function refreshPublicationSource<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
   source: ClientSourceSnapshot<TRow>,
+  invalid: BrunoTableRowPipelinePublication<TRow>["invalid"] = publication.invalid,
 ): BrunoTableRowPipelinePublication<TRow> {
   const terminal = source.status === "closed" || source.status === "error";
   return Object.freeze({
@@ -1200,13 +1273,23 @@ function refreshPublicationSource<TRow>(
     ...(publication.rowSpace === undefined ? {} : { rowSpace: publication.rowSpace }),
     hasCoherentRows:
       publication.rowSpace !== undefined && (!terminal || publication.rowSpace.loadedRows > 0),
-    ...(publication.invalid === undefined ? {} : { invalid: publication.invalid }),
+    ...(invalid === undefined ? {} : { invalid }),
   });
+}
+
+function retainedSourceInvalidSnapshot<TRow>(
+  source: ClientSourceSnapshot<TRow>,
+): BrunoTableRowPipelinePublication<TRow>["invalid"] {
+  return source.invalidRows !== undefined
+    ? Object.freeze({ kind: "invalid-rows" as const, receivedRows: source.invalidRows })
+    : source.invalidStatus !== undefined
+      ? Object.freeze({ kind: "invalid-status" as const, receivedStatus: source.invalidStatus })
+      : undefined;
 }
 
 function rejectPublicationRows<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
-  invalid: BrunoTableInvalidCellValue["invalid"],
+  invalid: NonNullable<BrunoTableRowPipelinePublication<TRow>["invalid"]>,
 ): BrunoTableRowPipelinePublication<TRow> {
   return Object.freeze({
     status: publication.status,

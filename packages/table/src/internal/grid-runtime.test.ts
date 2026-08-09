@@ -263,6 +263,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           changedRows: 1,
           resolvedRowIds: 1,
           identityPatches: 1,
+          rebuiltSourceSequence: false,
           rebuiltIdentityIndex: false,
         },
       ]);
@@ -1251,6 +1252,133 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getRowSnapshot("candidate")).toBeUndefined();
   });
 
+  it("does not read rows from unsupported-status publications", () => {
+    const rowsRead = vi.fn();
+    const malformed = (version: number) =>
+      ({
+        get rows(): readonly Row[] {
+          rowsRead();
+          throw new Error("Unsupported-status rows must stay unread.");
+        },
+        totalRows: 1,
+        version,
+        status: "offline",
+      }) as unknown as ReturnType<typeof source>;
+    const initialRuntime = createRuntime(malformed(1));
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const updatedRuntime = createRuntime(source([accepted]));
+
+    updatedRuntime.publish(malformed(2));
+
+    expect(initialRuntime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-status", receivedStatus: "offline" },
+    });
+    expect(updatedRuntime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-status", receivedStatus: "offline" },
+    });
+    expect(updatedRuntime.getRowSnapshot("accepted")).toBe(accepted);
+    expect(rowsRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed Client Source row collection without throwing", () => {
+    const malformed = {
+      rows: null,
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    } as unknown as ReturnType<typeof source>;
+    const runtime = createRuntime(malformed);
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-rows", receivedRows: "null" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
+  });
+
+  it("retains coherent rows while rejecting a malformed later row collection", () => {
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([accepted]));
+
+    runtime.publish({
+      rows: null,
+      totalRows: 1,
+      version: 2,
+      status: "ready",
+    } as unknown as ReturnType<typeof source>);
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-rows", receivedRows: "null" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getRowSnapshot("accepted")).toBe(accepted);
+  });
+
+  it.each([
+    ["malformed rows", "stale" as const],
+    ["unsupported status", "offline" as const],
+  ])("retains initially stale accepted rows after %s", (_label, nextStatus) => {
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([accepted], "stale"));
+    const malformed = {
+      rows: nextStatus === "stale" ? null : [{ id: "candidate", name: "Untrusted" }],
+      totalRows: 1,
+      version: 2,
+      status: nextStatus,
+    } as unknown as ReturnType<typeof source>;
+
+    runtime.publish(malformed);
+
+    expect(runtime.getChromeSnapshot()).toMatchObject({
+      status: "error",
+      hasCoherentRows: true,
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getRowSnapshot("accepted")).toBe(accepted);
+    expect(runtime.getRowSnapshot("candidate")).toBeUndefined();
+  });
+
+  it("contains unreadable non-loading row collections and retains accepted rows", () => {
+    const rowsRead = vi.fn();
+    const unreadable = (version: number, status: "ready" | "stale") =>
+      ({
+        get rows(): readonly Row[] {
+          rowsRead();
+          throw new Error("Hostile row getter.");
+        },
+        totalRows: 1,
+        version,
+        status,
+      }) as ReturnType<typeof source>;
+    const initialRuntime = createRuntime(unreadable(1, "ready"));
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const updatedRuntime = createRuntime(source([accepted], "stale"));
+
+    expect(() => updatedRuntime.publish(unreadable(2, "stale"))).not.toThrow();
+
+    expect(initialRuntime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-rows", receivedRows: "unreadable" },
+    });
+    expect(initialRuntime.getBodySnapshot()).toEqual({ kind: "empty" });
+    expect(updatedRuntime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-rows", receivedRows: "unreadable" },
+    });
+    expect(updatedRuntime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(updatedRuntime.getRowSnapshot("accepted")).toBe(accepted);
+    expect(rowsRead).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the last coherent rows available after a rejected ready publication", () => {
     const row = { id: "first", name: "Ada" } satisfies Row;
     const runtime = createRuntime(source([row]));
@@ -1280,6 +1408,64 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     runtime.publish(source([], "error", { totalRows: 0, message: "connection lost" }));
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
+  });
+
+  it("does not read candidate rows from loading publications", () => {
+    const rowsRead = vi.fn();
+    const loadingSource = (version: number) =>
+      ({
+        get rows(): readonly Row[] {
+          rowsRead();
+          throw new Error("Loading rows must stay unread.");
+        },
+        totalRows: 1_000_000,
+        version,
+        status: "loading",
+      }) as ReturnType<typeof source>;
+    const runtime = createRuntime(loadingSource(1));
+
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "loading", totalRows: 1_000_000 });
+    runtime.publish(loadingSource(2));
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "loading", totalRows: 1_000_000 });
+    expect(rowsRead).not.toHaveBeenCalled();
+  });
+
+  it("directly constructs the first valid row sequence after loading", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const replacement = { id: "second", name: "Grace Hopper" } satisfies Row;
+    const reconciliationEvents: BrunoTableClientReconciliationEvent[] = [];
+    const restoreInstrumentation = installBrunoTableClientReconciliationListener((event) => {
+      reconciliationEvents.push(event);
+    });
+
+    try {
+      const runtime = createRuntime(source([], "loading", { totalRows: 2 }));
+
+      runtime.publish(source([first, second]));
+      expect(reconciliationEvents.at(-1)).toMatchObject({
+        residentRows: 2,
+        rebuiltSourceSequence: true,
+        rebuiltIdentityIndex: true,
+      });
+
+      runtime.publish(source([first, replacement]));
+      expect(reconciliationEvents.at(-1)).toMatchObject({
+        residentRows: 2,
+        changedRows: 1,
+        rebuiltSourceSequence: false,
+        rebuiltIdentityIndex: false,
+      });
+
+      runtime.configure((row) => row.id, runtimeColumns);
+      expect(reconciliationEvents.at(-1)).toMatchObject({
+        residentRows: 2,
+        rebuiltSourceSequence: false,
+        rebuiltIdentityIndex: false,
+      });
+    } finally {
+      restoreInstrumentation();
+    }
   });
 
   it("routes filter commands only through sanitized structural ownership", () => {

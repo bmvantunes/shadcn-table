@@ -1390,6 +1390,62 @@ describe("BrunoTableClient browser surface", () => {
       expect(queryReads).not.toHaveBeenCalled();
       expect(cellRenders).not.toHaveBeenCalled();
       expect(gridSurfaceRenders).not.toHaveBeenCalled();
+
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={
+            {
+              rows: null,
+              totalRows: candidateRows.length,
+              version: 5,
+              status: "stale",
+            } as unknown as ReturnType<typeof readySource>
+          }
+        />,
+      );
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((notice) =>
+              notice.element().textContent?.includes("Invalid Client Source rows: null."),
+            ),
+        ).toBe(true),
+      );
+      expect(screen.getByRole("gridcell", { name: "Ada" }).element()).toBe(acceptedAdaCell);
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={
+            {
+              rows: candidateRows,
+              totalRows: candidateRows.length,
+              version: 6,
+              status: "offline",
+            } as unknown as ReturnType<typeof readySource>
+          }
+        />,
+      );
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((notice) => notice.element().textContent?.includes("Unsupported source status")),
+        ).toBe(true),
+      );
+      expect(screen.getByRole("gridcell", { name: "Ada" }).element()).toBe(acceptedAdaCell);
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
     } finally {
       removeGridSurfaceRenderListener();
       removeCellRenderListener();
@@ -1436,6 +1492,46 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
       .not.toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={
+          {
+            rows: null,
+            totalRows: candidateRows.length,
+            version: 3,
+            status: "error",
+          } as unknown as ReturnType<typeof readySource>
+        }
+      />,
+    );
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Invalid Client Source rows: null.");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={
+          {
+            rows: candidateRows,
+            totalRows: candidateRows.length,
+            version: 4,
+            status: "offline",
+          } as unknown as ReturnType<typeof readySource>
+        }
+      />,
+    );
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Unsupported source status");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
   });
 
   test("recovers a retained candidate from empty state on a later private query command", async () => {
@@ -1470,8 +1566,11 @@ describe("BrunoTableClient browser surface", () => {
     const toolbar = new BrunoTableToolbarStore(undefined);
     const screen = await render(
       <>
+        <button type="button" onClick={() => runtime.toggleColumnSort("COL_ID_SCORE", false)}>
+          Retry Score
+        </button>
         <button type="button" onClick={() => runtime.toggleColumnSort("COL_ID_NAME", false)}>
-          Recover by Name
+          Sort by Name
         </button>
         <BrunoTableView
           runtime={runtime.getView()}
@@ -1502,7 +1601,75 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
     sourceIndexRead.mockClear();
 
-    await screen.getByRole("button", { name: "Recover by Name" }).click();
+    const unsupportedRowsRead = vi.fn();
+    const queryReads = vi.fn();
+    const gridSurfaceRenders = vi.fn();
+    const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(queryReads);
+    const removeGridSurfaceRenderListener =
+      installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
+    try {
+      runtime.publish(
+        adapter.publish({
+          rows: null,
+          totalRows: candidateRows.length,
+          version: 3,
+          status: "error",
+        } as unknown as ReturnType<typeof readySource>),
+      );
+      await expect
+        .element(screen.getByRole("alert"))
+        .toHaveTextContent("Invalid Client Source rows: null.");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+        .not.toBeInTheDocument();
+      expect(sourceIndexRead).not.toHaveBeenCalled();
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+
+      await screen.getByRole("button", { name: "Retry Score" }).click();
+      await expect
+        .element(screen.getByRole("alert"))
+        .toHaveTextContent("Invalid Client Source rows: null.");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+        .not.toBeInTheDocument();
+      expect(sourceIndexRead).not.toHaveBeenCalled();
+      queryReads.mockClear();
+      gridSurfaceRenders.mockClear();
+
+      runtime.publish(
+        adapter.publish({
+          get rows(): readonly Row[] {
+            unsupportedRowsRead();
+            throw new Error("Unsupported source rows must stay unread.");
+          },
+          totalRows: candidateRows.length,
+          version: 4,
+          status: "offline",
+        } as unknown as ReturnType<typeof readySource>),
+      );
+      await expect
+        .element(screen.getByRole("alert"))
+        .toHaveTextContent("Unsupported source status");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+        .not.toBeInTheDocument();
+      expect(sourceIndexRead).not.toHaveBeenCalled();
+      expect(unsupportedRowsRead).not.toHaveBeenCalled();
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+    } finally {
+      removeGridSurfaceRenderListener();
+      removeQueryReadListener();
+    }
+
+    await screen.getByRole("button", { name: "Retry Score" }).click();
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Unsupported source status");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+      .not.toBeInTheDocument();
+
+    await screen.getByRole("button", { name: "Sort by Name" }).click();
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
       .toBeInTheDocument();
@@ -1854,6 +2021,48 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("grid", { name: `Data for ${props.tableId}` }))
       .not.toBeInTheDocument();
+  });
+
+  test("rejects a malformed runtime row collection with visible error chrome", async () => {
+    const malformedSource = {
+      rows: null,
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    } as unknown as ReturnType<typeof readySource>;
+    const screen = await render(<BrunoTableClient {...props} clientSource={malformedSource} />);
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("Live data error");
+    await expect.element(alert).toHaveTextContent("Invalid Client Source rows: null.");
+    await expect
+      .element(screen.getByRole("grid", { name: `Data for ${props.tableId}` }))
+      .not.toBeInTheDocument();
+  });
+
+  test("retains accepted rows when a later row collection is malformed", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={
+          {
+            rows: null,
+            totalRows: rows.length,
+            version: 2,
+            status: "ready",
+          } as unknown as ReturnType<typeof readySource>
+        }
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("Live data error");
+    await expect.element(alert).toHaveTextContent("Invalid Client Source rows: null.");
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
   });
 
   test("announces an initially closed empty source as status", async () => {
