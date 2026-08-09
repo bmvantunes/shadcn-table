@@ -1,90 +1,85 @@
 import type {
-  BrunoTableClientSource,
   BrunoTableRowId,
   BrunoTableSourceRetry,
   BrunoTableSourceStatus,
 } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
-import type { ClientOrderBy } from "./client-row-model";
+import type { BrunoTableOrderBy } from "./grid-query";
 import {
-  filterReferencesColumn,
-  reconcileClientOrderBy,
-  sanitizeClientOrderBy,
-  sanitizeClientInitialFilters,
-  sanitizeClientInitialOrderBy,
-} from "./client-row-model";
+  brunoTableFilterReferencesColumn,
+  reconcileBrunoTableOrderBy,
+  sanitizeBrunoTableFilters,
+  sanitizeBrunoTableOrderBy,
+} from "./grid-query";
 
 type Listener = () => void;
-export type BrunoTableRowOrderChangeDetector = (
-  previousRows: readonly unknown[],
-  nextRows: readonly unknown[],
-  change: BrunoTableRowOrderChange,
-) => boolean;
-
-export type BrunoTableRowOrderChange = Readonly<{
-  readonly rowIdsChanged: boolean;
-  readonly changedIndexes: readonly number[];
+export type BrunoTableInvalidSourceSnapshot = Readonly<{
+  readonly kind: "row-count-mismatch";
+  readonly expectedRows: number;
+  readonly receivedRows: number;
 }>;
 
-export type BrunoTableRowsStore = Readonly<{
-  readonly getSnapshot: () => readonly unknown[];
-  readonly subscribe: (listener: Listener) => () => void;
-}>;
-
-export type BrunoTableClientChromeSnapshot = Readonly<{
+export type BrunoTableChromeSnapshot = Readonly<{
   readonly status: BrunoTableSourceStatus;
-  readonly totalRows: number;
   readonly statusCode?: string;
   readonly message?: string;
   readonly retry?: BrunoTableSourceRetry;
   readonly hasCoherentRows: boolean;
-  readonly incomplete: boolean;
-  readonly receivedRows: number;
+  readonly invalid?: BrunoTableInvalidSourceSnapshot;
 }>;
 
-export type BrunoTableClientBodySnapshot = Readonly<
-  | {
-      readonly kind: "loading";
-      readonly skeletonCount: number;
-    }
-  | {
-      readonly kind: "invalid";
-    }
-  | {
-      readonly kind: "empty";
-      readonly emptyTitle: string;
-      readonly emptyDescription?: string;
-      readonly retry?: BrunoTableSourceRetry;
-      readonly destructive?: boolean;
-    }
-  | {
-      readonly kind: "rows";
-    }
->;
+export type BrunoTableSourceSnapshot = Readonly<{
+  readonly totalRows: number;
+  readonly loadedRows: number;
+  readonly version: number;
+}>;
 
-export type BrunoTableClientRuntimeView = {
-  readonly getChromeSnapshot: () => BrunoTableClientChromeSnapshot;
-  readonly getBodySnapshot: () => BrunoTableClientBodySnapshot;
+export type BrunoTableBodySnapshot =
+  | Readonly<{ readonly kind: "rows" }>
+  | Readonly<{ readonly kind: "loading"; readonly totalRows: number }>
+  | Readonly<{ readonly kind: "invalid" }>
+  | Readonly<{ readonly kind: "empty" }>;
+
+export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
+  readonly totalRows: number;
+  readonly loadedRows: number;
+  readonly getRowId: (index: number) => BrunoTableRowId | undefined;
+  readonly getRow: (rowId: BrunoTableRowId) => TRow | undefined;
+}>;
+
+export type BrunoTableRuntimeView = {
+  readonly getChromeSnapshot: () => BrunoTableChromeSnapshot;
+  readonly getSourceSnapshot: () => BrunoTableSourceSnapshot;
+  readonly getBodySnapshot: () => BrunoTableBodySnapshot;
+  readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
-  readonly getQuerySnapshot: () => BrunoTableClientQuerySnapshot;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly subscribeChrome: (listener: Listener) => () => void;
+  readonly subscribeSource: (listener: Listener) => () => void;
   readonly subscribeBody: (listener: Listener) => () => void;
-  readonly createRowsStore: (detector: BrunoTableRowOrderChangeDetector) => BrunoTableRowsStore;
+  readonly subscribeRowSpace: (listener: Listener) => () => void;
   readonly subscribeRow: (rowId: BrunoTableRowId, listener: Listener) => () => void;
-  readonly subscribeQuery: (listener: Listener) => () => void;
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
-  readonly resolveRowId: (row: unknown) => BrunoTableRowId;
   readonly toggleColumnSort: (columnId: string, multi: boolean) => void;
   readonly clearColumnFilters: (columnId: string) => void;
   readonly resetColumnFilters: (columnId: string) => void;
   readonly retry: () => void;
 };
 
-export type BrunoTableClientQuerySnapshot = Readonly<{
+export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
+  readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
+  readonly subscribeQuery: (listener: Listener) => () => void;
+};
+
+export type BrunoTableQuerySnapshot = Readonly<{
   readonly filters: readonly unknown[];
-  readonly orderBy: ClientOrderBy;
+  readonly orderBy: BrunoTableOrderBy;
   readonly generation: number;
+}>;
+
+export type BrunoTableQueryConfiguration = Readonly<{
+  readonly baselineFilters: readonly unknown[];
+  readonly baselineOrderBy: BrunoTableOrderBy;
 }>;
 
 export type BrunoTableColumnCommandSnapshot = Readonly<{
@@ -95,33 +90,32 @@ export type BrunoTableColumnCommandSnapshot = Readonly<{
   readonly filterBaselineAvailable: boolean;
 }>;
 
-const EMPTY_ROWS: readonly [] = Object.freeze([]);
+const BODY_ROWS: BrunoTableBodySnapshot = Object.freeze({ kind: "rows" });
+const BODY_INVALID: BrunoTableBodySnapshot = Object.freeze({ kind: "invalid" });
+const BODY_EMPTY: BrunoTableBodySnapshot = Object.freeze({ kind: "empty" });
 const EMPTY_COLUMN_COMMAND: BrunoTableColumnCommandSnapshot = Object.freeze({
   sortable: false,
   filterActive: false,
   filterBaselineAvailable: false,
 });
 
-type CoherentRows<TRow> = Readonly<{
-  readonly rows: readonly TRow[];
-  readonly rowIds: readonly BrunoTableRowId[];
-  readonly rowsById: Readonly<{
-    readonly get: (rowId: BrunoTableRowId) => TRow | undefined;
-  }>;
-  readonly changeFromPrevious: BrunoTableRowOrderChange;
-}>;
-
-type RowsStoreEntry<TRow> = Readonly<{
-  readonly publish: (
-    previous: CoherentRows<TRow> | undefined,
-    next: CoherentRows<TRow> | undefined,
-  ) => ListenerError | undefined;
+export type BrunoTableRowPipelinePublication<TRow> = Readonly<{
+  readonly status: BrunoTableSourceStatus;
+  readonly totalRows: number;
+  readonly version: number;
+  readonly statusCode?: string;
+  readonly message?: string;
+  readonly retry?: BrunoTableSourceRetry;
+  readonly rowSpace?: BrunoTableRowSpaceSnapshot<TRow>;
+  readonly hasCoherentRows: boolean;
+  readonly invalid?: BrunoTableInvalidSourceSnapshot;
 }>;
 
 type RuntimeState<TRow> = Readonly<{
-  readonly chrome: BrunoTableClientChromeSnapshot;
-  readonly body: BrunoTableClientBodySnapshot;
-  readonly coherent: CoherentRows<TRow> | undefined;
+  readonly chrome: BrunoTableChromeSnapshot;
+  readonly source: BrunoTableSourceSnapshot;
+  readonly body: BrunoTableBodySnapshot;
+  readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
 }>;
 
 type QueryTransition = Readonly<{
@@ -132,69 +126,64 @@ type QueryTransition = Readonly<{
 type ColumnConfiguration = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly baselineFilters: readonly unknown[];
-  readonly baselineOrderBy: ClientOrderBy;
-  readonly query: BrunoTableClientQuerySnapshot;
+  readonly baselineOrderBy: BrunoTableOrderBy;
+  readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly transition: QueryTransition;
 }>;
 
-export class BrunoTableClientRuntime<TRow> {
+export class BrunoTableGridRuntime<TRow> {
   private readonly chromeListeners = new Set<Listener>();
+  private readonly sourceListeners = new Set<Listener>();
   private readonly bodyListeners = new Set<Listener>();
-  private readonly rowsStores = new Set<RowsStoreEntry<TRow>>();
+  private readonly rowSpaceListeners = new Set<Listener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
   private readonly queryListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
-  private view: BrunoTableClientRuntimeView | undefined;
+  private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
-  private getRowId: (row: TRow) => BrunoTableRowId;
-  private source: BrunoTableClientSource<TRow>;
+  private publication: BrunoTableRowPipelinePublication<TRow>;
   private columns: readonly CompiledColumn[];
-  private readonly initialFilters: readonly unknown[];
-  private readonly initialOrderBy: ClientOrderBy;
   private baselineFilters: readonly unknown[];
-  private baselineOrderBy: ClientOrderBy;
-  private query: BrunoTableClientQuerySnapshot;
+  private baselineOrderBy: BrunoTableOrderBy;
+  private query: BrunoTableQuerySnapshot;
   private columnCommands = new Map<string, BrunoTableColumnCommandSnapshot>();
 
   public constructor(
-    source: BrunoTableClientSource<TRow>,
-    getRowId: (row: TRow) => BrunoTableRowId,
+    publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
-    initialFilters: readonly unknown[] | undefined,
-    initialOrderBy: ClientOrderBy | undefined,
+    queryConfiguration: BrunoTableQueryConfiguration,
   ) {
-    this.getRowId = getRowId;
     this.columns = columns;
-    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
-    this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
-    this.baselineFilters = this.initialFilters;
-    this.baselineOrderBy = this.initialOrderBy;
+    this.baselineFilters = queryConfiguration.baselineFilters;
+    this.baselineOrderBy = queryConfiguration.baselineOrderBy;
     this.query = Object.freeze({
       filters: this.baselineFilters,
       orderBy: this.baselineOrderBy,
       generation: 0,
     });
     this.columnCommands = createColumnCommandSnapshots(columns, this.query, this.baselineFilters);
-    this.source = snapshotSource(source);
-    this.state = this.createState(this.source, undefined, getRowId);
+    this.publication = publication;
+    this.state = this.createState(publication);
   }
 
-  public readonly getView = (): BrunoTableClientRuntimeView => {
+  public readonly getView = (): BrunoTableRowPipelineRuntimeView => {
     if (this.view === undefined) {
       this.view = Object.freeze({
         getChromeSnapshot: this.getChromeSnapshot,
+        getSourceSnapshot: this.getSourceSnapshot,
         getBodySnapshot: this.getBodySnapshot,
+        getRowSpaceSnapshot: this.getRowSpaceSnapshot,
         getRowSnapshot: this.getRowSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
         subscribeChrome: this.subscribeChrome,
+        subscribeSource: this.subscribeSource,
         subscribeBody: this.subscribeBody,
-        createRowsStore: this.createRowsStore,
+        subscribeRowSpace: this.subscribeRowSpace,
         subscribeRow: this.subscribeRow,
         subscribeQuery: this.subscribeQuery,
         subscribeColumnCommands: this.subscribeColumnCommands,
-        resolveRowId: this.resolveRowId,
         toggleColumnSort: this.toggleColumnSort,
         clearColumnFilters: this.clearColumnFilters,
         resetColumnFilters: this.resetColumnFilters,
@@ -204,20 +193,26 @@ export class BrunoTableClientRuntime<TRow> {
     return this.view;
   };
 
-  public readonly publish = (source: BrunoTableClientSource<TRow>): void => {
-    this.reconcile(source, this.getRowId, this.columns);
+  public readonly publish = (publication: BrunoTableRowPipelinePublication<TRow>): void => {
+    this.reconcile(publication, this.columns);
   };
 
   public readonly reconcile = (
-    source: BrunoTableClientSource<TRow>,
-    getRowId: (row: TRow) => BrunoTableRowId,
+    publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
+    queryConfiguration: BrunoTableQueryConfiguration = Object.freeze({
+      baselineFilters: this.baselineFilters,
+      baselineOrderBy: this.baselineOrderBy,
+    }),
   ): void => {
     const previous = this.state;
-    const configuration = this.columns === columns ? undefined : this.stageColumns(columns);
-    const resolveRowIds = this.getRowId !== getRowId;
-    const sourceSnapshot = snapshotSource(source);
-    const next = this.createState(sourceSnapshot, previous.coherent, getRowId, resolveRowIds);
+    const configuration =
+      this.columns === columns &&
+      this.baselineFilters === queryConfiguration.baselineFilters &&
+      this.baselineOrderBy === queryConfiguration.baselineOrderBy
+        ? undefined
+        : this.stageColumns(columns, queryConfiguration);
+    const next = this.createState(publication);
 
     if (configuration !== undefined) {
       this.columns = configuration.columns;
@@ -226,8 +221,7 @@ export class BrunoTableClientRuntime<TRow> {
       this.query = configuration.query;
       this.columnCommands = configuration.columnCommands;
     }
-    this.getRowId = getRowId;
-    this.source = sourceSnapshot;
+    this.publication = publication;
     const commitError = this.commitState(previous, next);
     const transitionError =
       configuration === undefined
@@ -242,93 +236,61 @@ export class BrunoTableClientRuntime<TRow> {
     next: RuntimeState<TRow>,
   ): ListenerError | undefined {
     const chromeChanged = !sameChrome(previous.chrome, next.chrome);
+    const sourceChanged = !sameSource(previous.source, next.source);
     const bodyChanged = !sameBody(previous.body, next.body);
+    const rowSpaceChanged = previous.rowSpace !== next.rowSpace;
     this.state = Object.freeze({
       chrome: chromeChanged ? next.chrome : previous.chrome,
+      source: sourceChanged ? next.source : previous.source,
       body: bodyChanged ? next.body : previous.body,
-      coherent: next.coherent,
+      rowSpace: next.rowSpace,
     });
 
     let firstError: ListenerError | undefined;
     if (chromeChanged) firstError = notify(this.chromeListeners);
+    if (sourceChanged) firstError = firstListenerError(firstError, notify(this.sourceListeners));
     if (bodyChanged) firstError = firstListenerError(firstError, notify(this.bodyListeners));
-    firstError = firstListenerError(firstError, this.notifyRows(previous.coherent, next.coherent));
-    return firstListenerError(firstError, this.notifyChangedRows(previous.coherent, next.coherent));
+    if (rowSpaceChanged) {
+      firstError = firstListenerError(firstError, notify(this.rowSpaceListeners));
+    }
+    return firstListenerError(firstError, this.notifyChangedRows(previous.rowSpace, next.rowSpace));
   }
 
   public readonly configure = (
-    getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
+    queryConfiguration: BrunoTableQueryConfiguration,
   ): void => {
-    if (this.columns === columns && this.getRowId === getRowId) return;
-    this.reconcile(this.source, getRowId, columns);
+    this.reconcile(this.publication, columns, queryConfiguration);
   };
 
-  public readonly getChromeSnapshot = (): BrunoTableClientChromeSnapshot => this.state.chrome;
+  public readonly getChromeSnapshot = (): BrunoTableChromeSnapshot => this.state.chrome;
 
-  public readonly getBodySnapshot = (): BrunoTableClientBodySnapshot => this.state.body;
+  public readonly getSourceSnapshot = (): BrunoTableSourceSnapshot => this.state.source;
+
+  public readonly getBodySnapshot = (): BrunoTableBodySnapshot => this.state.body;
+
+  public readonly getRowSpaceSnapshot = (): BrunoTableRowSpaceSnapshot<TRow> | undefined =>
+    this.state.rowSpace;
 
   public readonly getRowSnapshot = (rowId: BrunoTableRowId): TRow | undefined =>
-    this.state.coherent?.rowsById.get(rowId);
+    this.state.rowSpace?.getRow(rowId);
 
-  public readonly getQuerySnapshot = (): BrunoTableClientQuerySnapshot => this.query;
+  public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 
   public readonly getColumnCommandSnapshot = (columnId: string): BrunoTableColumnCommandSnapshot =>
     this.columnCommands.get(columnId) ?? EMPTY_COLUMN_COMMAND;
 
-  public readonly resolveRowId = (row: unknown): BrunoTableRowId => this.getRowId(row as TRow);
-
   public readonly subscribeChrome = (listener: Listener): (() => void) =>
     subscribe(this.chromeListeners, listener);
+
+  public readonly subscribeSource = (listener: Listener): (() => void) =>
+    subscribe(this.sourceListeners, listener);
 
   public readonly subscribeBody = (listener: Listener): (() => void) =>
     subscribe(this.bodyListeners, listener);
 
-  public readonly createRowsStore = (
-    detector: BrunoTableRowOrderChangeDetector,
-  ): BrunoTableRowsStore => {
-    let snapshot: readonly TRow[] = this.state.coherent?.rows ?? EMPTY_ROWS;
-    const listeners = new Set<Listener>();
-    let active = false;
-    const entry: RowsStoreEntry<TRow> = Object.freeze({
-      publish: (previous, next) => {
-        const previousRows = previous?.rows ?? EMPTY_ROWS;
-        const nextRows = next?.rows ?? EMPTY_ROWS;
-        const change =
-          next?.changeFromPrevious ??
-          Object.freeze({ rowIdsChanged: previous !== undefined, changedIndexes: EMPTY_ROWS });
-        try {
-          if (!detector(previousRows, nextRows, change)) return undefined;
-        } catch (error) {
-          snapshot = nextRows;
-          return firstListenerError(Object.freeze({ value: error }), notify(listeners));
-        }
-        snapshot = nextRows;
-        return notify(listeners);
-      },
-    });
-    return Object.freeze({
-      getSnapshot: () => snapshot,
-      subscribe: (listener: Listener) => {
-        listeners.add(listener);
-        if (!active) {
-          active = true;
-          snapshot = this.state.coherent?.rows ?? EMPTY_ROWS;
-          this.rowsStores.add(entry);
-        }
-        let subscribed = true;
-        return () => {
-          if (!subscribed) return;
-          subscribed = false;
-          listeners.delete(listener);
-          if (listeners.size === 0) {
-            active = false;
-            this.rowsStores.delete(entry);
-          }
-        };
-      },
-    });
-  };
+  public readonly subscribeRowSpace = (listener: Listener): (() => void) =>
+    subscribe(this.rowSpaceListeners, listener);
 
   public readonly subscribeRow = (rowId: BrunoTableRowId, listener: Listener): (() => void) => {
     let listeners = this.rowListeners.get(rowId);
@@ -386,21 +348,23 @@ export class BrunoTableClientRuntime<TRow> {
             index === currentIndex ? { columnId, direction: nextDirection } : sort,
           )
       : [{ columnId, direction: nextDirection }];
-    this.publishQuery(this.query.filters, sanitizeClientOrderBy(nextOrderBy, this.columns));
+    this.publishQuery(this.query.filters, sanitizeBrunoTableOrderBy(nextOrderBy, this.columns));
   };
 
   public readonly clearColumnFilters = (columnId: string): void => {
-    const next = this.query.filters.filter((filter) => !filterReferencesColumn(filter, columnId));
+    const next = this.query.filters.filter(
+      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
+    );
     if (next.length === this.query.filters.length) return;
     this.publishQuery(Object.freeze(next), this.query.orderBy);
   };
 
   public readonly resetColumnFilters = (columnId: string): void => {
     const withoutColumn = this.query.filters.filter(
-      (filter) => !filterReferencesColumn(filter, columnId),
+      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
     );
     const baseline = this.baselineFilters.filter((filter) =>
-      filterReferencesColumn(filter, columnId),
+      brunoTableFilterReferencesColumn(filter, columnId),
     );
     this.publishQuery(Object.freeze([...withoutColumn, ...baseline]), this.query.orderBy);
   };
@@ -413,79 +377,37 @@ export class BrunoTableClientRuntime<TRow> {
     }
   };
 
-  private createState(
-    sourceSnapshot: BrunoTableClientSource<TRow>,
-    previousCoherent: CoherentRows<TRow> | undefined,
-    getRowId: (row: TRow) => BrunoTableRowId,
-    resolveRowIds = false,
-  ): RuntimeState<TRow> {
-    const complete = isCompleteSource(sourceSnapshot);
-    const incomplete =
-      (sourceSnapshot.status === "ready" || sourceSnapshot.status === "stale") && !complete;
-    const currentCoherent =
-      complete && (sourceSnapshot.status !== "loading" || sourceSnapshot.rows.length > 0)
-        ? createCoherent(sourceSnapshot.rows, getRowId, previousCoherent, resolveRowIds)
-        : undefined;
-    const terminal = sourceSnapshot.status === "closed" || sourceSnapshot.status === "error";
-    const retainPrevious = terminal || sourceSnapshot.status === "stale";
-    const coherent =
-      terminal && previousCoherent !== undefined && currentCoherent?.rows.length === 0
-        ? previousCoherent
-        : (currentCoherent ?? (retainPrevious ? previousCoherent : undefined));
-    const hasCoherentRows = coherent !== undefined && (!terminal || coherent.rows.length > 0);
+  private createState(publication: BrunoTableRowPipelinePublication<TRow>): RuntimeState<TRow> {
+    const rowSpace = publication.rowSpace;
     const chrome = Object.freeze({
-      status: sourceSnapshot.status,
-      totalRows: sourceSnapshot.totalRows,
-      ...(sourceSnapshot.statusCode === undefined ? {} : { statusCode: sourceSnapshot.statusCode }),
-      ...(sourceSnapshot.message === undefined ? {} : { message: sourceSnapshot.message }),
-      ...(sourceSnapshot.retry === undefined ? {} : { retry: sourceSnapshot.retry }),
-      hasCoherentRows,
-      incomplete,
-      receivedRows: sourceSnapshot.rows.length,
+      status: publication.status,
+      ...(publication.statusCode === undefined ? {} : { statusCode: publication.statusCode }),
+      ...(publication.message === undefined ? {} : { message: publication.message }),
+      ...(publication.retry === undefined ? {} : { retry: publication.retry }),
+      hasCoherentRows: publication.hasCoherentRows,
+      ...(publication.invalid === undefined ? {} : { invalid: publication.invalid }),
     });
-
-    let body: BrunoTableClientBodySnapshot;
-    if (hasCoherentRows && coherent !== undefined && coherent.rows.length > 0) {
-      body = Object.freeze({ kind: "rows" });
-    } else if (sourceSnapshot.status === "loading" && coherent === undefined) {
-      body = Object.freeze({
-        kind: "loading",
-        skeletonCount: skeletonCount(sourceSnapshot.totalRows),
-      });
-    } else if (incomplete && coherent === undefined) {
-      body = Object.freeze({ kind: "invalid" });
-    } else {
-      body = Object.freeze({
-        kind: "empty",
-        emptyTitle: emptyTitle(sourceSnapshot.status),
-        ...emptyDescription(sourceSnapshot),
-        ...(sourceSnapshot.status === "closed" || sourceSnapshot.status === "error"
-          ? sourceSnapshot.retry === undefined
-            ? {}
-            : { retry: sourceSnapshot.retry }
-          : {}),
-        ...(sourceSnapshot.status === "error" ? { destructive: true } : {}),
-      });
-    }
-
-    return Object.freeze({ chrome, body, coherent });
+    const source = Object.freeze({
+      totalRows: publication.totalRows,
+      loadedRows: rowSpace?.loadedRows ?? 0,
+      version: publication.version,
+    });
+    const body = bodySnapshot(publication);
+    return Object.freeze({ chrome, source, body, rowSpace });
   }
 
-  private stageColumns(columns: readonly CompiledColumn[]): ColumnConfiguration {
-    const baselineFilters = sanitizeClientInitialFilters(this.initialFilters, columns);
-    const baselineOrderBy = reconcileClientOrderBy(
-      this.initialOrderBy,
-      this.initialOrderBy,
-      columns,
-    );
-    if (baselineOrderBy.length === 0) {
-      throw new TypeError("BrunoTableClient requires at least one sortable column.");
-    }
-    const nextFilters = sanitizeClientInitialFilters(this.query.filters, columns);
-    const nextOrderBy = reconcileClientOrderBy(this.query.orderBy, baselineOrderBy, columns);
+  private stageColumns(
+    columns: readonly CompiledColumn[],
+    queryConfiguration: BrunoTableQueryConfiguration,
+  ): ColumnConfiguration {
+    const baselineFilters = queryConfiguration.baselineFilters;
+    const baselineOrderBy = queryConfiguration.baselineOrderBy;
+    const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
+    const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
     const queryChanged =
       !sameReferences(this.query.filters, nextFilters) ||
-      !sameOrderBy(this.query.orderBy, nextOrderBy);
+      !sameOrderBy(this.query.orderBy, nextOrderBy) ||
+      activeQuerySemanticsChanged(this.columns, columns, this.query);
     const query = queryChanged
       ? Object.freeze({
           filters: nextFilters,
@@ -511,7 +433,7 @@ export class BrunoTableClientRuntime<TRow> {
 
   private publishQuery(
     filters: readonly unknown[],
-    orderBy: ClientOrderBy,
+    orderBy: BrunoTableOrderBy,
     forceColumnRefresh = false,
   ): void {
     const transition = this.updateQuery(filters, orderBy, forceColumnRefresh);
@@ -522,7 +444,7 @@ export class BrunoTableClientRuntime<TRow> {
 
   private updateQuery(
     filters: readonly unknown[],
-    orderBy: ClientOrderBy,
+    orderBy: BrunoTableOrderBy,
     forceColumnRefresh = false,
   ): QueryTransition | undefined {
     const queryChanged =
@@ -568,171 +490,64 @@ export class BrunoTableClientRuntime<TRow> {
   }
 
   private notifyChangedRows(
-    previous: CoherentRows<TRow> | undefined,
-    next: CoherentRows<TRow> | undefined,
+    previous: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+    next: BrunoTableRowSpaceSnapshot<TRow> | undefined,
   ): ListenerError | undefined {
     if (previous === next) return undefined;
     let firstError: ListenerError | undefined;
     for (const [rowId, listeners] of this.rowListeners) {
-      if (previous?.rowsById.get(rowId) !== next?.rowsById.get(rowId)) {
+      if (previous?.getRow(rowId) !== next?.getRow(rowId)) {
         firstError = firstListenerError(firstError, notify(listeners));
       }
     }
     return firstError;
   }
-
-  private notifyRows(
-    previous: CoherentRows<TRow> | undefined,
-    next: CoherentRows<TRow> | undefined,
-  ): ListenerError | undefined {
-    if (previous === next) return undefined;
-    let firstError: ListenerError | undefined;
-    for (const store of this.rowsStores) {
-      firstError = firstListenerError(firstError, store.publish(previous, next));
-    }
-    return firstError;
-  }
 }
 
-function createCoherent<TRow>(
-  rows: readonly TRow[],
-  getRowId: (row: TRow) => BrunoTableRowId,
-  previous: CoherentRows<TRow> | undefined,
-  resolveRowIds: boolean,
-): CoherentRows<TRow> {
-  if (
-    previous !== undefined &&
-    !resolveRowIds &&
-    previous.rows.length === rows.length &&
-    rows.every((row, index) => previous.rows[index] === row)
-  ) {
-    return previous;
-  }
-  const rowIds = Array.from({ length: rows.length }, () => "" as BrunoTableRowId);
-  const rowsById = new Map<BrunoTableRowId, TRow>();
-  const seenIds = new Set<BrunoTableRowId>();
-  let rowIdsChanged = previous === undefined || previous.rows.length !== rows.length;
-  const changedIndexes: number[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index]!;
-    const previousRow = previous?.rows[index];
-    const rowId =
-      previous !== undefined && previousRow === row && !resolveRowIds
-        ? previous.rowIds[index]!
-        : getRowId(row);
-    if (typeof rowId !== "string" || rowId.length === 0) {
-      throw new TypeError("BrunoTable getRowId must return a non-empty string.");
-    }
-    if (seenIds.has(rowId)) {
-      throw new TypeError(`BrunoTable getRowId returned a duplicate row identity: ${rowId}`);
-    }
-    seenIds.add(rowId);
-    rowIds[index] = rowId;
-    rowsById.set(rowId, row);
-    if (previousRow !== row) changedIndexes.push(index);
-    if (previous?.rowIds[index] !== rowId) rowIdsChanged = true;
-  }
-  if (!rowIdsChanged && changedIndexes.length === 0 && previous !== undefined) return previous;
-
-  return Object.freeze({
-    rows,
-    rowIds: Object.freeze(rowIds),
-    rowsById: Object.freeze({
-      get: (rowId: BrunoTableRowId) => rowsById.get(rowId),
-    }),
-    changeFromPrevious: Object.freeze({
-      rowIdsChanged,
-      changedIndexes: Object.freeze(changedIndexes),
-    }),
-  });
-}
-
-function snapshotSource<TRow>(source: BrunoTableClientSource<TRow>): BrunoTableClientSource<TRow> {
-  return Object.freeze({
-    rows: Object.freeze(Array.from(source.rows)),
-    totalRows: source.totalRows,
-    version: source.version,
-    status: source.status,
-    ...(source.statusCode === undefined ? {} : { statusCode: boundedText(source.statusCode, 128) }),
-    ...(source.message === undefined ? {} : { message: boundedText(source.message, 512) }),
-    ...(source.retry === undefined
-      ? {}
-      : { retry: Object.freeze({ run: source.retry.run, pending: source.retry.pending }) }),
-  });
-}
-
-function boundedText(value: string, limit: number): string {
-  return value.length <= limit ? value : value.slice(0, limit);
-}
-
-function isCompleteSource<TRow>(source: BrunoTableClientSource<TRow>): boolean {
-  return (
-    Number.isSafeInteger(source.totalRows) &&
-    source.totalRows >= 0 &&
-    source.rows.length === source.totalRows
-  );
-}
-
-function skeletonCount(totalRows: number): number {
-  return Number.isSafeInteger(totalRows) && totalRows > 0 ? Math.min(totalRows, 10) : 5;
-}
-
-function emptyTitle(status: BrunoTableSourceStatus): string {
-  if (status === "closed") return "Live updates stopped";
-  if (status === "error") return "Live data error";
-  return "No rows";
-}
-
-function emptyDescription<TRow>(source: BrunoTableClientSource<TRow>): {
-  readonly emptyDescription?: string;
-} {
-  const details = [source.message, source.statusCode].filter(
-    (detail): detail is string => detail !== undefined && detail.length > 0,
-  );
-  return details.length === 0 ? {} : { emptyDescription: details.join(" · ") };
-}
-
-function sameChrome(
-  previous: BrunoTableClientChromeSnapshot,
-  next: BrunoTableClientChromeSnapshot,
-): boolean {
+function sameChrome(previous: BrunoTableChromeSnapshot, next: BrunoTableChromeSnapshot): boolean {
   return (
     previous.status === next.status &&
-    previous.totalRows === next.totalRows &&
     previous.statusCode === next.statusCode &&
     previous.message === next.message &&
     previous.retry?.run === next.retry?.run &&
     previous.retry?.pending === next.retry?.pending &&
     previous.hasCoherentRows === next.hasCoherentRows &&
-    previous.incomplete === next.incomplete &&
-    previous.receivedRows === next.receivedRows
+    previous.invalid?.kind === next.invalid?.kind &&
+    previous.invalid?.expectedRows === next.invalid?.expectedRows &&
+    previous.invalid?.receivedRows === next.invalid?.receivedRows
   );
 }
 
-function sameBody(
-  previous: BrunoTableClientBodySnapshot,
-  next: BrunoTableClientBodySnapshot,
-): boolean {
-  if (previous.kind !== next.kind) return false;
-  if (previous.kind === "loading" && next.kind === "loading") {
-    return previous.skeletonCount === next.skeletonCount;
+function sameSource(previous: BrunoTableSourceSnapshot, next: BrunoTableSourceSnapshot): boolean {
+  return (
+    previous.totalRows === next.totalRows &&
+    previous.loadedRows === next.loadedRows &&
+    previous.version === next.version
+  );
+}
+
+function sameBody(previous: BrunoTableBodySnapshot, next: BrunoTableBodySnapshot): boolean {
+  return (
+    previous.kind === next.kind &&
+    (previous.kind !== "loading" ||
+      (next.kind === "loading" && previous.totalRows === next.totalRows))
+  );
+}
+
+function bodySnapshot<TRow>(
+  publication: BrunoTableRowPipelinePublication<TRow>,
+): BrunoTableBodySnapshot {
+  if (publication.rowSpace !== undefined && publication.rowSpace.totalRows > 0) return BODY_ROWS;
+  if (publication.invalid !== undefined) return BODY_INVALID;
+  if (publication.status === "loading" && publication.rowSpace === undefined) {
+    return Object.freeze({ kind: "loading", totalRows: publication.totalRows });
   }
-  if (previous.kind === "rows" && next.kind === "rows") return true;
-  if (previous.kind === "empty" && next.kind === "empty") {
-    return (
-      previous.emptyTitle === next.emptyTitle &&
-      previous.emptyDescription === next.emptyDescription &&
-      previous.destructive === next.destructive &&
-      previous.retry?.run === next.retry?.run &&
-      previous.retry?.pending === next.retry?.pending
-    );
-  }
-  return true;
+  return BODY_EMPTY;
 }
 
 function createColumnCommandSnapshots(
   columns: readonly CompiledColumn[],
-  query: BrunoTableClientQuerySnapshot,
+  query: BrunoTableQuerySnapshot,
   baselineFilters: readonly unknown[],
   previous?: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>,
 ): Map<string, BrunoTableColumnCommandSnapshot> {
@@ -743,9 +558,11 @@ function createColumnCommandSnapshots(
     const next = Object.freeze({
       sortable: column.enableSorting !== false,
       ...(sort === undefined ? {} : { sortDirection: sort.direction, sortPriority: sortIndex + 1 }),
-      filterActive: query.filters.some((filter) => filterReferencesColumn(filter, column.columnId)),
+      filterActive: query.filters.some((filter) =>
+        brunoTableFilterReferencesColumn(filter, column.columnId),
+      ),
       filterBaselineAvailable: baselineFilters.some((filter) =>
-        filterReferencesColumn(filter, column.columnId),
+        brunoTableFilterReferencesColumn(filter, column.columnId),
       ),
     });
     const previousSnapshot = previous?.get(column.columnId);
@@ -776,7 +593,48 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }
 
-function sameOrderBy(previous: ClientOrderBy, next: ClientOrderBy): boolean {
+function activeQuerySemanticsChanged(
+  previousColumns: readonly CompiledColumn[],
+  nextColumns: readonly CompiledColumn[],
+  query: BrunoTableQuerySnapshot,
+): boolean {
+  const activeColumnIds = new Set(query.orderBy.map((sort) => sort.columnId));
+  for (const column of previousColumns) {
+    if (query.filters.some((filter) => brunoTableFilterReferencesColumn(filter, column.columnId))) {
+      activeColumnIds.add(column.columnId);
+    }
+  }
+  for (const columnId of activeColumnIds) {
+    const previous = previousColumns.find((column) => column.columnId === columnId);
+    const next = nextColumns.find((column) => column.columnId === columnId);
+    if (previous === undefined || next === undefined) return true;
+    if (!sameQuerySemantics(previous, next)) return true;
+  }
+  return false;
+}
+
+function sameQuerySemantics(previous: CompiledColumn, next: CompiledColumn): boolean {
+  if (
+    previous.kind !== next.kind ||
+    !Object.is(previous.valueType, next.valueType) ||
+    previous.semantics.codecId !== next.semantics.codecId ||
+    previous.semantics.codecVersion !== next.semantics.codecVersion ||
+    previous.semantics.filterFamily !== next.semantics.filterFamily
+  ) {
+    return false;
+  }
+  if (previous.kind === "field" && next.kind === "field") return previous.field === next.field;
+  if (previous.kind === "computed" && next.kind === "computed") {
+    return (
+      previous.valueGetter === next.valueGetter &&
+      previous.fields.length === next.fields.length &&
+      previous.fields.every((field, index) => field === next.fields[index])
+    );
+  }
+  return false;
+}
+
+function sameOrderBy(previous: BrunoTableOrderBy, next: BrunoTableOrderBy): boolean {
   return (
     previous.length === next.length &&
     previous.every(

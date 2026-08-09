@@ -4,7 +4,9 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    "lib": ["esnext", "dom"],
     "noEmit": true,
+    "skipLibCheck": false,
     "types": [],
     "paths": {
       "@bruno/table": ["../../dist/index.d.mts"],

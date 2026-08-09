@@ -3,6 +3,7 @@ import { defineConfig, type UserConfig } from "vite-plus";
 import { shadcnSourceAliases } from "./config/shadcn-source-aliases.js";
 
 const config: UserConfig = defineConfig({
+  define: { __BRUNO_TABLE_DEVELOPMENT__: "true" },
   resolve: { alias: shadcnSourceAliases },
   test: {
     projects: [

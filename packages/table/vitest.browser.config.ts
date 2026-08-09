@@ -1,4 +1,5 @@
 import babel from "@rolldown/plugin-babel";
+import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
@@ -10,7 +11,8 @@ const reactCompiler = await babel({
 });
 
 export default defineConfig({
-  plugins: [react(), reactCompiler],
+  define: { __BRUNO_TABLE_DEVELOPMENT__: "true" },
+  plugins: [react(), reactCompiler, tailwindcss()],
   resolve: { alias: shadcnSourceAliases },
   optimizeDeps: {
     include: ["vite-plus/test/browser", "vitest-browser-react"],
@@ -18,6 +20,7 @@ export default defineConfig({
   test: {
     name: "table-browser",
     include: ["src/**/*.browser.test.tsx"],
+    setupFiles: ["./src/vitest.browser.setup.ts"],
     browser: {
       enabled: true,
       headless: true,

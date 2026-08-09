@@ -12,6 +12,17 @@ import {
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientViewRenderListener,
 } from "./internal/render-instrumentation";
+import {
+  BrunoTableToolbarStore,
+  BrunoTableView,
+  type BrunoTableLogicalRowSpace,
+  type BrunoTableRowPipelineProps,
+} from "./internal/bruno-table-view";
+import { compileColumns } from "./internal/compile-columns";
+import {
+  BrunoTableGridRuntime,
+  type BrunoTableRowPipelineRuntimeView,
+} from "./internal/grid-runtime";
 
 type Row = {
   readonly id: string;
@@ -52,6 +63,21 @@ const props = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SCORE", direction: "asc" as const }],
 } as const;
+
+type SparseRowPipelineAdapter = Readonly<{
+  readonly rowSpace: BrunoTableLogicalRowSpace;
+  readonly queryGeneration: number;
+}>;
+
+function SparseRowPipeline({
+  children,
+  rowPipelineAdapter,
+}: BrunoTableRowPipelineProps<BrunoTableRowPipelineRuntimeView, SparseRowPipelineAdapter>) {
+  return children({
+    rowSpace: rowPipelineAdapter.rowSpace,
+    queryGeneration: rowPipelineAdapter.queryGeneration,
+  });
+}
 
 function TrackedRowAction({
   row,
@@ -165,6 +191,7 @@ const wideColumns = [
 
 afterEach(async () => {
   await cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("BrunoTableClient browser surface", () => {
@@ -331,6 +358,111 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
   });
 
+  test("renders and navigates a sparse row space while publishing required ranges", async () => {
+    const compiledColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const setRequiredRange = vi.fn();
+    const rowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      totalRows: 100,
+      getRowId: () => undefined,
+      findRowIndex: () => undefined,
+      setRequiredRange,
+    });
+    const runtime = new BrunoTableGridRuntime<never>(
+      Object.freeze({
+        status: "loading" as const,
+        totalRows: 100,
+        version: 1,
+        rowSpace: Object.freeze({
+          totalRows: 100,
+          loadedRows: 0,
+          getRowId: () => undefined,
+          getRow: () => undefined,
+        }),
+        hasCoherentRows: false,
+      }),
+      compiledColumns,
+      Object.freeze({
+        baselineFilters: Object.freeze([]),
+        baselineOrderBy: Object.freeze([
+          Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
+        ]),
+      }),
+    );
+    const toolbar = new BrunoTableToolbarStore(undefined);
+    const renderSparseTable = (adapter: SparseRowPipelineAdapter) => (
+      <BrunoTableView
+        runtime={runtime.getView()}
+        tableId="TABLE_ID_SPARSE"
+        compiledColumns={compiledColumns}
+        toolbar={toolbar}
+        rowPipeline={SparseRowPipeline}
+        rowPipelineAdapter={adapter}
+      />
+    );
+    const screen = await render(renderSparseTable({ rowSpace, queryGeneration: 0 }));
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SPARSE" });
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "101");
+    await vi.waitFor(() => expect(setRequiredRange).toHaveBeenCalled());
+    const loadingCells = screen.getByRole("gridcell", { name: "Loading row" }).all();
+    expect(loadingCells.some((cell) => cell.element().parentElement?.style.height === "36px")).toBe(
+      true,
+    );
+
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toContain(
+        "bruno-table-loading-cell",
+      ),
+    );
+    const firstActiveId = grid.element().getAttribute("aria-activedescendant");
+    expect(
+      screen
+        .getByRole("gridcell", { name: "Loading row" })
+        .all()
+        .some((cell) => cell.element().id === firstActiveId),
+    ).toBe(true);
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBe(firstActiveId),
+    );
+    const secondActiveId = grid.element().getAttribute("aria-activedescendant");
+    expect(
+      screen
+        .getByRole("gridcell", { name: "Loading row" })
+        .all()
+        .some((cell) => cell.element().id === secondActiveId),
+    ).toBe(true);
+
+    await grid.wheel({ delta: { y: 1200 } });
+    await vi.waitFor(() =>
+      expect(
+        setRequiredRange.mock.calls.some(([start]) => typeof start === "number" && start > 0),
+      ).toBe(true),
+    );
+
+    const replacementRequiredRange = vi.fn();
+    const replacementRowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      ...rowSpace,
+      totalRows: 2,
+      setRequiredRange: replacementRequiredRange,
+    });
+    await screen.rerender(renderSparseTable({ rowSpace: replacementRowSpace, queryGeneration: 1 }));
+    await vi.waitFor(() => expect(replacementRequiredRange).toHaveBeenCalled());
+    expect(replacementRequiredRange.mock.calls[0]?.[0]).toBe(0);
+    expect(replacementRequiredRange.mock.calls.some(([start]) => start > 0)).toBe(false);
+    expect(
+      replacementRequiredRange.mock.calls.every(([, end]) => typeof end === "number" && end <= 2),
+    ).toBe(true);
+  });
+
   test("retains terminal rows and exposes only source-owned retry", async () => {
     const run = vi.fn();
     const screen = await render(
@@ -490,6 +622,24 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Second");
+  });
+
+  test("announces an initially closed empty source as status", async () => {
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [],
+          totalRows: 0,
+          version: 1,
+          status: "closed",
+          message: "Socket closed",
+        }}
+      />,
+    );
+
+    await expect.element(screen.getByRole("status")).toHaveTextContent("Live updates stopped");
+    await expect.element(screen.getByRole("status")).toHaveTextContent("Socket closed");
   });
 
   test("keeps closed rows visible and exposes the explicit closed-source retry", async () => {
@@ -763,6 +913,63 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("columnheader", { name: "Scroll end" }))
       .toBeInTheDocument();
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(wideColumns.length + 1);
+  });
+
+  test("moves Page Up and Page Down through viewport-relative logical rows", async () => {
+    const manyRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `page-row-${index}`,
+      name: `Page row ${String(index).padStart(3, "0")}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const pageColumns = [columns[0]] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_PAGE_KEYS"
+        getRowId={(row: Row) => row.id}
+        columns={pageColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource(manyRows)}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PAGE_KEYS" });
+    const pageSize = Math.max(
+      1,
+      Math.floor((grid.element().clientHeight - BRUNO_TABLE_ROW_HEIGHT) / BRUNO_TABLE_ROW_HEIGHT),
+    );
+    grid.element().focus();
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageUp" }));
+    const firstCell = screen.getByRole("gridcell", { name: "Page row 000" });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(firstCell.element().id),
+    );
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+    const pageDestination = screen.getByRole("gridcell", {
+      name: `Page row ${String(pageSize).padStart(3, "0")}`,
+    });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        pageDestination.element().id,
+      ),
+    );
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageUp" }));
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(firstCell.element().id),
+    );
+
+    for (let index = 0; index < manyRows.length; index += pageSize) {
+      grid
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+    }
+    const lastCell = screen.getByRole("gridcell", { name: "Page row 099" });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(lastCell.element().id),
+    );
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(lastCell.element().id);
   });
 
   test("keeps pinned columns in separate continuously mounted regions", async () => {
@@ -1350,8 +1557,9 @@ describe("BrunoTableClient browser surface", () => {
     grid.element().focus();
     grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() => {
-      const activeId = grid.element().getAttribute("aria-activedescendant");
-      expect(document.getElementById(activeId!)?.textContent).toContain("Ada");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Ada" }).element().id,
+      );
     });
 
     await screen.rerender(
@@ -1361,8 +1569,9 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     await vi.waitFor(() => {
-      const activeId = grid.element().getAttribute("aria-activedescendant");
-      expect(document.getElementById(activeId!)?.textContent).toContain("Grace");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Grace" }).element().id,
+      );
     });
     expect(document.activeElement).toBe(grid.element());
 
@@ -1376,15 +1585,44 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     await vi.waitFor(() => {
-      const activeId = grid.element().getAttribute("aria-activedescendant");
-      expect(document.getElementById(activeId!)?.textContent).toContain("Grace");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Grace" }).element().id,
+      );
     });
 
     grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() => {
-      const activeId = grid.element().getAttribute("aria-activedescendant");
-      expect(document.getElementById(activeId!)?.textContent).toContain("Linus");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Linus" }).element().id,
+      );
     });
+  });
+
+  test("rekeys the logical projection when getRowId changes over the same row array", async () => {
+    const source = readySource(rows);
+    const screen = await render(
+      <BrunoTableClient {...props} getRowId={(row: Row) => row.id} clientSource={source} />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    grid.element().focus();
+    const initialCellId = screen.getByRole("gridcell", { name: "Grace" }).element().id;
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(initialCellId),
+    );
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        getRowId={(row: Row) => `next:${row.id}`}
+        clientSource={source}
+      />,
+    );
+
+    const rekeyedCellId = screen.getByRole("gridcell", { name: "Grace" }).element().id;
+    expect(rekeyedCellId).not.toBe(initialCellId);
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(rekeyedCellId),
+    );
   });
 
   test("preserves focus authority across an empty source and replacement rows", async () => {
@@ -1416,7 +1654,7 @@ describe("BrunoTableClient browser surface", () => {
       expect(replacementGrid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
     );
     const activeId = replacementGrid.element().getAttribute("aria-activedescendant");
-    expect(document.getElementById(activeId!)?.textContent).toContain("Linus");
+    expect(activeId).toBe(screen.getByRole("gridcell", { name: "Linus" }).element().id);
   });
 
   test("scopes active descendants to each mounted table instance", async () => {
@@ -1455,7 +1693,7 @@ describe("BrunoTableClient browser surface", () => {
     const activeId = grid.element().getAttribute("aria-activedescendant");
 
     expect(activeId).toMatch(/^[a-z0-9-]+$/u);
-    expect(document.getElementById(activeId!)).not.toBeNull();
+    expect(activeId).toBe(screen.getByRole("gridcell", { name: "Surrogate" }).element().id);
   });
 
   test("preserves complete active-cell semantics after virtualization unmounts it", async () => {
@@ -1922,6 +2160,21 @@ describe("BrunoTableClient browser surface", () => {
         .element(screen.getByRole("region", { name: "Table toolbar" }))
         .not.toBeInTheDocument();
 
+      await screen.rerender(
+        <BrunoTableClient
+          {...instrumentedProps}
+          clientSource={{ ...readySource(), version: 2, status: "stale", message: "Delayed" }}
+        />,
+      );
+      await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
+      expect(gridSurfaceRenders).toHaveBeenCalledTimes(structuralRenderCount);
+      expect(renderCounts).toEqual(
+        new Map([
+          ["ada", 1],
+          ["grace", 1],
+        ]),
+      );
+
       const nextRows = [rows[0]!, { ...rows[1]!, name: "Grace Hopper" }] satisfies readonly Row[];
       await screen.rerender(
         <BrunoTableClient {...instrumentedProps} clientSource={readySource(nextRows)} />,
@@ -1944,12 +2197,62 @@ describe("BrunoTableClient browser surface", () => {
   test("exposes non-empty toolbar children through the accessible toolbar region", async () => {
     const screen = await render(
       <BrunoTableClient {...props} clientSource={readySource()}>
-        <button type="button">Refresh view</button>
+        <BrunoTableToolbar>
+          <button type="button">Refresh view</button>
+        </BrunoTableToolbar>
       </BrunoTableClient>,
     );
 
     await expect.element(screen.getByRole("region", { name: "Table toolbar" })).toBeInTheDocument();
     await expect.element(screen.getByRole("button", { name: "Refresh view" })).toBeInTheDocument();
+    expect(
+      getComputedStyle(screen.getByRole("toolbar", { name: "Table controls" }).element()).display,
+    ).toBe("flex");
+  });
+
+  test("does not expose a toolbar landmark for an empty BrunoTableToolbar", async () => {
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource()}>
+        <BrunoTableToolbar />
+      </BrunoTableClient>,
+    );
+
+    await expect
+      .element(screen.getByRole("region", { name: "Table toolbar" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("toolbar", { name: "Table controls" }))
+      .not.toBeInTheDocument();
+  });
+
+  test("diagnoses incompatible concurrent reuse of one Table Identity", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const incompatibleColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "score",
+        headerName: "Score as name",
+        valueType: "number",
+      },
+    ] as const;
+    const screen = await render(
+      <>
+        <BrunoTableClient {...props} tableId="TABLE_ID_CONFLICT" clientSource={readySource()} />
+        <BrunoTableClient
+          tableId="TABLE_ID_CONFLICT"
+          getRowId={(row: Row) => row.id}
+          columns={incompatibleColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </>,
+    );
+
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('simultaneous use of tableId "TABLE_ID_CONFLICT"'),
+    );
+    expect(screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT" }).all()).toHaveLength(2);
   });
 
   test("isolates root, toolbar, and unchanged cells during sustained 20 Hz publications", async () => {

@@ -120,3 +120,26 @@ state or controls. Server-side runtime virtualization remains planned backlog wo
 
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.
+
+## Application styles
+
+Import the canonical shadcn stylesheet once from an application CSS entry point, include the
+installed table bundle as a Tailwind source, and enable the Tailwind Vite plugin in the application
+build:
+
+```css
+@import "@bruno/shadcn/styles.css";
+
+@source "../node_modules/@bruno/table/dist";
+```
+
+```ts
+import tailwindcss from "@tailwindcss/vite";
+import { defineConfig } from "vite";
+
+export default defineConfig({ plugins: [tailwindcss()] });
+```
+
+The stylesheet owns BrunoTable's shared design tokens, while the explicit source directive emits
+the utilities used by BrunoTable's renderer. The table package does not inject global CSS at
+runtime.

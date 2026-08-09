@@ -126,8 +126,49 @@ describe("BrunoTableNavigationRuntime", () => {
 
     navigation.setShape(["first"], columns);
     navigation.move(1, 0);
+    navigation.setShape([], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    navigation.setShape(["replacement"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    navigation.activateForFocus();
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "replacement",
+    });
+    navigation.movePage(-10);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowId: "replacement" });
+
     navigation.clearForQuery();
     navigation.setShape(["first"], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
+  it("keeps unloaded logical positions out of row identity and navigation", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    navigation.setShape([undefined, "second", undefined, "fourth"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 0 });
+    expect(navigation.getSnapshot()?.rowId).toBeUndefined();
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 1, rowId: "second" });
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 2 });
+    expect(navigation.getSnapshot()?.rowId).toBeUndefined();
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 3, rowId: "fourth" });
+
+    navigation.move(-4, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header" });
   });
 });

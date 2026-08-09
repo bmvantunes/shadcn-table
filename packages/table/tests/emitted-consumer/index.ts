@@ -14,6 +14,7 @@ import {
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
+  type BrunoTableEditableCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
   type BrunoTableGroupKeyCellParams,
@@ -47,6 +48,12 @@ type Order = {
   readonly status: "open" | "closed";
   readonly multiplier: number;
 };
+
+type EditableClientContract<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = Omit<
+  BrunoTableClientProps<TRow, TColumns>,
+  "editable" | "getRowVersion" | "onSaveEdits"
+> &
+  BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
 const emittedInvalidWhitespaceHelperOptions = {
   columnId: "COL_ID_UNIT PRICE",
@@ -85,6 +92,23 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const emittedClientProps = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready" as const,
+  },
+} satisfies BrunoTableClientProps<Order, Columns>;
+const emittedCallableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[0] =
+  emittedClientProps;
+const emittedNamedProps: BrunoTableClientProps<Order, Columns> = emittedCallableProps;
+void BrunoTableClient(emittedNamedProps);
 
 const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
 const emittedViewServerClient = BrunoTableClient({
@@ -476,7 +500,7 @@ const editableProps = {
     version: 0,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, Columns, bigint>;
+} satisfies EditableClientContract<Order, Columns, bigint>;
 
 const noSortingProps = {
   tableId: "unsortable-orders",
@@ -512,7 +536,7 @@ const widenedEditableProps = {
     version: 0,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
+} satisfies EditableClientContract<Order, typeof widenedColumns, bigint>;
 
 const invalidProps = {
   tableId: "orders",
@@ -538,7 +562,7 @@ const editablePropsWithGrouping = {
 } as const;
 
 // @ts-expect-error emitted editable Client props reject grouping for non-fresh objects.
-const invalidEditableGrouping: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableGrouping: EditableClientContract<Order, Columns, bigint> =
   editablePropsWithGrouping;
 
 const invalidCrossedSaveCell = {

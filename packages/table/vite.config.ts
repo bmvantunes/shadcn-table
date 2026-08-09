@@ -15,7 +15,17 @@ const reactCompilerForLibrary = await babel({
   plugins: [["babel-plugin-react-compiler", reactCompilerOptions]],
 });
 
+const brunoTableDevelopment = process.env["BRUNO_TABLE_DEVELOPMENT"] === "true";
+const brunoTableDevelopmentDefine = {
+  name: "bruno-table-development-define",
+  transform(code: string, id: string) {
+    if (!id.endsWith("/src/bruno-table-client.tsx")) return;
+    return code.replaceAll("__BRUNO_TABLE_DEVELOPMENT__", String(brunoTableDevelopment));
+  },
+};
+
 const config: UserConfig = defineConfig({
+  define: { __BRUNO_TABLE_DEVELOPMENT__: "true" },
   plugins: [react(), reactCompilerForVite],
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
@@ -57,7 +67,7 @@ const config: UserConfig = defineConfig({
         };
       },
     },
-    plugins: [reactCompilerForLibrary],
+    plugins: [reactCompilerForLibrary, brunoTableDevelopmentDefine],
   },
   lint: {
     ignorePatterns: ["tests/emitted-consumer/**"],

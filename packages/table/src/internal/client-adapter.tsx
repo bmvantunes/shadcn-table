@@ -1,4 +1,6 @@
 import {
+  columnFilteringFeature,
+  createFilteredRowModel,
   createSortedRowModel,
   rowSortingFeature,
   tableFeatures,
@@ -10,16 +12,19 @@ import type { ColumnDef, RowData } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
 import type { ClientOrderBy } from "./client-row-model";
-import { filterClientRows } from "./client-row-model";
+import { createClientFilterPredicate } from "./client-row-model";
 import { readCompiledColumnValue } from "./cell-value";
 
 const clientFeatures = tableFeatures({
+  columnFilteringFeature,
   rowSortingFeature,
+  filteredRowModel: createFilteredRowModel(),
   sortedRowModel: createSortedRowModel(),
 });
 
 type AdapterRow = RowData;
 type ClientColumn = ColumnDef<typeof clientFeatures, AdapterRow, unknown>;
+const INTERNAL_FILTER_COLUMN_ID = "__BRUNO_TABLE_FILTERS__";
 
 export function useClientRowIds<TRow>(
   rows: readonly TRow[],
@@ -29,13 +34,18 @@ export function useClientRowIds<TRow>(
   filters?: readonly unknown[],
 ): readonly string[] {
   const tieBreaker = orderBy.at(-1);
+  const filterPredicate = useMemo(() => {
+    const predicate = createClientFilterPredicate<TRow>(compiledColumns, filters);
+    return predicate === undefined ? undefined : (row: AdapterRow) => predicate(row as TRow);
+  }, [compiledColumns, filters]);
   const adapterColumns = useMemo(
-    () => buildAdapterColumns(compiledColumns, tieBreaker),
-    [compiledColumns, tieBreaker],
+    () => buildAdapterColumns(compiledColumns, tieBreaker, filterPredicate),
+    [compiledColumns, filterPredicate, tieBreaker],
   );
-  const filteredRows = useMemo(
-    () => filterClientRows(rows, compiledColumns, filters),
-    [compiledColumns, filters, rows],
+  const columnFilters = useMemo(
+    () =>
+      filterPredicate === undefined ? [] : [{ id: INTERNAL_FILTER_COLUMN_ID, value: filters }],
+    [filterPredicate, filters],
   );
   const sorting = useMemo(
     () =>
@@ -45,14 +55,14 @@ export function useClientRowIds<TRow>(
       })),
     [orderBy],
   );
-  const data = filteredRows as readonly AdapterRow[];
+  const data = rows as readonly AdapterRow[];
   const table = useTable(
     {
       features: clientFeatures,
       columns: adapterColumns,
       data,
       getRowId: (row) => getRowId(row as TRow),
-      state: { sorting },
+      state: { columnFilters, sorting },
     },
     () => null,
   );
@@ -64,22 +74,34 @@ export function useClientRowIds<TRow>(
 function buildAdapterColumns(
   compiledColumns: readonly CompiledColumn[],
   tieBreaker: { readonly columnId: string; readonly direction: "asc" | "desc" } | undefined,
+  filterPredicate: ((row: AdapterRow) => boolean) | undefined,
 ): ClientColumn[] {
-  return compiledColumns.map((column) => ({
-    id: column.columnId,
-    header: column.headerName,
-    accessorFn: (row: AdapterRow) => readCompiledColumnValue(column, row),
-    sortUndefined: false,
-    sortFn: (rowA, rowB) => {
-      const comparison = column.semantics.compare(
-        rowA.getValue(column.columnId),
-        rowB.getValue(column.columnId),
-      );
-      return comparison === 0 && column.columnId === tieBreaker?.columnId
-        ? compareRowIds(rowA.id, rowB.id) * (tieBreaker.direction === "desc" ? -1 : 1)
-        : comparison;
+  const columns = compiledColumns.map(
+    (column): ClientColumn => ({
+      id: column.columnId,
+      header: column.headerName,
+      accessorFn: (row: AdapterRow) => readCompiledColumnValue(column, row),
+      sortUndefined: false,
+      sortFn: (rowA, rowB) => {
+        const comparison = column.semantics.compare(
+          rowA.getValue(column.columnId),
+          rowB.getValue(column.columnId),
+        );
+        return comparison === 0 && column.columnId === tieBreaker?.columnId
+          ? compareRowIds(rowA.id, rowB.id) * (tieBreaker.direction === "desc" ? -1 : 1)
+          : comparison;
+      },
+    }),
+  );
+  return [
+    {
+      id: INTERNAL_FILTER_COLUMN_ID,
+      accessorFn: (row: AdapterRow) => row,
+      enableSorting: false,
+      filterFn: (row) => filterPredicate?.(row.original) ?? true,
     },
-  }));
+    ...columns,
+  ];
 }
 
 function compareRowIds(left: string, right: string): -1 | 0 | 1 {

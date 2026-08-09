@@ -23,6 +23,7 @@ import type {
   BrunoTableColumns,
   BrunoTableColumnValue,
   BrunoTableDecodeResult,
+  BrunoTableEditableCapability,
   BrunoTableEditableColumnId,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
@@ -71,6 +72,12 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+type EditableClientContract<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = Omit<
+  BrunoTableClientProps<TRow, TColumns>,
+  "editable" | "getRowVersion" | "onSaveEdits"
+> &
+  BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
 const directViewServerResult = null as unknown as LiveQueryResult<Order>;
 const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
@@ -278,7 +285,7 @@ void invalidMixedCaseColumnId;
 
 describe("BrunoTable public types", () => {
   it("infers the strict live Client component surface without exposing a table object", () => {
-    const rendered = BrunoTableClient({
+    const props = {
       tableId: "orders",
       columns,
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
@@ -289,9 +296,13 @@ describe("BrunoTable public types", () => {
         version: 1,
         status: "ready",
       },
-    });
+    } satisfies BrunoTableClientProps<Order, Columns>;
+    const callableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[0] = props;
+    const namedProps: BrunoTableClientProps<Order, Columns> = callableProps;
+    const rendered = BrunoTableClient(namedProps);
 
     expectTypeOf(rendered).toEqualTypeOf<ReactNode>();
+    expectTypeOf(callableProps).toEqualTypeOf<BrunoTableClientProps<Order, Columns>>();
     expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
 
     const missingTableId = {
@@ -410,7 +421,7 @@ describe("BrunoTable public types", () => {
         version: 1,
         status: "ready",
       },
-    } satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
+    } satisfies EditableClientContract<Order, typeof widenedColumns, bigint>;
 
     expectTypeOf(widenedEditableProps.getRowVersion).returns.toEqualTypeOf<bigint>();
   });
@@ -525,7 +536,7 @@ describe("BrunoTable public types", () => {
         version: 1,
         status: "ready",
       },
-    } satisfies BrunoTableClientProps<Order, Columns, bigint>;
+    } satisfies EditableClientContract<Order, Columns, bigint>;
 
     const viewport = {
       replace: () => ({ setWindow: () => undefined, release: () => undefined }),
@@ -587,13 +598,13 @@ describe("BrunoTable public types", () => {
       },
     ] as const satisfies BrunoTableColumns<Order>;
     // @ts-expect-error BrunoTableClient cannot omit its required non-empty Initial Order By.
-    void BrunoTableClient({
+    void BrunoTableClient<Order, typeof noSortColumns>({
       tableId: "orders-no-sort",
       columns: noSortColumns,
       getRowId: (row: Order) => row.id,
       clientSource: clientProps.clientSource,
     });
-    void BrunoTableClient({
+    void BrunoTableClient<Order, typeof noSortColumns>({
       tableId: "orders-no-sort",
       columns: noSortColumns,
       // @ts-expect-error initialOrderBy is forbidden when no column is sortable.
@@ -1062,7 +1073,7 @@ const editableClientWithoutSave = {
 } as const;
 
 // @ts-expect-error editable Client Tables require an onSaveEdits operation.
-const invalidEditableClientWithoutSave: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithoutSave: EditableClientContract<Order, Columns, bigint> =
   editableClientWithoutSave;
 
 const readOnlyClientWithSave = {
@@ -1082,8 +1093,7 @@ const readOnlyClientWithSave = {
 } as const;
 
 // @ts-expect-error read-only Client Tables reject edit-only operations.
-const invalidReadOnlyClientWithSave: BrunoTableClientProps<Order, Columns, bigint> =
-  readOnlyClientWithSave;
+const invalidReadOnlyClientWithSave: BrunoTableClientProps<Order, Columns> = readOnlyClientWithSave;
 
 const nonEditableColumns = [
   {
@@ -1099,11 +1109,8 @@ const invalidClientWithoutEditableColumns = {
   columns: nonEditableColumns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  // @ts-expect-error no column exposes editable capability.
   editable: true,
-  // @ts-expect-error no column exposes editable capability.
   getRowVersion: (row: Order) => row.revision,
-  // @ts-expect-error no column exposes editable capability.
   onSaveEdits: () => Promise.resolve(),
   clientSource: {
     rows: [] as readonly Order[],
@@ -1111,7 +1118,15 @@ const invalidClientWithoutEditableColumns = {
     version: 1,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, typeof nonEditableColumns, bigint>;
+} as const;
+
+// @ts-expect-error no column exposes editable capability.
+const invalidClientWithoutEditableColumnsAssignment: EditableClientContract<
+  Order,
+  typeof nonEditableColumns,
+  bigint
+> = invalidClientWithoutEditableColumns;
+void invalidClientWithoutEditableColumnsAssignment;
 
 const editableClientWithGrouping = {
   tableId: "orders",
@@ -1131,7 +1146,7 @@ const editableClientWithGrouping = {
 } as const;
 
 // @ts-expect-error editable Client Tables reject grouping even for non-fresh props objects.
-const invalidEditableClientWithGrouping: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithGrouping: EditableClientContract<Order, Columns, bigint> =
   editableClientWithGrouping;
 
 const invalidCrossedSaveCell = {

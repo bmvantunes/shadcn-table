@@ -7,21 +7,55 @@ import { spawnSync } from "node:child_process";
 
 class UninspectableWildcardExportError extends Error {}
 
+async function readDeclarationClosure(entryUrl) {
+  const sources = new Map();
+
+  async function visit(sourceUrl) {
+    const sourcePath = fileURLToPath(sourceUrl);
+    if (sources.has(sourcePath)) return;
+    const source = await readFile(sourceUrl, "utf8");
+    sources.set(sourcePath, source);
+    const localImports = source.matchAll(/(?:from\s+|import\s*)["'](\.[^"']+)["']/gu);
+    for (const match of localImports) {
+      const specifier = match[1];
+      if (specifier === undefined) continue;
+      const runtimeUrl = new URL(specifier, sourceUrl);
+      const declarationUrl = new URL(
+        runtimeUrl.href.endsWith(".mjs")
+          ? runtimeUrl.href.replace(/\.mjs$/u, ".d.mts")
+          : runtimeUrl.href.endsWith(".js")
+            ? runtimeUrl.href.replace(/\.js$/u, ".d.ts")
+            : runtimeUrl.href,
+      );
+      if (existsSync(declarationUrl)) await visit(declarationUrl);
+    }
+  }
+
+  await visit(entryUrl);
+  return Object.freeze({
+    entry: sources.get(fileURLToPath(entryUrl)) ?? "",
+    declarations: [...sources.values()].join("\n"),
+  });
+}
+
 const [
-  declarations,
-  effectDeclarations,
+  rootDeclarationSet,
+  effectDeclarationSet,
   rootRuntime,
   effectRuntime,
   compilerOutput,
   packageJsonSource,
 ] = await Promise.all([
-  readFile(new URL("../dist/index.d.mts", import.meta.url), "utf8"),
-  readFile(new URL("../dist/effect.d.mts", import.meta.url), "utf8"),
+  readDeclarationClosure(new URL("../dist/index.d.mts", import.meta.url)),
+  readDeclarationClosure(new URL("../dist/effect.d.mts", import.meta.url)),
   readFile(new URL("../dist/index.mjs", import.meta.url), "utf8"),
   readFile(new URL("../dist/effect.mjs", import.meta.url), "utf8"),
   readFile(new URL("../dist/internal/compiler-smoke.mjs", import.meta.url), "utf8"),
   readFile(new URL("../package.json", import.meta.url), "utf8"),
 ]);
+
+const declarations = rootDeclarationSet.declarations;
+const effectDeclarations = effectDeclarationSet.declarations;
 
 if (!compilerOutput.includes("react/compiler-runtime")) {
   throw new Error("React Compiler did not transform the @bruno/table smoke fixture.");
@@ -34,6 +68,16 @@ if (/\bany\b/u.test(declarations)) {
 if (/tanstack/iu.test(declarations)) {
   throw new Error("A TanStack implementation type leaked into the @bruno/table declarations.");
 }
+
+if (
+  /registerBrunoTableIdentity/u.test(rootRuntime) ||
+  /simultaneous use of tableId/u.test(rootRuntime) ||
+  /__BRUNO_TABLE_DEVELOPMENT__/u.test(rootRuntime)
+) {
+  throw new Error("Development-only Table Identity diagnostics leaked into the production build.");
+}
+
+await assertDevelopmentDiagnosticBuild();
 
 if (
   /\beffect(?:\/|["'])/u.test(declarations) ||
@@ -61,7 +105,7 @@ if (
   throw new Error("The optional Effect entry imports the broad Effect or Schema entrypoint.");
 }
 
-const exportedNames = collectDeclarationExportNames(declarations);
+const exportedNames = collectDeclarationExportNames(rootDeclarationSet.entry);
 
 if (exportedNames.length === 0) {
   throw new Error("The @bruno/table declaration entry has no public exports.");
@@ -220,7 +264,7 @@ if (JSON.stringify(actualEffectRuntimeExports) !== JSON.stringify(expectedEffect
   throw new Error("The @bruno/table/effect runtime exports do not match the optional surface.");
 }
 
-const effectExportedNames = collectDeclarationExportNames(effectDeclarations);
+const effectExportedNames = collectDeclarationExportNames(effectDeclarationSet.entry);
 if (
   JSON.stringify(effectExportedNames.toSorted((left, right) => left.localeCompare(right))) !==
   JSON.stringify(expectedEffectRuntimeExports.toSorted((left, right) => left.localeCompare(right)))
@@ -335,6 +379,35 @@ async function assertPackedConsumers() {
   }
 }
 
+async function assertDevelopmentDiagnosticBuild() {
+  const developmentRoot = await mkdtemp(join(tmpdir(), "bruno-table-development-build-"));
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+  const packageJsonPath = join(packageRoot, "package.json");
+  const originalPackageJson = await readFile(packageJsonPath, "utf8");
+  try {
+    runCommand(
+      "vp",
+      ["pack", "--out-dir", developmentRoot],
+      packageRoot,
+      "development diagnostic build",
+      { BRUNO_TABLE_DEVELOPMENT: "true" },
+    );
+    const developmentRuntime = await readFile(join(developmentRoot, "index.mjs"), "utf8");
+    if (
+      !/registerBrunoTableIdentity/u.test(developmentRuntime) ||
+      !/simultaneous use of tableId/u.test(developmentRuntime) ||
+      /__BRUNO_TABLE_DEVELOPMENT__/u.test(developmentRuntime)
+    ) {
+      throw new Error(
+        "The development @bruno/table build does not contain resolved Table Identity diagnostics.",
+      );
+    }
+  } finally {
+    await writeFile(packageJsonPath, originalPackageJson);
+    await rm(developmentRoot, { recursive: true, force: true });
+  }
+}
+
 async function assertPackedRootConsumer(tarball, shadcnTarball) {
   const consumerRoot = await createPackedConsumer(
     "bruno-table-root-consumer-",
@@ -423,10 +496,38 @@ void toolbar;
 `,
     );
     await writeFile(join(consumerRoot, "runtime.mjs"), 'await import("@bruno/table");\n');
+    await writeFile(
+      join(consumerRoot, "style-entry.ts"),
+      'import "./bruno-table.css";\nimport "@bruno/table";\n',
+    );
+    await writeFile(
+      join(consumerRoot, "bruno-table.css"),
+      '@import "@bruno/shadcn/styles.css";\n@source "./node_modules/@bruno/table/dist";\n',
+    );
+    await writeFile(
+      join(consumerRoot, "vite.config.ts"),
+      'import tailwindcss from "@tailwindcss/vite";\nimport { defineConfig } from "vite";\nexport default defineConfig({ plugins: [tailwindcss()] });\n',
+    );
+    await writeFile(
+      join(consumerRoot, "index.html"),
+      '<!doctype html><html><body><script type="module" src="/style-entry.ts"></script></body></html>\n',
+    );
 
     await assertInstalledGraphExcludesEffect(consumerRoot);
     runTypeScriptConsumer(consumerRoot, "Effect-free @bruno/table root consumer");
     runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "Effect-free root runtime");
+    runCommand("pnpm", ["exec", "vp", "build"], consumerRoot, "Styled packed Vite consumer");
+    const assetRoot = join(consumerRoot, "dist", "assets");
+    const cssAssets = (await readdir(assetRoot)).filter((fileName) => fileName.endsWith(".css"));
+    if (cssAssets.length === 0) {
+      throw new Error("The styled packed Vite consumer emitted no CSS asset.");
+    }
+    const css = await Promise.all(
+      cssAssets.map((fileName) => readFile(join(assetRoot, fileName), "utf8")),
+    );
+    if (!css.some((asset) => asset.includes("data-bruno-table"))) {
+      throw new Error("The styled packed Vite consumer omitted BrunoTable utility styles.");
+    }
   } finally {
     await rm(consumerRoot, { recursive: true, force: true });
   }
@@ -514,6 +615,14 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
         "@bruno/table": `file:${tarball}`,
         "@bruno/shadcn": `file:${shadcnTarball}`,
         "@types/react": "19.2.18",
+        ...(includeEffect
+          ? {}
+          : {
+              "@tailwindcss/vite": "4.3.3",
+              tailwindcss: "4.3.3",
+              vite: "npm:@voidzero-dev/vite-plus-core@0.2.7",
+              "vite-plus": "0.2.7",
+            }),
         ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
         react: "19.2.8",
         "react-dom": "19.2.8",
@@ -567,11 +676,11 @@ function runTypeScriptConsumer(consumerRoot, label) {
   runCommand(process.execPath, [typescriptCli, "--project", "tsconfig.json"], consumerRoot, label);
 }
 
-function runCommand(command, parameters, cwd, label) {
+function runCommand(command, parameters, cwd, label, extraEnvironment = {}) {
   const result = spawnSync(command, parameters, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, CI: "true" },
+    env: { ...process.env, CI: "true", ...extraEnvironment },
   });
   if (result.status !== 0) {
     throw new Error(`${label} failed.\n${result.stdout ?? ""}${result.stderr ?? ""}`);
