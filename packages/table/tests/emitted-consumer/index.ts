@@ -14,7 +14,6 @@ import {
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
-  type BrunoTableEditableCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
   type BrunoTableGroupKeyCellParams,
@@ -48,12 +47,6 @@ type Order = {
   readonly status: "open" | "closed";
   readonly multiplier: number;
 };
-
-type EditableClientContract<TRow, TColumns extends BrunoTableColumns<TRow>, TRowVersion> = Omit<
-  BrunoTableClientProps<TRow, TColumns>,
-  "editable" | "getRowVersion" | "onSaveEdits"
-> &
-  BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
 const emittedInvalidWhitespaceHelperOptions = {
   columnId: "COL_ID_UNIT PRICE",
@@ -433,6 +426,25 @@ const emittedClient = BrunoTableClient({
 });
 void emittedClient;
 
+void BrunoTableClient({
+  tableId: "private-runtime",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client API exposes no table controller.
+  table: {},
+});
+void BrunoTableClient({
+  tableId: "private-row-model",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client API exposes no TanStack row-model factory.
+  getCoreRowModel: () => ({}),
+});
+
 // @ts-expect-error emitted Client component requires tableId.
 void BrunoTableClient({
   columns,
@@ -500,7 +512,7 @@ const editableProps = {
     version: 0,
     status: "ready",
   },
-} satisfies EditableClientContract<Order, Columns, bigint>;
+} satisfies BrunoTableClientProps<Order, Columns, bigint>;
 
 const noSortingProps = {
   tableId: "unsortable-orders",
@@ -536,7 +548,7 @@ const widenedEditableProps = {
     version: 0,
     status: "ready",
   },
-} satisfies EditableClientContract<Order, typeof widenedColumns, bigint>;
+} satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
 
 const invalidProps = {
   tableId: "orders",
@@ -562,7 +574,7 @@ const editablePropsWithGrouping = {
 } as const;
 
 // @ts-expect-error emitted editable Client props reject grouping for non-fresh objects.
-const invalidEditableGrouping: EditableClientContract<Order, Columns, bigint> =
+const invalidEditableGrouping: BrunoTableClientProps<Order, Columns, bigint> =
   editablePropsWithGrouping;
 
 const invalidCrossedSaveCell = {

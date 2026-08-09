@@ -99,4 +99,64 @@ describe("BrunoTable Table Identity registry", () => {
     disposeCompatible();
     disposeFirst();
   });
+
+  it("diagnoses incompatible custom value semantics", () => {
+    const report = vi.fn();
+    const valueType = {
+      codecId: "example/code",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected text." } as const),
+      equivalent: (left: string, right: string) => left === right,
+      compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value: string) => value,
+      parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+      formatDisplay: (value: string) => value,
+      encodePersisted: (value: string) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected text." } as const),
+    };
+    const compile = (selection: typeof valueType) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_CODE",
+          field: "code",
+          headerName: "Code",
+          valueType: selection,
+        },
+      ]);
+    const disposeFirst = registerBrunoTableIdentity(
+      "TABLE_ID_CUSTOM_SEMANTICS",
+      compile(valueType),
+      report,
+    );
+    const disposeCompatible = registerBrunoTableIdentity(
+      "TABLE_ID_CUSTOM_SEMANTICS",
+      compile(valueType),
+      report,
+    );
+    expect(report).not.toHaveBeenCalled();
+    const disposeIncompatible = registerBrunoTableIdentity(
+      "TABLE_ID_CUSTOM_SEMANTICS",
+      compile({
+        ...valueType,
+        equivalent: (left, right) => left.toLowerCase() === right.toLowerCase(),
+      }),
+      report,
+    );
+    expect(report).toHaveBeenCalledOnce();
+
+    disposeIncompatible();
+    disposeCompatible();
+    disposeFirst();
+  });
 });

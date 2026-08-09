@@ -106,7 +106,7 @@ Prototype evidence: [`77e8ce4`](https://github.com/bmvantunes/shadcn-table/tree/
 
 Build:
 
-- `<BrunoTableClient tableId getRowId columns clientSource />`
+- `<BrunoTableClient tableId getRowId columns clientSource initialOrderBy />`
 - structurally typed Client Source integration, including direct `useLiveQuery(...)` results
 - shared shadcn lifecycle presentation: fixed-height Skeleton rows while loading, compact persistent Alerts over retained coherent stale/closed/error rows, and full-body Empty states for terminal states without rows
 - optional source-owned Retry capability for closed/error presentation, with source-authoritative pending state, one invocation per explicit activation, and no table-owned automatic retry or lifecycle transition

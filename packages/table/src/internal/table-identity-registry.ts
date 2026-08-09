@@ -7,7 +7,9 @@ type Registration = Readonly<{
 
 const registrations = new Map<string, Registration[]>();
 const computedGetterIdentities = new WeakMap<Function, number>();
+const valueSemanticsFunctionIdentities = new WeakMap<Function, number>();
 let nextComputedGetterIdentity = 1;
+let nextValueSemanticsFunctionIdentity = 1;
 
 export function registerBrunoTableIdentity(
   tableId: string,
@@ -53,6 +55,7 @@ function fingerprintSchema(columns: readonly CompiledColumn[]): string {
     codecId: column.semantics.codecId,
     codecVersion: column.semantics.codecVersion,
     filterFamily: column.semantics.filterFamily,
+    customValueSemantics: fingerprintCustomValueSemantics(column.valueType),
     enableFilter: column.enableFilter,
     enableSorting: column.enableSorting,
   }));
@@ -66,5 +69,39 @@ function computedGetterIdentity(valueGetter: Function): number {
   const next = nextComputedGetterIdentity;
   nextComputedGetterIdentity += 1;
   computedGetterIdentities.set(valueGetter, next);
+  return next;
+}
+
+function fingerprintCustomValueSemantics(
+  valueType: unknown,
+): readonly (number | string)[] | undefined {
+  if (typeof valueType !== "object" || valueType === null) return undefined;
+  const descriptor = valueType as Readonly<Record<string, unknown>>;
+  const keys = [
+    "decodeRuntime",
+    "equivalent",
+    "compare",
+    "formatCanonicalText",
+    "parseCanonicalText",
+    "encodePersisted",
+    "decodePersisted",
+  ] as const;
+  const fingerprint: (number | string)[] = [];
+  for (const key of keys) {
+    const candidate = descriptor[key];
+    fingerprint.push(
+      key,
+      typeof candidate === "function" ? valueSemanticsFunctionIdentity(candidate) : "missing",
+    );
+  }
+  return Object.freeze(fingerprint);
+}
+
+function valueSemanticsFunctionIdentity(callback: Function): number {
+  const current = valueSemanticsFunctionIdentities.get(callback);
+  if (current !== undefined) return current;
+  const next = nextValueSemanticsFunctionIdentity;
+  nextValueSemanticsFunctionIdentity += 1;
+  valueSemanticsFunctionIdentities.set(callback, next);
   return next;
 }

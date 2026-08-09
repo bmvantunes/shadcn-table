@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { compileColumns, type CompiledColumn } from "./compile-columns";
 import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
-import { BrunoTableGridRuntime } from "./grid-runtime";
+import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
 
@@ -64,14 +64,21 @@ function createClientRuntime(
     adapter.getQueryConfiguration(columns),
   );
   const view = runtime.getView();
+  const acceptCurrentRows = () => {
+    const rows = adapter.createRowsStore(view, () => true).getSnapshot();
+    adapter.acceptRows(rows);
+  };
+  acceptCurrentRows();
   return Object.freeze({
     ...view,
     getView: runtime.getView,
     resolveRowId: adapter.resolveRowId,
     createRowsStore: (detector: Parameters<typeof adapter.createRowsStore>[1]) =>
       adapter.createRowsStore(view, detector),
-    publish: (nextSource: ReturnType<typeof source>) =>
-      runtime.publish(adapter.publish(nextSource)),
+    publish: (nextSource: ReturnType<typeof source>) => {
+      runtime.publish(adapter.publish(nextSource));
+      acceptCurrentRows();
+    },
     reconcile: (
       nextSource: ReturnType<typeof source>,
       nextGetRowId: (row: Row) => string,
@@ -83,6 +90,7 @@ function createClientRuntime(
         nextColumns,
         queryConfiguration,
       );
+      acceptCurrentRows();
     },
     configure: (nextGetRowId: (row: Row) => string, nextColumns: readonly CompiledColumn[]) => {
       const queryConfiguration = adapter.getQueryConfiguration(nextColumns);
@@ -91,6 +99,7 @@ function createClientRuntime(
         nextColumns,
         queryConfiguration,
       );
+      acceptCurrentRows();
     },
   });
 }
@@ -187,6 +196,64 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rawRows(rowsStore.getSnapshot())).toEqual([first, nextSecond]);
     expect(Object.isFrozen(runtime.getBodySnapshot())).toBe(true);
     expect(runtime.getView()).toBe(runtime.getView());
+  });
+
+  it("publishes stable per-cell snapshots for unchanged canonical values", () => {
+    const cellColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const first = { id: "first", name: "Ada", note: "Initial" } satisfies Row;
+    const runtime = createClientRuntime(source([first]), (row) => row.id, cellColumns, undefined, [
+      { columnId: "COL_ID_NAME", direction: "asc" },
+    ]);
+    const nameListener = vi.fn();
+    const noteListener = vi.fn();
+    runtime.subscribeCell("first", "COL_ID_NAME", nameListener);
+    runtime.subscribeCell("first", "COL_ID_NOTE", noteListener);
+    const nameSnapshot = runtime.getCellSnapshot("first", "COL_ID_NAME");
+    const noteSnapshot = runtime.getCellSnapshot("first", "COL_ID_NOTE");
+
+    runtime.publish(source([{ ...first, note: "Changed" }]));
+
+    expect(nameListener).not.toHaveBeenCalled();
+    expect(noteListener).toHaveBeenCalledOnce();
+    expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(nameSnapshot);
+    expect(runtime.getCellSnapshot("first", "COL_ID_NOTE")).not.toBe(noteSnapshot);
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_NOTE")).toBe("Changed");
+  });
+
+  it("refreshes abandoned cell reads and bounds pending snapshots", () => {
+    const manyRows = Array.from({ length: 4_100 }, (_, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    const runtime = createRuntime(source(manyRows));
+    const firstSnapshot = runtime.getCellSnapshot("row-0", "COL_ID_NAME");
+    for (let index = 1; index <= 4_096; index += 1) {
+      runtime.getCellSnapshot(`row-${String(index)}`, "COL_ID_NAME");
+    }
+
+    const rereadAfterEviction = runtime.getCellSnapshot("row-0", "COL_ID_NAME");
+    expect(rereadAfterEviction).not.toBe(firstSnapshot);
+    expect(rereadAfterEviction.value).toBe("Name 0");
+
+    const changedRows = manyRows.with(0, { id: "row-0", name: "Changed" });
+    runtime.publish(source(changedRows));
+
+    const refreshed = runtime.getCellSnapshot("row-0", "COL_ID_NAME");
+    expect(refreshed).not.toBe(rereadAfterEviction);
+    expect(refreshed.value).toBe("Changed");
   });
 
   it("advances a derived row-order snapshot only with its notification", () => {
@@ -494,6 +561,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       {
         body: { kind: "rows" },
         query: {
+          columns: replacementColumns,
           filters: [],
           orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
           generation: 1,
@@ -582,7 +650,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getBodySnapshot().kind).toBe("rows");
   });
 
-  it("rejects invalid source values before rendering or sorting consumes them", () => {
+  it("brands invalid source values for the row model or presentation island to reject", () => {
     type NumberRow = { readonly id: string; readonly score: number };
     const numberColumns = compileColumns([
       {
@@ -611,16 +679,16 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getQueryConfiguration(numberColumns),
     );
 
-    expect(runtime.getChromeSnapshot()).toMatchObject({
-      invalid: {
-        kind: "invalid-value",
-        rowIndex: 0,
-        columnId: "COL_ID_SCORE",
-        message: "Expected a finite number value.",
-      },
+    const value = runtime.getCellValueSnapshot("invalid", "COL_ID_SCORE");
+    expect(isBrunoTableInvalidCellValue(value)).toBe(true);
+    if (!isBrunoTableInvalidCellValue(value)) return;
+    expect(value.invalid).toEqual({
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_SCORE",
+      message: "Expected a finite number value.",
     });
-    expect(runtime.getBodySnapshot()).toEqual({ kind: "invalid" });
-    expect(runtime.getRowSpaceSnapshot()).toBeUndefined();
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
   });
 
   it("decodes only changed source rows when column semantics stay installed", () => {
@@ -642,21 +710,223 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
 
+    let rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
     expect(decodeRuntime).toHaveBeenCalledTimes(2);
 
     adapter.publish(source([first, second]));
+    rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
     expect(decodeRuntime).toHaveBeenCalledTimes(2);
 
     const updatedSecond = { id: "second", name: "Hopper" } satisfies Row;
     adapter.publish(source([first, updatedSecond]));
+    rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
     expect(decodeRuntime).toHaveBeenCalledTimes(3);
 
     const replacementColumns = Object.freeze(Array.from(instrumentedColumns));
     adapter.configure((row) => (row as Row).id, replacementColumns);
-    expect(decodeRuntime).toHaveBeenCalledTimes(5);
+    rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
+    expect(decodeRuntime).toHaveBeenCalledTimes(3);
 
     adapter.publish(source([first, updatedSecond]));
-    expect(decodeRuntime).toHaveBeenCalledTimes(5);
+    rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
+    expect(decodeRuntime).toHaveBeenCalledTimes(3);
+  });
+
+  it("reuses canonical values across sustained sparse source publications", () => {
+    const [baseColumn] = runtimeColumns;
+    const decodeRuntime = vi.fn(baseColumn!.semantics.decodeRuntime);
+    const instrumentedColumns = Object.freeze([
+      Object.freeze({
+        ...baseColumn!,
+        semantics: Object.freeze({ ...baseColumn!.semantics, decodeRuntime }),
+      }),
+    ] satisfies readonly CompiledColumn[]);
+    let rows = Array.from({ length: 256 }, (_, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source(rows),
+      (row) => row.id,
+      instrumentedColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+
+    for (const row of rows) {
+      adapter.getPublication().rowSpace?.getCellValue(row.id, "COL_ID_NAME");
+    }
+    expect(decodeRuntime).toHaveBeenCalledTimes(rows.length);
+
+    for (let publication = 0; publication < 64; publication += 1) {
+      const changedIndex = publication % rows.length;
+      rows = rows.with(changedIndex, {
+        ...rows[changedIndex]!,
+        name: `Changed ${String(publication)}`,
+      });
+      adapter.publish(source(rows));
+      for (const row of rows) {
+        adapter.getPublication().rowSpace?.getCellValue(row.id, "COL_ID_NAME");
+      }
+    }
+
+    expect(decodeRuntime).toHaveBeenCalledTimes(256 + 64);
+  });
+
+  it("decodes query columns columnarly and presentation cells on demand", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const wideColumns = Object.freeze(
+      compileColumns(
+        Array.from({ length: 1_000 }, (_, index) => ({
+          columnId: `COL_ID_LAZY_${String(index).padStart(4, "0")}`,
+          field: "name",
+          headerName: `Lazy ${String(index)}`,
+          valueType: "text",
+        })),
+      ).map((column) =>
+        Object.freeze({
+          ...column,
+          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+        }),
+      ),
+    );
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([first, second]),
+      (row) => row.id,
+      wideColumns,
+      undefined,
+      [{ columnId: "COL_ID_LAZY_0000", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      wideColumns,
+      adapter.getQueryConfiguration(wideColumns),
+    );
+
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_LAZY_0000")).toBe("Ada");
+    expect(runtime.getCellValueSnapshot("second", "COL_ID_LAZY_0000")).toBe("Grace");
+    expect(decodeRuntime).toHaveBeenCalledTimes(2);
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_LAZY_0999")).toBe("Ada");
+    expect(decodeRuntime).toHaveBeenCalledTimes(3);
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_LAZY_0999")).toBe("Ada");
+    expect(decodeRuntime).toHaveBeenCalledTimes(3);
+  });
+
+  it("enforces one table-wide bound for primitive-row canonical values", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const primitiveColumns = Object.freeze(
+      compileColumns([
+        {
+          columnId: "COL_ID_LENGTH_PRIMARY",
+          field: "length",
+          headerName: "Primary length",
+          valueType: "number",
+        },
+        {
+          columnId: "COL_ID_LENGTH_SECONDARY",
+          field: "length",
+          headerName: "Secondary length",
+          valueType: "number",
+        },
+      ]).map((column) =>
+        Object.freeze({
+          ...column,
+          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+        }),
+      ),
+    );
+    const primitiveRows = Array.from({ length: 9_000 }, (_, index) => `row-${String(index)}`);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      {
+        rows: primitiveRows,
+        totalRows: primitiveRows.length,
+        version: 1,
+        status: "ready",
+      },
+      (row) => row,
+      primitiveColumns,
+      undefined,
+      [{ columnId: "COL_ID_LENGTH_PRIMARY", direction: "asc" }],
+    );
+    const rowSpace = adapter.getPublication().rowSpace!;
+
+    for (const rowId of primitiveRows) {
+      rowSpace.getCellValue(rowId, "COL_ID_LENGTH_PRIMARY");
+    }
+    expect(decodeRuntime).toHaveBeenCalledTimes(9_000);
+    for (const rowId of primitiveRows) {
+      rowSpace.getCellValue(rowId, "COL_ID_LENGTH_SECONDARY");
+    }
+    expect(decodeRuntime).toHaveBeenCalledTimes(18_000);
+
+    rowSpace.getCellValue(primitiveRows[0]!, "COL_ID_LENGTH_PRIMARY");
+    expect(decodeRuntime).toHaveBeenCalledTimes(18_001);
+  });
+
+  it("enforces the same table-wide bound for retained object rows", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const objectColumns = Object.freeze(
+      compileColumns([
+        {
+          columnId: "COL_ID_NAME_PRIMARY",
+          field: "name",
+          headerName: "Primary name",
+          valueType: "text",
+        },
+        {
+          columnId: "COL_ID_NAME_SECONDARY",
+          field: "name",
+          headerName: "Secondary name",
+          valueType: "text",
+        },
+      ]).map((column) =>
+        Object.freeze({
+          ...column,
+          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+        }),
+      ),
+    );
+    const objectRows = Array.from({ length: 9_000 }, (_, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    }));
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      {
+        rows: objectRows,
+        totalRows: objectRows.length,
+        version: 1,
+        status: "ready",
+      },
+      (row) => row.id,
+      objectColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME_PRIMARY", direction: "asc" }],
+    );
+    const rowSpace = adapter.getPublication().rowSpace!;
+
+    for (const row of objectRows) {
+      rowSpace.getCellValue(row.id, "COL_ID_NAME_PRIMARY");
+    }
+    expect(decodeRuntime).toHaveBeenCalledTimes(9_000);
+    for (const row of objectRows) {
+      rowSpace.getCellValue(row.id, "COL_ID_NAME_SECONDARY");
+    }
+    expect(decodeRuntime).toHaveBeenCalledTimes(18_000);
+
+    rowSpace.getCellValue(objectRows[0]!.id, "COL_ID_NAME_PRIMARY");
+    expect(decodeRuntime).toHaveBeenCalledTimes(18_001);
   });
 
   it("retains canonical decoder output separately from the raw source row", () => {
@@ -693,11 +963,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       raw,
       rowId: "first",
     });
+    const admitted = adapter.createRowsStore(runtime.getView(), () => true).getSnapshot()[0]!;
     expect(
-      adapter
-        .createRowsStore(runtime.getView(), () => true)
-        .getSnapshot()[0]
-        ?.values.get("COL_ID_NAME"),
+      admitted.values.read(admitted.raw, admitted.rowId, admitted.rowIndex, canonicalColumns[0]!),
     ).toBe("ADA");
   });
 
@@ -877,6 +1145,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     runtime.configure((value) => value.id, replacementColumns);
 
     expect(runtime.getQuerySnapshot()).toEqual({
+      columns: replacementColumns,
       filters: [],
       orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
       generation: 1,
@@ -931,8 +1200,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.configure((row) => row.id, replacementColumns);
 
-    expect(runtime.getQuerySnapshot()).toBe(previousQuery);
-    expect(queryListener).not.toHaveBeenCalled();
+    expect(runtime.getQuerySnapshot()).toEqual({
+      columns: replacementColumns,
+      filters: previousQuery.filters,
+      orderBy: previousQuery.orderBy,
+      generation: previousQuery.generation,
+    });
+    expect(queryListener).toHaveBeenCalledOnce();
   });
 
   it("advances query generation when an active column changes query semantics", () => {
@@ -958,6 +1232,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     runtime.configure((row) => row.id, replacementColumns);
 
     expect(runtime.getQuerySnapshot()).toEqual({
+      columns: replacementColumns,
       filters: previousQuery.filters,
       orderBy: previousQuery.orderBy,
       generation: 1,

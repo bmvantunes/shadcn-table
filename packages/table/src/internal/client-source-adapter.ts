@@ -5,10 +5,12 @@ import type {
   BrunoTableRowSpaceSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
+import { createBrunoTableInvalidCellValue, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
 import type { ClientOrderBy } from "./grid-query";
 import {
+  collectClientFilterColumnIds,
   reconcileClientOrderBy,
   sanitizeClientInitialFilters,
   sanitizeClientInitialOrderBy,
@@ -20,11 +22,16 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private getRowId: (row: TRow) => BrunoTableRowId;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private coherent: ClientCoherentSnapshot<TRow> | undefined;
+  private acceptedCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private readonly initialFilters: readonly unknown[];
   private readonly initialOrderBy: ClientOrderBy;
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
+  private activeFilters: readonly unknown[];
+  private activeOrderBy: ClientOrderBy;
+  private validationColumnIds: ReadonlySet<string>;
+  private readonly valueCache = new ClientCanonicalValueCache();
 
   public constructor(
     source: BrunoTableClientSource<TRow>,
@@ -33,13 +40,25 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     initialFilters: readonly unknown[] | undefined,
     initialOrderBy: ClientOrderBy | undefined,
   ) {
+    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
+    this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
+    this.activeFilters = this.initialFilters;
+    this.activeOrderBy = this.initialOrderBy;
+    this.validationColumnIds = queryColumnIds(this.initialFilters, this.initialOrderBy);
     this.sourceRowsInput = source.rows;
     this.source = snapshotSource(source);
     this.getRowId = getRowId;
-    this.publication = createPublication(this.source, getRowId, columns, undefined, false);
+    this.publication = createPublication(
+      this.source,
+      getRowId,
+      columns,
+      undefined,
+      undefined,
+      false,
+      this.validationColumnIds,
+      this.valueCache,
+    );
     this.coherent = nextCoherent(this.coherent, this.publication);
-    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
-    this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
     this.sourceColumns = columns;
     this.queryColumns = columns;
     this.queryConfiguration = Object.freeze({
@@ -63,6 +82,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     if (baselineOrderBy.length === 0) {
       throw new TypeError("BrunoTableClient requires at least one sortable column.");
     }
+    this.activeFilters = sanitizeClientInitialFilters(this.activeFilters, columns);
+    this.activeOrderBy = reconcileClientOrderBy(this.activeOrderBy, baselineOrderBy, columns);
+    this.validationColumnIds = queryColumnIds(this.activeFilters, this.activeOrderBy);
     this.queryColumns = columns;
     this.queryConfiguration = Object.freeze({ baselineFilters, baselineOrderBy });
     return this.queryConfiguration;
@@ -73,6 +95,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
+    const previousCoherent = this.coherent;
     const sourceSnapshot = snapshotSource(
       source,
       source.rows === this.sourceRowsInput ? this.source.rows : undefined,
@@ -82,9 +105,20 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       getRowId,
       columns,
       this.coherent,
+      this.acceptedCoherent,
       this.getRowId !== getRowId,
+      this.validationColumnIds,
+      this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    if (
+      this.coherent !== undefined &&
+      this.coherent !== previousCoherent &&
+      this.coherent.changeFromPrevious.rowIdsChanged
+    ) {
+      this.valueCache.retainRowIds(this.coherent.hasRowId);
+    }
+    this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
     this.sourceRowsInput = source.rows;
     this.source = sourceSnapshot;
     this.getRowId = getRowId;
@@ -101,20 +135,42 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
+    const previousCoherent = this.coherent;
     this.publication = createPublication(
       this.source,
       getRowId,
       columns,
       this.coherent,
+      this.acceptedCoherent,
       this.getRowId !== getRowId,
+      this.validationColumnIds,
+      this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    if (
+      this.coherent !== undefined &&
+      this.coherent !== previousCoherent &&
+      this.coherent.changeFromPrevious.rowIdsChanged
+    ) {
+      this.valueCache.retainRowIds(this.coherent.hasRowId);
+    }
+    this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
     this.getRowId = getRowId;
     this.sourceColumns = columns;
     return this.publication;
   };
 
   public readonly resolveRowId = (row: unknown): BrunoTableRowId => this.getRowId(row as TRow);
+
+  public readonly setActiveQuery = (filters: readonly unknown[], orderBy: ClientOrderBy): void => {
+    this.activeFilters = filters;
+    this.activeOrderBy = orderBy;
+    this.validationColumnIds = queryColumnIds(filters, orderBy);
+  };
+
+  public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
+    if (this.coherent?.admittedRows === rows) this.acceptedCoherent = this.coherent;
+  };
 
   public readonly createRowsStore = (
     runtime: BrunoTableRuntimeView,
@@ -132,7 +188,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         nextCoherent?.changeFromPrevious ??
         Object.freeze({ rowIdsChanged: previousRows.length > 0, changedIndexes: EMPTY_ROWS });
       try {
-        if (!detector(previousRows, nextRows, change)) return;
+        if (!detector(previousRows, nextRows, change)) {
+          if (nextCoherent !== undefined) this.acceptedCoherent = nextCoherent;
+          return;
+        }
       } catch (error) {
         snapshot = nextRows;
         notifyRowsStoreListeners(listeners, error);
@@ -183,7 +242,17 @@ export type BrunoTableClientRowsStore = Readonly<{
 export type BrunoTableClientAdmittedRow = Readonly<{
   readonly raw: unknown;
   readonly rowId: BrunoTableRowId;
-  readonly values: ReadonlyMap<string, unknown>;
+  readonly rowIndex: number;
+  readonly values: BrunoTableClientValueCache;
+}>;
+
+export type BrunoTableClientValueCache = Readonly<{
+  readonly read: (
+    row: unknown,
+    rowId: BrunoTableRowId,
+    rowIndex: number,
+    column: CompiledColumn,
+  ) => unknown;
 }>;
 
 type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
@@ -191,18 +260,26 @@ type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
     readonly rows: readonly TRow[];
     readonly admittedRows: readonly BrunoTableClientAdmittedRow[];
     readonly rowIds: readonly BrunoTableRowId[];
+    readonly hasRowId: (rowId: BrunoTableRowId) => boolean;
+    readonly identityResolver: (row: TRow) => BrunoTableRowId;
     readonly changeFromPrevious: BrunoTableClientRowOrderChange;
     readonly validatedColumns: readonly CompiledColumn[];
   }>;
 
 const EMPTY_ROWS: readonly [] = Object.freeze([]);
+const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
+const NOT_FOUND = Object.freeze({ found: false as const });
+const CLIENT_BOUNDED_VALUE_CACHE_LIMIT = 16_384;
 
 function createPublication<TRow>(
   source: BrunoTableClientSource<TRow>,
   getRowId: (row: TRow) => BrunoTableRowId,
   columns: readonly CompiledColumn[],
   previousCoherent: ClientCoherentSnapshot<TRow> | undefined,
+  fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
+  validationColumnIds: ReadonlySet<string>,
+  valueCache: ClientCanonicalValueCache,
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =
@@ -215,18 +292,46 @@ function createPublication<TRow>(
       : undefined;
   const coherentResult =
     complete && (source.status !== "loading" || source.rows.length > 0)
-      ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds)
+      ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds, valueCache)
       : undefined;
-  const invalidValue = coherentResult?.invalid;
-  const currentCoherent = coherentResult?.coherent;
   const terminal = source.status === "closed" || source.status === "error";
+  const lifecycle = terminal || source.status === "stale";
+  const validationColumns = lifecycle
+    ? columns.filter((column) => validationColumnIds.has(column.columnId))
+    : EMPTY_COLUMNS;
+  const lifecycleCandidate = coherentResult?.coherent;
+  const invalidValue =
+    lifecycle && lifecycleCandidate !== undefined
+      ? validateAdmittedRows(lifecycleCandidate.admittedRows, validationColumns)
+      : coherentResult?.invalid;
+  const currentCoherent = invalidValue === undefined ? lifecycleCandidate : undefined;
   const retainPrevious = terminal || source.status === "stale";
-  const coherent =
-    terminal && previousCoherent !== undefined && currentCoherent?.rows.length === 0
-      ? previousCoherent
-      : (currentCoherent ?? (retainPrevious ? previousCoherent : undefined));
+  const useFallback =
+    fallbackCoherent !== undefined &&
+    retainPrevious &&
+    (currentCoherent === undefined || (terminal && currentCoherent.rows.length === 0));
+  const fallbackResult = useFallback
+    ? createCoherent(
+        fallbackCoherent.rows,
+        getRowId,
+        columns,
+        previousCoherent,
+        resolveRowIds,
+        valueCache,
+      )
+    : undefined;
+  const fallbackCandidate = fallbackResult?.coherent;
+  const fallbackInvalidValue =
+    fallbackCandidate === undefined
+      ? fallbackResult?.invalid
+      : validateAdmittedRows(fallbackCandidate.admittedRows, validationColumns);
+  const coherent = useFallback
+    ? fallbackInvalidValue === undefined
+      ? fallbackCandidate
+      : undefined
+    : currentCoherent;
   const hasCoherentRows = coherent !== undefined && (!terminal || coherent.rows.length > 0);
-  const resolvedInvalid = invalid ?? invalidValue;
+  const resolvedInvalid = invalid ?? invalidValue ?? fallbackInvalidValue;
   return Object.freeze({
     status: source.status,
     totalRows: source.totalRows,
@@ -256,10 +361,13 @@ function createCoherent<TRow>(
   columns: readonly CompiledColumn[],
   previous: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
+  valueCache: ClientCanonicalValueCache,
 ): CoherentResult<TRow> {
+  const resolveCurrentRowIds =
+    resolveRowIds || (previous !== undefined && previous.identityResolver !== getRowId);
   if (
     previous !== undefined &&
-    !resolveRowIds &&
+    !resolveCurrentRowIds &&
     previous.rows === rows &&
     previous.validatedColumns === columns
   ) {
@@ -267,7 +375,7 @@ function createCoherent<TRow>(
   }
   if (
     previous !== undefined &&
-    !resolveRowIds &&
+    !resolveCurrentRowIds &&
     previous.validatedColumns === columns &&
     previous.rows.length === rows.length &&
     rows.every((row, index) => previous.rows[index] === row)
@@ -276,42 +384,35 @@ function createCoherent<TRow>(
   }
   const rowIds = Array.from({ length: rows.length }, () => "" as BrunoTableRowId);
   const admittedRows = Array.from<BrunoTableClientAdmittedRow>({ length: rows.length });
-  const rowsById = new Map<BrunoTableRowId, TRow>();
-  const valuesByRowId = new Map<BrunoTableRowId, ReadonlyMap<string, unknown>>();
-  const seenIds = new Set<BrunoTableRowId>();
+  const admittedById = new Map<BrunoTableRowId, BrunoTableClientAdmittedRow>();
+  const columnsById = new Map<string, CompiledColumn>(
+    columns.map((column) => [column.columnId, column]),
+  );
   let rowIdsChanged = previous === undefined || previous.rows.length !== rows.length;
-  const validateEveryRow = previous?.validatedColumns !== columns;
   const changedIndexes: number[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
     const previousRow = previous?.rows[index];
     const rowId =
-      previous !== undefined && previousRow === row && !resolveRowIds
+      previous !== undefined && previousRow === row && !resolveCurrentRowIds
         ? previous.rowIds[index]!
         : getRowId(row);
     if (typeof rowId !== "string" || rowId.length === 0) {
       throw new TypeError("BrunoTable getRowId must return a non-empty string.");
     }
-    if (seenIds.has(rowId)) {
+    if (admittedById.has(rowId)) {
       throw new TypeError(`BrunoTable getRowId returned a duplicate row identity: ${rowId}`);
     }
-    seenIds.add(rowId);
     const previousAdmitted = previous?.admittedRows[index];
-    let admitted: BrunoTableClientAdmittedRow;
-    if (!validateEveryRow && previousRow === row && previousAdmitted !== undefined) {
-      admitted =
-        previousAdmitted.rowId === rowId
+    const admitted =
+      previousRow === row && previousAdmitted !== undefined
+        ? previousAdmitted.rowId === rowId
           ? previousAdmitted
-          : Object.freeze({ raw: row, rowId, values: previousAdmitted.values });
-    } else {
-      const decoded = decodeSourceValues(row, index, columns);
-      if ("invalid" in decoded) return Object.freeze({ invalid: decoded.invalid });
-      admitted = Object.freeze({ raw: row, rowId, values: decoded.values });
-    }
+          : Object.freeze({ ...previousAdmitted, rowId })
+        : Object.freeze({ raw: row, rowId, rowIndex: index, values: valueCache });
     rowIds[index] = rowId;
     admittedRows[index] = admitted;
-    rowsById.set(rowId, row);
-    valuesByRowId.set(rowId, admitted.values);
+    admittedById.set(rowId, admitted);
     if (previousRow !== row) changedIndexes.push(index);
     if (previous?.rowIds[index] !== rowId) rowIdsChanged = true;
   }
@@ -335,47 +436,163 @@ function createCoherent<TRow>(
       totalRows: rows.length,
       loadedRows: rows.length,
       getRowId: (index: number) => rowIds[index],
-      getRow: (rowId: BrunoTableRowId) => rowsById.get(rowId),
-      getCellValue: (rowId: BrunoTableRowId, columnId: string) =>
-        valuesByRowId.get(rowId)?.get(columnId),
+      hasRowId: (rowId: BrunoTableRowId) => admittedById.has(rowId),
+      identityResolver: getRowId,
+      getRow: (rowId: BrunoTableRowId) => admittedById.get(rowId)?.raw as TRow | undefined,
+      getCellValue: (rowId: BrunoTableRowId, columnId: string) => {
+        const admitted = admittedById.get(rowId);
+        const column = columnsById.get(columnId);
+        return admitted === undefined || column === undefined
+          ? undefined
+          : admitted.values.read(admitted.raw, admitted.rowId, admitted.rowIndex, column);
+      },
       changeFromPrevious,
       validatedColumns: columns,
     }),
   });
 }
 
-type DecodedSourceValues =
-  | Readonly<{ readonly values: ReadonlyMap<string, unknown> }>
-  | Readonly<{ readonly invalid: NonNullable<CoherentResult<unknown>["invalid"]> }>;
+type ClientBoundedValue = Readonly<{
+  readonly raw: unknown;
+  readonly value: unknown;
+  readonly token: object;
+}>;
 
-function decodeSourceValues(
-  row: unknown,
-  rowIndex: number,
-  columns: readonly CompiledColumn[],
-): DecodedSourceValues {
-  const values = new Map<string, unknown>();
-  for (const column of columns) {
+class ClientCanonicalValueCache implements BrunoTableClientValueCache {
+  private readonly boundedValuesByRow = new Map<
+    BrunoTableRowId,
+    Map<CompiledColumn, ClientBoundedValue>
+  >();
+  private readonly boundedLru = new Map<
+    object,
+    Readonly<{ rowId: BrunoTableRowId; column: CompiledColumn }>
+  >();
+
+  public readonly read = (
+    row: unknown,
+    rowId: BrunoTableRowId,
+    rowIndex: number,
+    column: CompiledColumn,
+  ): unknown => {
+    const bounded = this.readBounded(row, rowId, rowIndex, column);
+    if (bounded.found) {
+      return bounded.value;
+    }
     let value: unknown;
     try {
       value = readCompiledColumnValue(column, row);
     } catch {
-      return Object.freeze({
-        invalid: invalidValue(rowIndex, column.columnId, "The source value could not be read."),
-      });
+      const invalid = createBrunoTableInvalidCellValue(
+        invalidValue(rowIndex, column.columnId, "The source value could not be read."),
+      );
+      this.store(row, rowId, column, invalid);
+      return invalid;
     }
     if (value === null || value === undefined) {
-      values.set(column.columnId, value);
-      continue;
+      this.store(row, rowId, column, value);
+      return value;
     }
     const decoded = column.semantics.decodeRuntime(value);
     if (decoded._tag === "Failure") {
-      return Object.freeze({
-        invalid: invalidValue(rowIndex, column.columnId, decoded.message),
-      });
+      const invalid = createBrunoTableInvalidCellValue(
+        invalidValue(rowIndex, column.columnId, decoded.message),
+      );
+      this.store(row, rowId, column, invalid);
+      return invalid;
     }
-    values.set(column.columnId, decoded.value);
+    this.store(row, rowId, column, decoded.value);
+    return decoded.value;
+  };
+
+  public readonly retainRowIds = (hasRowId: (rowId: BrunoTableRowId) => boolean): void => {
+    for (const [rowId, values] of this.boundedValuesByRow) {
+      if (hasRowId(rowId)) continue;
+      for (const entry of values.values()) this.boundedLru.delete(entry.token);
+      this.boundedValuesByRow.delete(rowId);
+    }
+  };
+
+  public readonly retainColumns = (
+    ...columnGroups: readonly (readonly CompiledColumn[] | undefined)[]
+  ): void => {
+    const retained = new Set(columnGroups.flatMap((columns) => columns ?? EMPTY_COLUMNS));
+    for (const [rowId, values] of this.boundedValuesByRow) {
+      for (const [column, entry] of values) {
+        if (retained.has(column)) continue;
+        values.delete(column);
+        this.boundedLru.delete(entry.token);
+      }
+      if (values.size === 0) this.boundedValuesByRow.delete(rowId);
+    }
+  };
+
+  private readonly readBounded = (
+    row: unknown,
+    rowId: BrunoTableRowId,
+    rowIndex: number,
+    column: CompiledColumn,
+  ): Readonly<{ found: true; value: unknown }> | Readonly<{ found: false }> => {
+    const values = this.boundedValuesByRow.get(rowId);
+    const cached = values?.get(column);
+    if (cached === undefined) return NOT_FOUND;
+    if (!Object.is(cached.raw, row)) {
+      values?.delete(column);
+      this.boundedLru.delete(cached.token);
+      if (values?.size === 0) this.boundedValuesByRow.delete(rowId);
+      return NOT_FOUND;
+    }
+    this.boundedLru.delete(cached.token);
+    this.boundedLru.set(cached.token, { rowId, column });
+    const value = currentInvalidRow(cached.value, rowIndex, column.columnId);
+    if (value !== cached.value) values?.set(column, Object.freeze({ ...cached, value }));
+    return Object.freeze({ found: true, value });
+  };
+
+  private readonly store = (
+    row: unknown,
+    rowId: BrunoTableRowId,
+    column: CompiledColumn,
+    value: unknown,
+  ): void => {
+    let values = this.boundedValuesByRow.get(rowId);
+    if (values === undefined) {
+      values = new Map();
+      this.boundedValuesByRow.set(rowId, values);
+    }
+    const previous = values.get(column);
+    if (previous !== undefined) this.boundedLru.delete(previous.token);
+    const token = Object.freeze({});
+    values.set(column, Object.freeze({ raw: row, value, token }));
+    this.boundedLru.set(token, { rowId, column });
+    if (this.boundedLru.size <= CLIENT_BOUNDED_VALUE_CACHE_LIMIT) return;
+    const oldestToken = this.boundedLru.keys().next().value;
+    if (oldestToken === undefined) return;
+    const oldest = this.boundedLru.get(oldestToken);
+    this.boundedLru.delete(oldestToken);
+    if (oldest === undefined) return;
+    const oldestValues = this.boundedValuesByRow.get(oldest.rowId);
+    if (oldestValues?.get(oldest.column)?.token !== oldestToken) return;
+    oldestValues.delete(oldest.column);
+    if (oldestValues.size === 0) this.boundedValuesByRow.delete(oldest.rowId);
+  };
+}
+
+function currentInvalidRow(value: unknown, rowIndex: number, columnId: string): unknown {
+  if (!isBrunoTableInvalidCellValue(value) || value.invalid.rowIndex === rowIndex) return value;
+  return createBrunoTableInvalidCellValue(invalidValue(rowIndex, columnId, value.invalid.message));
+}
+
+function validateAdmittedRows(
+  rows: readonly BrunoTableClientAdmittedRow[],
+  columns: readonly CompiledColumn[],
+): NonNullable<CoherentResult<unknown>["invalid"]> | undefined {
+  for (const row of rows) {
+    for (const column of columns) {
+      const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+      if (isBrunoTableInvalidCellValue(value)) return value.invalid;
+    }
   }
-  return Object.freeze({ values });
+  return undefined;
 }
 
 function invalidValue(
@@ -414,7 +631,7 @@ function snapshotSource<TRow>(
   stableRows?: readonly TRow[],
 ): BrunoTableClientSource<TRow> {
   return Object.freeze({
-    rows: stableRows ?? Object.freeze(Array.from(source.rows)),
+    rows: stableRows ?? source.rows,
     totalRows: source.totalRows,
     version: source.version,
     status: source.status,
@@ -424,6 +641,12 @@ function snapshotSource<TRow>(
       ? {}
       : { retry: Object.freeze({ run: source.retry.run, pending: source.retry.pending }) }),
   });
+}
+
+function queryColumnIds(filters: readonly unknown[], orderBy: ClientOrderBy): ReadonlySet<string> {
+  const columnIds = new Set(orderBy.map((sort) => sort.columnId));
+  for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
+  return columnIds;
 }
 
 function nextCoherent<TRow>(

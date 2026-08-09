@@ -37,6 +37,28 @@ describe("Client row model", () => {
     expect(localeLowerCase).not.toHaveBeenCalled();
   });
 
+  it("normalizes canonically equivalent accent-sensitive text", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+
+    expect(
+      filterClientRows([{ name: "caf\u00e9" }], columns, [
+        {
+          accentSensitive: true,
+          columnId: "COL_ID_NAME",
+          filter: "cafe\u0301",
+          type: "equals",
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
   it("requires a valid initial sort and removes invalid or duplicate live entries", () => {
     const columns = compileColumns([
       {

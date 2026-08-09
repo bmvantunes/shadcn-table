@@ -390,7 +390,9 @@ function compareEquality(
 }
 
 function normalizeText(value: string, caseSensitive: boolean, accentSensitive: boolean): string {
-  const withoutAccents = accentSensitive ? value : value.normalize("NFD").replace(/\p{Mark}/gu, "");
+  const withoutAccents = accentSensitive
+    ? value.normalize("NFC")
+    : value.normalize("NFD").replace(/\p{Mark}/gu, "");
   return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
 }
 

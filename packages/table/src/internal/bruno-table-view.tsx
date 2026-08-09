@@ -38,11 +38,14 @@ import {
   type BrunoTableActiveCell,
 } from "./navigation";
 import type {
+  BrunoTableCellSnapshot,
   BrunoTableChromeSnapshot,
   BrunoTableColumnCommandSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
+import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import {
+  recordBrunoTableClientCellRender,
   recordBrunoTableClientGridSurfaceRender,
   recordBrunoTableClientViewRender,
 } from "./render-instrumentation";
@@ -70,6 +73,13 @@ const VISUALLY_HIDDEN: CSSProperties = {
 
 function totalColumnWidth(columns: readonly CompiledColumn[]): number {
   return columns.reduce((total, column) => total + column.semantics.width, 0);
+}
+
+function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
+  grid.tabIndex = -1;
+  setTimeout(() => {
+    if (grid.isConnected) grid.tabIndex = 0;
+  }, 0);
 }
 
 function navigationDelta(
@@ -154,10 +164,21 @@ export type BrunoTableRowPipelineProps<
   readonly children: (snapshot: BrunoTableRowPipelineSnapshot) => ReactElement;
 };
 
-export type BrunoTableRowPipelineSnapshot = Readonly<{
-  readonly rowSpace: BrunoTableLogicalRowSpace;
-  readonly queryGeneration: number;
-}>;
+export type BrunoTableRowPipelineSnapshot =
+  | Readonly<{
+      readonly kind: "rows";
+      readonly columns: readonly CompiledColumn[];
+      readonly rowSpace: BrunoTableLogicalRowSpace;
+      readonly queryGeneration: number;
+    }>
+  | Readonly<{
+      readonly kind: "invalid";
+      readonly columns: readonly CompiledColumn[];
+      readonly invalid: Extract<
+        BrunoTableChromeSnapshot["invalid"],
+        { readonly kind: "invalid-value" }
+      >;
+    }>;
 
 export type BrunoTableLogicalRowSpace = Readonly<{
   readonly totalRows: number;
@@ -374,7 +395,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   useLayoutEffect(() => {
     if (body.kind !== "rows") navigation.setShape([], compiledColumns);
   }, [body.kind, compiledColumns, navigation]);
-  if (body.kind === "loading") return <LoadingRows count={skeletonCount(body.totalRows)} />;
+  if (body.kind === "loading") return <LoadingRows totalRows={body.totalRows} />;
   if (body.kind === "invalid") return null;
   if (body.kind === "empty") {
     return <EmptySourceBody runtime={runtime} focusFallback={focusFallback} />;
@@ -386,17 +407,24 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       columns={compiledColumns}
       rowPipelineAdapter={rowPipelineAdapter}
     >
-      {({ rowSpace, queryGeneration }) => (
-        <BrunoTableViewportAdapter
-          tableId={tableId}
-          rowSpace={rowSpace}
-          runtime={runtime}
-          columns={compiledColumns}
-          focusFallback={focusFallback}
-          navigation={navigation}
-          queryGeneration={queryGeneration}
-        />
-      )}
+      {(snapshot) =>
+        snapshot.kind === "invalid" ? (
+          <Alert variant="destructive">
+            <AlertTitle>Invalid source value</AlertTitle>
+            <AlertDescription>{invalidSourceDetails(snapshot.invalid)}</AlertDescription>
+          </Alert>
+        ) : (
+          <BrunoTableViewportAdapter
+            tableId={tableId}
+            rowSpace={snapshot.rowSpace}
+            runtime={runtime}
+            columns={snapshot.columns}
+            focusFallback={focusFallback}
+            navigation={navigation}
+            queryGeneration={snapshot.queryGeneration}
+          />
+        )
+      }
     </RowPipeline>
   );
 }
@@ -439,10 +467,6 @@ const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }
     </Empty>
   );
 });
-
-function skeletonCount(totalRows: number): number {
-  return Number.isSafeInteger(totalRows) && totalRows > 0 ? Math.min(totalRows, 10) : 5;
-}
 
 function emptyTitle(status: BrunoTableChromeSnapshot["status"]): string {
   if (status === "closed") return "Live updates stopped";
@@ -710,6 +734,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) {
             event.preventDefault();
             event.currentTarget.focus({ preventScroll: true });
+          } else if (
+            event.key === "Tab" &&
+            event.shiftKey &&
+            event.currentTarget.contains(event.target as Node)
+          ) {
+            yieldGridTabStopForNativeTraversal(event.currentTarget);
           }
           return;
         }
@@ -740,16 +770,41 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           }
           return;
         }
-        const delta = navigationDelta(event.key);
+        const boundaryModifier = event.ctrlKey || event.metaKey;
+        const rowEdge = event.key === "Home" ? "start" : event.key === "End" ? "end" : undefined;
+        const columnEdge =
+          boundaryModifier && event.key === "ArrowUp"
+            ? "start"
+            : boundaryModifier && event.key === "ArrowDown"
+              ? "end"
+              : undefined;
+        const modifiedRowEdge =
+          boundaryModifier && event.key === "ArrowLeft"
+            ? "start"
+            : boundaryModifier && event.key === "ArrowRight"
+              ? "end"
+              : undefined;
+        const delta = boundaryModifier ? undefined : navigationDelta(event.key);
         const pageDelta =
           event.key === "PageUp"
             ? -viewportPageSize(event.currentTarget)
             : event.key === "PageDown"
               ? viewportPageSize(event.currentTarget)
               : undefined;
-        if (delta === undefined && pageDelta === undefined) return;
+        if (
+          delta === undefined &&
+          pageDelta === undefined &&
+          rowEdge === undefined &&
+          columnEdge === undefined &&
+          modifiedRowEdge === undefined
+        )
+          return;
         event.preventDefault();
-        if (pageDelta !== undefined) navigation.movePage(pageDelta);
+        if (rowEdge !== undefined && boundaryModifier) navigation.moveToGridEdge(rowEdge);
+        else if (rowEdge !== undefined) navigation.moveToRowEdge(rowEdge);
+        else if (columnEdge !== undefined) navigation.moveToColumnEdge(columnEdge);
+        else if (modifiedRowEdge !== undefined) navigation.moveToRowEdge(modifiedRowEdge);
+        else if (pageDelta !== undefined) navigation.movePage(pageDelta);
         else if (delta !== undefined) navigation.move(delta.row, delta.column);
         const next = navigation.getSnapshot();
         if (next !== undefined) {
@@ -806,15 +861,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             {virtualWindow.leftPadding > 0 ? (
               <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.leftPadding }} />
             ) : null}
-            {virtualWindow.center.map((column) => (
+            {virtualWindow.center.map((column, index) => (
               <BrunoTableHeaderCell
                 key={column.columnId}
                 instanceId={instanceId}
                 tableId={tableId}
                 columnIndex={
-                  virtualWindow.pinnedStart.length +
-                  virtualWindow.centerStartIndex +
-                  virtualWindow.center.indexOf(column)
+                  virtualWindow.pinnedStart.length + virtualWindow.centerStartIndex + index
                 }
                 column={column}
                 runtime={runtime}
@@ -1186,21 +1239,34 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
   readonly tableId: string;
 }) {
   const rowId = activeCell.rowId;
+  const rowAware = proxyPresentationUsesRawRow(column);
   const subscribe = useMemo(
     () => (listener: () => void) =>
-      rowId === undefined ? () => undefined : runtime.subscribeRow(rowId, listener),
-    [rowId, runtime],
+      rowId === undefined
+        ? () => undefined
+        : rowAware
+          ? runtime.subscribeRow(rowId, listener)
+          : runtime.subscribeCell(rowId, column.columnId, listener),
+    [column.columnId, rowAware, rowId, runtime],
   );
   const getSnapshot = useMemo(
-    () => () => (rowId === undefined ? undefined : runtime.getRowSnapshot(rowId)),
-    [rowId, runtime],
+    () => () =>
+      rowId === undefined
+        ? undefined
+        : rowAware
+          ? runtime.getRowSnapshot(rowId)
+          : runtime.getCellSnapshot(rowId, column.columnId),
+    [column.columnId, rowAware, rowId, runtime],
   );
-  const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot | undefined);
+  const row = rowAware ? snapshot : undefined;
+  const rowPresent = rowAware ? row !== undefined : (cellSnapshot?.rowPresent ?? false);
   const value =
-    row === undefined || rowId === undefined
-      ? undefined
-      : runtime.getCellValueSnapshot(rowId, column.columnId);
-  const content = row === undefined ? "Loading row" : resolveProxyCellContent(column, row, value);
+    rowAware && rowId !== undefined
+      ? runtime.getCellValueSnapshot(rowId, column.columnId)
+      : cellSnapshot?.value;
+  const content = rowPresent ? resolveProxyCellContent(column, row, value) : "Loading row";
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
@@ -1278,14 +1344,6 @@ const BrunoTableRow = memo(function BrunoTableRow({
   readonly top: number;
   readonly width: number;
 }) {
-  const subscribe = useMemo(
-    () => (listener: () => void) => runtime.subscribeRow(rowId, listener),
-    [rowId, runtime],
-  );
-  const getSnapshot = useMemo(() => () => runtime.getRowSnapshot(rowId), [rowId, runtime]);
-  const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  if (row === undefined) return null;
-
   return (
     <tr
       role="row"
@@ -1312,8 +1370,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
               <BrunoTableCell
                 key={column.columnId}
                 regionCell
-                row={row}
-                value={runtime.getCellValueSnapshot(rowId, column.columnId)}
+                runtime={runtime}
                 rowId={rowId}
                 instanceId={instanceId}
                 tableId={tableId}
@@ -1327,15 +1384,14 @@ const BrunoTableRow = memo(function BrunoTableRow({
       {leftPadding > 0 ? (
         <td aria-hidden="true" style={{ padding: 0, width: leftPadding }} />
       ) : null}
-      {center.map((column) => (
+      {center.map((column, index) => (
         <BrunoTableCell
           key={column.columnId}
-          row={row}
-          value={runtime.getCellValueSnapshot(rowId, column.columnId)}
+          runtime={runtime}
           rowId={rowId}
           instanceId={instanceId}
           tableId={tableId}
-          columnIndex={pinnedStartCount + centerStartIndex + center.indexOf(column)}
+          columnIndex={pinnedStartCount + centerStartIndex + index}
           column={column}
         />
       ))}
@@ -1353,8 +1409,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
               <BrunoTableCell
                 key={column.columnId}
                 regionCell
-                row={row}
-                value={runtime.getCellValueSnapshot(rowId, column.columnId)}
+                runtime={runtime}
                 rowId={rowId}
                 instanceId={instanceId}
                 tableId={tableId}
@@ -1370,8 +1425,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
 });
 
 const BrunoTableCell = memo(function BrunoTableCell({
-  row,
-  value,
+  runtime,
   rowId,
   instanceId,
   tableId,
@@ -1380,8 +1434,7 @@ const BrunoTableCell = memo(function BrunoTableCell({
   regionCell = false,
   style,
 }: {
-  readonly row: unknown;
-  readonly value: unknown;
+  readonly runtime: BrunoTableRuntimeView;
   readonly rowId: string;
   readonly instanceId?: string;
   readonly tableId?: string;
@@ -1390,8 +1443,33 @@ const BrunoTableCell = memo(function BrunoTableCell({
   readonly regionCell?: boolean;
   readonly style?: CSSProperties;
 }) {
-  const className = resolveCellClassName(column, row, value);
-  const content = resolveCellContent(column, row, value);
+  const rowAware = cellPresentationUsesRawRow(column);
+  const subscribe = useMemo(
+    () => (listener: () => void) =>
+      rowAware
+        ? runtime.subscribeRow(rowId, listener)
+        : runtime.subscribeCell(rowId, column.columnId, listener),
+    [column.columnId, rowAware, rowId, runtime],
+  );
+  const getSnapshot = useMemo(
+    () => () =>
+      rowAware ? runtime.getRowSnapshot(rowId) : runtime.getCellSnapshot(rowId, column.columnId),
+    [column.columnId, rowAware, rowId, runtime],
+  );
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
+  const row = rowAware ? snapshot : undefined;
+  const value = rowAware
+    ? runtime.getCellValueSnapshot(rowId, column.columnId)
+    : cellSnapshot?.value;
+  recordBrunoTableClientCellRender(rowId, column.columnId);
+  const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
+  const className = invalid ? undefined : resolveCellClassName(column, row, value);
+  const content = invalid ? (
+    <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
+  ) : (
+    resolveCellContent(column, row, value)
+  );
   const id =
     instanceId === undefined || tableId === undefined || columnIndex === undefined
       ? undefined
@@ -1416,7 +1494,7 @@ const BrunoTableCell = memo(function BrunoTableCell({
         width: "100%",
       }}
     >
-      {column.cellRenderer === undefined ? (
+      {invalid || column.cellRenderer === undefined ? (
         content
       ) : (
         <NonTabbableCellContent>{content}</NonTabbableCellContent>
@@ -1635,6 +1713,18 @@ function hasRenderableChildren(children: ReactNode): boolean {
   });
 }
 
+function cellPresentationUsesRawRow(column: CompiledColumn): boolean {
+  return (
+    column.valueFormatter !== undefined ||
+    typeof column.cellClassName === "function" ||
+    column.cellRenderer !== undefined
+  );
+}
+
+function proxyPresentationUsesRawRow(column: CompiledColumn): boolean {
+  return column.valueFormatter !== undefined;
+}
+
 function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): string {
   if (column.valueFormatter !== undefined) {
     const formatted = Reflect.apply(column.valueFormatter, undefined, [{ row, value }]);
@@ -1687,27 +1777,74 @@ function resolveCellRenderer(
   return Reflect.apply(column.cellRenderer, undefined, [{ row, value }]) as ReactNode | undefined;
 }
 
-function LoadingRows({ count }: { readonly count: number }) {
+const EMPTY_LOADING_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
+const DEFAULT_LOADING_ROW_COUNT = 5;
+
+// Loading scroll attachment stays outside the compiler-managed render surface.
+// oxlint-disable react/react-compiler
+const LoadingRows = memo(function LoadingRows({ totalRows }: { readonly totalRows: number }) {
+  "use no memo";
+  const logicalRowCount = totalRows > 0 ? totalRows : DEFAULT_LOADING_ROW_COUNT;
+  const [viewport] = useState(() => {
+    const next = new BrunoTableViewportRuntime(0);
+    next.setLayout(logicalRowCount, EMPTY_LOADING_COLUMNS);
+    return next;
+  });
+  const viewportSnapshot = useSyncExternalStore(
+    viewport.subscribe,
+    viewport.getSnapshot,
+    viewport.getSnapshot,
+  );
+  useLayoutEffect(
+    () => viewport.setLayout(logicalRowCount, EMPTY_LOADING_COLUMNS),
+    [logicalRowCount, viewport],
+  );
+  useEffect(() => () => viewport.dispose(), [viewport]);
+  const virtualWindow = viewportSnapshot.virtualWindow;
   return (
     <div
+      ref={viewport.attach}
       aria-busy="true"
       aria-colcount={1}
       aria-label="Loading table rows"
-      aria-rowcount={count}
+      aria-rowcount={logicalRowCount}
       role="grid"
+      style={{
+        maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+        overflow: "auto",
+        position: "relative",
+      }}
     >
-      <div role="rowgroup">
-        {Array.from({ length: count }, (_, index) => (
-          <div key={index} aria-rowindex={index + 1} role="row" style={{ height: ROW_HEIGHT }}>
-            <div role="gridcell">
-              <Skeleton aria-label="Loading row" style={{ height: ROW_HEIGHT - 8, margin: 4 }} />
+      <div
+        role="rowgroup"
+        style={{ height: virtualWindow.totalHeight, position: "relative", width: "100%" }}
+      >
+        {Array.from({ length: virtualWindow.rowEnd - virtualWindow.rowStart }, (_, offset) => {
+          const logicalRowIndex = virtualWindow.rowStart + offset;
+          return (
+            <div
+              key={`loading-slot-${String(offset)}`}
+              aria-rowindex={logicalRowIndex + 1}
+              role="row"
+              style={{
+                height: ROW_HEIGHT,
+                left: 0,
+                position: "absolute",
+                right: 0,
+                top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
+              }}
+            >
+              <div aria-label="Loading row" role="gridcell">
+                <Skeleton aria-label="Loading row" style={{ height: ROW_HEIGHT - 8, margin: 4 }} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
-}
+});
+// oxlint-enable react/react-compiler
 
 type BrunoTableToolbarSnapshot = Readonly<{
   readonly children: ReactNode;

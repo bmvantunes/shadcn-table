@@ -169,22 +169,58 @@ export class BrunoTableNavigationRuntime {
   };
 
   public readonly movePage = (rowDelta: number): void => {
-    if (
-      this.activeCell === undefined ||
-      this.activeCell.region !== "body" ||
-      this.rowSpace.totalRows === 0
-    ) {
-      return;
-    }
-    const target = Math.max(
-      0,
-      Math.min(this.rowSpace.totalRows - 1, this.activeCell.rowIndex + rowDelta),
-    );
+    if (this.activeCell === undefined || this.rowSpace.totalRows === 0) return;
+    const target =
+      this.activeCell.region === "header"
+        ? Math.max(0, Math.min(this.rowSpace.totalRows - 1, rowDelta > 0 ? rowDelta - 1 : 0))
+        : Math.max(0, Math.min(this.rowSpace.totalRows - 1, this.activeCell.rowIndex + rowDelta));
     this.setActive({
       region: "body",
       rowIndex: target,
       ...rowIdentity(this.rowSpace, target),
       columnId: this.activeCell.columnId,
+    });
+  };
+
+  public readonly moveToRowEdge = (edge: "start" | "end"): void => {
+    if (this.activeCell === undefined || this.columns.length === 0) return;
+    this.setActive({
+      ...this.activeCell,
+      columnId: this.columns[edge === "start" ? 0 : this.columns.length - 1]!.columnId,
+    });
+  };
+
+  public readonly moveToColumnEdge = (edge: "start" | "end"): void => {
+    if (this.activeCell === undefined || this.columns.length === 0) return;
+    if (edge === "start" || this.rowSpace.totalRows === 0) {
+      this.setActive({ region: "header", rowIndex: 0, columnId: this.activeCell.columnId });
+      return;
+    }
+    const rowIndex = this.rowSpace.totalRows - 1;
+    this.setActive({
+      region: "body",
+      rowIndex,
+      ...rowIdentity(this.rowSpace, rowIndex),
+      columnId: this.activeCell.columnId,
+    });
+  };
+
+  public readonly moveToGridEdge = (edge: "start" | "end"): void => {
+    if (this.columns.length === 0) return;
+    if (edge === "start" || this.rowSpace.totalRows === 0) {
+      this.setActive({
+        region: "header",
+        rowIndex: 0,
+        columnId: this.columns[edge === "start" ? 0 : this.columns.length - 1]!.columnId,
+      });
+      return;
+    }
+    const rowIndex = this.rowSpace.totalRows - 1;
+    this.setActive({
+      region: "body",
+      rowIndex,
+      ...rowIdentity(this.rowSpace, rowIndex),
+      columnId: this.columns[this.columns.length - 1]!.columnId,
     });
   };
 

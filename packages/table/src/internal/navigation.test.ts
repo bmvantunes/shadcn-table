@@ -171,4 +171,50 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.move(-4, 0);
     expect(navigation.getSnapshot()).toMatchObject({ region: "header" });
   });
+
+  it("supports row, column, grid, and header page boundaries", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+
+    navigation.moveToRowEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "first",
+      columnId: "COL_ID_SCORE",
+    });
+    navigation.moveToColumnEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({ rowId: "third", columnId: "COL_ID_SCORE" });
+    navigation.moveToGridEdge("start");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_NAME",
+    });
+    navigation.movePage(2);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "second",
+      columnId: "COL_ID_NAME",
+    });
+    navigation.moveToGridEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({ rowId: "third", columnId: "COL_ID_SCORE" });
+    navigation.moveToColumnEdge("start");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_SCORE",
+    });
+  });
 });
