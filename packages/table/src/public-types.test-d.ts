@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 
 import type { ReactNode } from "react";
+import type { LiveQueryResult } from "effect-view-server/config/query";
 
 import {
   BrunoTableBigIntColumn,
@@ -15,6 +16,7 @@ import {
 
 import type {
   BrunoTableClientProps,
+  BrunoTableClientSource,
   BrunoTableColumnField,
   BrunoTableColumnId,
   BrunoTableColumnIdOf,
@@ -69,6 +71,18 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const directViewServerResult = null as unknown as LiveQueryResult<Order>;
+const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
+const directViewServerClient = BrunoTableClient({
+  tableId: "view-server-orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void directClientSource;
+void directViewServerClient;
 
 const rawGroupSymbol = {
   columnId: "COL_ID_GROUP_SYMBOL",
@@ -145,6 +159,47 @@ const capabilityColumns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type CapabilityColumns = typeof capabilityColumns;
+
+void BrunoTableClient({
+  tableId: "invalid-unknown-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Client component preserves exact Column Identity inference.
+    { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-misspelled-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Client component rejects misspelled Column Identities.
+    { columnId: "COL_ID_SYMBOOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-computed-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Computed columns have no automatic Client sort mapping.
+    { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-nonsortable-sort",
+  columns: capabilityColumns,
+  initialOrderBy: [
+    // @ts-expect-error Client component excludes explicitly nonsortable identities.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
 
 const noSortingColumns = [
   {
@@ -395,6 +450,15 @@ describe("BrunoTable public types", () => {
 
     expectTypeOf(filters).toBeArray();
     expectTypeOf(sorting).toBeArray();
+
+    const emptyCompound = [
+      {
+        type: "OR",
+        // @ts-expect-error Compound filter conditions are non-empty.
+        conditions: [],
+      },
+    ] satisfies BrunoTableFilterExpressions<Order, Columns>;
+    void emptyCompound;
   });
 
   it("accepts direct client and opaque server viewport source envelopes", () => {

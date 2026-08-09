@@ -1,9 +1,13 @@
 import { defineConfig, type UserConfig } from "vite-plus";
 
+import { shadcnSourceAliases } from "./config/shadcn-source-aliases.js";
+
 const config: UserConfig = defineConfig({
+  resolve: { alias: shadcnSourceAliases },
   test: {
     projects: [
       {
+        resolve: { alias: shadcnSourceAliases },
         test: {
           name: "node",
           environment: "node",
@@ -30,7 +34,12 @@ const config: UserConfig = defineConfig({
     exports: true,
   },
   lint: {
-    ignorePatterns: [".agents/**", ".repos/**"],
+    ignorePatterns: [
+      ".agents/**",
+      ".repos/**",
+      "packages/table/tests/emitted-consumer/**",
+      "packages/table/tests/emitted-effect-consumer/**",
+    ],
     options: {
       typeAware: true,
       typeCheck: true,

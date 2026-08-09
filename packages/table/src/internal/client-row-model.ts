@@ -85,14 +85,20 @@ export function filterClientRows<TRow>(
 }
 
 export function filterReferencesColumn(candidate: unknown, columnId: string): boolean {
+  const columnIds = new Set<string>();
+  collectClientFilterColumnIds(candidate, columnIds);
+  return columnIds.has(columnId);
+}
+
+export function collectClientFilterColumnIds(candidate: unknown, target: Set<string>): void {
   const filter = asRecord(candidate);
-  if (filter["columnId"] === columnId) return true;
+  if (typeof filter["columnId"] === "string") target.add(filter["columnId"]);
   if (Array.isArray(filter["conditions"])) {
-    return filter["conditions"].some((condition) => filterReferencesColumn(condition, columnId));
+    for (const condition of filter["conditions"]) collectClientFilterColumnIds(condition, target);
   }
-  return filter["condition"] === undefined
-    ? false
-    : filterReferencesColumn(filter["condition"], columnId);
+  if (filter["condition"] !== undefined) {
+    collectClientFilterColumnIds(filter["condition"], target);
+  }
 }
 
 function sanitizeFilter(
@@ -102,23 +108,27 @@ function sanitizeFilter(
   const filter = asRecord(candidate);
   const type = filter["type"];
   if (type === "AND" || type === "OR") {
-    if (!Array.isArray(filter["conditions"])) return undefined;
-    const conditions = filter["conditions"].map((condition) =>
-      sanitizeFilter(condition, columnsById),
-    );
+    const candidates = filter["conditions"];
+    if (!Array.isArray(candidates) || candidates.length === 0) return undefined;
+    for (let index = 0; index < candidates.length; index += 1) {
+      if (!Object.hasOwn(candidates, index)) return undefined;
+    }
+    const conditions = candidates.map((condition) => sanitizeFilter(condition, columnsById));
     if (conditions.some((condition) => condition === undefined)) return undefined;
     const columnIds = new Set<string>();
-    for (const condition of conditions) collectFilterColumnIds(condition, columnIds);
+    for (const condition of conditions) collectClientFilterColumnIds(condition, columnIds);
     if (columnIds.size > 1) return undefined;
     const sanitizedConditions =
-      Object.isFrozen(filter["conditions"]) && sameReferences(filter["conditions"], conditions)
-        ? filter["conditions"]
+      Object.isFrozen(candidates) && sameReferences(candidates, conditions)
+        ? candidates
         : Object.freeze(conditions);
-    return snapshotFilter(filter, { conditions: sanitizedConditions });
+    return snapshotFilter(filter, ["type", "conditions"], { conditions: sanitizedConditions });
   }
   if (type === "NOT") {
     const condition = sanitizeFilter(filter["condition"], columnsById);
-    return condition === undefined ? undefined : snapshotFilter(filter, { condition });
+    return condition === undefined
+      ? undefined
+      : snapshotFilter(filter, ["type", "condition"], { condition });
   }
   const columnId = filter["columnId"];
   const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
@@ -127,9 +137,17 @@ function sanitizeFilter(
   }
   const operand = filter["filter"];
   const decode = (value: unknown) => column.semantics.decodeRuntime(value);
-  if (type === "blank" || type === "notBlank") return snapshotFilter(filter);
+  if (type === "blank" || type === "notBlank") {
+    return snapshotFilter(filter, ["columnId", "type"]);
+  }
   if (type === "in") {
-    if (!Array.isArray(operand)) return undefined;
+    if (
+      !Array.isArray(operand) ||
+      !isDenseArray(operand) ||
+      !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
+    ) {
+      return undefined;
+    }
     const decoded = operand.map(decode);
     const decodedValues = decoded.map((result) =>
       result._tag === "Success" ? result.value : undefined,
@@ -139,15 +157,22 @@ function sanitizeFilter(
         ? operand
         : Object.freeze(decodedValues);
     return decoded.every((result) => result._tag === "Success")
-      ? snapshotFilter(filter, { filter: sanitizedValues })
+      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"], {
+          filter: sanitizedValues,
+        })
       : undefined;
   }
   if (type === "inRange") {
     if (column.semantics.filterFamily !== "numeric") return undefined;
     const from = decode(operand);
     const to = decode(filter["filterTo"]);
-    return from._tag === "Success" && to._tag === "Success"
-      ? snapshotFilter(filter, { filter: from.value, filterTo: to.value })
+    return from._tag === "Success" &&
+      to._tag === "Success" &&
+      column.semantics.compare(from.value, to.value) < 0
+      ? snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
+          filter: from.value,
+          filterTo: to.value,
+        })
       : undefined;
   }
   if (
@@ -168,7 +193,20 @@ function sanitizeFilter(
       return undefined;
     }
     const result = decode(operand);
-    return result._tag === "Success" ? snapshotFilter(filter, { filter: result.value }) : undefined;
+    if (
+      result._tag !== "Success" ||
+      ((type === "equals" || type === "notEqual") &&
+        !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text"))
+    ) {
+      return undefined;
+    }
+    return snapshotFilter(
+      filter,
+      type === "equals" || type === "notEqual"
+        ? ["columnId", "type", "filter", "caseSensitive", "accentSensitive"]
+        : ["columnId", "type", "filter"],
+      { filter: result.value },
+    );
   }
   if (
     type === "contains" ||
@@ -176,8 +214,17 @@ function sanitizeFilter(
     type === "startsWith" ||
     type === "endsWith"
   ) {
-    return typeof operand === "string" && column.semantics.filterFamily === "text"
-      ? snapshotFilter(filter)
+    const validSensitivity = hasValidTextSensitivity(filter, true);
+    const normalizedOperand =
+      typeof operand === "string" && validSensitivity
+        ? normalizeText(
+            operand,
+            filter["caseSensitive"] === true,
+            filter["accentSensitive"] === true,
+          )
+        : "";
+    return column.semantics.filterFamily === "text" && normalizedOperand.length > 0
+      ? snapshotFilter(filter, ["columnId", "type", "filter", "caseSensitive", "accentSensitive"])
       : undefined;
   }
   return undefined;
@@ -185,9 +232,14 @@ function sanitizeFilter(
 
 function snapshotFilter(
   filter: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
   replacements: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {
-  const snapshot = { ...filter, ...replacements };
+  const snapshot: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Object.hasOwn(replacements, key)) snapshot[key] = replacements[key];
+    else if (Object.hasOwn(filter, key)) snapshot[key] = filter[key];
+  }
   if (
     Object.isFrozen(filter) &&
     Reflect.ownKeys(filter).length === Reflect.ownKeys(snapshot).length &&
@@ -202,15 +254,6 @@ function snapshotFilter(
 
 function sameReferences(previous: readonly unknown[], next: readonly unknown[]): boolean {
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
-}
-
-function collectFilterColumnIds(candidate: unknown, target: Set<string>): void {
-  const filter = asRecord(candidate);
-  if (typeof filter["columnId"] === "string") target.add(filter["columnId"]);
-  if (Array.isArray(filter["conditions"])) {
-    for (const condition of filter["conditions"]) collectFilterColumnIds(condition, target);
-  }
-  if (filter["condition"] !== undefined) collectFilterColumnIds(filter["condition"], target);
 }
 
 function evaluateFilter(
@@ -250,6 +293,16 @@ function evaluateFilter(
       Array.isArray(operand) &&
       operand.some((item) => compareEquality(column, value, item, caseSensitive, accentSensitive))
     );
+  }
+  if (
+    (filter["type"] === "greaterThan" ||
+      filter["type"] === "greaterThanOrEqual" ||
+      filter["type"] === "lessThan" ||
+      filter["type"] === "lessThanOrEqual" ||
+      filter["type"] === "inRange") &&
+    (value === null || value === undefined)
+  ) {
+    return false;
   }
   if (filter["type"] === "greaterThan") return column.semantics.compare(value, operand) > 0;
   if (filter["type"] === "greaterThanOrEqual") return column.semantics.compare(value, operand) >= 0;
@@ -295,6 +348,22 @@ function compareEquality(
 function normalizeText(value: string, caseSensitive: boolean, accentSensitive: boolean): string {
   const withoutAccents = accentSensitive ? value : value.normalize("NFD").replace(/\p{Mark}/gu, "");
   return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
+}
+
+function hasValidTextSensitivity(
+  filter: Readonly<Record<string, unknown>>,
+  supported: boolean,
+): boolean {
+  return ["caseSensitive", "accentSensitive"].every(
+    (key) => !Object.hasOwn(filter, key) || (supported && typeof filter[key] === "boolean"),
+  );
+}
+
+function isDenseArray(values: readonly unknown[]): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.hasOwn(values, index)) return false;
+  }
+  return true;
 }
 
 function hasSortableColumns(columns: readonly CompiledColumn[]): boolean {

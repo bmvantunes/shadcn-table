@@ -29,7 +29,7 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toBeUndefined();
   });
 
-  it("falls back to the active row's previous display position when its identity disappears", () => {
+  it("falls back to the clamped display position when its raw row identity disappears", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -114,6 +114,10 @@ describe("BrunoTableNavigationRuntime", () => {
       region: "header",
       columnId: "COL_ID_NAME",
     });
+    const activated = navigation.getSnapshot();
+    navigation.activateForFocus();
+    navigation.activateHeader("COL_ID_MISSING");
+    expect(navigation.getSnapshot()).toBe(activated);
     navigation.move(0, 1);
     expect(navigation.getSnapshot()).toMatchObject({
       region: "header",

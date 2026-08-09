@@ -73,6 +73,8 @@ function navigate(command: NavigationCommand) {
 
 Navigation never waits for a DOM node or a network response before accepting the next command. The logical Active Cell is authoritative; mounted DOM focus is only its current projection.
 
+For an ordinary Client live publication inside the same projection, follow a surviving active Row Identity to its new display index without revealing it. If that identity disappears while rows remain, target the row at the previous display index, clamped to the new last row, and retain the active Column Identity when it is still navigable. Clear the Active Cell only when the result becomes empty. This positional fallback chooses a new identity after authoritative disappearance; it never treats the row index itself as identity.
+
 ## Grouping shape reset
 
 Every Group By add, remove, or reorder replaces the logical row-and-column projection. After cancelling any active range gesture and deriving that projection, reset the Active Cell to row zero and its first visible navigable Logical Column. While grouped, that column is the first active group key. After clearing the final key, it is the first visible navigable column in restored base Logical Column Order. Do not translate the previous raw row into a group, preserve a coincidentally matching column, or carry a group coordinate across a reordered key tuple.
@@ -138,6 +140,14 @@ Pinned columns are already horizontally visible but still require vertical scrol
 Entering either pinned region must not change horizontal scroll position. Crossing from a pinned-start column into centre reveals the first centre destination only; crossing from centre into pinned-end focuses the pinned destination without block-scrolling the centre region.
 
 Do not delegate horizontal navigation reveal directly to native `Element.scrollIntoView()`. It does not understand the grid's logical pinned insets and can jump multiple columns. BrunoTable owns this geometry even when TanStack supplies private selection or movement primitives.
+
+In a read-only body cell whose custom renderer contains interactive descendants, Enter or F2
+enters that cell's first same-document interactive control from the grid root. Embedded browsing
+contexts stay outside ordinary Tab order but are never automatic interaction-entry targets because
+their keyboard events cannot bubble to the grid. All interactive descendants stay outside ordinary
+Tab order so virtualization cannot create unstable tab stops. Escape returns focus to the grid root
+without changing the Active Cell; once inside, the control otherwise owns its native key behavior,
+and Tab leaves the grid through the ordinary document order.
 
 For Page Up and Page Down, derive the target from viewport geometry, not a hard-coded row count.
 
@@ -281,6 +291,7 @@ Support:
 28. An unloaded active Server row retains its logical Active Cell until delivery.
 29. Live sort-key movement follows the same Row Identity when its new index is known, never auto-scrolls after it, and never transfers activation to a different row at the old index.
 30. If a moved Server row's new index is unknown, clear the Active Cell while retaining focus on the grid root; if a Client range's identities cease to be contiguous, clear the range.
+31. An ordinary Client publication follows a surviving active Row Identity and falls back to the clamped previous display position only after that identity disappears.
 
 ## Test matrix
 

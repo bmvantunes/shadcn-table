@@ -108,6 +108,32 @@ describe("BrunoTableClientRuntime", () => {
     ]);
   });
 
+  it("releases and resynchronizes derived row stores across idempotent disposal", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const runtime = createRuntime(source([first]));
+    const rowsStore = runtime.createRowsStore(() => true);
+    const staleListener = vi.fn();
+    const unsubscribe = rowsStore.subscribe(staleListener);
+    const initialSnapshot = rowsStore.getSnapshot();
+
+    unsubscribe();
+    unsubscribe();
+    const updated = { id: "first", name: "Ada Lovelace" } satisfies Row;
+    runtime.publish(source([updated]));
+
+    expect(staleListener).not.toHaveBeenCalled();
+    expect(rowsStore.getSnapshot()).toBe(initialSnapshot);
+
+    const liveListener = vi.fn();
+    const disposeLive = rowsStore.subscribe(liveListener);
+    expect(rowsStore.getSnapshot()).toEqual([updated]);
+    const latest = { id: "first", name: "Countess Lovelace" } satisfies Row;
+    runtime.publish(source([latest]));
+    expect(liveListener).toHaveBeenCalledOnce();
+    expect(rowsStore.getSnapshot()).toEqual([latest]);
+    disposeLive();
+  });
+
   it("retains and silences unchanged column-command snapshots", () => {
     const columns = compileColumns([
       {
@@ -259,13 +285,16 @@ describe("BrunoTableClientRuntime", () => {
 
   it("reuses row collections when a source publishes the same row references", () => {
     const rows = [{ id: "first", name: "Ada" }] satisfies readonly Row[];
-    const runtime = createRuntime(source(rows));
+    const getRowId = vi.fn((row: Row) => row.id);
+    const runtime = createRuntime(source(rows), getRowId);
     const bodyListener = vi.fn();
     runtime.subscribeBody(bodyListener);
     const firstSnapshot = runtime.getBodySnapshot();
+    getRowId.mockClear();
 
     runtime.publish(source(Array.from(rows)));
 
+    expect(getRowId).not.toHaveBeenCalled();
     expect(bodyListener).not.toHaveBeenCalled();
     expect(runtime.getBodySnapshot()).toBe(firstSnapshot);
   });
@@ -440,6 +469,46 @@ describe("BrunoTableClientRuntime", () => {
 
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
+  });
+
+  it("routes filter commands only through sanitized structural ownership", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const runtime = new BrunoTableClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      columns,
+      [
+        {
+          columnId: "COL_ID_NAME",
+          type: "blank",
+          condition: { columnId: "COL_ID_ALIAS", type: "blank" },
+        },
+      ],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    expect(runtime.getColumnCommandSnapshot("COL_ID_NAME").filterBaselineAvailable).toBe(true);
+    expect(runtime.getColumnCommandSnapshot("COL_ID_ALIAS").filterBaselineAvailable).toBe(false);
+    runtime.resetColumnFilters("COL_ID_ALIAS");
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
   });
 
   it("owns live non-empty sorting and reversible initial filter commands", () => {

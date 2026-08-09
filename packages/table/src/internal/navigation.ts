@@ -96,6 +96,7 @@ export class BrunoTableNavigationRuntime {
     }
     if (this.bodyInitializationBlocked) return;
     if (rowIds.length === 0) {
+      if (this.activeCell?.region === "body") this.bodyInitializationBlocked = true;
       this.setActive(undefined);
       return;
     }

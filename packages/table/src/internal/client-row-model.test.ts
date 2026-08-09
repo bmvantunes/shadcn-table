@@ -112,6 +112,127 @@ describe("Client row model", () => {
     ).toEqual(["blank", "middle"]);
   });
 
+  it("excludes nullish Number and BigInt values from every ordered filter", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_COUNT",
+        field: "count",
+        headerName: "Count",
+        valueType: "bigint",
+      },
+    ]);
+    const rows = [
+      { id: "null", score: null, count: null },
+      { id: "low", score: 4, count: 4n },
+      { id: "middle", score: 5, count: 5n },
+      { id: "high", score: 6, count: 6n },
+    ] as const;
+    const cases = [
+      ["greaterThan", ["high"]],
+      ["greaterThanOrEqual", ["middle", "high"]],
+      ["lessThan", ["low"]],
+      ["lessThanOrEqual", ["low", "middle"]],
+    ] as const;
+
+    for (const [type, expected] of cases) {
+      expect(
+        filterClientRows(rows, columns, [{ columnId: "COL_ID_SCORE", type, filter: 5 }]).map(
+          (row) => row.id,
+        ),
+      ).toEqual(expected);
+      expect(
+        filterClientRows(rows, columns, [{ columnId: "COL_ID_COUNT", type, filter: 5n }]).map(
+          (row) => row.id,
+        ),
+      ).toEqual(expected);
+    }
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_SCORE", type: "inRange", filter: 4, filterTo: 6 },
+      ]).map((row) => row.id),
+    ).toEqual(["low", "middle"]);
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_COUNT", type: "inRange", filter: 4n, filterTo: 6n },
+      ]).map((row) => row.id),
+    ).toEqual(["low", "middle"]);
+  });
+
+  it("drops invalid ranges, text operands, sensitivities, and sparse inclusion arrays", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_COUNT",
+        field: "count",
+        headerName: "Count",
+        valueType: "bigint",
+      },
+    ]);
+    const sparseCandidates = Array<string>(2);
+    sparseCandidates[1] = "Ada";
+
+    expect(
+      sanitizeClientInitialFilters(
+        [
+          { columnId: "COL_ID_SCORE", type: "inRange", filter: 5, filterTo: 5 },
+          { columnId: "COL_ID_SCORE", type: "inRange", filter: 6, filterTo: 5 },
+          { columnId: "COL_ID_COUNT", type: "inRange", filter: 5n, filterTo: 5n },
+          { columnId: "COL_ID_COUNT", type: "inRange", filter: 6n, filterTo: 5n },
+          { columnId: "COL_ID_NAME", type: "contains", filter: "" },
+          { columnId: "COL_ID_NAME", type: "startsWith", filter: "\u0301" },
+          {
+            columnId: "COL_ID_NAME",
+            type: "equals",
+            filter: "Ada",
+            caseSensitive: "yes",
+          },
+          {
+            columnId: "COL_ID_NAME",
+            type: "in",
+            filter: ["Ada"],
+            accentSensitive: 1,
+          },
+          { columnId: "COL_ID_NAME", type: "in", filter: sparseCandidates },
+        ],
+        columns,
+      ),
+    ).toEqual([]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [
+          {
+            columnId: "COL_ID_NAME",
+            type: "contains",
+            filter: "Ada",
+            caseSensitive: false,
+            accentSensitive: true,
+          },
+          { columnId: "COL_ID_SCORE", type: "inRange", filter: 4, filterTo: 6 },
+          { columnId: "COL_ID_COUNT", type: "inRange", filter: 4n, filterTo: 6n },
+        ],
+        columns,
+      ),
+    ).toHaveLength(3);
+  });
+
   it("sanitizes compound filters and tracks nested column references", () => {
     const columns = compileColumns([
       {
@@ -130,6 +251,60 @@ describe("Client row model", () => {
     expect(sanitized).toEqual(filter);
     expect(filterReferencesColumn(sanitized, "COL_ID_NAME")).toBe(true);
     expect(filterReferencesColumn(sanitized, "COL_ID_MISSING")).toBe(false);
+  });
+
+  it("drops empty compounds and foreign structural keys from leaf filters", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+
+    expect(sanitizeClientInitialFilters([{ type: "OR", conditions: [] }], columns)).toEqual([]);
+    const [sanitized] = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_NAME",
+          type: "blank",
+          condition: { columnId: "COL_ID_SCORE", type: "blank" },
+          conditions: [{ columnId: "COL_ID_SCORE", type: "blank" }],
+        },
+      ],
+      columns,
+    );
+    expect(sanitized).toEqual({ columnId: "COL_ID_NAME", type: "blank" });
+    expect(filterReferencesColumn(sanitized, "COL_ID_NAME")).toBe(true);
+    expect(filterReferencesColumn(sanitized, "COL_ID_SCORE")).toBe(false);
+  });
+
+  it("drops sparse compound condition arrays", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [
+          { type: "AND", conditions: Array(1) },
+          { type: "OR", conditions: Array(2) },
+        ],
+        columns,
+      ),
+    ).toEqual([]);
   });
 
   it("reuses already-sanitized filter references for an equivalent column plan", () => {

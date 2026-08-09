@@ -3,6 +3,7 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "noEmit": true,
     "types": [],
     "paths": {
@@ -10,5 +11,5 @@
       "@bruno/table/effect": ["../../dist/effect.d.mts"]
     }
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "jsx.tsx"]
 }

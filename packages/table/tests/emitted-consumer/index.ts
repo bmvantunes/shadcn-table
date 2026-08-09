@@ -24,6 +24,7 @@ import {
   type BrunoTableSortBy,
   type BrunoTableValueType,
 } from "@bruno/table";
+import type { LiveQueryResult } from "effect-view-server/config/query";
 
 type Equal<TLeft, TRight> =
   (<TValue>() => TValue extends TLeft ? 1 : 2) extends <TValue>() => TValue extends TRight ? 1 : 2
@@ -84,6 +85,16 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
+const emittedViewServerClient = BrunoTableClient({
+  tableId: "view-server-orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+void emittedViewServerClient;
 
 const emittedPriceColumn = BrunoTableNumberColumn.withDefaults({
   headerName: "Price",
@@ -271,6 +282,47 @@ const capabilityColumns = [
 
 type CapabilityColumns = typeof capabilityColumns;
 
+void BrunoTableClient({
+  tableId: "invalid-unknown-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Client component preserves exact Column Identity inference.
+    { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-misspelled-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Client component rejects misspelled Column Identities.
+    { columnId: "COL_ID_SYMBOOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-computed-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted computed columns have no automatic Client sort mapping.
+    { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-nonsortable-sort",
+  columns: capabilityColumns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Client component excludes explicitly nonsortable identities.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+
 const noSortingColumns = [
   {
     columnId: "COL_ID_SYMBOL",
@@ -347,7 +399,7 @@ const emittedClient = BrunoTableClient({
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  getRowId: (row: Order) => row.id,
+  getRowId: (row) => row.id,
   clientSource: {
     rows: [] as readonly Order[],
     totalRows: 0,
@@ -356,6 +408,50 @@ const emittedClient = BrunoTableClient({
   },
 });
 void emittedClient;
+
+// @ts-expect-error emitted Client component requires tableId.
+void BrunoTableClient({
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+});
+// @ts-expect-error emitted Client component requires columns.
+void BrunoTableClient({
+  tableId: "orders",
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+});
+// @ts-expect-error emitted Client component requires getRowId.
+void BrunoTableClient({
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+});
+// @ts-expect-error emitted Client component requires clientSource.
+void BrunoTableClient({
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+});
+// @ts-expect-error emitted Client component requires initialOrderBy.
+void BrunoTableClient({
+  tableId: "orders",
+  columns,
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+});
+void BrunoTableClient({
+  tableId: "orders",
+  columns,
+  // @ts-expect-error emitted Client component rejects an empty initialOrderBy.
+  initialOrderBy: [],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+});
 const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
 void emittedToolbar;
 
@@ -544,6 +640,15 @@ const invalidMixedColumnCompoundFilter = [
     ],
   },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const invalidEmptyCompoundFilter = [
+  {
+    type: "OR",
+    // @ts-expect-error emitted compound filter conditions are non-empty.
+    conditions: [],
+  },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+void invalidEmptyCompoundFilter;
 
 // @ts-expect-error emitted declarations preserve the non-empty sorting invariant.
 const invalidEmptySort = [] satisfies BrunoTableSortBy<Columns>;

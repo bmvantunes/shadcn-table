@@ -88,6 +88,52 @@ describe("BrunoTableViewportRuntime", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("keeps a thousand-column horizontal window bounded", () => {
+    const columns = compileColumns(
+      Array.from({ length: 1_000 }, (_, index) => ({
+        columnId: `COL_ID_STRESS_${String(index).padStart(4, "0")}`,
+        field: "name",
+        headerName: `Stress ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    let callback: FrameRequestCallback | undefined;
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    const initial = viewport.getSnapshot().virtualWindow;
+    expect(initial.centerCount).toBe(1_000);
+    expect(initial.center.length).toBeLessThanOrEqual(12);
+    expect(initial.totalWidth).toBe(120_000);
+
+    element.scrollLeft = 60_000;
+    scrollListener!(new Event("scroll"));
+    callback!(0);
+    const middle = viewport.getSnapshot().virtualWindow;
+    expect(middle.centerStartIndex).toBeGreaterThan(490);
+    expect(middle.centerStartIndex).toBeLessThan(510);
+    expect(middle.center.length).toBeLessThanOrEqual(12);
+  });
+
   it("reaches the million-row suffix within browser-safe geometry", () => {
     const columns = compileColumns([
       {

@@ -5,6 +5,9 @@
     "moduleDetection": "force",
     "module": "nodenext",
     "moduleResolution": "nodenext",
+    "paths": {
+      "@bruno/shadcn/*": ["./packages/shadcn/src/components/*.tsx"]
+    },
     "resolveJsonModule": true,
     "types": ["node"],
     "strict": true,

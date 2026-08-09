@@ -35,6 +35,7 @@ import type {
 import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
 import { useClientRowIds } from "./internal/client-adapter";
 import { readCompiledColumnValue } from "./internal/cell-value";
+import { collectClientFilterColumnIds } from "./internal/client-row-model";
 import {
   BrunoTableNavigationRuntime,
   orderBrunoTableLogicalColumns,
@@ -42,10 +43,14 @@ import {
 } from "./internal/navigation";
 import {
   BrunoTableClientRuntime,
+  type BrunoTableColumnCommandSnapshot,
   type BrunoTableClientRuntimeView,
   type BrunoTableRowOrderChangeDetector,
 } from "./internal/grid-runtime";
-import { recordBrunoTableClientGridSurfaceRender } from "./internal/render-instrumentation";
+import {
+  recordBrunoTableClientGridSurfaceRender,
+  recordBrunoTableClientViewRender,
+} from "./internal/render-instrumentation";
 import {
   BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -54,6 +59,10 @@ import {
 } from "./internal/virtual-viewport";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
+type InteractiveDomElement = HTMLElement | SVGElement;
+const INTERACTIVE_DESCENDANT_SELECTOR =
+  'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
+const EMBEDDED_BROWSING_CONTEXT_SELECTOR = "iframe,object,embed";
 const VISUALLY_HIDDEN: CSSProperties = {
   clip: "rect(0 0 0 0)",
   clipPath: "inset(50%)",
@@ -181,11 +190,22 @@ const BrunoTableView = memo(function BrunoTableView({
   compiledColumns,
   toolbar,
 }: BrunoTableViewProps) {
+  recordBrunoTableClientViewRender();
+  const tableElement = useRef<HTMLElement | null>(null);
+  const focusFallback = useMemo(
+    () => () => tableElement.current?.focus({ preventScroll: true }),
+    [],
+  );
   return (
-    <section aria-label={tableId} data-bruno-table={tableId}>
+    <section ref={tableElement} aria-label={tableId} data-bruno-table={tableId} tabIndex={-1}>
       <ToolbarOutlet toolbar={toolbar} />
-      <SourceLifecycle runtime={runtime} />
-      <ClientGridBody runtime={runtime} tableId={tableId} compiledColumns={compiledColumns} />
+      <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
+      <ClientGridBody
+        runtime={runtime}
+        tableId={tableId}
+        compiledColumns={compiledColumns}
+        focusFallback={focusFallback}
+      />
     </section>
   );
 });
@@ -207,9 +227,12 @@ const ToolbarOutlet = memo(function ToolbarOutlet({
   ) : null;
 });
 
-type RuntimeProps = { readonly runtime: BrunoTableClientRuntimeView };
+type RuntimeProps = {
+  readonly runtime: BrunoTableClientRuntimeView;
+  readonly focusFallback: () => void;
+};
 
-function SourceLifecycle({ runtime }: RuntimeProps) {
+function SourceLifecycle({ runtime, focusFallback }: RuntimeProps) {
   const chrome = useSyncExternalStore(
     runtime.subscribeChrome,
     runtime.getChromeSnapshot,
@@ -232,6 +255,7 @@ function SourceLifecycle({ runtime }: RuntimeProps) {
       <LifecycleAlert
         title="Live data delayed"
         {...lifecycleDetails(chrome.message, chrome.statusCode)}
+        focusFallback={focusFallback}
       />
     );
   }
@@ -242,6 +266,7 @@ function SourceLifecycle({ runtime }: RuntimeProps) {
         {...lifecycleDetails(chrome.message, chrome.statusCode)}
         {...(chrome.retry === undefined ? {} : { retry: chrome.retry })}
         onRetry={runtime.retry}
+        focusFallback={focusFallback}
       />
     );
   }
@@ -253,6 +278,7 @@ function SourceLifecycle({ runtime }: RuntimeProps) {
         {...lifecycleDetails(chrome.message, chrome.statusCode)}
         {...(chrome.retry === undefined ? {} : { retry: chrome.retry })}
         onRetry={runtime.retry}
+        focusFallback={focusFallback}
       />
     );
   }
@@ -272,28 +298,32 @@ function LifecycleAlert({
   destructive = false,
   retry,
   onRetry,
+  focusFallback,
 }: {
   readonly title: string;
   readonly message?: string;
   readonly destructive?: boolean;
   readonly retry?: { readonly pending: boolean };
   readonly onRetry?: () => void;
+  readonly focusFallback: () => void;
 }) {
   return (
     <Alert variant={destructive ? "destructive" : "default"}>
       <AlertTitle>{title}</AlertTitle>
       {message !== undefined ? <AlertDescription>{message}</AlertDescription> : null}
       {retry !== undefined && onRetry !== undefined ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          onClick={onRetry}
-          disabled={retry.pending}
-        >
-          {retry.pending ? <Spinner /> : null}
-          Retry
-        </Button>
+        <FocusFallbackOnUnmount focusFallback={focusFallback}>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={onRetry}
+            disabled={retry.pending}
+          >
+            {retry.pending ? <Spinner /> : null}
+            Retry
+          </Button>
+        </FocusFallbackOnUnmount>
       ) : null}
     </Alert>
   );
@@ -303,14 +333,19 @@ type ClientGridBodyProps = {
   readonly runtime: BrunoTableClientRuntimeView;
   readonly tableId: string;
   readonly compiledColumns: readonly CompiledColumn[];
+  readonly focusFallback: () => void;
 };
 
-function ClientGridBody({ runtime, tableId, compiledColumns }: ClientGridBodyProps) {
+function ClientGridBody({ runtime, tableId, compiledColumns, focusFallback }: ClientGridBodyProps) {
+  const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
     runtime.getBodySnapshot,
   );
+  useLayoutEffect(() => {
+    if (body.kind === "empty") navigation.setShape([], compiledColumns);
+  }, [body.kind, compiledColumns, navigation]);
   if (body.kind === "loading") return <LoadingRows count={body.skeletonCount} />;
   if (body.kind === "invalid") return null;
   if (body.kind === "empty") {
@@ -327,22 +362,55 @@ function ClientGridBody({ runtime, tableId, compiledColumns }: ClientGridBodyPro
         </EmptyHeader>
         {body.retry !== undefined ? (
           <EmptyContent>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => runtime.retry()}
-              disabled={body.retry.pending}
-            >
-              {body.retry.pending ? <Spinner /> : null}
-              Retry
-            </Button>
+            <FocusFallbackOnUnmount focusFallback={focusFallback}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => runtime.retry()}
+                disabled={body.retry.pending}
+              >
+                {body.retry.pending ? <Spinner /> : null}
+                Retry
+              </Button>
+            </FocusFallbackOnUnmount>
           </EmptyContent>
         ) : null}
       </Empty>
     );
   }
 
-  return <ClientRowOrder tableId={tableId} runtime={runtime} columns={compiledColumns} />;
+  return (
+    <ClientRowOrder
+      tableId={tableId}
+      runtime={runtime}
+      columns={compiledColumns}
+      focusFallback={focusFallback}
+      navigation={navigation}
+    />
+  );
+}
+
+function FocusFallbackOnUnmount({
+  children,
+  focusFallback,
+}: {
+  readonly children: ReactNode;
+  readonly focusFallback: () => void;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    return () => {
+      if (document.activeElement !== null && root?.contains(document.activeElement)) {
+        focusFallback();
+      }
+    };
+  }, [focusFallback]);
+  return (
+    <span ref={ref} style={{ display: "contents" }}>
+      {children}
+    </span>
+  );
 }
 
 const ClientRowOrder = memo(function ClientRowOrder(props: ClientRowOrderProps) {
@@ -365,6 +433,8 @@ type ClientRowOrderProps = {
   readonly tableId: string;
   readonly runtime: BrunoTableClientRuntimeView;
   readonly columns: readonly CompiledColumn[];
+  readonly focusFallback: () => void;
+  readonly navigation: BrunoTableNavigationRuntime;
 };
 
 type ClientResolvedRowOrderProps = ClientRowOrderProps & {
@@ -380,6 +450,8 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   tableId,
   runtime,
   columns,
+  focusFallback,
+  navigation,
   filters,
   orderBy,
   queryGeneration,
@@ -415,6 +487,8 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
       rowIds={orderSnapshot.rowIds}
       runtime={runtime}
       columns={columns}
+      focusFallback={focusFallback}
+      navigation={navigation}
       queryGeneration={orderSnapshot.queryGeneration}
     />
   );
@@ -427,12 +501,16 @@ const ViewportAdapter = memo(function ViewportAdapter({
   rowIds,
   runtime,
   columns,
+  focusFallback,
+  navigation,
   queryGeneration,
 }: {
   readonly tableId: string;
   readonly rowIds: readonly string[];
   readonly runtime: BrunoTableClientRuntimeView;
   readonly columns: readonly CompiledColumn[];
+  readonly focusFallback: () => void;
+  readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
 }) {
   "use no memo";
@@ -442,7 +520,6 @@ const ViewportAdapter = memo(function ViewportAdapter({
     next.setLayout(rowIds.length, columns);
     return next;
   });
-  const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const queryGenerationRef = useRef(queryGeneration);
   const viewportSnapshot = useSyncExternalStore(
     viewport.subscribe,
@@ -471,6 +548,7 @@ const ViewportAdapter = memo(function ViewportAdapter({
       columns={columns}
       viewportSnapshot={viewportSnapshot}
       attach={viewport.attach}
+      focusFallback={focusFallback}
       navigation={navigation}
       revealCell={viewport.revealCell}
     />
@@ -486,6 +564,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
   columns,
   viewportSnapshot,
   attach,
+  focusFallback,
   navigation,
   revealCell,
 }: {
@@ -496,6 +575,7 @@ const ClientGridSurface = memo(function ClientGridSurface({
   readonly columns: readonly CompiledColumn[];
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
+  readonly focusFallback: () => void;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly revealCell: (rowIndex: number, columnId: string, region?: "header" | "body") => void;
 }) {
@@ -504,12 +584,20 @@ const ClientGridSurface = memo(function ClientGridSurface({
   const tableWidth = virtualWindow.totalWidth;
   const logicalColumns = useMemo(() => orderBrunoTableLogicalColumns(columns), [columns]);
   const gridElement = useRef<HTMLDivElement | null>(null);
+  const interactionFrame = useRef<number | null>(null);
   const attachGrid = useMemo(
     () => (element: HTMLDivElement | null) => {
+      if (
+        element === null &&
+        document.activeElement !== null &&
+        gridElement.current?.contains(document.activeElement)
+      ) {
+        focusFallback();
+      }
       gridElement.current = element;
       attach(element);
     },
-    [attach],
+    [attach, focusFallback],
   );
   const activateHeaderCommand = useMemo(
     () => (columnId: string) => {
@@ -518,6 +606,49 @@ const ClientGridSurface = memo(function ClientGridSurface({
     },
     [navigation],
   );
+  useEffect(
+    () => () => {
+      if (interactionFrame.current !== null) cancelAnimationFrame(interactionFrame.current);
+    },
+    [],
+  );
+
+  const enterInteractiveCell = (active: BrunoTableActiveCell, column: CompiledColumn): boolean => {
+    if (active.region !== "body" || column.cellRenderer === undefined) return false;
+    const activeId = activeDomId(instanceId, tableId, active);
+    if (activeId === undefined) return false;
+    const cell = document.getElementById(activeId);
+    if (cell !== null && !cell.hasAttribute("data-bruno-active-proxy")) {
+      return focusFirstInteractiveDescendant(cell);
+    }
+    revealCell(active.rowIndex, active.columnId, active.region);
+    if (interactionFrame.current !== null) cancelAnimationFrame(interactionFrame.current);
+    let attemptsRemaining = 4;
+    const focusAfterMount = () => {
+      interactionFrame.current = null;
+      const current = navigation.getSnapshot();
+      if (
+        current?.region !== active.region ||
+        current.rowIndex !== active.rowIndex ||
+        current.rowId !== active.rowId ||
+        current.columnId !== active.columnId
+      ) {
+        return;
+      }
+      const mountedCell = document.getElementById(activeId);
+      if (
+        mountedCell !== null &&
+        !mountedCell.hasAttribute("data-bruno-active-proxy") &&
+        focusFirstInteractiveDescendant(mountedCell)
+      ) {
+        return;
+      }
+      attemptsRemaining -= 1;
+      if (attemptsRemaining > 0) interactionFrame.current = requestAnimationFrame(focusAfterMount);
+    };
+    interactionFrame.current = requestAnimationFrame(focusAfterMount);
+    return true;
+  };
 
   return (
     <div
@@ -535,14 +666,25 @@ const ClientGridSurface = memo(function ClientGridSurface({
         if (event.target === event.currentTarget) navigation.activateForFocus();
       }}
       onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
+        if (event.target !== event.currentTarget) {
+          if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) {
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+          }
+          return;
+        }
         navigation.activateForFocus();
-        if (event.key === "Enter" || event.key === " ") {
+        if (event.key === "Enter" || event.key === " " || event.key === "F2") {
           const active = navigation.getSnapshot();
           const column = logicalColumns.find(
             (candidate) => candidate.columnId === active?.columnId,
           );
-          if (active?.region !== "header" || column === undefined) return;
+          if (active?.region === "body" && (event.key === "Enter" || event.key === "F2")) {
+            if (column !== undefined && enterInteractiveCell(active, column))
+              event.preventDefault();
+            return;
+          }
+          if (active?.region !== "header" || column === undefined || event.key === "F2") return;
           const command = runtime.getColumnCommandSnapshot(column.columnId);
           if (event.altKey && event.key === "Enter" && command.filterBaselineAvailable) {
             event.preventDefault();
@@ -805,16 +947,11 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
     [column.columnId, runtime],
   );
   const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const ariaSort =
-    command.sortDirection === "asc"
-      ? "ascending"
-      : command.sortDirection === "desc"
-        ? "descending"
-        : "none";
+  const presentation = headerSortPresentation(column.headerName, command);
   const sortLabel =
     command.sortDirection === undefined
       ? `Sort by ${column.headerName}`
-      : `Sort by ${column.headerName}, currently ${ariaSort}, priority ${String(command.sortPriority)}`;
+      : `Sort by ${column.headerName}, currently ${presentation.direction}, priority ${String(command.sortPriority)}`;
 
   const content = (
     <div className="flex min-w-0 items-center gap-1 overflow-hidden">
@@ -837,7 +974,10 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
         >
           <span className="truncate">{column.headerName}</span>
           {command.sortPriority === undefined ? null : (
-            <span aria-hidden="true">{String(command.sortPriority)}</span>
+            <>
+              <span aria-hidden="true">{command.sortDirection === "asc" ? "↑" : "↓"}</span>
+              <span aria-hidden="true">{String(command.sortPriority)}</span>
+            </>
           )}
         </Button>
       ) : (
@@ -868,10 +1008,10 @@ const ClientHeaderCell = memo(function ClientHeaderCell({
   );
   const headerProps = {
     id: headerDomId(instanceId, tableId, column.columnId),
-    "aria-label": column.headerName,
+    "aria-label": presentation.label,
     "aria-colindex": columnIndex + 1,
     "aria-keyshortcuts": command.filterBaselineAvailable ? "Alt+Enter" : undefined,
-    "aria-sort": command.sortPriority === 1 ? ariaSort : undefined,
+    "aria-sort": presentation.ariaSort,
     role: "columnheader",
     style: {
       boxSizing: "border-box",
@@ -905,6 +1045,84 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   readonly runtime: BrunoTableClientRuntimeView;
   readonly tableId: string;
 }) {
+  if (column === undefined || columnIndex < 0) return null;
+  if (activeCell.region === "header") {
+    return (
+      <ActiveHeaderDescendantProxy
+        column={column}
+        columnIndex={columnIndex}
+        instanceId={instanceId}
+        runtime={runtime}
+        tableId={tableId}
+      />
+    );
+  }
+  return (
+    <ActiveBodyDescendantProxy
+      activeCell={activeCell}
+      column={column}
+      columnIndex={columnIndex}
+      instanceId={instanceId}
+      runtime={runtime}
+      tableId={tableId}
+    />
+  );
+});
+
+const ActiveHeaderDescendantProxy = memo(function ActiveHeaderDescendantProxy({
+  column,
+  columnIndex,
+  instanceId,
+  runtime,
+  tableId,
+}: {
+  readonly column: CompiledColumn;
+  readonly columnIndex: number;
+  readonly instanceId: string;
+  readonly runtime: BrunoTableClientRuntimeView;
+  readonly tableId: string;
+}) {
+  const subscribe = useMemo(
+    () => (listener: () => void) => runtime.subscribeColumnCommands(column.columnId, listener),
+    [column.columnId, runtime],
+  );
+  const getSnapshot = useMemo(
+    () => () => runtime.getColumnCommandSnapshot(column.columnId),
+    [column.columnId, runtime],
+  );
+  const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const presentation = headerSortPresentation(column.headerName, command);
+  return (
+    <div aria-rowindex={1} role="row" style={VISUALLY_HIDDEN}>
+      <div
+        id={headerDomId(instanceId, tableId, column.columnId)}
+        aria-colindex={columnIndex + 1}
+        aria-keyshortcuts={command.filterBaselineAvailable ? "Alt+Enter" : undefined}
+        aria-label={presentation.label}
+        aria-sort={presentation.ariaSort}
+        role="columnheader"
+      >
+        {column.headerName}
+      </div>
+    </div>
+  );
+});
+
+const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
+  activeCell,
+  column,
+  columnIndex,
+  instanceId,
+  runtime,
+  tableId,
+}: {
+  readonly activeCell: BrunoTableActiveCell;
+  readonly column: CompiledColumn;
+  readonly columnIndex: number;
+  readonly instanceId: string;
+  readonly runtime: BrunoTableClientRuntimeView;
+  readonly tableId: string;
+}) {
   const rowId = activeCell.rowId ?? "";
   const subscribe = useMemo(
     () => (listener: () => void) => runtime.subscribeRow(rowId, listener),
@@ -912,52 +1130,22 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   );
   const getSnapshot = useMemo(() => () => runtime.getRowSnapshot(rowId), [rowId, runtime]);
   const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  if (column === undefined || columnIndex < 0) return null;
-
-  if (activeCell.region === "header") {
-    return (
-      <div aria-rowindex={1} role="row" style={VISUALLY_HIDDEN}>
-        <div
-          id={headerDomId(instanceId, tableId, column.columnId)}
-          aria-colindex={columnIndex + 1}
-          role="columnheader"
-        >
-          {column.headerName}
-        </div>
-      </div>
-    );
-  }
-
   const value = row === undefined ? undefined : readCompiledColumnValue(column, row);
-  const content = row === undefined ? "Unavailable row" : resolveCellContent(column, row, value);
-  const customProxy = row !== undefined && column.cellRenderer !== undefined;
-  const customProxyHasContent =
-    customProxy && content !== null && content !== undefined && content !== false && content !== "";
+  const content =
+    row === undefined ? "Unavailable row" : resolveProxyCellContent(column, row, value);
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
         id={cellDomId(instanceId, tableId, rowId, column.columnId)}
+        data-bruno-active-proxy=""
         aria-colindex={columnIndex + 1}
-        aria-label={customProxyHasContent ? resolveCellText(column, row, value) : undefined}
         role="gridcell"
       >
-        {customProxyHasContent ? <InertProxyContent>{content}</InertProxyContent> : content}
+        {content}
       </div>
     </div>
   );
 });
-
-function InertProxyContent({ children }: { readonly children: ReactNode }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    if (ref.current !== null) ref.current.inert = true;
-  }, []);
-  return (
-    <span ref={ref} aria-hidden="true">
-      {children}
-    </span>
-  );
-}
 
 const ClientRow = memo(function ClientRow({
   rowId,
@@ -1126,7 +1314,11 @@ const ClientCell = memo(function ClientCell({
         width: "100%",
       }}
     >
-      {content}
+      {column.cellRenderer === undefined ? (
+        content
+      ) : (
+        <NonTabbableCellContent>{content}</NonTabbableCellContent>
+      )}
     </div>
   );
   return regionCell ? (
@@ -1151,6 +1343,166 @@ const ClientCell = memo(function ClientCell({
     </td>
   );
 });
+
+function NonTabbableCellContent({ children }: { readonly children: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (root === null) return;
+    const grid = root.closest<HTMLElement>('[role="grid"]');
+    const originalTabIndexes = new WeakMap<InteractiveDomElement, string | null>();
+    const pendingManagedTabIndexWrites = new WeakMap<InteractiveDomElement, number>();
+    const trackedCandidates = new Set<InteractiveDomElement>();
+    let focusedCandidate: InteractiveDomElement | null = null;
+    const trackFocusedCandidate = (event: FocusEvent) => {
+      if (
+        (event.target instanceof HTMLElement || event.target instanceof SVGElement) &&
+        root.contains(event.target)
+      ) {
+        focusedCandidate = event.target;
+      }
+    };
+    root.addEventListener("focusin", trackFocusedCandidate);
+    const restoreTabIndex = (candidate: InteractiveDomElement) => {
+      const tabIndex = originalTabIndexes.get(candidate);
+      if (tabIndex === null) candidate.removeAttribute("tabindex");
+      else if (tabIndex !== undefined) candidate.setAttribute("tabindex", tabIndex);
+    };
+    const writeManagedTabIndex = (candidate: InteractiveDomElement) => {
+      pendingManagedTabIndexWrites.set(
+        candidate,
+        (pendingManagedTabIndexWrites.get(candidate) ?? 0) + 1,
+      );
+      candidate.setAttribute("tabindex", "-1");
+    };
+    const removeFromTabOrder = (records: readonly MutationRecord[] = []) => {
+      for (const record of records) {
+        if (
+          record.type !== "attributes" ||
+          record.attributeName !== "tabindex" ||
+          (!(record.target instanceof HTMLElement) && !(record.target instanceof SVGElement))
+        ) {
+          continue;
+        }
+        const managedWrites = pendingManagedTabIndexWrites.get(record.target) ?? 0;
+        if (managedWrites > 0) {
+          if (managedWrites === 1) pendingManagedTabIndexWrites.delete(record.target);
+          else pendingManagedTabIndexWrites.set(record.target, managedWrites - 1);
+          continue;
+        }
+        if (trackedCandidates.has(record.target)) {
+          originalTabIndexes.set(record.target, record.target.getAttribute("tabindex"));
+        }
+      }
+      for (const candidate of trackedCandidates) {
+        if (root.contains(candidate)) continue;
+        const recoverGridFocus =
+          candidate === focusedCandidate && document.activeElement === document.body;
+        restoreTabIndex(candidate);
+        trackedCandidates.delete(candidate);
+        if (candidate === focusedCandidate) focusedCandidate = null;
+        if (recoverGridFocus) grid?.focus({ preventScroll: true });
+      }
+      for (const candidate of root.querySelectorAll<InteractiveDomElement>(
+        INTERACTIVE_DESCENDANT_SELECTOR,
+      )) {
+        if (!trackedCandidates.has(candidate)) {
+          originalTabIndexes.set(candidate, candidate.getAttribute("tabindex"));
+          trackedCandidates.add(candidate);
+        }
+        if (candidate.getAttribute("tabindex") !== "-1") writeManagedTabIndex(candidate);
+      }
+      if (
+        focusedCandidate !== null &&
+        root.contains(focusedCandidate) &&
+        (document.activeElement === document.body ||
+          (document.activeElement !== null && focusedCandidate.contains(document.activeElement))) &&
+        !interactiveDescendantIsUsable(focusedCandidate)
+      ) {
+        focusedCandidate = null;
+        grid?.focus({ preventScroll: true });
+      }
+    };
+    const observer = new MutationObserver(removeFromTabOrder);
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: [
+        "aria-hidden",
+        "class",
+        "contenteditable",
+        "controls",
+        "disabled",
+        "hidden",
+        "href",
+        "inert",
+        "style",
+        "tabindex",
+      ],
+      childList: true,
+      subtree: true,
+    });
+    removeFromTabOrder();
+    return () => {
+      observer.disconnect();
+      root.removeEventListener("focusin", trackFocusedCandidate);
+      if (document.activeElement !== null && root.contains(document.activeElement)) {
+        grid?.focus({ preventScroll: true });
+      }
+      for (const candidate of trackedCandidates) restoreTabIndex(candidate);
+      trackedCandidates.clear();
+    };
+  }, []);
+  return (
+    <span ref={ref} style={{ display: "contents" }}>
+      {children}
+    </span>
+  );
+}
+
+function headerSortPresentation(
+  headerName: string,
+  command: BrunoTableColumnCommandSnapshot,
+): Readonly<{
+  readonly ariaSort?: "ascending" | "descending";
+  readonly direction?: "ascending" | "descending";
+  readonly label: string;
+}> {
+  const direction =
+    command.sortDirection === "asc"
+      ? "ascending"
+      : command.sortDirection === "desc"
+        ? "descending"
+        : undefined;
+  return Object.freeze({
+    ...(command.sortPriority === 1 && direction !== undefined ? { ariaSort: direction } : {}),
+    ...(direction === undefined ? {} : { direction }),
+    label:
+      direction === undefined
+        ? headerName
+        : `${headerName}, sorted ${direction}, priority ${String(command.sortPriority)}`,
+  });
+}
+
+function focusFirstInteractiveDescendant(cell: HTMLElement): boolean {
+  for (const candidate of cell.querySelectorAll<InteractiveDomElement>(
+    INTERACTIVE_DESCENDANT_SELECTOR,
+  )) {
+    if (candidate.matches(EMBEDDED_BROWSING_CONTEXT_SELECTOR)) continue;
+    if (!interactiveDescendantIsUsable(candidate)) continue;
+    candidate.focus({ preventScroll: true });
+    if (document.activeElement === candidate) return true;
+  }
+  return false;
+}
+
+function interactiveDescendantIsUsable(candidate: InteractiveDomElement): boolean {
+  return (
+    !candidate.matches(":disabled") &&
+    candidate.closest("[inert]") === null &&
+    candidate.closest('[aria-hidden="true"]') === null &&
+    candidate.getClientRects().length > 0
+  );
+}
 
 function pinnedRegionStyle(side: "start" | "end", width: number): CSSProperties {
   return {
@@ -1196,6 +1548,17 @@ function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown
   return resolveCellText(column, row, value);
 }
 
+function resolveProxyCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
+  if (
+    column.valueFormatter === undefined &&
+    column.valueType === "boolean" &&
+    typeof value === "boolean"
+  ) {
+    return <input aria-label={column.headerName} checked={value} disabled type="checkbox" />;
+  }
+  return resolveCellText(column, row, value);
+}
+
 function rowOrderChanged(
   previousRows: readonly unknown[],
   nextRows: readonly unknown[],
@@ -1209,7 +1572,9 @@ function rowOrderChanged(
 ): boolean {
   if (change.rowIdsChanged) return true;
   const relevantIds = new Set(orderBy.map((sort) => sort.columnId));
-  for (const filter of filters ?? EMPTY_ORDER_BY) collectFilterColumnIds(filter, relevantIds);
+  for (const filter of filters ?? EMPTY_ORDER_BY) {
+    collectClientFilterColumnIds(filter, relevantIds);
+  }
   const relevantColumns = columns.filter((column) => relevantIds.has(column.columnId));
   if (relevantColumns.length === 0) return false;
   for (const index of change.changedIndexes) {
@@ -1228,20 +1593,6 @@ function rowOrderChanged(
     }
   }
   return false;
-}
-
-function collectFilterColumnIds(candidate: unknown, target: Set<string>): void {
-  const filter = asRecord(candidate);
-  if (typeof filter["columnId"] === "string") target.add(filter["columnId"]);
-  if (Array.isArray(filter["conditions"])) {
-    for (const condition of filter["conditions"]) collectFilterColumnIds(condition, target);
-  }
-  if (filter["condition"] !== undefined) collectFilterColumnIds(filter["condition"], target);
-}
-
-function asRecord(value: unknown): Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  return value as Readonly<Record<string, unknown>>;
 }
 
 class ClientRowOrderStore {

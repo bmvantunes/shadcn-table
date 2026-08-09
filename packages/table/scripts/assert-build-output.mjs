@@ -344,23 +344,80 @@ async function assertPackedRootConsumer(tarball, shadcnTarball) {
   );
   try {
     await writeFile(
-      join(consumerRoot, "index.ts"),
+      join(consumerRoot, "index.tsx"),
       `import { BrunoTableClient, BrunoTableTextColumn, BrunoTableToolbar } from "@bruno/table";
 import type { BrunoTableColumns } from "@bruno/table";
 
-type Row = { readonly symbol: string };
+type Row = { readonly symbol: string; readonly revision: bigint };
 const columns = [
-  BrunoTableTextColumn({ columnId: "COL_ID_SYMBOL", field: "symbol", headerName: "Symbol" }),
+  BrunoTableTextColumn({
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    isEditable: true,
+  }),
 ] satisfies BrunoTableColumns<Row>;
 void columns;
-const rendered = BrunoTableClient({
-  tableId: "TABLE_ID_PACKED",
-  columns,
-  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  getRowId: (row: Row) => row.symbol,
-  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" },
-});
+const source = { rows: [] as readonly Row[], totalRows: 0, version: 1, status: "ready" as const };
+const rendered = (
+  <BrunoTableClient
+    tableId="TABLE_ID_PACKED"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+    getRowId={(row) => row.symbol}
+    clientSource={source}
+  />
+);
 void rendered;
+const missingOrder = (
+  // @ts-expect-error Packed JSX Client usage requires initialOrderBy.
+  <BrunoTableClient
+    tableId="TABLE_ID_PACKED_MISSING_ORDER"
+    columns={columns}
+    getRowId={(row) => row.symbol}
+    clientSource={source}
+  />
+);
+void missingOrder;
+const emptyOrder = (
+  <BrunoTableClient
+    tableId="TABLE_ID_PACKED_EMPTY_ORDER"
+    columns={columns}
+    // @ts-expect-error Packed JSX Client usage rejects an empty initialOrderBy.
+    initialOrderBy={[]}
+    getRowId={(row) => row.symbol}
+    clientSource={source}
+  />
+);
+void emptyOrder;
+const invalidOrder = (
+  <BrunoTableClient
+    tableId="TABLE_ID_PACKED_INVALID_ORDER"
+    columns={columns}
+    initialOrderBy={[
+      // @ts-expect-error Packed JSX preserves exact sortable Column Identity inference.
+      { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+    ]}
+    getRowId={(row) => row.symbol}
+    clientSource={source}
+  />
+);
+void invalidOrder;
+const readOnlyWithEditOperation = (
+  <BrunoTableClient
+    tableId="TABLE_ID_PACKED_READ_ONLY"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+    getRowId={(row) => row.symbol}
+    clientSource={source}
+    editable={false}
+    // @ts-expect-error Packed read-only JSX Client usage rejects getRowVersion.
+    getRowVersion={(row: Row) => row.revision}
+    // @ts-expect-error Packed read-only JSX Client usage rejects onSaveEdits.
+    onSaveEdits={() => Promise.resolve()}
+  />
+);
+void readOnlyWithEditOperation;
 const toolbar = BrunoTableToolbar({ children: "Filters" });
 void toolbar;
 `,
@@ -471,11 +528,12 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
         noEmit: true,
         module: "esnext",
         moduleResolution: "bundler",
+        jsx: "react-jsx",
         lib: ["esnext", "dom"],
         types: [],
         skipLibCheck: false,
       },
-      include: ["index.ts"],
+      include: ["index.ts", "index.tsx"],
     }),
   );
   runCommand(

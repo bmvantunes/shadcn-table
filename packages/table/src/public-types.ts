@@ -879,7 +879,10 @@ type FilterExpressionForColumn<
   | FilterLeaf<TRow, TColumns, TColumnId>
   | {
       readonly type: "AND" | "OR";
-      readonly conditions: readonly FilterExpressionForColumn<TRow, TColumns, TColumnId>[];
+      readonly conditions: readonly [
+        FilterExpressionForColumn<TRow, TColumns, TColumnId>,
+        ...FilterExpressionForColumn<TRow, TColumns, TColumnId>[],
+      ];
     }
   | {
       readonly type: "NOT";

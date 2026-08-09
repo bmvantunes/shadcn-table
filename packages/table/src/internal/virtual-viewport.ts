@@ -168,8 +168,11 @@ export class BrunoTableViewportRuntime {
     const columnWidth = centerEnd - centerOffset;
     if (columnWidth > centerViewportWidth) {
       const viewportEnd = centerScrollLeft + centerViewportWidth;
-      if (centerEnd < centerScrollLeft) element.scrollLeft = centerEnd;
-      else if (centerOffset > viewportEnd) element.scrollLeft = centerOffset - centerViewportWidth;
+      if (centerEnd <= centerScrollLeft) {
+        element.scrollLeft = Math.max(centerEnd - centerViewportWidth, 0);
+      } else if (centerOffset >= viewportEnd) {
+        element.scrollLeft = centerOffset;
+      }
     } else if (centerOffset < centerScrollLeft) {
       element.scrollLeft = centerOffset;
     } else if (centerEnd > centerScrollLeft + centerViewportWidth) {
@@ -349,7 +352,8 @@ function calculateVirtualWindow(
     readonly height: number;
   }>,
 ): BrunoTableVirtualWindow {
-  const rowViewportHeight = viewport.height > 0 ? viewport.height : 480;
+  const rowViewportHeight =
+    viewport.height > 0 ? viewport.height : BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT;
   const rowStart = Math.max(Math.floor(viewport.logicalScrollTop / ROW_HEIGHT) - ROW_OVERSCAN, 0);
   const rowEnd = Math.min(
     layout.rowCount,

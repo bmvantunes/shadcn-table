@@ -600,6 +600,14 @@ function createCoherent<TRow>(
   previous: CoherentRows<TRow> | undefined,
   resolveRowIds: boolean,
 ): CoherentRows<TRow> {
+  if (
+    previous !== undefined &&
+    !resolveRowIds &&
+    previous.rows.length === rows.length &&
+    rows.every((row, index) => previous.rows[index] === row)
+  ) {
+    return previous;
+  }
   const rowIds = Array.from({ length: rows.length }, () => "" as BrunoTableRowId);
   const rowsById = new Map<BrunoTableRowId, TRow>();
   const seenIds = new Set<BrunoTableRowId>();

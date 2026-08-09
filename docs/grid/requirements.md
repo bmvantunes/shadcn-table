@@ -762,6 +762,14 @@ In an Editable Client Table, one Enter or F2 starts the focused cell from its cu
 
 Logical focus must survive DOM unmounting caused by virtualization.
 
+When an active read-only body cell contains interactive custom-renderer content, Enter or F2 moves
+focus from the grid root to its first same-document interactive descendant. Embedded browsing
+contexts remain outside ordinary Tab order but are excluded from automatic entry because their
+keyboard events cannot bubble to the grid. All interactive descendants remain outside ordinary Tab
+order so virtualization cannot create unstable tab stops. Escape returns focus to the grid root
+without changing the Active Cell; same-document nested controls otherwise retain their native key
+behavior.
+
 ## Undo, redo, clipboard, and fill
 
 V1 supports Copy and Paste but no Cut or destructive cell Clear/Delete capability. Do not register `Ctrl/Cmd+X`, `Delete`, or `Backspace` as mutation shortcuts; do not clear cells after a browser clipboard write; and do not expose Cut or Clear/Delete through menus, commands, or the public interface. Editable Client users change a value only through an editor, an explicit paste transaction, or repetition-only Drag Fill. Deliberately entered, pasted, or repeated blank text is still subject to the destination column's explicit blank policy, parsing, atomic validation, Batch history, and save rules.
