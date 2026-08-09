@@ -358,6 +358,8 @@ TanStack row, cell, column, and header builder methods hide state reads from Rea
 
 Some hot presentation state should avoid React reconciliation entirely. During live column resize, subscribe imperatively to the sizing atom, write width CSS variables on the grid root, batch writes per animation frame, and unsubscribe on teardown. React render islands remain appropriate for the small pieces that must change semantically, such as the active resize handle.
 
+Keep custom-property invalidation scoped to its readers. Column-width variables belong on the grid root because every mounted header and cell consumes them. Scrollbar thumb offsets and track measurements belong on the isolated decorative overlay subtree because they change on ordinary scroll frames; placing those inherited values on the grid root would invalidate unrelated rows and cells. The reviewed ReUI evidence for this distinction is indexed in [ReUI data-grid patterns](research/reui-data-grid-patterns.md).
+
 ## Row-pipeline Adapter seam
 
 The Grid Runtime owns one validated filter state plus two validated Column Identity-keyed sort contexts: normal-row `orderBy` and grouped-summary `groupOrderBy`. Only one sort context is active in the row pipeline at a time. Filter and sort controls dispatch `filters.replace`, `sorting.normal.replace`, or `sorting.grouped.replace` commands without knowing which Adapter executes them.
@@ -546,6 +548,8 @@ Required layout:
 - bounded mounted cells proportional to mounted rows multiplied by pinned plus virtual centre columns, never total centre-column count
 
 Rows and columns are virtualized for both Client and Server Tables. The Client Row Pipeline provides the complete final row count and resident rows. The Viewport Row Pipeline provides exact `totalRows` geometry and sparse indexed slots. The horizontal path is identical for both variants: it virtualizes the current visible centre-column sequence after order, visibility, and pinning have been applied. Pinned-start and pinned-end columns remain mounted and contribute to viewport insets, keyboard reveal, and mounted-cell instrumentation.
+
+A visual Base UI Scroll Area is permitted only as decoration around that same native owner. Its track and thumb geometry consume the renderer's immutable viewport/pinning snapshot: the horizontal track occupies the effective centre band, the vertical track begins after the sticky header and ends before a visible horizontal track, and neither track feeds offsets back into layout, hit testing, reveal, or virtual-window calculation. See [ReUI data-grid patterns](research/reui-data-grid-patterns.md) for the external pattern and the incompatible pieces that must not cross the Adapter seam.
 
 ### React Compiler virtualization boundary
 

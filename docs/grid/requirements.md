@@ -101,6 +101,8 @@ The shared renderer owns one native two-axis scroll container as the sole author
 - The Client Table virtualizes the complete locally filtered and sorted row model.
 - The Server Table virtualizes the exact `totalRows` reported by the Viewport Source, renders sparse placeholders for unloaded indexes, and sends the visible range plus overscan to the source as one indexed window.
 
+Decorative scrollbar chrome mirrors that owner's effective geometry. Its horizontal track spans only the centre band after current pinned-start and pinned-end insets, and its vertical track excludes the sticky header and visible horizontal scrollbar. Thumb movement is frame-batched and writes hot custom properties only on the overlay subtree that consumes them; per-scroll inherited variables must not invalidate the complete grid subtree.
+
 Virtualization is mandatory for both variants. Keyboard navigation addresses logical row and column coordinates independently of which cells are mounted. When a held Arrow key moves beyond the visible boundary, the renderer minimally scrolls to reveal the new Active Cell. Client reveal mounts an already resident row; Server reveal updates the active viewport window and may temporarily focus a stable loading slot until the row arrives. Neither path creates page state.
 
 Horizontal virtualization is equally mandatory. A table with 150 centre columns must not mount all 150 cells for every visible row merely because its rows are virtualized. One grid-level horizontal virtualizer windows the currently visible centre columns; pinned-start and pinned-end columns remain mounted in separate sticky regions outside that window and participate in the same Logical Column Order. Header and body consume the same immutable column-window snapshot so widths, virtual padding, hit testing, and keyboard reveal cannot drift.
@@ -374,6 +376,8 @@ BrunoTable also provides optional typed Column Helpers as the recommended constr
 
 Helpers provide coherent Value Type, renderer, editor, filter, sort, clipboard, accessibility, and theme defaults but return ordinary column definitions. Raw Field Columns and helper-created columns may coexist. Helpers never infer or generate `columnId`, never infer a direct server field, and never introduce a string-keyed registry or per-cell dispatch. Strict Computed Columns use a global Value Type helper or equivalently typed custom constructor as the generic boundary that captures their non-empty `fields` tuple and restricts the getter row to its exact `Pick`.
 
+Loading Cell Presentation follows the same compiled, non-semantic presentation seam. Fixed-height loading rows may use Value Type-appropriate skeleton alignment and shape—for example end-aligned exact numeric bars or centred boolean placeholders—without sampling source rows, invoking `valueGetter` or `cellRenderer`, or changing equality, parsing, query, clipboard, or persistence behavior.
+
 Applications may specialize a helper with `withDefaults` into a reusable Column Preset for domain conventions such as Price title, fraction digits, width, alignment, editor, filter, and validation policy. Merge order is built-in helper defaults, then preset defaults, then individual column options. Presets and final columns live at module scope.
 
 Every helper and preset retains typed per-column `valueFormatter`, `cellClassName`, and `cellRenderer` overrides. `valueFormatter` changes visible text only; conditional classes and custom rendering change Cell Presentation only. None may redefine equality, ordering, parsing, clipboard exchange, preference codecs, draft/conflict reconciliation, or server query operands. A custom display representation that must round-trip requires an explicit paired parser/exchange capability or custom Value Type.
@@ -494,6 +498,8 @@ While Group By is active, ordinary column reordering is temporarily unavailable;
 Column dragging should use a projected layout and transform animation rather than rewriting committed order on every pointer move.
 
 Pinned columns remain part of one logical navigation order.
+
+Header and layout menus may group Sort, Filter, Pin start/end, Unpin, Move, Visibility, and Reset affordances with checked state and non-color cues. They dispatch the same typed Grid Commands as pointer and keyboard interactions; they never receive or expose a TanStack Column/Table object. Hiding remains rejected when it would remove the final navigable column, and a sorting-capable table never offers an action that removes its final active sort.
 
 ## Optional toolbar composition
 

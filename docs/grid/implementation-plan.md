@@ -109,6 +109,7 @@ Build:
 - `<BrunoTableClient tableId getRowId columns clientSource />`
 - structurally typed Client Source integration, including direct `useLiveQuery(...)` results
 - shared shadcn lifecycle presentation: fixed-height Skeleton rows while loading, compact persistent Alerts over retained coherent stale/closed/error rows, and full-body Empty states for terminal states without rows
+- Value Type-aware loading Cell Presentation that keeps row height fixed and never samples rows or invokes cell value computation
 - optional source-owned Retry capability for closed/error presentation, with source-authoritative pending state, one invocation per explicit activation, and no table-owned automatic retry or lifecycle transition
 - incomplete-source detection for ready/stale results
 - the shared Grid Runtime and `BrunoTableView`
@@ -125,6 +126,7 @@ Build:
 - horizontal centre-column virtualization
 - pinned start and end columns
 - one native two-axis scroll owner; Scroll Area styling may decorate only that viewport
+- decorative scrollbar tracks derived from the same pinned/header geometry, with hot thumb variables isolated to the overlay subtree
 - separate continuously mounted sticky start/end regions around the virtual centre window
 - one shared immutable centre-column window for header and body
 - basic headers and cells
@@ -162,6 +164,7 @@ Success criteria:
 - production benchmarks compare the exact installed Virtual React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before locking the private default
 - smooth 120 Hz scrolling target on capable hardware
 - exact-numeric hot paths perform no value-kind sampling, schema inspection, or per-cell registry lookup
+- renderer and loading implementation consult the pinned [ReUI data-grid pattern note](research/reui-data-grid-patterns.md), borrowing only the explicitly accepted presentation/performance patterns
 
 ## Phase 3: Keyboard navigation
 
@@ -195,6 +198,7 @@ Build:
 - resize
 - visibility
 - pinning
+- one compact header/layout menu presentation for typed Sort, Filter, Pin/Unpin, Move, Visibility, and Reset commands, without exposing TanStack objects
 - right-side tool rail
 - `BrunoTableQuickFilter` backed by an explicit non-empty `quickFilterFields` tuple of string-valued Query Fields
 - complete View Server operator parity per built-in Value Type
@@ -270,6 +274,7 @@ Success criteria:
 - drag commits once
 - live resize does not rerender the mounted body on each pointer frame
 - drag animation stays within frame budget
+- column management and Set Filter work consult the pinned [ReUI data-grid pattern note](research/reui-data-grid-patterns.md), including its explicit prohibitions on unsorted state, empty-selection-as-no-filter, broad context, and pagination
 
 ## Phase 5: Server viewport read-only model
 
