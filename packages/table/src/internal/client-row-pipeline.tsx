@@ -170,13 +170,23 @@ function rowOrderChanged(
         isBrunoTableInvalidCellValue(nextValue) ||
         (filteredIds.has(column.columnId)
           ? !Object.is(previousValue, nextValue)
-          : !column.semantics.equivalent(previousValue, nextValue))
+          : !equivalentOrderedValue(column, previousValue, nextValue))
       ) {
         return true;
       }
     }
   }
   return false;
+}
+
+function equivalentOrderedValue(
+  column: CompiledColumn,
+  previousValue: unknown,
+  nextValue: unknown,
+): boolean {
+  return previousValue == null || nextValue == null
+    ? previousValue == null && nextValue == null
+    : column.semantics.equivalent(previousValue, nextValue);
 }
 
 export class ClientRowOrderStore {

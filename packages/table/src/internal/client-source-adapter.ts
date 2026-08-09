@@ -73,7 +73,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
     this.source = snapshotSource(source);
     this.observedRows =
-      this.source.inputRows === undefined ? undefined : Array.from(this.source.inputRows);
+      this.source.inputRows === undefined ? undefined : Array.from(this.source.rows.asArray());
     this.getRowId = getRowId;
     this.publication = createPublication(
       this.source,
@@ -150,7 +150,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       });
       if (sourceSnapshot.inputRows !== undefined) {
         this.observedRows = commitObservedRows(
-          sourceSnapshot.inputRows,
+          sourceSnapshot.rows,
           sourceSnapshot.rows.changedIndexes,
           this.observedRows,
         );
@@ -198,7 +198,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     }
     if (sourceSnapshot.inputRows !== undefined) {
       this.observedRows = commitObservedRows(
-        sourceSnapshot.inputRows,
+        sourceSnapshot.rows,
         sourceSnapshot.rows.changedIndexes,
         this.observedRows,
       );
@@ -433,6 +433,10 @@ type ClientPersistentSequence<T> = Readonly<{
   readonly asArray: () => readonly T[];
 }>;
 
+type ClientPersistentSequenceSnapshot<T> =
+  | Readonly<{ readonly rows: ClientPersistentSequence<T> }>
+  | Readonly<{ readonly invalidRows: string }>;
+
 type ClientPersistentIdentityIndex = Readonly<{
   readonly buckets: ReadonlyMap<number, ReadonlyMap<BrunoTableRowId, BrunoTableClientAdmittedRow>>;
   readonly get: (rowId: BrunoTableRowId) => BrunoTableClientAdmittedRow | undefined;
@@ -457,33 +461,86 @@ function snapshotObservedPersistentSequence<T>(
   input: readonly T[],
   previous: ClientPersistentSequence<T>,
   observed: T[],
-): ClientPersistentSequence<T> {
+): ClientPersistentSequenceSnapshot<T> {
   const changedIndexes: number[] = [];
-  for (let index = 0; index < input.length; index += 1) {
-    if (index >= observed.length || observed[index] !== input[index]) {
-      changedIndexes.push(index);
+  const patches = new Map<number, T>();
+  try {
+    const indexedPrototype = hasIndexedPrototypeProperty(input);
+    for (let index = 0; index < input.length; index += 1) {
+      if (!(indexedPrototype ? Object.hasOwn(input, index) : index in input)) {
+        return Object.freeze({ invalidRows: "sparse array" });
+      }
+      const next = input[index]!;
+      if (index >= observed.length || observed[index] !== next) {
+        changedIndexes.push(index);
+        patches.set(index, next);
+      }
     }
+  } catch {
+    return Object.freeze({ invalidRows: "unreadable" });
   }
-  if (previous.length === input.length && changedIndexes.length === 0) return previous;
-  const patches = new Map(changedIndexes.map((index) => [index, input[index]!]));
-  return patchPersistentSequence(
-    previous,
-    input.length,
-    patches,
-    changedIndexes,
-    (index) => input[index]!,
-  );
+  if (previous.length === input.length && changedIndexes.length === 0) {
+    return Object.freeze({ rows: previous });
+  }
+  return Object.freeze({
+    rows: patchPersistentSequence(
+      previous,
+      input.length,
+      patches,
+      changedIndexes,
+      (index) => input[index]!,
+    ),
+  });
 }
 
 function commitObservedRows<T>(
-  input: readonly T[],
+  input: ClientPersistentSequence<T>,
   changedIndexes: readonly number[],
   observed: T[] | undefined,
 ): T[] {
-  if (observed === undefined) return Array.from(input);
-  for (const index of changedIndexes) observed[index] = input[index]!;
+  if (observed === undefined) return Array.from(input.asArray());
+  for (const index of changedIndexes) observed[index] = input.get(index)!;
   observed.length = input.length;
   return observed;
+}
+
+function snapshotBasePersistentSequence<T>(
+  input: readonly T[],
+): ClientPersistentSequenceSnapshot<T> {
+  const chunks: (readonly T[])[] = [];
+  try {
+    const indexedPrototype = hasIndexedPrototypeProperty(input);
+    for (let start = 0; start < input.length; start += CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE) {
+      const end = Math.min(input.length, start + CLIENT_PERSISTENT_SEQUENCE_CHUNK_SIZE);
+      const chunk: T[] = [];
+      for (let index = start; index < end; index += 1) {
+        if (!(indexedPrototype ? Object.hasOwn(input, index) : index in input)) {
+          return Object.freeze({ invalidRows: "sparse array" });
+        }
+        chunk.push(input[index]!);
+      }
+      chunks.push(Object.freeze(chunk));
+    }
+  } catch {
+    return Object.freeze({ invalidRows: "unreadable" });
+  }
+  return Object.freeze({
+    rows: persistentSequence(Object.freeze(chunks), input.length, EMPTY_ROWS),
+  });
+}
+
+function hasIndexedPrototypeProperty(input: readonly unknown[]): boolean {
+  let prototype: object | null = Object.getPrototypeOf(input) as object | null;
+  while (prototype !== null) {
+    for (const key of Object.getOwnPropertyNames(prototype)) {
+      const index = Number(key);
+      if (Number.isInteger(index) && index >= 0 && index < 4_294_967_295 && String(index) === key) {
+        return true;
+      }
+    }
+    prototype = Object.getPrototypeOf(prototype) as object | null;
+  }
+  return false;
 }
 
 function patchPersistentSequence<T>(
@@ -1172,13 +1229,23 @@ function snapshotSource<TRow>(
   const rowInput =
     status === undefined || status === "loading" ? undefined : snapshotSourceRows(source);
   const inputRows = rowInput?.inputRows;
-  const invalidRows = rowInput?.invalidRows;
-  const rows =
+  const sequenceSnapshot =
     inputRows === undefined
-      ? (previous?.rows ?? (EMPTY_PERSISTENT_SEQUENCE as ClientPersistentSequence<TRow>))
+      ? undefined
       : previous === undefined || observedRows === undefined
-        ? basePersistentSequence(inputRows)
+        ? snapshotBasePersistentSequence(inputRows)
         : snapshotObservedPersistentSequence(inputRows, previous.rows, observedRows);
+  const sequenceRows =
+    sequenceSnapshot !== undefined && "rows" in sequenceSnapshot
+      ? sequenceSnapshot.rows
+      : undefined;
+  const invalidRows =
+    rowInput?.invalidRows ??
+    (sequenceSnapshot !== undefined && "invalidRows" in sequenceSnapshot
+      ? sequenceSnapshot.invalidRows
+      : undefined);
+  const rows =
+    sequenceRows ?? previous?.rows ?? (EMPTY_PERSISTENT_SEQUENCE as ClientPersistentSequence<TRow>);
   return Object.freeze({
     rows,
     totalRows: source.totalRows,
@@ -1186,7 +1253,7 @@ function snapshotSource<TRow>(
     status: invalidRows === undefined ? (status ?? "error") : "error",
     ...(status === undefined ? { invalidStatus: describeInvalidStatus(sourceStatus) } : {}),
     ...(invalidRows === undefined ? {} : { invalidRows }),
-    ...(inputRows === undefined ? {} : { inputRows }),
+    ...(inputRows === undefined || invalidRows !== undefined ? {} : { inputRows }),
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(message === undefined ? {} : { message }),
     ...(retry === undefined ? {} : { retry }),

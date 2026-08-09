@@ -1301,6 +1301,22 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
   });
 
+  it("rejects a sparse Client Source row collection before resolving row identities", () => {
+    const sparseRows = Array<Row>(2);
+    sparseRows[1] = { id: "candidate", name: "Untrusted" };
+    const getRowId = vi.fn((row: Row) => row.id);
+
+    const runtime = createRuntime(source(sparseRows), getRowId);
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: false,
+      invalid: { kind: "invalid-rows", receivedRows: "sparse array" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
+    expect(getRowId).not.toHaveBeenCalled();
+  });
+
   it("retains coherent rows while rejecting a malformed later row collection", () => {
     const accepted = { id: "accepted", name: "Ada" } satisfies Row;
     const runtime = createRuntime(source([accepted]));
@@ -1319,6 +1335,27 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     });
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("accepted")).toBe(accepted);
+  });
+
+  it("retains coherent rows while rejecting a sparse later row collection", () => {
+    const accepted = { id: "accepted", name: "Ada" } satisfies Row;
+    const getRowId = vi.fn((row: Row) => row.id);
+    const runtime = createRuntime(source([accepted]), getRowId);
+    const identityReads = getRowId.mock.calls.length;
+    const sparseRows = Array<Row>(2);
+    sparseRows[1] = { id: "candidate", name: "Untrusted" };
+
+    runtime.publish(source(sparseRows));
+
+    expect(runtime.getChromeSnapshot()).toEqual({
+      status: "error",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-rows", receivedRows: "sparse array" },
+    });
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+    expect(runtime.getRowSnapshot("accepted")).toBe(accepted);
+    expect(runtime.getRowSnapshot("candidate")).toBeUndefined();
+    expect(getRowId).toHaveBeenCalledTimes(identityReads);
   });
 
   it.each([

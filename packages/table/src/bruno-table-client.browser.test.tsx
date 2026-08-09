@@ -324,6 +324,29 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(1))
       .toHaveTextContent("1");
+
+    const updatedRows = [
+      optionalRows[0]!,
+      { ...optionalRows[1]!, name: "Still null" },
+      optionalRows[2]!,
+    ] satisfies readonly OptionalRow[];
+    await expect(
+      screen.rerender(
+        <BrunoTableClient
+          tableId="TABLE_ID_OPTIONAL"
+          getRowId={(row: OptionalRow) => row.id}
+          columns={optionalColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={{
+            rows: updatedRows,
+            totalRows: updatedRows.length,
+            version: 2,
+            status: "ready",
+          }}
+        />,
+      ),
+    ).resolves.toBeUndefined();
+    await expect.element(screen.getByRole("gridcell", { name: "Still null" })).toBeInTheDocument();
   });
 
   test("renders loading skeletons and rejects an incomplete ready source visibly", async () => {
@@ -2049,6 +2072,29 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("rejects a sparse runtime row collection with visible error chrome", async () => {
+    const sparseRows = Array<Row>(2);
+    sparseRows[1] = rows[1]!;
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: sparseRows,
+          totalRows: sparseRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("Live data error");
+    await expect.element(alert).toHaveTextContent("Invalid Client Source rows: sparse array.");
+    await expect
+      .element(screen.getByRole("grid", { name: `Data for ${props.tableId}` }))
+      .not.toBeInTheDocument();
+  });
+
   test("retains accepted rows when a later row collection is malformed", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
@@ -2072,6 +2118,33 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(alert).toHaveTextContent("Invalid Client Source rows: null.");
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
     await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+  });
+
+  test("retains accepted rows when a later row collection is sparse", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const acceptedAdaCell = screen.getByRole("gridcell", { name: "Ada" }).element();
+    const sparseRows = Array<Row>(2);
+    sparseRows[1] = { id: "candidate", name: "Untrusted", score: 3 };
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: sparseRows,
+          totalRows: sparseRows.length,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("Invalid Client Source rows: sparse array.");
+    expect(screen.getByRole("gridcell", { name: "Ada" }).element()).toBe(acceptedAdaCell);
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Untrusted" }))
+      .not.toBeInTheDocument();
   });
 
   test("announces an initially closed empty source as status", async () => {
