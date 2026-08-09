@@ -646,6 +646,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useLayoutEffect(recordBrunoTableClientGridSurfaceRender);
   const virtualWindow = viewportSnapshot.virtualWindow;
   const tableWidth = virtualWindow.totalWidth;
+  const viewportFill =
+    virtualWindow.pinnedEnd.length === 0 ? 0 : Math.max(0, viewportSnapshot.width - tableWidth);
+  const renderedTableWidth = tableWidth + viewportFill;
   const logicalColumns = columns;
   const gridElement = useRef<HTMLDivElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
@@ -823,14 +826,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         navigation={navigation}
         tableId={tableId}
       />
-      <table role="presentation" style={{ tableLayout: "fixed", width: tableWidth }}>
+      <table role="presentation" style={{ tableLayout: "fixed", width: renderedTableWidth }}>
         <thead
           role="rowgroup"
           style={{
             background: "Canvas",
             position: "sticky",
             top: 0,
-            width: tableWidth,
+            width: renderedTableWidth,
             zIndex: 4,
           }}
         >
@@ -878,6 +881,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             {virtualWindow.rightPadding > 0 ? (
               <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.rightPadding }} />
             ) : null}
+            {viewportFill > 0 ? (
+              <th aria-hidden="true" style={{ padding: 0, width: viewportFill }} />
+            ) : null}
             {virtualWindow.pinnedEnd.length > 0 ? (
               <th
                 data-pinned-region="end"
@@ -911,7 +917,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             display: "block",
             height: virtualWindow.totalHeight,
             position: "relative",
-            width: tableWidth,
+            width: renderedTableWidth,
           }}
         >
           {Array.from({ length: virtualWindow.rowEnd - virtualWindow.rowStart }, (_, offset) => {
@@ -922,7 +928,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                 key={`unloaded-${String(logicalRowIndex)}`}
                 logicalRowIndex={logicalRowIndex}
                 top={offset * ROW_HEIGHT}
-                width={tableWidth}
+                width={renderedTableWidth}
               />
             ) : (
               <BrunoTableRow
@@ -939,9 +945,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                 pinnedEnd={virtualWindow.pinnedEnd}
                 leftPadding={virtualWindow.leftPadding}
                 rightPadding={virtualWindow.rightPadding}
+                viewportFill={viewportFill}
                 logicalRowIndex={logicalRowIndex}
                 top={offset * ROW_HEIGHT}
-                width={tableWidth}
+                width={renderedTableWidth}
               />
             );
           })}
@@ -1326,6 +1333,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
   pinnedEnd,
   leftPadding,
   rightPadding,
+  viewportFill,
   logicalRowIndex,
   top,
   width,
@@ -1342,6 +1350,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
   readonly pinnedEnd: readonly CompiledColumn[];
   readonly leftPadding: number;
   readonly rightPadding: number;
+  readonly viewportFill: number;
   readonly logicalRowIndex: number;
   readonly top: number;
   readonly width: number;
@@ -1399,6 +1408,9 @@ const BrunoTableRow = memo(function BrunoTableRow({
       ))}
       {rightPadding > 0 ? (
         <td aria-hidden="true" style={{ padding: 0, width: rightPadding }} />
+      ) : null}
+      {viewportFill > 0 ? (
+        <td aria-hidden="true" style={{ padding: 0, width: viewportFill }} />
       ) : null}
       {pinnedEnd.length > 0 ? (
         <td

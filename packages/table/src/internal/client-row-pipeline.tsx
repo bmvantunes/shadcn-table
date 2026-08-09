@@ -124,11 +124,14 @@ function rowOrderChanged(
   orderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
 ): boolean {
   if (change.rowIdsChanged) return true;
-  const relevantIds = new Set(orderBy.map((sort) => sort.columnId));
+  const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
+  const filteredIds = new Set<string>();
   for (const filter of filters ?? EMPTY_FILTERS) {
-    collectClientFilterColumnIds(filter, relevantIds);
+    collectClientFilterColumnIds(filter, filteredIds);
   }
-  const relevantColumns = columns.filter((column) => relevantIds.has(column.columnId));
+  const relevantColumns = columns.filter(
+    (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
+  );
   if (relevantColumns.length === 0) return false;
   for (const index of change.changedIndexes) {
     const previousRow = previousRows[index];
@@ -147,7 +150,9 @@ function rowOrderChanged(
       if (
         isBrunoTableInvalidCellValue(previousValue) ||
         isBrunoTableInvalidCellValue(nextValue) ||
-        !column.semantics.equivalent(previousValue, nextValue)
+        (filteredIds.has(column.columnId)
+          ? !Object.is(previousValue, nextValue)
+          : !column.semantics.equivalent(previousValue, nextValue))
       ) {
         return true;
       }

@@ -614,29 +614,81 @@ describe("BrunoTableClient browser surface", () => {
         valueType: casePreservingText,
       },
     ] as const satisfies BrunoTableColumns<Row>;
+    const initialSource = readySource([{ id: "row", name: "a", score: 1 }]);
     const screen = await render(
-      <BrunoTableClient
-        tableId="TABLE_ID_PRESENTATION_IDENTITY"
-        getRowId={(row: Row) => row.id}
-        columns={presentationColumns}
-        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-        clientSource={readySource([{ id: "row", name: "a", score: 1 }])}
-      />,
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_PRESENTATION_IDENTITY"
+          getRowId={(row: Row) => row.id}
+          columns={presentationColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={initialSource}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FILTER_MEMBERSHIP_IDENTITY"
+          getRowId={(row: Row) => row.id}
+          columns={presentationColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_NAME",
+              type: "equals",
+              filter: "a",
+              caseSensitive: true,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={initialSource}
+        />
+      </>,
     );
+    const presentationGrid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_PRESENTATION_IDENTITY",
+    });
+    const sensitiveFilterGrid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_FILTER_MEMBERSHIP_IDENTITY",
+    });
 
-    await expect.element(screen.getByRole("gridcell", { name: "a", exact: true })).toBeVisible();
+    await expect
+      .element(presentationGrid.getByRole("gridcell", { name: "a", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(sensitiveFilterGrid.getByRole("gridcell", { name: "a", exact: true }))
+      .toBeVisible();
 
+    const updatedSource = readySource([{ id: "row", name: "A", score: 1 }]);
     await screen.rerender(
-      <BrunoTableClient
-        tableId="TABLE_ID_PRESENTATION_IDENTITY"
-        getRowId={(row: Row) => row.id}
-        columns={presentationColumns}
-        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-        clientSource={readySource([{ id: "row", name: "A", score: 1 }])}
-      />,
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_PRESENTATION_IDENTITY"
+          getRowId={(row: Row) => row.id}
+          columns={presentationColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={updatedSource}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FILTER_MEMBERSHIP_IDENTITY"
+          getRowId={(row: Row) => row.id}
+          columns={presentationColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_NAME",
+              type: "equals",
+              filter: "a",
+              caseSensitive: true,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={updatedSource}
+        />
+      </>,
     );
 
-    await expect.element(screen.getByRole("gridcell", { name: "A", exact: true })).toBeVisible();
+    await expect
+      .element(presentationGrid.getByRole("gridcell", { name: "A", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(sensitiveFilterGrid.getByRole("gridcell", { name: "A", exact: true }))
+      .not.toBeInTheDocument();
   });
 
   test("retains coherent rows for a terminal publication after rejecting ready data", async () => {
@@ -2007,6 +2059,19 @@ describe("BrunoTableClient browser surface", () => {
     expect(restoredEnd.element().closest('[data-pinned-region="end"]')).not.toBeNull();
     expect(restoredStart.element().getAttribute("aria-colindex")).toBe("1");
     expect(restoredEnd.element().getAttribute("aria-colindex")).toBe("60");
+    const gridRight = grid.element().getBoundingClientRect().right;
+    const endHeaderRegion = restoredEnd.element().closest('[data-pinned-region="end"]');
+    expect(endHeaderRegion?.getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
+    expect(restoredEnd.element().getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
+    expect(restoredEnd.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
+    const endBodyCell = screen
+      .getByRole("gridcell")
+      .all()
+      .find((cell) => cell.element().getAttribute("aria-colindex") === "60");
+    const endBodyRegion = endBodyCell?.element().closest('[data-pinned-region="end"]');
+    expect(endBodyRegion?.getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
+    expect(endBodyCell?.element().getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
+    expect(endBodyCell?.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
   });
 
   test("renders boolean values as read-only checkbox semantics", async () => {
