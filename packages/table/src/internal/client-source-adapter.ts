@@ -291,7 +291,7 @@ function createPublication<TRow>(
         })
       : undefined;
   const coherentResult =
-    complete && (source.status !== "loading" || source.rows.length > 0)
+    complete && source.status !== "loading"
       ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds, valueCache)
       : undefined;
   const terminal = source.status === "closed" || source.status === "error";
@@ -654,7 +654,10 @@ function nextCoherent<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
 ): ClientCoherentSnapshot<TRow> | undefined {
   const next = asClientCoherent(publication.rowSpace);
-  return next ?? (publication.invalid === undefined ? undefined : previous);
+  return (
+    next ??
+    (publication.status === "loading" || publication.invalid !== undefined ? previous : undefined)
+  );
 }
 
 function boundedText(value: string, limit: number): string {

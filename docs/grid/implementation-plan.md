@@ -125,7 +125,7 @@ Build:
 - horizontal centre-column virtualization
 - pinned start and end columns
 - one native two-axis scroll owner; Scroll Area styling may decorate only that viewport
-- separate continuously mounted sticky start/end regions around the virtual centre window
+- separate continuously mounted sticky start/end regions around the virtual centre window while pinning is active; before measurement, or while a narrow mixed layout cannot preserve the minimum centre width or a centreless pinned layout cannot fit, suspend pinning into one start → centre → end virtual window and restore it automatically when the active layout fits
 - one shared immutable centre-column window for header and body
 - basic headers and cells
 - helper-owned semantic layout defaults for start-aligned text, end-aligned numbers, centered checkboxes, and full-width select editors
@@ -150,7 +150,7 @@ Success criteria:
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
 - bounded mounted cells
-- a 150-column fixture mounts only pinned columns plus the visible and overscanned centre window for each mounted row
+- a 150-column fixture mounts only active pinned columns plus the visible and overscanned centre window, or one bounded visible and overscanned all-column window while pinning is suspended, for each mounted row
 - held-arrow reveal advances by one logical cell and the smallest geometry delta across centre and pinned boundaries; it never delegates to nearest-index alignment
 - end-pinned columns render inside a sticky end region rather than collapsing beside start-pinned cells
 - one-time Active Cell initialization does not replay after row or column virtual-window renders
@@ -159,7 +159,7 @@ Success criteria:
 - no full-grid rerender on a single row replacement
 - React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
 - compiler-on tests prove horizontal and vertical windows, column resizing, and keyboard reveal never freeze behind a memoized mutable getter
-- production benchmarks compare the exact installed Virtual React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before locking the private default
+- the BrunoTable-owned custom viewport runtime is the private default; if a future TanStack Virtual adoption is proposed, production benchmarks must compare the exact candidate React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before changing it
 - smooth 120 Hz scrolling target on capable hardware
 - exact-numeric hot paths perform no value-kind sampling, schema inspection, or per-cell registry lookup
 
@@ -635,7 +635,7 @@ Potential later work:
 - pivot
 - server-assisted bulk operations
 - per-cell subscriptions for hot columns
-- custom virtualization adapter without compiler escape hatch
+- compiler-on removal tests for the custom viewport and loading DOM-attachment escape hatches
 
 ## Exact-numeric verification gates
 

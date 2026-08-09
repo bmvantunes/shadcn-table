@@ -365,8 +365,8 @@ describe("BrunoTableClient browser surface", () => {
     );
     await expect
       .element(screen.getByRole("grid", { name: "Loading table rows" }))
-      .not.toBeInTheDocument();
-    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+      .toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).not.toBeInTheDocument();
 
     await screen.rerender(
       <BrunoTableClient
@@ -587,6 +587,7 @@ describe("BrunoTableClient browser surface", () => {
 
   test("retains the latest accepted live rows for a later empty terminal publication", async () => {
     const latestRows = rows.map((row) => ({ ...row, name: `${row.name} latest` }));
+    const loadingRows = rows.map((row) => ({ ...row, name: `${row.name} loading` }));
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
 
     await screen.rerender(
@@ -597,7 +598,28 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
-        clientSource={{ rows: [], totalRows: 0, version: 3, status: "error" }}
+        clientSource={{
+          rows: loadingRows,
+          totalRows: loadingRows.length,
+          version: 3,
+          status: "loading",
+        }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada latest" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada loading" }))
+      .not.toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [], totalRows: 0, version: 4, status: "error" }}
       />,
     );
 
@@ -608,6 +630,9 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada loading" }))
       .not.toBeInTheDocument();
   });
 
@@ -1408,6 +1433,241 @@ describe("BrunoTableClient browser surface", () => {
     expect(Number(headerLayer?.style.zIndex)).toBeGreaterThan(
       Number((bodyPinnedLayer as HTMLElement | null)?.style.zIndex),
     );
+  });
+
+  test("virtualizes, reveals, and restores a suspended many-column pinned layout", async () => {
+    const narrowColumns = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_NARROW_START_${String(index).padStart(2, "0")}`,
+        headerName: `Start ${index}`,
+        pinned: "start" as const,
+        width: 120,
+      })),
+      { ...columns[1], columnId: "COL_ID_NARROW_CENTER", width: 120 },
+      ...Array.from({ length: 30 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_NARROW_END_${String(index).padStart(2, "0")}`,
+        headerName: `End ${index}`,
+        pinned: "end" as const,
+        width: 120,
+      })),
+    ] as BrunoTableColumns<Row>;
+    const renderAtWidth = (width: number) => (
+      <div style={{ width }}>
+        <BrunoTableClient
+          tableId="TABLE_ID_NARROW_PINNING"
+          getRowId={(row: Row) => row.id}
+          columns={narrowColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NARROW_CENTER", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </div>
+    );
+    const initiallyRenderedColumns = new Set<string>();
+    const removeInitialRenderListener = installBrunoTableClientCellRenderListener(
+      (_rowId, columnId) => initiallyRenderedColumns.add(columnId),
+    );
+    const screen = await render(renderAtWidth(240)).finally(removeInitialRenderListener);
+
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_NARROW_PINNING" });
+    await expect.element(grid).toBeInTheDocument();
+    expect(initiallyRenderedColumns.size).toBeLessThan(10);
+    await vi.waitFor(() => {
+      expect(
+        screen
+          .getByRole("columnheader")
+          .all()
+          .every((header) => header.element().closest("[data-pinned-region]") === null),
+      ).toBe(true);
+    });
+    expect(screen.getByRole("columnheader").all().length).toBeLessThan(10);
+
+    const activeCell = () => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      return screen
+        .getByRole("gridcell")
+        .all()
+        .find((cell) => cell.element().id === activeId);
+    };
+    const moveHorizontally = (key: "ArrowLeft" | "ArrowRight", count = 1) => {
+      for (let step = 0; step < count; step += 1) {
+        grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key }));
+      }
+    };
+    grid.element().focus();
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
+
+    moveHorizontally("ArrowRight", 29);
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("30"),
+    );
+    expect(activeCell()?.element().textContent).toBe("Grace");
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_NARROW_START_29"),
+    );
+
+    moveHorizontally("ArrowRight");
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("31"),
+    );
+    expect(activeCell()?.element().textContent).toBe("2");
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_NARROW_CENTER"),
+    );
+    expect(
+      screen
+        .getByRole("columnheader", { name: "Start 29" })
+        .element()
+        .getAttribute("aria-colindex"),
+    ).toBe("30");
+    expect(
+      screen.getByRole("columnheader", { name: "Score" }).element().getAttribute("aria-colindex"),
+    ).toBe("31");
+    expect(
+      screen.getByRole("columnheader", { name: "End 0" }).element().getAttribute("aria-colindex"),
+    ).toBe("32");
+
+    moveHorizontally("ArrowRight");
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("32"),
+    );
+    expect(activeCell()?.element().textContent).toBe("Grace");
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_NARROW_END_00"),
+    );
+
+    moveHorizontally("ArrowLeft");
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("31"),
+    );
+    expect(activeCell()?.element().textContent).toBe("2");
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_NARROW_CENTER"),
+    );
+
+    moveHorizontally("ArrowLeft");
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("30"),
+    );
+    expect(activeCell()?.element().textContent).toBe("Grace");
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_NARROW_START_29"),
+    );
+
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowRight" }),
+      );
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("61"),
+    );
+    await vi.waitFor(() =>
+      expect(grid.element().scrollLeft).toBe(7_320 - grid.element().clientWidth),
+    );
+    expect(screen.getByRole("columnheader").all().length).toBeLessThan(10);
+
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowLeft" }),
+      );
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
+    await vi.waitFor(() => expect(grid.element().scrollLeft).toBe(0));
+
+    await screen.rerender(renderAtWidth(8_000));
+    const restoredStart = screen.getByRole("columnheader", { name: "Start 0" });
+    const restoredEnd = screen.getByRole("columnheader", { name: "End 29" });
+    await vi.waitFor(() =>
+      expect(restoredStart.element().closest('[data-pinned-region="start"]')).not.toBeNull(),
+    );
+    expect(restoredEnd.element().closest('[data-pinned-region="end"]')).not.toBeNull();
+    expect(
+      screen.getByRole("columnheader", { name: "Score" }).element().getAttribute("aria-colindex"),
+    ).toBe("31");
+    expect(restoredEnd.element().getAttribute("aria-colindex")).toBe("61");
+  });
+
+  test("bounds and restores an oversized centreless pinned layout from its first commit", async () => {
+    const allPinnedColumns = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_ALL_PINNED_START_${String(index).padStart(2, "0")}`,
+        headerName: `All pinned start ${index}`,
+        pinned: "start" as const,
+        width: 120,
+      })),
+      ...Array.from({ length: 30 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_ALL_PINNED_END_${String(index).padStart(2, "0")}`,
+        headerName: `All pinned end ${index}`,
+        pinned: "end" as const,
+        width: 120,
+      })),
+    ] as BrunoTableColumns<Row>;
+    const renderAtWidth = (width: number) => (
+      <div style={{ width }}>
+        <BrunoTableClient
+          tableId="TABLE_ID_ALL_PINNED"
+          getRowId={(row: Row) => row.id}
+          columns={allPinnedColumns}
+          initialOrderBy={[{ columnId: "COL_ID_ALL_PINNED_START_00", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </div>
+    );
+    const initiallyRenderedColumns = new Set<string>();
+    const removeInitialRenderListener = installBrunoTableClientCellRenderListener(
+      (_rowId, columnId) => initiallyRenderedColumns.add(columnId),
+    );
+    const screen = await render(renderAtWidth(240)).finally(removeInitialRenderListener);
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ALL_PINNED" });
+
+    await expect.element(grid).toBeInTheDocument();
+    expect(initiallyRenderedColumns.size).toBeLessThan(10);
+    expect(screen.getByRole("columnheader").all().length).toBeLessThan(10);
+    expect(
+      screen
+        .getByRole("columnheader")
+        .all()
+        .every((header) => header.element().closest("[data-pinned-region]") === null),
+    ).toBe(true);
+
+    const activeCell = () => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      return screen
+        .getByRole("gridcell")
+        .all()
+        .find((cell) => cell.element().id === activeId);
+    };
+    grid.element().focus();
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
+
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowRight" }),
+      );
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("60"),
+    );
+    expect(activeCell()?.element().id).toContain(
+      encodeExpectedDomIdSegment("COL_ID_ALL_PINNED_END_29"),
+    );
+    await vi.waitFor(() =>
+      expect(grid.element().scrollLeft).toBe(7_200 - grid.element().clientWidth),
+    );
+
+    await screen.rerender(renderAtWidth(8_000));
+    const restoredStart = screen.getByRole("columnheader", { name: "All pinned start 0" });
+    const restoredEnd = screen.getByRole("columnheader", { name: "All pinned end 29" });
+    await vi.waitFor(() =>
+      expect(restoredStart.element().closest('[data-pinned-region="start"]')).not.toBeNull(),
+    );
+    expect(restoredEnd.element().closest('[data-pinned-region="end"]')).not.toBeNull();
+    expect(restoredStart.element().getAttribute("aria-colindex")).toBe("1");
+    expect(restoredEnd.element().getAttribute("aria-colindex")).toBe("60");
   });
 
   test("renders boolean values as read-only checkbox semantics", async () => {

@@ -29,6 +29,7 @@ export const BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT = 4_000_000;
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_OVERSCAN = 4;
 const COLUMN_OVERSCAN = 2;
+const MIN_CENTER_VIEWPORT_WIDTH = 80;
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
 
 type ViewportLayout = Readonly<{
@@ -39,6 +40,9 @@ type ViewportLayout = Readonly<{
   readonly center: readonly CompiledColumn[];
   readonly pinnedEnd: readonly CompiledColumn[];
   readonly centerOffsets: readonly number[];
+  readonly suspendedCenter: readonly CompiledColumn[];
+  readonly suspendedCenterOffsets: readonly number[];
+  readonly suspendedCenterWidth: number;
   readonly pinnedStartWidth: number;
   readonly pinnedEndWidth: number;
   readonly centerWidth: number;
@@ -179,18 +183,22 @@ export class BrunoTableViewportRuntime {
       }
       this.setLogicalScrollTop(element, nextLogicalScrollTop);
     }
-    if (column.pinned !== undefined) return;
-    const centerIndex = this.layout.center.findIndex(
-      (candidate) => candidate.columnId === target.columnId,
-    );
-    const centerOffset = this.layout.centerOffsets[centerIndex] ?? 0;
+    const suspendPinning = shouldSuspendPinning(this.layout, element.clientWidth);
+    if (!suspendPinning && column.pinned !== undefined) return;
+    const center = suspendPinning ? this.layout.suspendedCenter : this.layout.center;
+    const centerOffsets = suspendPinning
+      ? this.layout.suspendedCenterOffsets
+      : this.layout.centerOffsets;
+    const centerIndex = center.findIndex((candidate) => candidate.columnId === target.columnId);
+    const centerOffset = centerOffsets[centerIndex] ?? 0;
     const centerEnd = centerOffset + column.semantics.width;
     // The semantic table keeps pinned columns in the scrollable inline layout and makes
     // them sticky. Native scrollLeft therefore already identifies the centre-content origin;
     // subtracting the pinned-start inset would double-count that column space.
     const centerScrollLeft = element.scrollLeft;
     const centerViewportWidth = Math.max(
-      element.clientWidth - this.layout.pinnedStartWidth - this.layout.pinnedEndWidth,
+      element.clientWidth -
+        (suspendPinning ? 0 : this.layout.pinnedStartWidth + this.layout.pinnedEndWidth),
       0,
     );
     const columnWidth = centerEnd - centerOffset;
@@ -387,35 +395,41 @@ function calculateVirtualWindow(
     layout.rowCount,
     Math.ceil((viewport.logicalScrollTop + rowViewportHeight) / ROW_HEIGHT) + ROW_OVERSCAN,
   );
+  const suspendPinning = shouldSuspendPinning(layout, viewport.width);
+  const pinnedStart = suspendPinning ? EMPTY_COLUMNS : layout.pinnedStart;
+  const pinnedEnd = suspendPinning ? EMPTY_COLUMNS : layout.pinnedEnd;
+  const center = suspendPinning ? layout.suspendedCenter : layout.center;
+  const centerOffsets = suspendPinning ? layout.suspendedCenterOffsets : layout.centerOffsets;
+  const centerWidth = suspendPinning ? layout.suspendedCenterWidth : layout.centerWidth;
   // Pinned columns occupy their original table slots while their visual regions are sticky.
   // The native offset consequently maps directly to the centre-column offset.
   const centerScrollLeft = viewport.scrollLeft;
   const centerViewportWidth = Math.max(
-    viewport.width - layout.pinnedStartWidth - layout.pinnedEndWidth,
+    viewport.width - (suspendPinning ? 0 : layout.pinnedStartWidth + layout.pinnedEndWidth),
     0,
   );
   const firstVisible = findColumnAtOffset(
-    layout.centerOffsets,
+    centerOffsets,
     Math.max(centerScrollLeft - BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM, 0),
   );
   const lastVisible = findColumnAtOffset(
-    layout.centerOffsets,
+    centerOffsets,
     centerScrollLeft + centerViewportWidth + BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM,
   );
   const columnStart = Math.max(firstVisible - COLUMN_OVERSCAN, 0);
-  const columnEnd = Math.min(layout.center.length, lastVisible + COLUMN_OVERSCAN + 1);
-  const leftPadding = layout.centerOffsets[columnStart] ?? 0;
-  const visibleWidth = (layout.centerOffsets[columnEnd] ?? layout.centerWidth) - leftPadding;
+  const columnEnd = Math.min(center.length, lastVisible + COLUMN_OVERSCAN + 1);
+  const leftPadding = centerOffsets[columnStart] ?? 0;
+  const visibleWidth = (centerOffsets[columnEnd] ?? centerWidth) - leftPadding;
   return Object.freeze({
     rowStart,
     rowEnd,
-    pinnedStart: layout.pinnedStart,
-    center: Object.freeze(layout.center.slice(columnStart, columnEnd)),
-    pinnedEnd: layout.pinnedEnd,
+    pinnedStart,
+    center: Object.freeze(center.slice(columnStart, columnEnd)),
+    pinnedEnd,
     centerStartIndex: columnStart,
-    centerCount: layout.center.length,
+    centerCount: center.length,
     leftPadding,
-    rightPadding: Math.max(layout.centerWidth - leftPadding - visibleWidth, 0),
+    rightPadding: Math.max(centerWidth - leftPadding - visibleWidth, 0),
     totalHeight: layout.physicalRowHeight,
     totalWidth: layout.totalWidth,
   });
@@ -425,6 +439,8 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   return (
     left.rowStart === right.rowStart &&
     left.rowEnd === right.rowEnd &&
+    left.centerStartIndex === right.centerStartIndex &&
+    left.centerCount === right.centerCount &&
     left.leftPadding === right.leftPadding &&
     left.rightPadding === right.rightPadding &&
     left.totalHeight === right.totalHeight &&
@@ -450,13 +466,13 @@ function createLayout(
   );
   const center = Object.freeze(normalizedColumns.filter((column) => column.pinned === undefined));
   const pinnedEnd = Object.freeze(normalizedColumns.filter((column) => column.pinned === "end"));
-  const centerOffsets = [0];
-  for (const column of center) {
-    centerOffsets.push(centerOffsets.at(-1)! + column.semantics.width);
-  }
+  const centerOffsets = columnOffsets(center);
+  const suspendedCenter = Object.freeze([...pinnedStart, ...center, ...pinnedEnd]);
+  const suspendedCenterOffsets = columnOffsets(suspendedCenter);
   const pinnedStartWidth = totalColumnWidth(pinnedStart);
   const pinnedEndWidth = totalColumnWidth(pinnedEnd);
   const centerWidth = centerOffsets.at(-1) ?? 0;
+  const suspendedCenterWidth = suspendedCenterOffsets.at(-1) ?? 0;
   const logicalRowHeight = rowCount * ROW_HEIGHT;
   const physicalRowHeight = Math.min(logicalRowHeight, BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT);
   return Object.freeze({
@@ -466,7 +482,10 @@ function createLayout(
     pinnedStart,
     center,
     pinnedEnd,
-    centerOffsets: Object.freeze(centerOffsets),
+    centerOffsets,
+    suspendedCenter,
+    suspendedCenterOffsets,
+    suspendedCenterWidth,
     pinnedStartWidth,
     pinnedEndWidth,
     centerWidth,
@@ -474,6 +493,23 @@ function createLayout(
     physicalRowHeight,
     totalWidth: pinnedStartWidth + centerWidth + pinnedEndWidth,
   });
+}
+
+function columnOffsets(columns: readonly CompiledColumn[]): readonly number[] {
+  const offsets = [0];
+  for (const column of columns) offsets.push(offsets.at(-1)! + column.semantics.width);
+  return Object.freeze(offsets);
+}
+
+function shouldSuspendPinning(layout: ViewportLayout, viewportWidth: number): boolean {
+  const hasPinnedColumns = layout.pinnedStart.length > 0 || layout.pinnedEnd.length > 0;
+  if (!hasPinnedColumns) return false;
+  if (viewportWidth <= 0) return true;
+  if (layout.center.length === 0) {
+    return layout.pinnedStartWidth + layout.pinnedEndWidth > viewportWidth;
+  }
+  const reservedCenterWidth = Math.min(MIN_CENTER_VIEWPORT_WIDTH, viewportWidth);
+  return layout.pinnedStartWidth + layout.pinnedEndWidth > viewportWidth - reservedCenterWidth;
 }
 
 function emptyVirtualWindow(): BrunoTableVirtualWindow {

@@ -133,11 +133,13 @@ The Client Table's virtual row count is the complete locally filtered and sorted
 
 The Server Table's virtual row count is the source's exact `totalRows`. Reveal may target an unloaded sparse row slot. The resulting virtual range change extends or replaces the active effect-view-server window; it does not fetch a "next page". Source overscan should normally request rows ahead of the visible boundary before the Active Cell reaches it.
 
-For centre columns, scroll horizontally by the minimum delta required to reveal the destination inside the unobscured centre viewport. That viewport begins after the total pinned-start width and ends before the total pinned-end width.
+While pinning is active, scroll centre columns horizontally by the minimum delta required to reveal the destination inside the unobscured centre viewport. That viewport begins after the total pinned-start width and ends before the total pinned-end width.
 
-Pinned columns are already horizontally visible but still require vertical scrolling.
+Active pinned columns are already horizontally visible but still require vertical scrolling.
 
-Entering either pinned region must not change horizontal scroll position. Crossing from a pinned-start column into centre reveals the first centre destination only; crossing from centre into pinned-end focuses the pinned destination without block-scrolling the centre region.
+Entering either active pinned region must not change horizontal scroll position. Crossing from a pinned-start column into centre reveals the first centre destination only; crossing from centre into pinned-end focuses the pinned destination without block-scrolling the centre region.
+
+Before any viewport with pinned columns is measured, pinning is suspended. After measurement, a mixed layout remains suspended while its pinned widths would leave less than 80 CSS pixels for the centre, and a centreless layout remains suspended while its total pinned width exceeds the viewport. Both pinned insets become zero, and horizontal navigation and reveal operate over one virtualized start → centre → end sequence, including formerly pinned destinations. Reverse traversal preserves end → centre → start identity order. Measuring or widening the viewport until the active pinned layout fits restores pinned behavior without changing the Active Cell or Logical Column Order.
 
 Do not delegate horizontal navigation reveal directly to native `Element.scrollIntoView()`. It does not understand the grid's logical pinned insets and can jump multiple columns. BrunoTable owns this geometry even when TanStack supplies private selection or movement primitives.
 
@@ -275,7 +277,7 @@ Support:
 12. Sorting/filtering reconciles focus safely; a Client Linear Cell Range survives only while its exact ordered identity span remains unchanged and never retargets stable corners across different intervening cells.
 13. Focus never falls to the document body because a cell unmounted.
 14. One horizontal navigation command moves to exactly one adjacent navigable column.
-15. Horizontal reveal uses both pinned widths and the minimum required centre scroll delta.
+15. While pinning is active, horizontal reveal uses both pinned widths and the minimum required centre scroll delta; while suspended, it uses zero pinned insets and the minimum delta inside the all-column window.
 16. Enter starts an editable focused cell with one key press.
 17. Printable text starts an eligible Client editor with that text replacing the previous candidate; Enter and F2 preserve the pre-session value.
 18. IME composition and dead-key input seed replace mode from produced text rather than intermediate key events.
@@ -299,10 +301,11 @@ Must include:
 
 - zero, one, and multiple consumer-defined columns in each pinned region
 - multiple pinned-start columns traversed one at a time before centre navigation
-- final pinned-start column to first centre column, revealing only that destination
-- final centre column to first pinned-end column without changing horizontal scroll
-- first pinned-end column back to the final centre column with minimal reveal
-- first centre column back to pinned-start without changing horizontal scroll
+- while pinning is active, final pinned-start column to first centre column, revealing only that destination
+- while pinning is active, final centre column to first pinned-end column without changing horizontal scroll
+- while pinning is active, first pinned-end column back to the final centre column with minimal reveal
+- while pinning is active, first centre column back to pinned-start without changing horizontal scroll
+- while pinning is suspended, forward and reverse traversal across start, centre, and end boundaries with minimum all-column reveal
 - header to body
 - body to header
 - group header to leaf header

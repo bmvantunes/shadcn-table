@@ -6,6 +6,7 @@ BrunoTable owns keyboard destination resolution and minimal scroll-to-reveal geo
 
 - Pinned-start, centre, and pinned-end columns form one Logical Column Order.
 - One horizontal key command moves to exactly one adjacent navigable column.
-- Pinned destinations never cause horizontal scrolling.
-- Centre destinations scroll by the minimum delta required inside the unobscured centre viewport after both pinned widths are removed.
+- While pinning is active, pinned destinations never cause horizontal scrolling.
+- While pinning is active, centre destinations scroll by the minimum delta required inside the unobscured centre viewport after both pinned widths are removed.
+- While pinning is suspended, start, centre, and end destinations share one virtualized horizontal sequence with zero pinned insets, so formerly pinned destinations scroll by the same minimum reveal rule.
 - Behavioural fixtures cover zero, one, and multiple consumer-defined columns in both pinned regions; no specific field or Column Identity is privileged.

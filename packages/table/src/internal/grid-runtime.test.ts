@@ -1000,15 +1000,17 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });
 
-  it("keeps complete authoritative rows visible during loading refreshes", () => {
+  it("keeps complete loading rows behind skeletons and retains prior coherent evidence", () => {
     const row = { id: "first", name: "Ada" } satisfies Row;
-    const runtime = createRuntime(source([], "loading", { totalRows: 1 }));
+    const runtime = createRuntime(source([row]));
     const zeroRowLoading = createRuntime(source([], "loading"));
 
     expect(zeroRowLoading.getBodySnapshot()).toMatchObject({ kind: "loading" });
 
-    runtime.publish(source([row], "loading", { totalRows: 1 }));
+    runtime.publish(source([{ ...row, name: "Loading candidate" }], "loading", { totalRows: 1 }));
+    expect(runtime.getBodySnapshot()).toEqual({ kind: "loading", totalRows: 1 });
 
+    runtime.publish(source([], "error", { totalRows: 0, message: "connection lost" }));
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });

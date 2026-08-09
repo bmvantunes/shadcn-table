@@ -170,6 +170,243 @@ describe("BrunoTableViewportRuntime", () => {
     expect(middle.center.length).toBeLessThanOrEqual(12);
   });
 
+  it("publishes off-screen column-count changes that preserve visible geometry", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_REPLACE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Replace ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const replacementTail = compileColumns([
+      {
+        columnId: "COL_ID_REPLACEMENT_TAIL",
+        field: "name",
+        headerName: "Replacement tail",
+        valueType: "text",
+        width: 240,
+      },
+    ]);
+    const replacementColumns = Object.freeze([...columns.slice(0, 8), ...replacementTail]);
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    const initial = viewport.getSnapshot().virtualWindow;
+    expect(initial).toMatchObject({ centerCount: 10, totalWidth: 1_200 });
+    const listener = vi.fn();
+    viewport.subscribe(listener);
+
+    viewport.setLayout(2, replacementColumns);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({
+      centerStartIndex: 0,
+      centerCount: 9,
+      totalWidth: 1_200,
+    });
+    expect(viewport.getSnapshot().virtualWindow.center).toEqual(initial.center);
+  });
+
+  it("virtualizes and reveals across a suspended many-column pinned layout", () => {
+    const columns = compileColumns([
+      ...Array.from({ length: 30 }, (_, index) => ({
+        columnId: `COL_ID_START_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Start ${index}`,
+        valueType: "text" as const,
+        pinned: "start" as const,
+        width: 120,
+      })),
+      {
+        columnId: "COL_ID_CENTER",
+        field: "name",
+        headerName: "Center",
+        valueType: "text",
+        width: 120,
+      },
+      ...Array.from({ length: 30 }, (_, index) => ({
+        columnId: `COL_ID_END_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `End ${index}`,
+        valueType: "text" as const,
+        pinned: "end" as const,
+        width: 120,
+      })),
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({
+      pinnedStart: [],
+      pinnedEnd: [],
+      centerCount: 61,
+      totalWidth: 7_320,
+    });
+    expect(viewport.getSnapshot().virtualWindow.center.length).toBeLessThan(10);
+
+    viewport.attach(element);
+
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({
+      pinnedStart: [],
+      pinnedEnd: [],
+      centerCount: 61,
+      totalWidth: 7_320,
+    });
+    expect(viewport.getSnapshot().virtualWindow.center.length).toBeLessThan(10);
+
+    viewport.revealCell(0, "COL_ID_END_29", "header");
+    callback!(0);
+    expect(element.scrollLeft).toBe(7_080);
+    expect(viewport.getSnapshot().virtualWindow.center.length).toBeLessThan(10);
+    expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe("COL_ID_END_29");
+
+    viewport.revealCell(0, "COL_ID_START_00", "header");
+    callback!(0);
+    expect(element.scrollLeft).toBe(0);
+    expect(viewport.getSnapshot().virtualWindow.center[0]?.columnId).toBe("COL_ID_START_00");
+  });
+
+  it("suspends at 79px and restores pinning at the exact 80px centre threshold", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        valueType: "text",
+        pinned: "start",
+        width: 180,
+      },
+      {
+        columnId: "COL_ID_CENTER",
+        field: "name",
+        headerName: "Center",
+        valueType: "text",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        valueType: "text",
+        pinned: "end",
+        width: 180,
+      },
+    ]);
+    const snapshotAtWidth = (clientWidth: number) => {
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach({
+        addEventListener: vi.fn(),
+        clientHeight: 480,
+        clientWidth,
+        removeEventListener: vi.fn(),
+        scrollLeft: 0,
+        scrollTop: 0,
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement);
+      return viewport.getSnapshot().virtualWindow;
+    };
+
+    expect(snapshotAtWidth(439)).toMatchObject({
+      pinnedStart: [],
+      pinnedEnd: [],
+      centerCount: 3,
+    });
+    expect(snapshotAtWidth(440)).toMatchObject({
+      centerCount: 1,
+    });
+    expect(snapshotAtWidth(440).pinnedStart).toHaveLength(1);
+    expect(snapshotAtWidth(440).pinnedEnd).toHaveLength(1);
+  });
+
+  it("bounds, reveals, and restores an oversized centreless pinned layout", () => {
+    const columns = compileColumns([
+      ...Array.from({ length: 30 }, (_, index) => ({
+        columnId: `COL_ID_ALL_START_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `All start ${index}`,
+        valueType: "text" as const,
+        pinned: "start" as const,
+        width: 120,
+      })),
+      ...Array.from({ length: 30 }, (_, index) => ({
+        columnId: `COL_ID_ALL_END_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `All end ${index}`,
+        valueType: "text" as const,
+        pinned: "end" as const,
+        width: 120,
+      })),
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    let clientWidth = 240;
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      get clientWidth() {
+        return clientWidth;
+      },
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({
+      pinnedStart: [],
+      pinnedEnd: [],
+      centerCount: 60,
+      totalWidth: 7_200,
+    });
+    expect(viewport.getSnapshot().virtualWindow.center.length).toBeLessThan(10);
+
+    viewport.attach(element);
+    viewport.revealCell(0, "COL_ID_ALL_END_29", "header");
+    callback!(0);
+    expect(element.scrollLeft).toBe(6_960);
+    expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe("COL_ID_ALL_END_29");
+
+    clientWidth = 8_000;
+    viewport.attach(null);
+    viewport.attach(element);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(30);
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(30);
+    expect(viewport.getSnapshot().virtualWindow.centerCount).toBe(0);
+  });
+
   it("reaches the million-row suffix within browser-safe geometry", () => {
     const columns = compileColumns([
       {
