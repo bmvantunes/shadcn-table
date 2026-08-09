@@ -675,7 +675,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   });
 
   it("brands invalid source values for the row model or presentation island to reject", () => {
-    type NumberRow = { readonly id: string; readonly score: number };
+    type NumberRow = { readonly id: string; readonly name: string; readonly score: number };
     const numberColumns = compileColumns([
       {
         columnId: "COL_ID_SCORE",
@@ -683,8 +683,16 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         headerName: "Score",
         valueType: "number",
       },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
     ]);
-    const invalidRows = [{ id: "invalid", score: Number.NaN }] satisfies readonly NumberRow[];
+    const invalidRows = [
+      { id: "invalid", name: "Invalid", score: Number.NaN },
+    ] satisfies readonly NumberRow[];
     const adapter = new BrunoTableClientRowPipelineAdapter(
       {
         rows: invalidRows,
@@ -695,7 +703,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       (row) => row.id,
       numberColumns,
       undefined,
-      [{ columnId: "COL_ID_SCORE", direction: "asc" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
     const runtime = new BrunoTableGridRuntime(
       adapter.getPublication(),
@@ -713,6 +721,35 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       message: "Expected a finite number value.",
     });
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
+  });
+
+  it("defers exhaustive initial query decoding until post-construction reconciliation", () => {
+    const [baseColumn] = runtimeColumns;
+    const decodeRuntime = vi.fn(baseColumn!.semantics.decodeRuntime);
+    const instrumentedColumns = Object.freeze([
+      Object.freeze({
+        ...baseColumn!,
+        semantics: Object.freeze({ ...baseColumn!.semantics, decodeRuntime }),
+      }),
+    ] satisfies readonly CompiledColumn[]);
+    const initialRows = [
+      { id: "first", name: "Ada" },
+      { id: "second", name: "Grace" },
+    ] satisfies readonly Row[];
+    const initialSource = source(initialRows);
+    const getRowId = (row: Row) => row.id;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      initialSource,
+      getRowId,
+      instrumentedColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+
+    expect(decodeRuntime).not.toHaveBeenCalled();
+
+    adapter.reconcile(initialSource, getRowId, instrumentedColumns);
+    expect(decodeRuntime).toHaveBeenCalledTimes(initialRows.length);
   });
 
   it("decodes only changed source rows when column semantics stay installed", () => {

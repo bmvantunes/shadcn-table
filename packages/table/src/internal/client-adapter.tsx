@@ -17,7 +17,7 @@ import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { ClientOrderBy } from "./client-row-model";
-import { collectClientFilterColumnIds, createClientFilterPredicate } from "./client-row-model";
+import { createClientFilterPredicate } from "./client-row-model";
 
 const clientFeatures = tableFeatures({
   columnOrderingFeature,
@@ -33,6 +33,16 @@ type ClientRow = Row<typeof clientFeatures, AdapterRow>;
 type ClientColumn = ColumnDef<typeof clientFeatures, AdapterRow, unknown>;
 type ClientTable = Table<typeof clientFeatures, AdapterRow>;
 const INTERNAL_FILTER_COLUMN_ID = "__BRUNO_TABLE_FILTERS__";
+let queryValueReadListener: ((rowId: string, columnId: string) => void) | undefined;
+
+export function installBrunoTableClientQueryValueReadListener(
+  listener: (rowId: string, columnId: string) => void,
+): () => void {
+  queryValueReadListener = listener;
+  return () => {
+    if (queryValueReadListener === listener) queryValueReadListener = undefined;
+  };
+}
 
 export function useClientRowIds(
   rows: readonly BrunoTableClientAdmittedRow[],
@@ -41,13 +51,6 @@ export function useClientRowIds(
   filters?: readonly unknown[],
 ): BrunoTableClientRowModelResult {
   const tieBreaker = orderBy.at(-1);
-  const queryColumnIds = useMemo(() => {
-    const columnIds = new Set(orderBy.map((sort) => sort.columnId));
-    for (const filter of filters ?? EMPTY_FILTERS) {
-      collectClientFilterColumnIds(filter, columnIds);
-    }
-    return Object.freeze(Array.from(columnIds));
-  }, [filters, orderBy]);
   const filterPredicate = useMemo(() => {
     return createClientFilterPredicate<ClientRow>(compiledColumns, filters, (column, row) =>
       row.getValue(column.columnId),
@@ -100,9 +103,6 @@ export function useClientRowIds(
   let rowModel: ReturnType<typeof table.getRowModel> | undefined;
   let invalid: BrunoTableInvalidCellValue["invalid"] | undefined;
   try {
-    for (const row of table.getCoreRowModel().rows) {
-      for (const columnId of queryColumnIds) row.getValue(columnId);
-    }
     rowModel = table.getRowModel();
   } catch (error) {
     if (!(error instanceof ClientInvalidValueError)) throw error;
@@ -203,6 +203,7 @@ class ClientInvalidValueError extends Error {
 }
 
 function readCanonicalValue(row: AdapterRow, column: CompiledColumn): unknown {
+  queryValueReadListener?.(row.rowId, column.columnId);
   const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
   if (isBrunoTableInvalidCellValue(value)) throw new ClientInvalidValueError(value.invalid);
   return value;
@@ -215,7 +216,6 @@ function compareRowIds(left: string, right: string): -1 | 0 | 1 {
 }
 
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);
-const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const ROW_IDS_BY_MODEL = new WeakMap<object, readonly string[]>();
 
 function stableRowIds(rowModel: { readonly rows: readonly { readonly id: string }[] }) {

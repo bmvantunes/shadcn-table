@@ -1725,6 +1725,7 @@ function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): 
     const formatted = Reflect.apply(column.valueFormatter, undefined, [{ row, value }]);
     if (typeof formatted === "string") return formatted;
   }
+  if (value === null || value === undefined) return "";
   return column.semantics.formatDisplay(value);
 }
 

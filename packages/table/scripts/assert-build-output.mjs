@@ -70,14 +70,13 @@ if (/tanstack/iu.test(declarations)) {
 }
 
 if (
-  /registerBrunoTableIdentity/u.test(rootRuntime) ||
-  /simultaneous use of tableId/u.test(rootRuntime) ||
+  !/registerBrunoTableIdentity/u.test(rootRuntime) ||
+  !/simultaneous use of tableId/u.test(rootRuntime) ||
+  !/NODE_ENV/u.test(rootRuntime) ||
   /__BRUNO_TABLE_DEVELOPMENT__/u.test(rootRuntime)
 ) {
-  throw new Error("Development-only Table Identity diagnostics leaked into the production build.");
+  throw new Error("The package does not preserve consumer-time development diagnostics.");
 }
-
-await assertDevelopmentDiagnosticBuild();
 
 if (
   /\beffect(?:\/|["'])/u.test(declarations) ||
@@ -379,35 +378,6 @@ async function assertPackedConsumers() {
   }
 }
 
-async function assertDevelopmentDiagnosticBuild() {
-  const developmentRoot = await mkdtemp(join(tmpdir(), "bruno-table-development-build-"));
-  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-  const packageJsonPath = join(packageRoot, "package.json");
-  const originalPackageJson = await readFile(packageJsonPath, "utf8");
-  try {
-    runCommand(
-      "vp",
-      ["pack", "--out-dir", developmentRoot],
-      packageRoot,
-      "development diagnostic build",
-      { BRUNO_TABLE_DEVELOPMENT: "true" },
-    );
-    const developmentRuntime = await readFile(join(developmentRoot, "index.mjs"), "utf8");
-    if (
-      !/registerBrunoTableIdentity/u.test(developmentRuntime) ||
-      !/simultaneous use of tableId/u.test(developmentRuntime) ||
-      /__BRUNO_TABLE_DEVELOPMENT__/u.test(developmentRuntime)
-    ) {
-      throw new Error(
-        "The development @bruno/table build does not contain resolved Table Identity diagnostics.",
-      );
-    }
-  } finally {
-    await writeFile(packageJsonPath, originalPackageJson);
-    await rm(developmentRoot, { recursive: true, force: true });
-  }
-}
-
 async function assertPackedRootConsumer(tarball, shadcnTarball) {
   const consumerRoot = await createPackedConsumer(
     "bruno-table-root-consumer-",
@@ -498,7 +468,7 @@ void toolbar;
     await writeFile(join(consumerRoot, "runtime.mjs"), 'await import("@bruno/table");\n');
     await writeFile(
       join(consumerRoot, "style-entry.ts"),
-      'import "./bruno-table.css";\nimport "@bruno/table";\n',
+      'import "./bruno-table.css";\nimport { BrunoTableClient } from "@bruno/table";\nconsole.log(BrunoTableClient);\n',
     );
     await writeFile(
       join(consumerRoot, "bruno-table.css"),
@@ -506,7 +476,7 @@ void toolbar;
     );
     await writeFile(
       join(consumerRoot, "vite.config.ts"),
-      'import tailwindcss from "@tailwindcss/vite";\nimport { defineConfig } from "vite";\nexport default defineConfig({ plugins: [tailwindcss()] });\n',
+      'import tailwindcss from "@tailwindcss/vite";\nimport { defineConfig } from "vite";\nexport default defineConfig(({ mode }) => ({ plugins: [tailwindcss()], define: { "process.env.NODE_ENV": JSON.stringify(mode === "diagnostics" ? "development" : "production") } }));\n',
     );
     await writeFile(
       join(consumerRoot, "index.html"),
@@ -518,6 +488,7 @@ void toolbar;
     runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "Effect-free root runtime");
     runCommand("pnpm", ["exec", "vp", "build"], consumerRoot, "Styled packed Vite consumer");
     const assetRoot = join(consumerRoot, "dist", "assets");
+    await assertBundledIdentityDiagnostics(assetRoot, false);
     const cssAssets = (await readdir(assetRoot)).filter((fileName) => fileName.endsWith(".css"));
     if (cssAssets.length === 0) {
       throw new Error("The styled packed Vite consumer emitted no CSS asset.");
@@ -528,8 +499,35 @@ void toolbar;
     if (!css.some((asset) => asset.includes("data-bruno-table"))) {
       throw new Error("The styled packed Vite consumer omitted BrunoTable utility styles.");
     }
+    runCommand(
+      "pnpm",
+      ["exec", "vp", "build", "--mode", "diagnostics", "--outDir", "dist-diagnostics"],
+      consumerRoot,
+      "Development-diagnostic packed Vite consumer",
+      { NODE_ENV: "development" },
+    );
+    await assertBundledIdentityDiagnostics(join(consumerRoot, "dist-diagnostics", "assets"), true);
   } finally {
     await rm(consumerRoot, { recursive: true, force: true });
+  }
+}
+
+async function assertBundledIdentityDiagnostics(assetRoot, expected) {
+  const javascriptAssets = (await readdir(assetRoot)).filter((fileName) =>
+    fileName.endsWith(".js"),
+  );
+  const javascript = (
+    await Promise.all(
+      javascriptAssets.map((fileName) => readFile(join(assetRoot, fileName), "utf8")),
+    )
+  ).join("\n");
+  const present = javascript.includes("simultaneous use of tableId");
+  if (present !== expected) {
+    throw new Error(
+      expected
+        ? "The development packed consumer removed Table Identity diagnostics."
+        : "The production packed consumer retained Table Identity diagnostics.",
+    );
   }
 }
 

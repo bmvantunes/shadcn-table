@@ -19,10 +19,6 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
     runtime: BrunoTableRowPipelineRuntimeView,
     detector: BrunoTableClientRowOrderChangeDetector,
   ) => BrunoTableClientRowsStore;
-  readonly setActiveQuery: (
-    filters: readonly unknown[],
-    orderBy: readonly { readonly columnId: string; readonly direction: "asc" | "desc" }[],
-  ) => void;
   readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
 }>;
 
@@ -93,9 +89,6 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   const nextRowIds =
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
   const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
-  useLayoutEffect(() => {
-    rowPipelineAdapter.setActiveQuery(filters, orderBy);
-  }, [filters, orderBy, rowPipelineAdapter]);
   useLayoutEffect(() => {
     if (invalid === undefined) rowPipelineAdapter.acceptRows(rows);
   }, [invalid, rowPipelineAdapter, rows]);

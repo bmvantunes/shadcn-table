@@ -132,6 +132,21 @@ describe("Client row model", () => {
         { columnId: "COL_ID_SCORE", type: "inRange", filter: 1, filterTo: 3 },
       ]).map((row) => row.id),
     ).toEqual(["blank", "middle"]);
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_SCORE", type: "equals", filter: 2 },
+      ]).map((row) => row.id),
+    ).toEqual(["middle"]);
+    expect(
+      filterClientRows(rows, columns, [{ columnId: "COL_ID_SCORE", type: "in", filter: [2] }]).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["middle"]);
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_SCORE", type: "notEqual", filter: 2 },
+      ]).map((row) => row.id),
+    ).toEqual(["blank", "upper"]);
   });
 
   it("excludes nullish Number and BigInt values from every ordered filter", () => {

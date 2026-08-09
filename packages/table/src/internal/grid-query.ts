@@ -376,6 +376,9 @@ function compareEquality(
   caseSensitive: boolean,
   accentSensitive: boolean,
 ): boolean {
+  if (value === null || value === undefined || operand === null || operand === undefined) {
+    return value === operand;
+  }
   if (
     column.semantics.filterFamily === "text" &&
     typeof value === "string" &&

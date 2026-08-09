@@ -2,14 +2,7 @@ import { useLayoutEffect, useMemo, useState } from "react";
 
 import type { ReactNode } from "react";
 
-import type {
-  BrunoTableClientSource,
-  BrunoTableCommonProps,
-  BrunoTableColumns,
-  BrunoTableReadOnlyCapability,
-  BrunoTableRowId,
-  BrunoTableSortBy,
-} from "./public-types";
+import type { BrunoTableClientProps, BrunoTableColumns } from "./public-types";
 import {
   BrunoTableToolbar,
   BrunoTableToolbarStore,
@@ -23,19 +16,8 @@ import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 
 export { BrunoTableToolbar };
 
-type BrunoTableClientReadOnlyProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  BrunoTableCommonProps<TRow, TColumns>,
-  "initialOrderBy"
-> &
-  BrunoTableReadOnlyCapability & {
-    readonly initialOrderBy: BrunoTableSortBy<TColumns>;
-    readonly getRowId: (row: TRow) => BrunoTableRowId;
-    readonly clientSource: BrunoTableClientSource<TRow>;
-    readonly viewportSource?: never;
-  };
-
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
-  props: BrunoTableClientReadOnlyProps<TRow, TColumns>,
+  props: BrunoTableClientProps<TRow, TColumns>,
 ): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const [rowPipelineAdapter] = useState(
@@ -60,16 +42,27 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    const activeQuery = runtime.getQuerySnapshot();
-    rowPipelineAdapter.setActiveQuery(activeQuery.filters, activeQuery.orderBy);
-    const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
-    const publication = rowPipelineAdapter.reconcile(
-      props.clientSource,
-      props.getRowId,
-      compiledColumns,
-    );
-    runtime.reconcile(publication, compiledColumns, queryConfiguration);
-  }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
+    const reconcile = () => {
+      const activeQuery = runtime.getQuerySnapshot();
+      rowPipelineAdapter.setActiveQuery(activeQuery.filters, activeQuery.orderBy);
+      const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
+      const publication = rowPipelineAdapter.reconcile(
+        props.clientSource,
+        props.getRowId,
+        compiledColumns,
+      );
+      runtime.reconcile(publication, compiledColumns, queryConfiguration);
+    };
+    reconcile();
+    return runtimeView.subscribeQuery(reconcile);
+  }, [
+    compiledColumns,
+    props.clientSource,
+    props.getRowId,
+    rowPipelineAdapter,
+    runtime,
+    runtimeView,
+  ]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);

@@ -418,6 +418,12 @@ type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>,
   | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 ```
 
+The shape above is the editing-capable end state. Issue #7's first live read-only slice exports
+`BrunoTableClientProps<TRow, TColumns>` as the exact props accepted by the current
+`BrunoTableClient` component: `editable` may be false or omitted, while `getRowVersion` and
+`onSaveEdits` are rejected. The component and named props alias expand together only when the
+editing workflow is implemented.
+
 `editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. It also rejects `groupRowsColumn` on the editable branch. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
 
 Grouping and editing are mutually exclusive Table Instance capabilities. `BrunoTableServer` always installs the read-only branch. `BrunoTableClient` installs grouping and aggregation only when `editable` is false or omitted; when true, its composition root does not register grouping or aggregation features, expose a Group By Region, accept grouped commands, or execute aggregate work. Shared definitions may still declare `isEditable`, `groupBy`, and `aggFunc` because the same tuple may serve different Table Instances. A restored editable instance conservatively drops `groupBy`, `groupOrderBy`, and the reserved Rows width rather than retaining unreachable grouping intent.

@@ -31,6 +31,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private activeFilters: readonly unknown[];
   private activeOrderBy: ClientOrderBy;
   private validationColumnIds: ReadonlySet<string>;
+  private queryValidationPending = true;
   private readonly valueCache = new ClientCanonicalValueCache();
 
   public constructor(
@@ -56,6 +57,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       undefined,
       false,
       this.validationColumnIds,
+      "none",
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
@@ -85,7 +87,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     }
     this.activeFilters = sanitizeClientInitialFilters(this.activeFilters, columns);
     this.activeOrderBy = reconcileClientOrderBy(this.activeOrderBy, baselineOrderBy, columns);
-    this.validationColumnIds = queryColumnIds(this.activeFilters, this.activeOrderBy);
+    this.updateValidationColumnIds(queryColumnIds(this.activeFilters, this.activeOrderBy));
     this.queryColumns = columns;
     this.queryConfiguration = Object.freeze({ baselineFilters, baselineOrderBy });
     return this.queryConfiguration;
@@ -109,8 +111,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.acceptedCoherent,
       this.getRowId !== getRowId,
       this.validationColumnIds,
+      this.queryValidationPending ? "all" : "changed",
       this.valueCache,
     );
+    this.recordQueryValidation(sourceSnapshot);
     this.coherent = nextCoherent(this.coherent, this.publication);
     this.acceptEmptyCoherent();
     if (
@@ -146,8 +150,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.acceptedCoherent,
       this.getRowId !== getRowId,
       this.validationColumnIds,
+      this.queryValidationPending ? "all" : "changed",
       this.valueCache,
     );
+    this.recordQueryValidation(this.source);
     this.coherent = nextCoherent(this.coherent, this.publication);
     this.acceptEmptyCoherent();
     if (
@@ -168,7 +174,20 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly setActiveQuery = (filters: readonly unknown[], orderBy: ClientOrderBy): void => {
     this.activeFilters = filters;
     this.activeOrderBy = orderBy;
-    this.validationColumnIds = queryColumnIds(filters, orderBy);
+    this.updateValidationColumnIds(queryColumnIds(filters, orderBy));
+  };
+
+  private readonly updateValidationColumnIds = (next: ReadonlySet<string>): void => {
+    if (!sameStringSet(this.validationColumnIds, next)) this.queryValidationPending = true;
+    this.validationColumnIds = next;
+  };
+
+  private readonly recordQueryValidation = (source: BrunoTableClientSource<TRow>): void => {
+    if (this.publication.invalid?.kind === "invalid-value") {
+      this.queryValidationPending = true;
+    } else if (canValidateSource(source)) {
+      this.queryValidationPending = false;
+    }
   };
 
   public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
@@ -275,6 +294,7 @@ type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
 
 const EMPTY_ROWS: readonly [] = Object.freeze([]);
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
+const EMPTY_ADMITTED_ROWS: readonly BrunoTableClientAdmittedRow[] = Object.freeze([]);
 const NOT_FOUND = Object.freeze({ found: false as const });
 const CLIENT_BOUNDED_VALUE_CACHE_LIMIT = 16_384;
 
@@ -286,6 +306,7 @@ function createPublication<TRow>(
   fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
   validationColumnIds: ReadonlySet<string>,
+  queryValidation: "none" | "all" | "changed",
   valueCache: ClientCanonicalValueCache,
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
@@ -302,14 +323,19 @@ function createPublication<TRow>(
       ? createCoherent(source.rows, getRowId, columns, previousCoherent, resolveRowIds, valueCache)
       : undefined;
   const terminal = source.status === "closed" || source.status === "error";
-  const lifecycle = terminal || source.status === "stale";
-  const validationColumns = lifecycle
-    ? columns.filter((column) => validationColumnIds.has(column.columnId))
-    : EMPTY_COLUMNS;
+  const validationColumns = columns.filter((column) => validationColumnIds.has(column.columnId));
   const lifecycleCandidate = coherentResult?.coherent;
   const invalidValue =
-    lifecycle && lifecycleCandidate !== undefined
-      ? validateAdmittedRows(lifecycleCandidate.admittedRows, validationColumns)
+    lifecycleCandidate !== undefined
+      ? validateAdmittedRows(
+          rowsRequiringQueryValidation(
+            lifecycleCandidate,
+            previousCoherent,
+            columns,
+            queryValidation,
+          ),
+          validationColumns,
+        )
       : coherentResult?.invalid;
   const currentCoherent = invalidValue === undefined ? lifecycleCandidate : undefined;
   const retainPrevious = terminal || source.status === "stale";
@@ -331,7 +357,10 @@ function createPublication<TRow>(
   const fallbackInvalidValue =
     fallbackCandidate === undefined
       ? fallbackResult?.invalid
-      : validateAdmittedRows(fallbackCandidate.admittedRows, validationColumns);
+      : validateAdmittedRows(
+          queryValidation === "none" ? EMPTY_ADMITTED_ROWS : fallbackCandidate.admittedRows,
+          validationColumns,
+        );
   const coherent = useFallback
     ? fallbackInvalidValue === undefined
       ? fallbackCandidate
@@ -350,6 +379,29 @@ function createPublication<TRow>(
     hasCoherentRows,
     ...(resolvedInvalid === undefined ? {} : { invalid: resolvedInvalid }),
   });
+}
+
+function rowsRequiringQueryValidation<TRow>(
+  coherent: ClientCoherentSnapshot<TRow>,
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  columns: readonly CompiledColumn[],
+  queryValidation: "none" | "all" | "changed",
+): readonly BrunoTableClientAdmittedRow[] {
+  if (queryValidation === "none") return EMPTY_ADMITTED_ROWS;
+  if (
+    queryValidation === "all" ||
+    previous === undefined ||
+    previous.validatedColumns !== columns
+  ) {
+    return coherent.admittedRows;
+  }
+  if (coherent === previous) return EMPTY_ADMITTED_ROWS;
+  return Object.freeze(
+    coherent.changeFromPrevious.changedIndexes.flatMap((index) => {
+      const row = coherent.admittedRows[index];
+      return row === undefined ? [] : [row];
+    }),
+  );
 }
 
 type CoherentResult<TRow> = Readonly<{
@@ -656,6 +708,14 @@ function queryColumnIds(filters: readonly unknown[], orderBy: ClientOrderBy): Re
   const columnIds = new Set(orderBy.map((sort) => sort.columnId));
   for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
   return columnIds;
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && Array.from(left).every((value) => right.has(value));
+}
+
+function canValidateSource<TRow>(source: BrunoTableClientSource<TRow>): boolean {
+  return source.status !== "loading" && isCompleteSource(source);
 }
 
 function nextCoherent<TRow>(

@@ -21,6 +21,9 @@ import {
   type BrunoTableRowPipelineProps,
 } from "./internal/bruno-table-view";
 import { compileColumns } from "./internal/compile-columns";
+import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
+import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import {
   BrunoTableGridRuntime,
   type BrunoTableRowPipelineRuntimeView,
@@ -312,6 +315,15 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(0))
       .toHaveTextContent("Number");
+    await expect
+      .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(1))
+      .toHaveTextContent("");
+    await expect
+      .element(screen.getByRole("row").nth(2).getByRole("gridcell").nth(1))
+      .toHaveTextContent("");
+    await expect
+      .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(1))
+      .toHaveTextContent("1");
   });
 
   test("renders loading skeletons and rejects an incomplete ready source visibly", async () => {
@@ -430,9 +442,10 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
-  test("presents an invalid non-query cell when its virtual island reads it", async () => {
+  test("rejects a newly activated query column after its cell island reported an error", async () => {
     const invalidRows = [
-      { id: "invalid", name: "Invalid", score: Number.NaN },
+      { id: "valid", name: "Ada", score: 1 },
+      { id: "invalid", name: "Grace", score: Number.NaN },
     ] satisfies readonly Row[];
     const screen = await render(
       <BrunoTableClient
@@ -447,13 +460,43 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
     await expect
       .element(screen.getByRole("alert"))
-      .toHaveTextContent("Source row 1, column COL_ID_SCORE: Expected a finite number value.");
+      .toHaveTextContent("Source row 2, column COL_ID_SCORE: Expected a finite number value.");
 
-    await screen.getByRole("button", { name: "Sort by Score" }).click();
+    screen
+      .getByRole("button", { name: "Sort by Score" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
       .not.toBeInTheDocument();
+
+    const unrelatedUpdate = [
+      { ...invalidRows[0]!, name: "Augusta" },
+      invalidRows[1]!,
+    ] satisfies readonly Row[];
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource(unrelatedUpdate)}
+      />,
+    );
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([unrelatedUpdate[0]!, { ...unrelatedUpdate[1]!, score: 2 }])}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .toBeInTheDocument();
   });
 
   test("renders, sorts, and filters with canonical runtime-decoder values", async () => {
@@ -1224,6 +1267,147 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
     expect(screen.getByRole("gridcell").all().length).toBeLessThan(40);
+  });
+
+  test("rejects an offscreen newly active query value until its source row is repaired", async () => {
+    const queryReads: string[] = [];
+    const restoreQueryReadListener = installBrunoTableClientQueryValueReadListener(
+      (_rowId, columnId) => queryReads.push(columnId),
+    );
+    const secondaryDecode = vi.fn((input: unknown) =>
+      typeof input === "number" && Number.isFinite(input)
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected a number." } as const),
+    );
+    const secondaryValueType: BrunoTableValueType<number, "numeric", "number"> = {
+      codecId: "test/lazy-secondary-number",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "number",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: secondaryDecode,
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: Number(text) }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: Number(input) }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    };
+    const lazyColumns = Array.from({ length: 100 }, (_, index) => ({
+      columnId: `COL_ID_LAZY_${String(index).padStart(3, "0")}`,
+      field: index === 75 ? ("score" as const) : ("name" as const),
+      headerName: `Lazy ${String(index).padStart(3, "0")}`,
+      valueType: index === 75 ? secondaryValueType : ("text" as const),
+      width: 120,
+    })) as BrunoTableColumns<Row>;
+    const compiledLazyColumns = compileColumns(lazyColumns);
+    const getRowId = (row: Row) => row.id;
+    let currentSource = readySource([
+      { id: "first", name: "Ada", score: 1 },
+      { id: "second", name: "Grace", score: 2 },
+    ]);
+    const rowPipelineAdapter = new BrunoTableClientRowPipelineAdapter(
+      currentSource,
+      getRowId,
+      compiledLazyColumns,
+      undefined,
+      [{ columnId: "COL_ID_LAZY_000", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      rowPipelineAdapter.getPublication(),
+      compiledLazyColumns,
+      rowPipelineAdapter.getQueryConfiguration(compiledLazyColumns),
+    );
+    const runtimeView = runtime.getView();
+    const reconcile = () => {
+      const activeQuery = runtime.getQuerySnapshot();
+      rowPipelineAdapter.setActiveQuery(activeQuery.filters, activeQuery.orderBy);
+      runtime.reconcile(
+        rowPipelineAdapter.reconcile(currentSource, getRowId, compiledLazyColumns),
+        compiledLazyColumns,
+        rowPipelineAdapter.getQueryConfiguration(compiledLazyColumns),
+      );
+    };
+    reconcile();
+    const unsubscribeQuery = runtimeView.subscribeQuery(reconcile);
+    const toolbar = new BrunoTableToolbarStore(undefined);
+
+    try {
+      const screen = await render(
+        <BrunoTableView
+          runtime={runtimeView}
+          tableId="TABLE_ID_LAZY_SECONDARY_SORT"
+          compiledColumns={compiledLazyColumns}
+          toolbar={toolbar}
+          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipelineAdapter={rowPipelineAdapter}
+        />,
+      );
+
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Lazy 075" }))
+        .not.toBeInTheDocument();
+      expect(secondaryDecode).not.toHaveBeenCalled();
+
+      queryReads.length = 0;
+      runtime.toggleColumnSort("COL_ID_LAZY_075", true);
+      expect(secondaryDecode).toHaveBeenCalledTimes(currentSource.rows.length);
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .toBeInTheDocument();
+      await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Lazy 075" }))
+        .not.toBeInTheDocument();
+
+      runtime.toggleColumnSort("COL_ID_LAZY_000", false);
+      currentSource = readySource([
+        currentSource.rows[0]!,
+        { id: "second", name: "Grace", score: Number.NaN },
+      ]);
+      reconcile();
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .toBeInTheDocument();
+      await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+
+      runtime.toggleColumnSort("COL_ID_LAZY_075", true);
+
+      await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .not.toBeInTheDocument();
+      currentSource = { ...currentSource, version: currentSource.version + 1 };
+      reconcile();
+      await expect.element(screen.getByRole("alert")).toHaveTextContent("Invalid source value");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .not.toBeInTheDocument();
+
+      queryReads.length = 0;
+      currentSource = readySource([
+        currentSource.rows[0]!,
+        { id: "second", name: "Grace", score: 2 },
+      ]);
+      reconcile();
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_LAZY_SECONDARY_SORT" }))
+        .toBeInTheDocument();
+      await vi.waitFor(() => expect(queryReads).toContain("COL_ID_LAZY_000"));
+      expect(queryReads).not.toContain("COL_ID_LAZY_075");
+    } finally {
+      unsubscribeQuery();
+      restoreQueryReadListener();
+    }
   });
 
   test("reveals oversized columns with only the minimum geometry delta", async () => {

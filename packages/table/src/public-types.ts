@@ -1019,12 +1019,11 @@ export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>
   readonly children?: ReactNode;
 } & InitialOrderByCapability<TColumns>;
 
-export type BrunoTableClientProps<
-  TRow,
-  TColumns extends BrunoTableColumns<TRow>,
-  TRowVersion = never,
-> = Omit<BrunoTableCommonProps<TRow, TColumns>, "initialOrderBy"> &
-  BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
+export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
+  BrunoTableCommonProps<TRow, TColumns>,
+  "initialOrderBy"
+> &
+  BrunoTableReadOnlyCapability & {
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;

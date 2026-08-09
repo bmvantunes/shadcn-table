@@ -24,6 +24,7 @@ import type {
   BrunoTableColumnValue,
   BrunoTableDecodeResult,
   BrunoTableEditableColumnId,
+  BrunoTableEditingCapability,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
   BrunoTableFieldColumnDefinition,
@@ -408,26 +409,16 @@ describe("BrunoTable public types", () => {
       BrunoTableEditableColumnId<typeof widenedColumns>
     >().toEqualTypeOf<BrunoTableColumnId>();
 
-    const widenedEditableProps = {
-      tableId: "orders",
-      columns: widenedColumns,
-      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-      getRowId: (row: Order) => row.id,
+    const widenedEditableCapability = {
       editable: true,
       getRowVersion: (row: Order) => row.revision,
       onSaveEdits: (changes) => {
         expectTypeOf(changes[0].changes[0]).not.toBeNever();
         return Promise.resolve();
       },
-      clientSource: {
-        rows: [] as readonly Order[],
-        totalRows: 0,
-        version: 1,
-        status: "ready",
-      },
-    } satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
+    } satisfies BrunoTableEditingCapability<Order, typeof widenedColumns, bigint>;
 
-    expectTypeOf(widenedEditableProps.getRowVersion).returns.toEqualTypeOf<bigint>();
+    expectTypeOf(widenedEditableCapability.getRowVersion).returns.toEqualTypeOf<bigint>();
   });
 
   it("correlates row-grouped saves with source fields and exact row versions", () => {
@@ -517,31 +508,6 @@ describe("BrunoTable public types", () => {
       },
     } satisfies BrunoTableClientProps<Order, Columns>;
 
-    const editableClientProps = {
-      ...common,
-      editable: true,
-      getRowId: (row: Order) => row.id,
-      getRowVersion: (row: Order) => row.revision,
-      onSaveEdits: (changes) => {
-        expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
-        const [change] = changes[0].changes;
-        if (change.columnId === "COL_ID_PRICE") {
-          expectTypeOf(change.field).toEqualTypeOf<"price">();
-          expectTypeOf(change.after).toEqualTypeOf<number>();
-        } else {
-          expectTypeOf(change.field).toEqualTypeOf<"symbol">();
-          expectTypeOf(change.after).toEqualTypeOf<string>();
-        }
-        return Promise.resolve();
-      },
-      clientSource: {
-        rows: [] as readonly Order[],
-        totalRows: 0,
-        version: 1,
-        status: "ready",
-      },
-    } satisfies BrunoTableClientProps<Order, Columns, bigint>;
-
     const viewport = {
       replace: () => ({ setWindow: () => undefined, release: () => undefined }),
       destroy: () => undefined,
@@ -559,7 +525,6 @@ describe("BrunoTable public types", () => {
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
     expectTypeOf(clientProps.initialFilters[0]!.columnId).toEqualTypeOf<"COL_ID_SYMBOL">();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
-    expectTypeOf(editableClientProps.getRowVersion).returns.toEqualTypeOf<bigint>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
 
     void BrunoTableClient({
@@ -1077,7 +1042,7 @@ const editableClientWithoutSave = {
 } as const;
 
 // @ts-expect-error editable Client Tables require an onSaveEdits operation.
-const invalidEditableClientWithoutSave: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithoutSave: BrunoTableEditingCapability<Order, Columns, bigint> =
   editableClientWithoutSave;
 
 const readOnlyClientWithSave = {
@@ -1125,7 +1090,7 @@ const invalidClientWithoutEditableColumns = {
 } as const;
 
 // @ts-expect-error no column exposes editable capability.
-const invalidClientWithoutEditableColumnsAssignment: BrunoTableClientProps<
+const invalidClientWithoutEditableColumnsAssignment: BrunoTableEditingCapability<
   Order,
   typeof nonEditableColumns,
   bigint
@@ -1150,7 +1115,7 @@ const editableClientWithGrouping = {
 } as const;
 
 // @ts-expect-error editable Client Tables reject grouping even for non-fresh props objects.
-const invalidEditableClientWithGrouping: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithGrouping: BrunoTableEditingCapability<Order, Columns, bigint> =
   editableClientWithGrouping;
 
 const invalidCrossedSaveCell = {
