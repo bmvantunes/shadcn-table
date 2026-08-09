@@ -109,6 +109,7 @@ export type BrunoTableRuntimeView = {
 export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
   readonly subscribeQuery: (listener: Listener) => () => void;
+  readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
 
 export type BrunoTableQuerySnapshot = Readonly<{
@@ -246,6 +247,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeRow: this.subscribeRow,
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
+        publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
         toggleColumnSort: this.toggleColumnSort,
         clearColumnFilters: this.clearColumnFilters,
@@ -258,6 +260,12 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly publish = (publication: BrunoTableRowPipelinePublication<TRow>): void => {
     this.reconcile(publication, this.columns);
+  };
+
+  private readonly publishRowPipeline = (
+    publication: BrunoTableRowPipelinePublication<unknown>,
+  ): void => {
+    this.publish(publication as BrunoTableRowPipelinePublication<TRow>);
   };
 
   public readonly reconcile = (

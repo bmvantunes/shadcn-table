@@ -2,7 +2,11 @@ import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
-import type { BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
+import type {
+  BrunoTableInvalidCellValue,
+  BrunoTableRowPipelinePublication,
+  BrunoTableRowPipelineRuntimeView,
+} from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { BrunoTableRowPipelineProps } from "./bruno-table-view";
 import type {
@@ -20,6 +24,11 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
     detector: BrunoTableClientRowOrderChangeDetector,
   ) => BrunoTableClientRowsStore;
   readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
+  readonly rejectQueryRows: (
+    rows: readonly BrunoTableClientAdmittedRow[],
+    invalid: BrunoTableInvalidCellValue["invalid"],
+  ) => BrunoTableRowPipelinePublication<unknown> | undefined;
+  readonly retryQueryRows: () => BrunoTableRowPipelinePublication<unknown> | undefined;
 }>;
 
 type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
@@ -90,8 +99,17 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
   const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
   useLayoutEffect(() => {
-    if (invalid === undefined) rowPipelineAdapter.acceptRows(rows);
-  }, [invalid, rowPipelineAdapter, rows]);
+    const candidate = rowPipelineAdapter.retryQueryRows();
+    if (candidate !== undefined) runtime.publishRowPipeline(candidate);
+  }, [queryGeneration, rowPipelineAdapter, runtime]);
+  useLayoutEffect(() => {
+    if (invalid === undefined) {
+      rowPipelineAdapter.acceptRows(rows);
+      return;
+    }
+    const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
+    if (fallback !== undefined) runtime.publishRowPipeline(fallback);
+  }, [invalid, rowPipelineAdapter, rows, runtime]);
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
   }, [nextRowIds, orderStore, queryGeneration]);

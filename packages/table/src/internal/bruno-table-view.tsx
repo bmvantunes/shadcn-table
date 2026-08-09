@@ -393,19 +393,17 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
     if (body.kind !== "rows") navigation.setShape([], compiledColumns);
   }, [body.kind, compiledColumns, navigation]);
   if (body.kind === "loading") return <LoadingRows totalRows={body.totalRows} />;
-  if (body.kind === "invalid") return null;
-  if (body.kind === "empty") {
-    return <EmptySourceBody runtime={runtime} focusFallback={focusFallback} />;
-  }
-
-  return (
+  const rowPipeline = (
     <RowPipeline
+      key="row-pipeline"
       runtime={runtime}
       columns={compiledColumns}
       rowPipelineAdapter={rowPipelineAdapter}
     >
       {(snapshot) =>
-        snapshot.kind === "invalid" ? (
+        body.kind === "empty" || body.kind === "invalid" ? (
+          <></>
+        ) : snapshot.kind === "invalid" ? (
           <Alert variant="destructive">
             <AlertTitle>Invalid source value</AlertTitle>
             <AlertDescription>{invalidSourceDetails(snapshot.invalid)}</AlertDescription>
@@ -423,6 +421,14 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         )
       }
     </RowPipeline>
+  );
+  return (
+    <>
+      {body.kind === "empty" ? (
+        <EmptySourceBody key="empty-source" runtime={runtime} focusFallback={focusFallback} />
+      ) : null}
+      {rowPipeline}
+    </>
   );
 }
 

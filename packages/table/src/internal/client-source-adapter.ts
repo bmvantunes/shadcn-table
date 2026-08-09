@@ -4,6 +4,7 @@ import type {
   BrunoTableSourceStatus,
 } from "../public-types";
 import type {
+  BrunoTableInvalidCellValue,
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
   BrunoTableRowSpaceSnapshot,
@@ -50,6 +51,14 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
+  private queryFallbackActive = false;
+  private lifecycleFallbackCoherent: ClientCoherentSnapshot<TRow> | undefined;
+  private queryRejected:
+    | Readonly<{
+        readonly coherent: ClientCoherentSnapshot<TRow>;
+        readonly publication: BrunoTableRowPipelinePublication<TRow>;
+      }>
+    | undefined;
   private readonly valueCache = new ClientCanonicalValueCache();
 
   public constructor(
@@ -108,14 +117,52 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
-    const previousCoherent = this.coherent;
     const sourceSnapshot = snapshotSource(source, this.source, this.observedRows);
+    const queryRejected = this.queryRejected;
+    const sameRetainedCandidate =
+      this.queryFallbackActive &&
+      queryRejected !== undefined &&
+      retainsPreviousRows(this.source) &&
+      retainsPreviousRows(sourceSnapshot) &&
+      this.source.invalidStatus === sourceSnapshot.invalidStatus &&
+      this.source.rows === sourceSnapshot.rows &&
+      this.source.totalRows === sourceSnapshot.totalRows &&
+      this.getRowId === getRowId &&
+      this.sourceColumns === columns;
+    if (sameRetainedCandidate && queryRejected !== undefined) {
+      this.publication = refreshPublicationSource(this.publication, sourceSnapshot);
+      this.queryRejected = Object.freeze({
+        coherent: queryRejected.coherent,
+        publication: refreshPublicationSource(queryRejected.publication, sourceSnapshot),
+      });
+      commitObservedRows(source.rows, sourceSnapshot.rows.changedIndexes, this.observedRows);
+      this.source = sourceSnapshot;
+      return this.publication;
+    }
+    this.queryFallbackActive = false;
+    this.queryRejected = undefined;
+    const previousCoherent = this.coherent;
+    if (!retainsPreviousRows(sourceSnapshot)) {
+      this.lifecycleFallbackCoherent = undefined;
+    } else if (
+      !retainsPreviousRows(this.source) ||
+      this.source.rows !== sourceSnapshot.rows ||
+      this.source.totalRows !== sourceSnapshot.totalRows
+    ) {
+      this.lifecycleFallbackCoherent = this.acceptedCoherent;
+    }
+    this.lifecycleFallbackCoherent = reconfigureFallback(
+      this.lifecycleFallbackCoherent,
+      getRowId,
+      columns,
+      this.valueCache,
+    );
     this.publication = createPublication(
       sourceSnapshot,
       getRowId,
       columns,
       this.coherent,
-      this.acceptedCoherent,
+      this.lifecycleFallbackCoherent,
       this.getRowId !== getRowId,
       this.valueCache,
     );
@@ -145,13 +192,21 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
+    this.queryFallbackActive = false;
+    this.queryRejected = undefined;
     const previousCoherent = this.coherent;
+    this.lifecycleFallbackCoherent = reconfigureFallback(
+      this.lifecycleFallbackCoherent,
+      getRowId,
+      columns,
+      this.valueCache,
+    );
     this.publication = createPublication(
       this.source,
       getRowId,
       columns,
       this.coherent,
-      this.acceptedCoherent,
+      this.lifecycleFallbackCoherent,
       this.getRowId !== getRowId,
       this.valueCache,
     );
@@ -174,6 +229,59 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
     if (this.coherent?.admittedRows.asArray() === rows) this.acceptedCoherent = this.coherent;
+  };
+
+  public readonly rejectQueryRows = (
+    rows: readonly BrunoTableClientAdmittedRow[],
+    invalid: BrunoTableInvalidCellValue["invalid"],
+  ): BrunoTableRowPipelinePublication<TRow> | undefined => {
+    const rejectedCoherent = this.coherent;
+    if (rejectedCoherent?.admittedRows.asArray() !== rows || !retainsPreviousRows(this.source)) {
+      return undefined;
+    }
+    if (this.queryFallbackActive) {
+      this.publication = rejectPublicationRows(this.publication, invalid);
+      this.coherent = undefined;
+      this.valueCache.retainColumns(this.sourceColumns);
+      return this.publication;
+    }
+    const fallbackCoherent =
+      this.lifecycleFallbackCoherent === rejectedCoherent
+        ? undefined
+        : this.lifecycleFallbackCoherent === undefined
+          ? undefined
+          : refreshRowOrderEvidence(this.lifecycleFallbackCoherent);
+    this.queryFallbackActive = true;
+    this.queryRejected = Object.freeze({
+      coherent: rejectedCoherent,
+      publication: this.publication,
+    });
+    this.publication = createPublication(
+      this.source,
+      this.getRowId,
+      this.sourceColumns,
+      rejectedCoherent,
+      fallbackCoherent,
+      false,
+      this.valueCache,
+      invalid,
+    );
+    this.coherent = asClientCoherent(this.publication.rowSpace);
+    this.valueCache.retainColumns(this.sourceColumns, this.coherent?.validatedColumns);
+    return this.publication;
+  };
+
+  public readonly retryQueryRows = (): BrunoTableRowPipelinePublication<TRow> | undefined => {
+    const rejected = this.queryRejected;
+    if (!this.queryFallbackActive || rejected === undefined) return undefined;
+    this.queryFallbackActive = false;
+    this.queryRejected = undefined;
+    this.coherent = refreshRowOrderEvidence(rejected.coherent);
+    this.publication = Object.freeze({
+      ...rejected.publication,
+      rowSpace: this.coherent,
+    });
+    return this.publication;
   };
 
   private readonly acceptEmptyCoherent = (): void => {
@@ -549,6 +657,7 @@ function createPublication<TRow>(
   fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
   valueCache: ClientCanonicalValueCache,
+  queryRejection?: BrunoTableInvalidCellValue["invalid"],
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =
@@ -570,24 +679,34 @@ function createPublication<TRow>(
       : undefined;
   const terminal = source.status === "closed" || source.status === "error";
   const currentCoherent = coherentResult?.coherent;
-  const retainPrevious = terminal || source.status === "stale";
+  const retainPrevious = retainsPreviousRows(source);
+  const rejectCurrent = queryRejection !== undefined && retainPrevious;
   const useFallback =
     fallbackCoherent !== undefined &&
     retainPrevious &&
-    (currentCoherent === undefined || (terminal && currentCoherent.rows.length === 0));
-  const fallbackResult = useFallback
-    ? createCoherent(
-        fallbackCoherent.rows,
-        getRowId,
-        columns,
-        previousCoherent,
-        resolveRowIds,
-        valueCache,
-      )
+    (queryRejection !== undefined ||
+      currentCoherent === undefined ||
+      (terminal && currentCoherent.rows.length === 0));
+  const fallbackResult: CoherentResult<TRow> | undefined = useFallback
+    ? queryRejection === undefined
+      ? createCoherent(
+          fallbackCoherent.rows,
+          getRowId,
+          columns,
+          previousCoherent,
+          resolveRowIds,
+          valueCache,
+        )
+      : Object.freeze({ coherent: fallbackCoherent })
     : undefined;
-  const coherent = useFallback ? fallbackResult?.coherent : currentCoherent;
+  const coherent = rejectCurrent
+    ? fallbackResult?.coherent
+    : useFallback
+      ? fallbackResult?.coherent
+      : currentCoherent;
   const hasCoherentRows = coherent !== undefined && (!terminal || coherent.rows.length > 0);
-  const resolvedInvalid = invalid ?? coherentResult?.invalid ?? fallbackResult?.invalid;
+  const resolvedInvalid =
+    invalid ?? queryRejection ?? coherentResult?.invalid ?? fallbackResult?.invalid;
   return Object.freeze({
     status: source.status,
     totalRows: source.totalRows,
@@ -1048,6 +1167,75 @@ function snapshotRetry(value: unknown): BrunoTableClientSource<unknown>["retry"]
   } catch {
     return undefined;
   }
+}
+
+function retainsPreviousRows(source: Pick<ClientSourceSnapshot<unknown>, "status">): boolean {
+  return source.status === "stale" || source.status === "closed" || source.status === "error";
+}
+
+function refreshRowOrderEvidence<TRow>(
+  coherent: ClientCoherentSnapshot<TRow>,
+): ClientCoherentSnapshot<TRow> {
+  return Object.freeze({
+    ...coherent,
+    changeFromPrevious: Object.freeze({
+      rowIdsChanged: true,
+      changedIndexes: EMPTY_ROWS,
+    }),
+  });
+}
+
+function refreshPublicationSource<TRow>(
+  publication: BrunoTableRowPipelinePublication<TRow>,
+  source: ClientSourceSnapshot<TRow>,
+): BrunoTableRowPipelinePublication<TRow> {
+  const terminal = source.status === "closed" || source.status === "error";
+  return Object.freeze({
+    status: source.status,
+    totalRows: source.totalRows,
+    version: source.version,
+    ...(source.statusCode === undefined ? {} : { statusCode: source.statusCode }),
+    ...(source.message === undefined ? {} : { message: source.message }),
+    ...(source.retry === undefined ? {} : { retry: source.retry }),
+    ...(publication.rowSpace === undefined ? {} : { rowSpace: publication.rowSpace }),
+    hasCoherentRows:
+      publication.rowSpace !== undefined && (!terminal || publication.rowSpace.loadedRows > 0),
+    ...(publication.invalid === undefined ? {} : { invalid: publication.invalid }),
+  });
+}
+
+function rejectPublicationRows<TRow>(
+  publication: BrunoTableRowPipelinePublication<TRow>,
+  invalid: BrunoTableInvalidCellValue["invalid"],
+): BrunoTableRowPipelinePublication<TRow> {
+  return Object.freeze({
+    status: publication.status,
+    totalRows: publication.totalRows,
+    version: publication.version,
+    ...(publication.statusCode === undefined ? {} : { statusCode: publication.statusCode }),
+    ...(publication.message === undefined ? {} : { message: publication.message }),
+    ...(publication.retry === undefined ? {} : { retry: publication.retry }),
+    hasCoherentRows: false,
+    invalid,
+  });
+}
+
+function reconfigureFallback<TRow>(
+  fallback: ClientCoherentSnapshot<TRow> | undefined,
+  getRowId: (row: TRow) => BrunoTableRowId,
+  columns: readonly CompiledColumn[],
+  valueCache: ClientCanonicalValueCache,
+): ClientCoherentSnapshot<TRow> | undefined {
+  return fallback === undefined
+    ? undefined
+    : createCoherent(
+        fallback.rows,
+        getRowId,
+        columns,
+        fallback,
+        fallback.identityResolver !== getRowId,
+        valueCache,
+      ).coherent;
 }
 
 function nextCoherent<TRow>(

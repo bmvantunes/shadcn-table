@@ -1162,6 +1162,591 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
   });
 
+  test.each(["stale", "closed", "error"] as const)(
+    "falls back to accepted rows when a complete %s candidate fails query decoding",
+    async (status) => {
+      const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+      await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{
+            rows: [
+              { id: "candidate-invalid", name: "Invalid", score: Number.NaN },
+              { id: "candidate-valid", name: "Valid", score: 1 },
+            ],
+            totalRows: 2,
+            version: 2,
+            status,
+          }}
+        />,
+      );
+
+      const lifecycleTitle =
+        status === "stale"
+          ? "Live data delayed"
+          : status === "closed"
+            ? "Live updates stopped"
+            : "Live data error";
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((notice) => notice.element().textContent?.includes(lifecycleTitle)),
+        ).toBe(true),
+      );
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((notice) =>
+              notice.element().textContent?.includes("Expected a finite number value."),
+            ),
+        ).toBe(true),
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+      await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Invalid" }))
+        .not.toBeInTheDocument();
+    },
+  );
+
+  test("retries a retained candidate on query change without rereading its source array", async () => {
+    const sourceIndexRead = vi.fn();
+    const candidateRows = new Proxy(
+      [
+        { id: "candidate-invalid", name: "Candidate A", score: Number.NaN },
+        { id: "candidate-valid", name: "Candidate B", score: 1 },
+      ] satisfies Row[],
+      {
+        get: (target, property, receiver) => {
+          if (typeof property === "string" && /^\d+$/.test(property)) sourceIndexRead(property);
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: candidateRows,
+          totalRows: candidateRows.length,
+          version: 2,
+          status: "stale",
+        }}
+      />,
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "Candidate A" })).toBeInTheDocument();
+    sourceIndexRead.mockClear();
+
+    await screen.getByRole("button", { name: "Sort by Score" }).click();
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Candidate A" }))
+      .not.toBeInTheDocument();
+    expect(sourceIndexRead).not.toHaveBeenCalled();
+
+    await screen.getByRole("button", { name: "Sort by Name" }).click();
+    await expect.element(screen.getByRole("gridcell", { name: "Candidate A" })).toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+    expect(sourceIndexRead).not.toHaveBeenCalled();
+  });
+
+  test("preserves and wakes a quiet lifecycle predecessor after chrome-only updates", async () => {
+    const retry = vi.fn();
+    const predecessorRows = [{ ...rows[0]!, score: 5 }, rows[1]!] satisfies readonly Row[];
+    const candidateRows = [
+      predecessorRows[0]!,
+      { ...predecessorRows[1]!, score: Number.NaN },
+    ] satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: predecessorRows,
+          totalRows: predecessorRows.length,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "5" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: candidateRows,
+          totalRows: candidateRows.length,
+          version: 3,
+          status: "stale",
+          message: "Initial delay",
+          retry: { run: retry, pending: false },
+        }}
+      />,
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((notice) => notice.element().textContent?.includes("Initial delay")),
+      ).toBe(true),
+    );
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: candidateRows,
+          totalRows: candidateRows.length,
+          version: 3,
+          status: "stale",
+          message: "Retry pending",
+          retry: { run: retry, pending: true },
+        }}
+      />,
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((notice) => notice.element().textContent?.includes("Retry pending")),
+      ).toBe(true),
+    );
+
+    await screen.getByRole("button", { name: "Sort by Score" }).click();
+    await expect.element(screen.getByRole("gridcell", { name: "5" })).toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "2" })).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((notice) =>
+            notice.element().textContent?.includes("Expected a finite number value."),
+          ),
+      ).toBe(true),
+    );
+
+    const acceptedAdaCell = screen.getByRole("gridcell", { name: "Ada" }).element();
+    const queryReads = vi.fn();
+    const cellRenders = vi.fn();
+    const gridSurfaceRenders = vi.fn();
+    const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(queryReads);
+    const removeCellRenderListener = installBrunoTableClientCellRenderListener(cellRenders);
+    const removeGridSurfaceRenderListener =
+      installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
+    try {
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={{
+            rows: candidateRows,
+            totalRows: candidateRows.length,
+            version: 4,
+            status: "stale",
+            message: "After fallback",
+            retry: { run: retry, pending: false },
+          }}
+        />,
+      );
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("alert")
+            .all()
+            .some((notice) => notice.element().textContent?.includes("After fallback")),
+        ).toBe(true),
+      );
+      expect(screen.getByRole("gridcell", { name: "Ada" }).element()).toBe(acceptedAdaCell);
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+    } finally {
+      removeGridSurfaceRenderListener();
+      removeCellRenderListener();
+      removeQueryReadListener();
+    }
+
+    await screen.getByRole("button", { name: "Sort by Name" }).click();
+    await expect.element(screen.getByRole("gridcell", { name: "2" })).not.toBeInTheDocument();
+  });
+
+  test("uses empty-state chrome when both candidate and predecessor fail the active query", async () => {
+    const predecessorRows = [{ ...rows[0]!, score: Number.NaN }, rows[1]!] satisfies readonly Row[];
+    const candidateRows = [
+      predecessorRows[0]!,
+      { ...predecessorRows[1]!, score: Number.POSITIVE_INFINITY },
+    ] satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource(predecessorRows)}
+      />,
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: candidateRows,
+          totalRows: candidateRows.length,
+          version: 2,
+          status: "error",
+          message: "Both projections are invalid",
+        }}
+      />,
+    );
+    await screen.getByRole("button", { name: "Sort by Score" }).click();
+
+    const announcement = screen.getByRole("alert");
+    await expect.element(announcement).toHaveTextContent("Both projections are invalid");
+    await expect.element(announcement).toHaveTextContent("Expected a finite number value.");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
+  });
+
+  test("recovers a retained candidate from empty state on a later private query command", async () => {
+    const compiledColumns = compileColumns(columns);
+    const predecessorRows = [{ ...rows[0]!, score: Number.NaN }, rows[1]!] satisfies readonly Row[];
+    const sourceIndexRead = vi.fn();
+    const candidateRows = new Proxy(
+      [
+        predecessorRows[0]!,
+        { ...predecessorRows[1]!, score: Number.POSITIVE_INFINITY },
+      ] satisfies Row[],
+      {
+        get: (target, property, receiver) => {
+          if (typeof property === "string" && /^\d+$/.test(property)) sourceIndexRead(property);
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const getRowId = (row: Row) => row.id;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      readySource(predecessorRows),
+      getRowId,
+      compiledColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      compiledColumns,
+      adapter.getQueryConfiguration(compiledColumns),
+    );
+    const toolbar = new BrunoTableToolbarStore(undefined);
+    const screen = await render(
+      <>
+        <button type="button" onClick={() => runtime.toggleColumnSort("COL_ID_NAME", false)}>
+          Recover by Name
+        </button>
+        <BrunoTableView
+          runtime={runtime.getView()}
+          tableId="TABLE_ID_EMPTY_QUERY_RECOVERY"
+          compiledColumns={compiledColumns}
+          toolbar={toolbar}
+          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipelineAdapter={adapter}
+        />
+      </>,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+      .toBeInTheDocument();
+
+    runtime.publish(
+      adapter.publish({
+        rows: candidateRows,
+        totalRows: candidateRows.length,
+        version: 2,
+        status: "error",
+        message: "Both projections are invalid",
+      }),
+    );
+    await screen.getByRole("button", { name: "Sort by Score" }).click();
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+      .not.toBeInTheDocument();
+    sourceIndexRead.mockClear();
+
+    await screen.getByRole("button", { name: "Recover by Name" }).click();
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_QUERY_RECOVERY" }))
+      .toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+    expect(sourceIndexRead).not.toHaveBeenCalled();
+  });
+
+  test("keeps an initial stale rejection recoverable across a terminal chrome update", async () => {
+    const compiledColumns = compileColumns(columns);
+    const sourceIndexRead = vi.fn();
+    const candidateRows = new Proxy(
+      [
+        { id: "candidate-invalid", name: "Invalid", score: Number.NaN },
+        { id: "candidate-valid", name: "Valid", score: 1 },
+      ] satisfies Row[],
+      {
+        get: (target, property, receiver) => {
+          if (typeof property === "string" && /^\d+$/.test(property)) sourceIndexRead(property);
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const getRowId = (row: Row) => row.id;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      {
+        rows: candidateRows,
+        totalRows: candidateRows.length,
+        version: 1,
+        status: "stale",
+        message: "Initial stale candidate",
+      },
+      getRowId,
+      compiledColumns,
+      undefined,
+      [{ columnId: "COL_ID_SCORE", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      compiledColumns,
+      adapter.getQueryConfiguration(compiledColumns),
+    );
+    const screen = await render(
+      <>
+        <button type="button" onClick={() => runtime.toggleColumnSort("COL_ID_NAME", false)}>
+          Recover stale candidate by Name
+        </button>
+        <BrunoTableView
+          runtime={runtime.getView()}
+          tableId="TABLE_ID_INITIAL_STALE_RECOVERY"
+          compiledColumns={compiledColumns}
+          toolbar={new BrunoTableToolbarStore(undefined)}
+          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipelineAdapter={adapter}
+        />
+      </>,
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_INITIAL_STALE_RECOVERY" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Expected a finite number value.");
+
+    const queryReads = vi.fn();
+    const gridSurfaceRenders = vi.fn();
+    const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(queryReads);
+    const removeGridSurfaceRenderListener =
+      installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
+    try {
+      runtime.publish(
+        adapter.publish({
+          rows: candidateRows,
+          totalRows: candidateRows.length,
+          version: 2,
+          status: "error",
+          message: "Terminal chrome update",
+        }),
+      );
+      await expect.element(screen.getByRole("alert")).toHaveTextContent("Terminal chrome update");
+      expect(queryReads).not.toHaveBeenCalled();
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+    } finally {
+      removeGridSurfaceRenderListener();
+      removeQueryReadListener();
+    }
+
+    sourceIndexRead.mockClear();
+    await screen.getByRole("button", { name: "Recover stale candidate by Name" }).click();
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_INITIAL_STALE_RECOVERY" }))
+      .toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Invalid" })).toBeInTheDocument();
+    expect(sourceIndexRead).not.toHaveBeenCalled();
+  });
+
+  test.each(["closed", "error"] as const)(
+    "reclassifies an empty stale fallback when the same candidate becomes %s",
+    async (status) => {
+      const retry = vi.fn();
+      const compiledColumns = compileColumns(columns);
+      const candidateRows = [
+        { id: "candidate-invalid", name: "Invalid", score: Number.NaN },
+      ] satisfies readonly Row[];
+      const getRowId = (row: Row) => row.id;
+      const adapter = new BrunoTableClientRowPipelineAdapter(
+        readySource([]),
+        getRowId,
+        compiledColumns,
+        undefined,
+        [{ columnId: "COL_ID_SCORE", direction: "asc" }],
+      );
+      const runtime = new BrunoTableGridRuntime(
+        adapter.getPublication(),
+        compiledColumns,
+        adapter.getQueryConfiguration(compiledColumns),
+      );
+      const screen = await render(
+        <BrunoTableView
+          runtime={runtime.getView()}
+          tableId="TABLE_ID_EMPTY_STALE_FALLBACK"
+          compiledColumns={compiledColumns}
+          toolbar={new BrunoTableToolbarStore(undefined)}
+          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipelineAdapter={adapter}
+        />,
+      );
+      const stalePublication = adapter.publish({
+        rows: candidateRows,
+        totalRows: candidateRows.length,
+        version: 2,
+        status: "stale",
+        message: "Waiting for a valid projection",
+      });
+      const rejectedRows = adapter.createRowsStore(runtime.getView(), () => true).getSnapshot();
+      const fallback = adapter.rejectQueryRows(rejectedRows, {
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId: "COL_ID_SCORE",
+        message: "Expected a finite number value.",
+      });
+      expect(stalePublication.rowSpace).toBeDefined();
+      expect(fallback?.rowSpace?.loadedRows).toBe(0);
+      if (fallback === undefined) throw new Error("Expected an empty stale fallback.");
+      runtime.publish(fallback);
+      await expect.element(screen.getByRole("alert")).toHaveTextContent("Live data delayed");
+      await expect
+        .element(screen.getByRole("region", { name: "No rows" }))
+        .toHaveTextContent("Waiting for a valid projection");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMPTY_STALE_FALLBACK" }))
+        .not.toBeInTheDocument();
+
+      const queryReads = vi.fn();
+      const gridSurfaceRenders = vi.fn();
+      const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(queryReads);
+      const removeGridSurfaceRenderListener =
+        installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
+      try {
+        runtime.publish(
+          adapter.publish({
+            rows: candidateRows,
+            totalRows: candidateRows.length,
+            version: 3,
+            status,
+            message: "Terminal without retained rows",
+            retry: { run: retry, pending: false },
+          }),
+        );
+        const announcement = screen.getByRole(status === "closed" ? "status" : "alert");
+        await expect.element(announcement).toHaveTextContent("Terminal without retained rows");
+        expect(screen.getByRole(status === "closed" ? "status" : "alert").all()).toHaveLength(1);
+        expect(screen.getByRole("button", { name: "Retry" }).all()).toHaveLength(1);
+        expect(queryReads).not.toHaveBeenCalled();
+        expect(gridSurfaceRenders).not.toHaveBeenCalled();
+      } finally {
+        removeGridSurfaceRenderListener();
+        removeQueryReadListener();
+      }
+    },
+  );
+
+  test.each(["closed", "error"] as const)(
+    "uses empty-state chrome when an initial %s candidate fails query decoding",
+    async (status) => {
+      const screen = await render(
+        <BrunoTableClient
+          {...props}
+          clientSource={{
+            rows: [
+              { id: "candidate-invalid", name: "Invalid", score: Number.NaN },
+              { id: "candidate-valid", name: "Valid", score: 1 },
+            ],
+            totalRows: 2,
+            version: 1,
+            status,
+          }}
+        />,
+      );
+
+      const announcement = screen.getByRole(status === "closed" ? "status" : "alert");
+      await expect
+        .element(announcement)
+        .toHaveTextContent(status === "closed" ? "Live updates stopped" : "Live data error");
+      await expect.element(announcement).toHaveTextContent("Expected a finite number value.");
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+        .not.toBeInTheDocument();
+    },
+  );
+
+  test("does not fall back from a distinct invalid ready candidate", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{
+          rows: [
+            { id: "candidate-invalid", name: "Invalid", score: Number.NaN },
+            { id: "candidate-valid", name: "Valid", score: 1 },
+          ],
+          totalRows: 2,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((notice) => notice.element().textContent?.includes("Invalid source value")),
+      ).toBe(true),
+    );
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+      .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+  });
+
   test("retains coherent rows while rejecting an incomplete stale publication", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
 

@@ -1151,6 +1151,66 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getRowSnapshot("first")).toBe(row);
   });
 
+  it("transitions retained query rows without re-resolving resident identities", () => {
+    const residentRows = Array.from({ length: 20_000 }, (_unused, index) => ({
+      id: `row-${String(index)}`,
+      name: `Accepted ${String(index)}`,
+    })) satisfies readonly Row[];
+    const candidateRows = residentRows.map((row, index) => ({
+      ...row,
+      name: `Candidate ${String(index)}`,
+    }));
+    const getRowId = vi.fn((row: Row) => row.id);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source(residentRows),
+      getRowId,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+    );
+    const rowsStore = adapter.createRowsStore(runtime.getView(), () => true);
+    const unsubscribe = rowsStore.subscribe(() => undefined);
+    adapter.acceptRows(rowsStore.getSnapshot());
+    runtime.publish(adapter.publish(source(candidateRows, "stale")));
+    const rejectedRows = rowsStore.getSnapshot();
+    const reconciliationEvents = vi.fn<(event: BrunoTableClientReconciliationEvent) => void>();
+    const removeReconciliationListener =
+      installBrunoTableClientReconciliationListener(reconciliationEvents);
+    getRowId.mockClear();
+
+    try {
+      const fallback = adapter.rejectQueryRows(rejectedRows, {
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId: "COL_ID_NAME",
+        message: "Rejected by the active query.",
+      });
+      runtime.publish(fallback!);
+      const fallbackRows = rowsStore.getSnapshot();
+      const empty = adapter.rejectQueryRows(fallbackRows, {
+        kind: "invalid-value",
+        rowIndex: 1,
+        columnId: "COL_ID_NAME",
+        message: "The retained predecessor also failed.",
+      });
+
+      expect(getRowId).not.toHaveBeenCalled();
+      expect(reconciliationEvents).not.toHaveBeenCalled();
+      expect(fallback?.rowSpace?.getRow("row-0")).toBe(residentRows[0]);
+      expect(fallback?.invalid).toMatchObject({ kind: "invalid-value" });
+      expect(empty).toMatchObject({ hasCoherentRows: false });
+      expect(empty?.rowSpace).toBeUndefined();
+    } finally {
+      removeReconciliationListener();
+      unsubscribe();
+    }
+  });
+
   it("rejects an unsupported source status without admitting its rows", () => {
     const malformed = {
       rows: [{ id: "invalid", name: "Untrusted" }],
