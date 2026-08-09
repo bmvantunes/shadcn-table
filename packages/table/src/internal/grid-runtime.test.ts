@@ -4,6 +4,7 @@ import { compileColumns, type CompiledColumn } from "./compile-columns";
 import {
   BrunoTableClientRowPipelineAdapter,
   type BrunoTableClientReconciliationEvent,
+  type BrunoTableClientRowOrderChangeDetector,
   installBrunoTableClientReconciliationListener,
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
@@ -71,7 +72,7 @@ function createClientRuntime(
   );
   const view = runtime.getView();
   const acceptCurrentRows = () => {
-    const rows = adapter.createRowsStore(view, () => true).getSnapshot();
+    const rows = adapter.createRowsStore(view, () => () => true).getSnapshot();
     adapter.acceptRows(rows);
   };
   acceptCurrentRows();
@@ -79,8 +80,8 @@ function createClientRuntime(
     ...view,
     getView: runtime.getView,
     resolveRowId: adapter.resolveRowId,
-    createRowsStore: (detector: Parameters<typeof adapter.createRowsStore>[1]) =>
-      adapter.createRowsStore(view, detector),
+    createRowsStore: (detector: BrunoTableClientRowOrderChangeDetector) =>
+      adapter.createRowsStore(view, () => detector),
     publish: (nextSource: ReturnType<typeof source>) => {
       runtime.publish(adapter.publish(nextSource));
       acceptCurrentRows();
@@ -111,6 +112,38 @@ function createClientRuntime(
 }
 
 describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
+  it("constructs a row-order detector only after subscription and reuses it", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([first]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+    );
+    const detector = vi.fn<BrunoTableClientRowOrderChangeDetector>(() => true);
+    const createDetector = vi.fn(() => detector);
+    const rowsStore = adapter.createRowsStore(runtime.getView(), createDetector);
+
+    expect(createDetector).not.toHaveBeenCalled();
+    const disposeInitial = rowsStore.subscribe(() => undefined);
+    expect(createDetector).toHaveBeenCalledOnce();
+    disposeInitial();
+
+    const listener = vi.fn();
+    const disposeReplacement = rowsStore.subscribe(listener);
+    expect(createDetector).toHaveBeenCalledOnce();
+    runtime.publish(adapter.publish(source([{ ...first, name: "Ada Lovelace" }])));
+    expect(detector).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledOnce();
+    disposeReplacement();
+  });
+
   it("accepts a sparse source-neutral logical row space without inventing identities", () => {
     const loaded = { id: "loaded", name: "Ada" } satisfies Row;
     const rowSpace = Object.freeze({
@@ -1127,11 +1160,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     expect(runtime.getRowSnapshot("first")).toBe(raw);
     expect(runtime.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("ADA");
-    expect(adapter.createRowsStore(runtime.getView(), () => true).getSnapshot()[0]).toMatchObject({
+    expect(
+      adapter.createRowsStore(runtime.getView(), () => () => true).getSnapshot()[0],
+    ).toMatchObject({
       raw,
       rowId: "first",
     });
-    const admitted = adapter.createRowsStore(runtime.getView(), () => true).getSnapshot()[0]!;
+    const admitted = adapter.createRowsStore(runtime.getView(), () => () => true).getSnapshot()[0]!;
     expect(
       admitted.values.read(admitted.raw, admitted.rowId, admitted.rowIndex, canonicalColumns[0]!),
     ).toBe("ADA");
@@ -1174,7 +1209,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       runtimeColumns,
       adapter.getQueryConfiguration(runtimeColumns),
     );
-    const rowsStore = adapter.createRowsStore(runtime.getView(), () => true);
+    const rowsStore = adapter.createRowsStore(runtime.getView(), () => () => true);
     const unsubscribe = rowsStore.subscribe(() => undefined);
     adapter.acceptRows(rowsStore.getSnapshot());
     runtime.publish(adapter.publish(source(candidateRows, "stale")));

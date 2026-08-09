@@ -1,9 +1,22 @@
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
+type RowOrderPlanningListener = (tableId: string) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientCellRenderListener: CellListener | undefined;
+const clientRowOrderPlanningListeners = new Set<RowOrderPlanningListener>();
+
+export function recordBrunoTableClientRowOrderPlanning(tableId: string): void {
+  for (const listener of clientRowOrderPlanningListeners) listener(tableId);
+}
+
+export function installBrunoTableClientRowOrderPlanningListener(
+  listener: RowOrderPlanningListener,
+): () => void {
+  clientRowOrderPlanningListeners.add(listener);
+  return () => clientRowOrderPlanningListeners.delete(listener);
+}
 
 export function recordBrunoTableClientCellRender(rowId: string, columnId: string): void {
   clientCellRenderListener?.(rowId, columnId);

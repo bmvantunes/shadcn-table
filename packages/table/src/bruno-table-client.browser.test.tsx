@@ -12,6 +12,7 @@ import {
 import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
+  installBrunoTableClientRowOrderPlanningListener,
   installBrunoTableClientViewRenderListener,
 } from "./internal/render-instrumentation";
 import {
@@ -1925,7 +1926,9 @@ describe("BrunoTableClient browser surface", () => {
         status: "stale",
         message: "Waiting for a valid projection",
       });
-      const rejectedRows = adapter.createRowsStore(runtime.getView(), () => true).getSnapshot();
+      const rejectedRows = adapter
+        .createRowsStore(runtime.getView(), () => () => true)
+        .getSnapshot();
       const fallback = adapter.rejectQueryRows(rejectedRows, {
         kind: "invalid-value",
         rowIndex: 0,
@@ -4715,6 +4718,42 @@ describe("BrunoTableClient browser surface", () => {
       expect.stringContaining('simultaneous use of tableId "TABLE_ID_CONFLICT"'),
     );
     expect(screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT" }).all()).toHaveLength(2);
+  });
+
+  test("plans row-order dependencies once per query across live publications", async () => {
+    const rowOrderPlans = vi.fn();
+    const removePlanningListener = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+    try {
+      const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+        .toBeInTheDocument();
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+      expect(rowOrderPlans).toHaveBeenLastCalledWith("TABLE_ID_PEOPLE");
+
+      for (let publication = 1; publication <= 3; publication += 1) {
+        await screen.rerender(
+          <BrunoTableClient
+            {...props}
+            clientSource={{
+              ...readySource([rows[0]!, { ...rows[1]!, name: `Grace ${String(publication)}` }]),
+              version: publication + 1,
+            }}
+          />,
+        );
+      }
+      await expect.element(screen.getByRole("gridcell", { name: "Grace 3" })).toBeInTheDocument();
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+
+      await screen.getByRole("button", { name: "Sort by Name" }).click();
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Name" }))
+        .toHaveAttribute("aria-sort", "ascending");
+      expect(rowOrderPlans).toHaveBeenCalledTimes(2);
+      expect(rowOrderPlans).toHaveBeenLastCalledWith("TABLE_ID_PEOPLE");
+    } finally {
+      removePlanningListener();
+    }
   });
 
   test("isolates root, toolbar, and unchanged cells during sustained 20 Hz publications", async () => {

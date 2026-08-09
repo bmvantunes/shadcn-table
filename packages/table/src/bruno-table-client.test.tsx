@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { BrunoTableClient } from "./bruno-table-client";
+import { installBrunoTableClientRowOrderPlanningListener } from "./internal/render-instrumentation";
 
 describe("BrunoTableClient server rendering", () => {
   it("renders the initial sorted rows without waiting for effects", () => {
@@ -24,19 +25,26 @@ describe("BrunoTableClient server rendering", () => {
       },
     ] as const;
 
-    const html = renderToStaticMarkup(
-      <BrunoTableClient
-        tableId="TABLE_ID_SERVER_RENDER"
-        getRowId={(row) => row.id}
-        columns={columns}
-        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
-        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
-      />,
-    );
+    const rowOrderPlans = vi.fn();
+    const removePlanningListener = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+    try {
+      const html = renderToStaticMarkup(
+        <BrunoTableClient
+          tableId="TABLE_ID_SERVER_RENDER"
+          getRowId={(row) => row.id}
+          columns={columns}
+          clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        />,
+      );
 
-    expect(html).toContain("Grace");
-    expect(html).toContain("Ada");
-    expect(html.indexOf("Grace")).toBeLessThan(html.indexOf("Ada"));
+      expect(html).toContain("Grace");
+      expect(html).toContain("Ada");
+      expect(html.indexOf("Grace")).toBeLessThan(html.indexOf("Ada"));
+      expect(rowOrderPlans).not.toHaveBeenCalled();
+    } finally {
+      removePlanningListener();
+    }
   });
 
   it("keeps custom renderer controls inert before hydration", () => {

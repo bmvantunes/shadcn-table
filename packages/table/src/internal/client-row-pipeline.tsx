@@ -16,12 +16,13 @@ import type {
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
 import { collectClientFilterColumnIds } from "./client-row-model";
+import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
   readonly resolveRowId: (row: unknown) => string;
   readonly createRowsStore: (
     runtime: BrunoTableRowPipelineRuntimeView,
-    detector: BrunoTableClientRowOrderChangeDetector,
+    createDetector: () => BrunoTableClientRowOrderChangeDetector,
   ) => BrunoTableClientRowsStore;
   readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
   readonly rejectQueryRows: (
@@ -80,21 +81,12 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   orderBy,
   queryGeneration,
 }: ClientResolvedRowOrderProps) {
-  const rowOrderDetector = useMemo<BrunoTableClientRowOrderChangeDetector>(() => {
-    const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
-    const filteredIds = new Set<string>();
-    for (const filter of filters ?? EMPTY_FILTERS) {
-      collectClientFilterColumnIds(filter, filteredIds);
-    }
-    const relevantColumns = columns.filter(
-      (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
-    );
-    return (previousRows, nextRows, change) =>
-      rowOrderChanged(previousRows, nextRows, change, relevantColumns, filteredIds);
-  }, [columns, filters, orderBy]);
   const rowsStore = useMemo(
-    () => rowPipelineAdapter.createRowsStore(runtime, rowOrderDetector),
-    [rowOrderDetector, rowPipelineAdapter, runtime],
+    () =>
+      rowPipelineAdapter.createRowsStore(runtime, () =>
+        createRowOrderChangeDetector(tableId, columns, filters, orderBy),
+      ),
+    [columns, filters, orderBy, rowPipelineAdapter, runtime, tableId],
   );
   const rows = useSyncExternalStore(
     rowsStore.subscribe,
@@ -137,6 +129,25 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
         }),
   );
 });
+
+function createRowOrderChangeDetector(
+  tableId: string,
+  columns: readonly CompiledColumn[],
+  filters: readonly unknown[],
+  orderBy: ClientResolvedRowOrderProps["orderBy"],
+): BrunoTableClientRowOrderChangeDetector {
+  recordBrunoTableClientRowOrderPlanning(tableId);
+  const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
+  const filteredIds = new Set<string>();
+  for (const filter of filters ?? EMPTY_FILTERS) {
+    collectClientFilterColumnIds(filter, filteredIds);
+  }
+  const relevantColumns = columns.filter(
+    (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
+  );
+  return (previousRows, nextRows, change) =>
+    rowOrderChanged(previousRows, nextRows, change, relevantColumns, filteredIds);
+}
 
 function rowOrderChanged(
   previousRows: readonly BrunoTableClientAdmittedRow[],

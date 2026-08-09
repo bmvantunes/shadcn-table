@@ -321,10 +321,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly createRowsStore = (
     runtime: BrunoTableRuntimeView,
-    detector: BrunoTableClientRowOrderChangeDetector,
+    createDetector: () => BrunoTableClientRowOrderChangeDetector,
   ): BrunoTableClientRowsStore => {
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
     let unsubscribeRuntime: (() => void) | undefined;
     const publish = () => {
@@ -334,8 +335,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       const change =
         nextCoherent?.changeFromPrevious ??
         Object.freeze({ rowIdsChanged: previousRows.length > 0, changedIndexes: EMPTY_ROWS });
+      const activeDetector = detector;
+      if (activeDetector === undefined) return;
       try {
-        if (!detector(previousRows, nextRows, change)) {
+        if (!activeDetector(previousRows, nextRows, change)) {
           if (nextCoherent !== undefined) this.acceptedCoherent = nextCoherent;
           return;
         }
@@ -352,6 +355,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       subscribe: (listener: () => void) => {
         listeners.add(listener);
         if (unsubscribeRuntime === undefined) {
+          detector ??= createDetector();
           snapshot = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
           unsubscribeRuntime = runtime.subscribeRowSpace(publish);
         }
