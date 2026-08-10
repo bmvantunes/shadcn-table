@@ -763,6 +763,14 @@ function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCell
       sameInvalidSource(previous.value.invalid, next.value.invalid)
     );
   }
+  if (
+    previous.value === null ||
+    previous.value === undefined ||
+    next.value === null ||
+    next.value === undefined
+  ) {
+    return false;
+  }
   const column = next.column;
   return (
     column !== undefined &&

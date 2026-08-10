@@ -73,9 +73,13 @@ if (
   !/registerBrunoTableIdentity/u.test(rootRuntime) ||
   !/simultaneous use of tableId/u.test(rootRuntime) ||
   !/NODE_ENV/u.test(rootRuntime) ||
+  !/globalThis\.process\?\.env\?\.NODE_ENV/u.test(rootRuntime) ||
+  /(?<!\.)\bprocess\.env/u.test(rootRuntime) ||
   /__BRUNO_TABLE_DEVELOPMENT__/u.test(rootRuntime)
 ) {
-  throw new Error("The package does not preserve consumer-time development diagnostics.");
+  throw new Error(
+    "The package does not preserve browser-safe consumer-time development diagnostics.",
+  );
 }
 
 if (

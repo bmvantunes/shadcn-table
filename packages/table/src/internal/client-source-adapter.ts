@@ -30,6 +30,7 @@ export type BrunoTableClientReconciliationEvent = Readonly<{
 }>;
 
 let reconciliationListener: ((event: BrunoTableClientReconciliationEvent) => void) | undefined;
+let valueCachePruneListener: ((visitedEntries: number) => void) | undefined;
 
 export function installBrunoTableClientReconciliationListener(
   listener: (event: BrunoTableClientReconciliationEvent) => void,
@@ -37,6 +38,15 @@ export function installBrunoTableClientReconciliationListener(
   reconciliationListener = listener;
   return () => {
     if (reconciliationListener === listener) reconciliationListener = undefined;
+  };
+}
+
+export function installBrunoTableClientValueCachePruneListener(
+  listener: (visitedEntries: number) => void,
+): () => void {
+  valueCachePruneListener = listener;
+  return () => {
+    if (valueCachePruneListener === listener) valueCachePruneListener = undefined;
   };
 }
 
@@ -90,6 +100,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.acceptEmptyCoherent();
     this.sourceColumns = columns;
     this.queryColumns = columns;
+    this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
     this.queryConfiguration = Object.freeze({
       baselineFilters: this.initialFilters,
       baselineOrderBy: this.initialOrderBy,
@@ -1092,6 +1103,9 @@ class ClientCanonicalValueCache implements BrunoTableClientValueCache {
     object,
     Readonly<{ rowId: BrunoTableRowId; column: CompiledColumn }>
   >();
+  private retainedColumnGroups: readonly (readonly CompiledColumn[] | undefined)[] = Object.freeze(
+    [],
+  );
 
   public readonly read = (
     row: unknown,
@@ -1140,15 +1154,25 @@ class ClientCanonicalValueCache implements BrunoTableClientValueCache {
   public readonly retainColumns = (
     ...columnGroups: readonly (readonly CompiledColumn[] | undefined)[]
   ): void => {
+    if (
+      this.retainedColumnGroups.length === columnGroups.length &&
+      this.retainedColumnGroups.every((columns, index) => columns === columnGroups[index])
+    ) {
+      return;
+    }
+    this.retainedColumnGroups = Object.freeze(Array.from(columnGroups));
     const retained = new Set(columnGroups.flatMap((columns) => columns ?? EMPTY_COLUMNS));
+    let visitedEntries = 0;
     for (const [rowId, values] of this.boundedValuesByRow) {
       for (const [column, entry] of values) {
+        visitedEntries += 1;
         if (retained.has(column)) continue;
         values.delete(column);
         this.boundedLru.delete(entry.token);
       }
       if (values.size === 0) this.boundedValuesByRow.delete(rowId);
     }
+    valueCachePruneListener?.(visitedEntries);
   };
 
   private readonly readBounded = (

@@ -324,6 +324,52 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("row").nth(2).getByRole("gridcell").nth(1))
       .toHaveTextContent("");
+
+    const nullToValueRows: readonly OptionalRow[] = Object.freeze([
+      { id: "z-undefined", name: "Undefined" },
+      { id: "a-null", name: "Null becomes two", score: 2 },
+      { id: "m-number", name: "Number", score: 1 },
+    ]);
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_OPTIONAL"
+        getRowId={(row: OptionalRow) => row.id}
+        columns={optionalColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{
+          rows: nullToValueRows,
+          totalRows: nullToValueRows.length,
+          version: 2,
+          status: "ready",
+        }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Null becomes two");
+
+    const valueToUndefinedRows: readonly OptionalRow[] = Object.freeze([
+      { id: "z-undefined", name: "Undefined" },
+      { id: "a-null", name: "Two becomes undefined" },
+      { id: "m-number", name: "Number", score: 1 },
+    ]);
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_OPTIONAL"
+        getRowId={(row: OptionalRow) => row.id}
+        columns={optionalColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{
+          rows: valueToUndefinedRows,
+          totalRows: valueToUndefinedRows.length,
+          version: 3,
+          status: "ready",
+        }}
+      />,
+    );
+    await expect
+      .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Two becomes undefined");
     await expect
       .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(1))
       .toHaveTextContent("1");
@@ -333,23 +379,36 @@ describe("BrunoTableClient browser surface", () => {
       { ...optionalRows[1]!, name: "Still null" },
       optionalRows[2]!,
     ] satisfies readonly OptionalRow[];
-    await expect(
-      screen.rerender(
-        <BrunoTableClient
-          tableId="TABLE_ID_OPTIONAL"
-          getRowId={(row: OptionalRow) => row.id}
-          columns={optionalColumns}
-          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
-          clientSource={{
-            rows: updatedRows,
-            totalRows: updatedRows.length,
-            version: 2,
-            status: "ready",
-          }}
-        />,
-      ),
-    ).resolves.toBeUndefined();
-    await expect.element(screen.getByRole("gridcell", { name: "Still null" })).toBeInTheDocument();
+    const queryReads = vi.fn();
+    const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(
+      (rowId, columnId, tableId) => {
+        if (tableId === "TABLE_ID_OPTIONAL") queryReads(rowId, columnId);
+      },
+    );
+    try {
+      await expect(
+        screen.rerender(
+          <BrunoTableClient
+            tableId="TABLE_ID_OPTIONAL"
+            getRowId={(row: OptionalRow) => row.id}
+            columns={optionalColumns}
+            initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+            clientSource={{
+              rows: updatedRows,
+              totalRows: updatedRows.length,
+              version: 4,
+              status: "ready",
+            }}
+          />,
+        ),
+      ).resolves.toBeUndefined();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Still null" }))
+        .toBeInTheDocument();
+      expect(queryReads).not.toHaveBeenCalled();
+    } finally {
+      removeQueryReadListener();
+    }
   });
 
   test("renders loading skeletons and rejects an incomplete ready source visibly", async () => {
@@ -684,7 +743,7 @@ describe("BrunoTableClient browser surface", () => {
             {
               columnId: "COL_ID_NAME",
               type: "contains",
-              filter: " a ",
+              filter: "A",
               caseSensitive: true,
             },
           ]}
@@ -708,6 +767,149 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(filterGrid.getByRole("gridcell", { name: "B", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("skips full row-model work when fresh canonical filter values keep membership", async () => {
+    type Email = Readonly<{ readonly address: string }>;
+    type EmailRow = Readonly<{
+      readonly id: string;
+      readonly email: Email;
+      readonly note: string;
+    }>;
+    const emailValueType: BrunoTableValueType<Email, "text", "text"> = {
+      codecId: "test/email-membership",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 180,
+      decodeRuntime: (input) =>
+        typeof input === "object" &&
+        input !== null &&
+        typeof Reflect.get(input, "address") === "string"
+          ? { _tag: "Success", value: Object.freeze({ address: Reflect.get(input, "address") }) }
+          : { _tag: "Failure", message: "Expected email." },
+      equivalent: (left, right) => left.address === right.address,
+      compare: (left, right) =>
+        left.address === right.address ? 0 : left.address < right.address ? -1 : 1,
+      formatCanonicalText: (value) => value.address,
+      parseCanonicalText: (text) => ({
+        _tag: "Success",
+        value: Object.freeze({ address: text }),
+      }),
+      formatDisplay: (value) => value.address,
+      encodePersisted: (value) => value.address,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: Object.freeze({ address: input }) }
+          : { _tag: "Failure", message: "Expected persisted email." },
+    };
+    const emailColumns = [
+      {
+        columnId: "COL_ID_EMAIL",
+        field: "email",
+        headerName: "Email",
+        valueType: emailValueType,
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ] as const satisfies BrunoTableColumns<EmailRow>;
+    const queryReads = vi.fn();
+    const removeQueryReadListener = installBrunoTableClientQueryValueReadListener(
+      (rowId, columnId, tableId) => {
+        if (tableId === "TABLE_ID_EMAIL_MEMBERSHIP") queryReads(rowId, columnId);
+      },
+    );
+    const initial = Object.freeze({
+      id: "ada",
+      email: Object.freeze({ address: "ada@example.com" }),
+      note: "Initial",
+    }) satisfies EmailRow;
+    const excluded = Object.freeze({
+      id: "excluded",
+      email: Object.freeze({ address: "z@example.com" }),
+      note: "Excluded",
+    }) satisfies EmailRow;
+    const initialRows: readonly EmailRow[] = Object.freeze([initial, excluded]);
+    try {
+      const screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_EMAIL_MEMBERSHIP"
+          getRowId={(row: EmailRow) => row.id}
+          columns={emailColumns}
+          initialFilters={[{ columnId: "COL_ID_EMAIL", type: "contains", filter: "ada@" }]}
+          initialOrderBy={[{ columnId: "COL_ID_EMAIL", direction: "asc" }]}
+          clientSource={{
+            rows: initialRows,
+            totalRows: 2,
+            version: 1,
+            status: "ready",
+          }}
+        />,
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "Initial" })).toBeInTheDocument();
+      queryReads.mockClear();
+      const updated = Object.freeze({
+        ...initial,
+        email: Object.freeze({ address: initial.email.address }),
+        note: "Changed",
+      }) satisfies EmailRow;
+      const updatedRows: readonly EmailRow[] = Object.freeze([updated, excluded]);
+
+      await screen.rerender(
+        <BrunoTableClient
+          tableId="TABLE_ID_EMAIL_MEMBERSHIP"
+          getRowId={(row: EmailRow) => row.id}
+          columns={emailColumns}
+          initialFilters={[{ columnId: "COL_ID_EMAIL", type: "contains", filter: "ada@" }]}
+          initialOrderBy={[{ columnId: "COL_ID_EMAIL", direction: "asc" }]}
+          clientSource={{
+            rows: updatedRows,
+            totalRows: 2,
+            version: 2,
+            status: "ready",
+          }}
+        />,
+      );
+
+      await expect.element(screen.getByRole("gridcell", { name: "Changed" })).toBeInTheDocument();
+      expect(queryReads).not.toHaveBeenCalled();
+      queryReads.mockClear();
+      const excludedWithChangedSortKey = Object.freeze({
+        ...excluded,
+        email: Object.freeze({ address: "b@example.com" }),
+      }) satisfies EmailRow;
+      const excludedUpdateRows: readonly EmailRow[] = Object.freeze([
+        updated,
+        excludedWithChangedSortKey,
+      ]);
+
+      await screen.rerender(
+        <BrunoTableClient
+          tableId="TABLE_ID_EMAIL_MEMBERSHIP"
+          getRowId={(row: EmailRow) => row.id}
+          columns={emailColumns}
+          initialFilters={[{ columnId: "COL_ID_EMAIL", type: "contains", filter: "ada@" }]}
+          initialOrderBy={[{ columnId: "COL_ID_EMAIL", direction: "asc" }]}
+          clientSource={{
+            rows: excludedUpdateRows,
+            totalRows: 2,
+            version: 3,
+            status: "ready",
+          }}
+        />,
+      );
+
+      await expect.element(screen.getByRole("gridcell", { name: "Changed" })).toBeInTheDocument();
+      expect(queryReads).not.toHaveBeenCalled();
+    } finally {
+      removeQueryReadListener();
+    }
   });
 
   test("refreshes presentation when domain-equivalent canonical values differ", async () => {

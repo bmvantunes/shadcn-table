@@ -6,6 +6,7 @@ import {
   type BrunoTableClientReconciliationEvent,
   type BrunoTableClientRowOrderChangeDetector,
   installBrunoTableClientReconciliationListener,
+  installBrunoTableClientValueCachePruneListener,
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -380,6 +381,47 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(snapshot);
+  });
+
+  it("publishes subscribed nullish cell transitions without invoking value callbacks", () => {
+    const cellColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const nullNote = { id: "first", name: "Ada", note: null } as unknown as Row;
+    const runtime = createClientRuntime(
+      source([nullNote]),
+      (row) => row.id,
+      cellColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const listener = vi.fn();
+    runtime.subscribeCell("first", "COL_ID_NOTE", listener);
+    const nullSnapshot = runtime.getCellSnapshot("first", "COL_ID_NOTE");
+
+    runtime.publish(source([{ id: "first", name: "Ada" }]));
+
+    expect(listener).toHaveBeenCalledOnce();
+    const undefinedSnapshot = runtime.getCellSnapshot("first", "COL_ID_NOTE");
+    expect(undefinedSnapshot).not.toBe(nullSnapshot);
+    expect(undefinedSnapshot.value).toBeUndefined();
+    listener.mockClear();
+
+    runtime.publish(source([{ id: "first", name: "Ada", note: "Ready" }]));
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(runtime.getCellValueSnapshot("first", "COL_ID_NOTE")).toBe("Ready");
   });
 
   it("indexes columns before reconciling subscribed cells", () => {
@@ -1022,6 +1064,36 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     }
 
     expect(decodeRuntime).toHaveBeenCalledTimes(256 + 64);
+  });
+
+  it("prunes canonical values only when the retained column schema changes", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const second = { id: "second", name: "Grace" } satisfies Row;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([first, second]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const rowSpace = adapter.getPublication().rowSpace!;
+    rowSpace.getCellValue("first", "COL_ID_NAME");
+    rowSpace.getCellValue("second", "COL_ID_NAME");
+    const prunes = vi.fn();
+    const restore = installBrunoTableClientValueCachePruneListener(prunes);
+    try {
+      adapter.publish(source([first, { ...second, note: "Changed" }]));
+      expect(prunes).not.toHaveBeenCalled();
+
+      const replacementColumns = Object.freeze(
+        runtimeColumns.map((column) => Object.freeze({ ...column })),
+      );
+      adapter.configure((row) => row.id, replacementColumns);
+      expect(prunes).toHaveBeenCalledOnce();
+      expect(prunes).toHaveBeenCalledWith(2);
+    } finally {
+      restore();
+    }
   });
 
   it("decodes query columns columnarly and presentation cells on demand", () => {

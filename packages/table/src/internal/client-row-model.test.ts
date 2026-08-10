@@ -285,12 +285,17 @@ describe("Client row model", () => {
       { columnId: "COL_ID_COUNT", type: "inRange", filter: 6n, filterTo: 5n },
     ] as const;
     const emptyText = { columnId: "COL_ID_NAME", type: "contains", filter: "" } as const;
+    const normalizedEmptyText = {
+      columnId: "COL_ID_NAME",
+      type: "startsWith",
+      filter: "\u0301",
+    } as const;
     expect(
       sanitizeClientInitialFilters(
         [
           ...emptyRanges,
           emptyText,
-          { columnId: "COL_ID_NAME", type: "startsWith", filter: "\u0301" },
+          normalizedEmptyText,
           {
             columnId: "COL_ID_NAME",
             type: "equals",
@@ -307,11 +312,12 @@ describe("Client row model", () => {
         ],
         columns,
       ),
-    ).toEqual([...emptyRanges, emptyText]);
+    ).toEqual([...emptyRanges, emptyText, normalizedEmptyText]);
     const rows = [{ id: "middle", name: "Ada", score: 5, count: 5n }] as const;
     for (const range of emptyRanges) {
       expect(filterClientRows(rows, columns, [range])).toEqual([]);
     }
+    expect(filterClientRows(rows, columns, [normalizedEmptyText])).toEqual(rows);
 
     expect(
       sanitizeClientInitialFilters(
@@ -329,6 +335,114 @@ describe("Client row model", () => {
         columns,
       ),
     ).toHaveLength(3);
+  });
+
+  it("applies text-family operators to custom canonical text domains", () => {
+    type Email = Readonly<{ readonly address: string }>;
+    const emailValueType = {
+      codecId: "test/email",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 180,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" &&
+        input !== null &&
+        typeof Reflect.get(input, "address") === "string"
+          ? ({ _tag: "Success", value: input as Email } as const)
+          : ({ _tag: "Failure", message: "Expected email." } as const),
+      equivalent: (left: Email, right: Email) => left.address === right.address,
+      compare: (left: Email, right: Email) =>
+        left.address === right.address ? 0 : left.address < right.address ? -1 : 1,
+      formatCanonicalText: (value: Email) => value.address,
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: Object.freeze({ address: text }) }) as const,
+      formatDisplay: (value: Email) => value.address,
+      encodePersisted: (value: Email) => value.address,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: Object.freeze({ address: input }) } as const)
+          : ({ _tag: "Failure", message: "Expected persisted email." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_EMAIL",
+        field: "email",
+        headerName: "Email",
+        valueType: emailValueType,
+      },
+    ]);
+    const rows = [
+      { id: "ada", email: Object.freeze({ address: "Ada@Example.com" }) },
+      { id: "grace", email: Object.freeze({ address: "grace@example.com" }) },
+      { id: "jose", email: Object.freeze({ address: "Jos\u00e9@Example.com" }) },
+    ] as const;
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_EMAIL", type: "contains", filter: "ADA@" }],
+      columns,
+    );
+
+    expect(filters).toEqual([{ columnId: "COL_ID_EMAIL", type: "contains", filter: "ADA@" }]);
+    expect(filterClientRows(rows, columns, filters).map((row) => row.id)).toEqual(["ada"]);
+    const caseInsensitiveEquals = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_EMAIL",
+          type: "equals",
+          filter: Object.freeze({ address: "ADA@EXAMPLE.COM" }),
+          caseSensitive: false,
+          accentSensitive: true,
+        },
+      ],
+      columns,
+    );
+    expect(filterClientRows(rows, columns, caseInsensitiveEquals).map((row) => row.id)).toEqual([
+      "ada",
+    ]);
+    const caseSensitiveEquals = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_EMAIL",
+          type: "equals",
+          filter: Object.freeze({ address: "ADA@EXAMPLE.COM" }),
+          caseSensitive: true,
+        },
+      ],
+      columns,
+    );
+    expect(filterClientRows(rows, columns, caseSensitiveEquals)).toEqual([]);
+    const accentInsensitiveIn = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_EMAIL",
+          type: "in",
+          filter: [Object.freeze({ address: "Ad\u00e1@Example.com" })],
+          caseSensitive: true,
+          accentSensitive: false,
+        },
+      ],
+      columns,
+    );
+    expect(filterClientRows(rows, columns, accentInsensitiveIn).map((row) => row.id)).toEqual([
+      "ada",
+    ]);
+    const combiningMarkEquals = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_EMAIL",
+          type: "equals",
+          filter: Object.freeze({ address: "Jose\u0301@Example.com" }),
+          caseSensitive: true,
+          accentSensitive: true,
+        },
+      ],
+      columns,
+    );
+    expect(filterClientRows(rows, columns, combiningMarkEquals).map((row) => row.id)).toEqual([
+      "jose",
+    ]);
   });
 
   it("sanitizes compound filters and tracks nested column references", () => {

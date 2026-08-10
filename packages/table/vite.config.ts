@@ -19,7 +19,10 @@ const brunoTableDevelopmentDefine = {
   name: "bruno-table-development-define",
   transform(code: string, id: string) {
     if (!id.endsWith("/src/bruno-table-client.tsx")) return;
-    return code.replaceAll("__BRUNO_TABLE_DEVELOPMENT__", 'process.env.NODE_ENV !== "production"');
+    return code.replaceAll(
+      "__BRUNO_TABLE_DEVELOPMENT__",
+      'globalThis.process?.env?.NODE_ENV !== "production"',
+    );
   },
 };
 

@@ -472,21 +472,8 @@ function sanitizeFilterRecord(
     type === "endsWith"
   ) {
     const validSensitivity = hasValidTextSensitivity(filter, true);
-    const decoded = decode(operand);
-    const textOperand =
-      decoded._tag === "Success" && typeof decoded.value === "string" ? decoded.value : undefined;
-    const hasMeaningfulNormalizedOperand =
-      textOperand !== undefined &&
-      (textOperand.length === 0 ||
-        normalizeText(
-          textOperand,
-          filter["caseSensitive"] === true,
-          filter["accentSensitive"] === true,
-        ).length > 0);
-    return column.semantics.filterFamily === "text" &&
-      textOperand !== undefined &&
-      hasMeaningfulNormalizedOperand &&
-      validSensitivity
+    const textOperand = typeof operand === "string" ? operand : undefined;
+    return column.semantics.filterFamily === "text" && textOperand !== undefined && validSensitivity
       ? node(
           snapshotFilter(
             filter,
@@ -629,8 +616,12 @@ function evaluateFilterRecord(
     );
   }
   if (typeof operand !== "string") return filter["type"] === "notContains";
-  if (typeof value !== "string") return filter["type"] === "notContains";
-  const left = normalizeText(value, caseSensitive, accentSensitive);
+  if (value === null || value === undefined) return filter["type"] === "notContains";
+  const left = normalizeText(
+    column.semantics.formatCanonicalText(value),
+    caseSensitive,
+    accentSensitive,
+  );
   const right = normalizeText(operand, caseSensitive, accentSensitive);
   if (filter["type"] === "contains") return left.includes(right);
   if (filter["type"] === "notContains") return !left.includes(right);
@@ -669,14 +660,10 @@ function compareEquality(
   if (value === null || value === undefined || operand === null || operand === undefined) {
     return value === operand;
   }
-  if (
-    column.semantics.filterFamily === "text" &&
-    typeof value === "string" &&
-    typeof operand === "string"
-  ) {
+  if (column.semantics.filterFamily === "text") {
     return (
-      normalizeText(value, caseSensitive, accentSensitive) ===
-      normalizeText(operand, caseSensitive, accentSensitive)
+      normalizeText(column.semantics.formatCanonicalText(value), caseSensitive, accentSensitive) ===
+      normalizeText(column.semantics.formatCanonicalText(operand), caseSensitive, accentSensitive)
     );
   }
   return column.semantics.equivalent(value, operand);

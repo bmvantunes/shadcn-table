@@ -15,7 +15,7 @@ import type {
   BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
-import { collectClientFilterColumnIds } from "./client-row-model";
+import { createClientFilterPredicate } from "./client-row-model";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
@@ -138,15 +138,18 @@ function createRowOrderChangeDetector(
 ): BrunoTableClientRowOrderChangeDetector {
   recordBrunoTableClientRowOrderPlanning(tableId);
   const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
-  const filteredIds = new Set<string>();
-  for (const filter of filters ?? EMPTY_FILTERS) {
-    collectClientFilterColumnIds(filter, filteredIds);
-  }
-  const relevantColumns = columns.filter(
-    (column) => orderedIds.has(column.columnId) || filteredIds.has(column.columnId),
+  const orderedColumns = columns.filter((column) => orderedIds.has(column.columnId));
+  const filterPredicate = createClientFilterPredicate<BrunoTableClientAdmittedRow>(
+    columns,
+    filters,
+    (column, row) => {
+      const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+      if (isBrunoTableInvalidCellValue(value)) throw FILTER_VALUE_INVALID;
+      return value;
+    },
   );
   return (previousRows, nextRows, change) =>
-    rowOrderChanged(previousRows, nextRows, change, relevantColumns, filteredIds);
+    rowOrderChanged(previousRows, nextRows, change, orderedColumns, filterPredicate);
 }
 
 function rowOrderChanged(
@@ -156,31 +159,38 @@ function rowOrderChanged(
     readonly rowIdsChanged: boolean;
     readonly changedIndexes: readonly number[];
   }>,
-  relevantColumns: readonly CompiledColumn[],
-  filteredIds: ReadonlySet<string>,
+  orderedColumns: readonly CompiledColumn[],
+  filterPredicate: ((row: BrunoTableClientAdmittedRow) => boolean) | undefined,
 ): boolean {
   if (change.rowIdsChanged) return true;
-  if (relevantColumns.length === 0) return false;
+  if (orderedColumns.length === 0 && filterPredicate === undefined) return false;
   for (const index of change.changedIndexes) {
     const previousRow = previousRows[index];
     const nextRow = nextRows[index];
     if (previousRow === nextRow) continue;
-    for (const column of relevantColumns) {
-      const previousValue =
-        previousRow?.values.read(
-          previousRow.raw,
-          previousRow.rowId,
-          previousRow.rowIndex,
-          column,
-        ) ?? undefined;
-      const nextValue =
-        nextRow?.values.read(nextRow.raw, nextRow.rowId, nextRow.rowIndex, column) ?? undefined;
+    if (previousRow === undefined || nextRow === undefined) return true;
+    if (filterPredicate !== undefined) {
+      try {
+        const previousIncluded = filterPredicate(previousRow);
+        const nextIncluded = filterPredicate(nextRow);
+        if (previousIncluded !== nextIncluded) return true;
+        if (!nextIncluded) continue;
+      } catch {
+        return true;
+      }
+    }
+    for (const column of orderedColumns) {
+      const previousValue = previousRow.values.read(
+        previousRow.raw,
+        previousRow.rowId,
+        previousRow.rowIndex,
+        column,
+      );
+      const nextValue = nextRow.values.read(nextRow.raw, nextRow.rowId, nextRow.rowIndex, column);
       if (
         isBrunoTableInvalidCellValue(previousValue) ||
         isBrunoTableInvalidCellValue(nextValue) ||
-        (filteredIds.has(column.columnId)
-          ? !Object.is(previousValue, nextValue)
-          : !equivalentOrderedValue(column, previousValue, nextValue))
+        !equivalentOrderedValue(column, previousValue, nextValue)
       ) {
         return true;
       }
@@ -189,11 +199,21 @@ function rowOrderChanged(
   return false;
 }
 
+const FILTER_VALUE_INVALID = Object.freeze({});
+
 function equivalentOrderedValue(
   column: CompiledColumn,
   previousValue: unknown,
   nextValue: unknown,
 ): boolean {
+  if (
+    previousValue === null ||
+    previousValue === undefined ||
+    nextValue === null ||
+    nextValue === undefined
+  ) {
+    return previousValue == null && nextValue == null;
+  }
   return column.semantics.compare(previousValue, nextValue) === 0;
 }
 
@@ -269,5 +289,4 @@ function sameRowIds(previous: readonly string[], next: readonly string[]): boole
   return previous.length === next.length && previous.every((rowId, index) => rowId === next[index]);
 }
 
-const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);
