@@ -342,6 +342,46 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getCellValueSnapshot("first", "COL_ID_NOTE")).toBe("Changed");
   });
 
+  it("preserves cell snapshots for freshly decoded equivalent canonical values", () => {
+    const [baseColumn] = runtimeColumns;
+    const objectColumns = Object.freeze([
+      Object.freeze({
+        ...baseColumn!,
+        semantics: Object.freeze({
+          ...baseColumn!.semantics,
+          decodeRuntime: (input: unknown) =>
+            typeof input === "string"
+              ? ({ _tag: "Success", value: Object.freeze({ text: input }) } as const)
+              : ({ _tag: "Failure", message: "Expected text." } as const),
+          equivalent: (left: unknown, right: unknown) =>
+            (left as { readonly text: string }).text === (right as { readonly text: string }).text,
+          compare: (left: unknown, right: unknown) => {
+            const leftText = (left as { readonly text: string }).text;
+            const rightText = (right as { readonly text: string }).text;
+            return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
+          },
+          formatDisplay: (value: unknown) => (value as { readonly text: string }).text,
+        }),
+      }),
+    ] satisfies readonly CompiledColumn[]);
+    const first = { id: "first", name: "Ada", note: "Initial" } satisfies Row;
+    const runtime = createClientRuntime(
+      source([first]),
+      (row) => row.id,
+      objectColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const listener = vi.fn();
+    runtime.subscribeCell("first", "COL_ID_NAME", listener);
+    const snapshot = runtime.getCellSnapshot("first", "COL_ID_NAME");
+
+    runtime.publish(source([{ ...first, note: "Changed" }]));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(snapshot);
+  });
+
   it("indexes columns before reconciling subscribed cells", () => {
     const indexedColumns = [...runtimeColumns];
     const first = { id: "first", name: "Ada" } satisfies Row;

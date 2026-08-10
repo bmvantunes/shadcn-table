@@ -513,6 +513,11 @@ describe("BrunoTableClient browser surface", () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const readyGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
     readyGrid.element().focus();
+    readyGrid
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "End" }));
+    const activeBeforeLoading = readyGrid.element().getAttribute("aria-activedescendant");
+    expect(activeBeforeLoading).toBe(screen.getByRole("gridcell", { name: "4" }).element().id);
     expect(document.activeElement).toBe(readyGrid.element());
 
     await screen.rerender(
@@ -531,6 +536,11 @@ describe("BrunoTableClient browser surface", () => {
 
     const restoredGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
     await vi.waitFor(() => expect(document.activeElement).toBe(restoredGrid.element()));
+    await vi.waitFor(() =>
+      expect(restoredGrid.element().getAttribute("aria-activedescendant")).toBe(
+        restoredGrid.getByRole("gridcell", { name: "4" }).element().id,
+      ),
+    );
   });
 
   test("presents invalid non-query values without letting semantic rendering throw", async () => {
@@ -2996,6 +3006,12 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("columnheader", { name: "Score" })
       .element()
       .getBoundingClientRect();
+    const startHeader = screen.getByRole("columnheader", { name: "Name" }).element();
+    const endHeader = screen.getByRole("columnheader", { name: "Pinned end" }).element();
+    expect(startHeader.tagName).toBe("TH");
+    expect(startHeader).toHaveAttribute("scope", "col");
+    expect(endHeader.tagName).toBe("TH");
+    expect(endHeader).toHaveAttribute("scope", "col");
     expect(Math.abs(gridBounds.right - endBounds.right)).toBeLessThanOrEqual(2);
     expect(endBounds.height).toBe(36);
     expect(centerBounds.height).toBe(36);

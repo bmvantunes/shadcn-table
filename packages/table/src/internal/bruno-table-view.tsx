@@ -423,8 +423,10 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
     runtime.getBodySnapshot,
   );
   useLayoutEffect(() => {
-    if (body.kind !== "rows") navigation.setShape([], compiledColumns);
-    if (body.kind !== "rows" && body.kind !== "loading") focusHandoff.clear();
+    if (body.kind !== "rows" && body.kind !== "loading") {
+      navigation.setShape([], compiledColumns);
+      focusHandoff.clear();
+    }
   }, [body.kind, compiledColumns, focusHandoff, navigation]);
   if (body.kind === "loading") {
     return (
@@ -933,29 +935,19 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             }}
           >
             <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
-              {virtualWindow.pinnedStart.length > 0 ? (
-                <th
-                  data-pinned-region="start"
-                  role="presentation"
-                  style={pinnedRegionStyle("start", totalColumnWidth(virtualWindow.pinnedStart))}
-                >
-                  <div role="presentation" style={{ display: "flex" }}>
-                    {virtualWindow.pinnedStart.map((column, index) => (
-                      <BrunoTableHeaderCell
-                        key={column.columnId}
-                        regionCell
-                        instanceId={instanceId}
-                        tableId={tableId}
-                        columnIndex={index}
-                        column={column}
-                        runtime={runtime}
-                        activateHeaderCommand={activateHeaderCommand}
-                        style={{ width: column.semantics.width }}
-                      />
-                    ))}
-                  </div>
-                </th>
-              ) : null}
+              {virtualWindow.pinnedStart.map((column, index) => (
+                <BrunoTableHeaderCell
+                  key={column.columnId}
+                  pinned="start"
+                  instanceId={instanceId}
+                  tableId={tableId}
+                  columnIndex={index}
+                  column={column}
+                  runtime={runtime}
+                  activateHeaderCommand={activateHeaderCommand}
+                  style={pinnedHeaderCellStyle("start", virtualWindow.pinnedStart, index)}
+                />
+              ))}
               {virtualWindow.leftPadding > 0 ? (
                 <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.leftPadding }} />
               ) : null}
@@ -979,31 +971,19 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               {viewportFill > 0 ? (
                 <th aria-hidden="true" style={{ padding: 0, width: viewportFill }} />
               ) : null}
-              {virtualWindow.pinnedEnd.length > 0 ? (
-                <th
-                  data-pinned-region="end"
-                  role="presentation"
-                  style={pinnedRegionStyle("end", totalColumnWidth(virtualWindow.pinnedEnd))}
-                >
-                  <div role="presentation" style={{ display: "flex" }}>
-                    {virtualWindow.pinnedEnd.map((column, index) => (
-                      <BrunoTableHeaderCell
-                        key={column.columnId}
-                        regionCell
-                        instanceId={instanceId}
-                        tableId={tableId}
-                        columnIndex={
-                          virtualWindow.pinnedStart.length + virtualWindow.centerCount + index
-                        }
-                        column={column}
-                        runtime={runtime}
-                        activateHeaderCommand={activateHeaderCommand}
-                        style={{ width: column.semantics.width }}
-                      />
-                    ))}
-                  </div>
-                </th>
-              ) : null}
+              {virtualWindow.pinnedEnd.map((column, index) => (
+                <BrunoTableHeaderCell
+                  key={column.columnId}
+                  pinned="end"
+                  instanceId={instanceId}
+                  tableId={tableId}
+                  columnIndex={virtualWindow.pinnedStart.length + virtualWindow.centerCount + index}
+                  column={column}
+                  runtime={runtime}
+                  activateHeaderCommand={activateHeaderCommand}
+                  style={pinnedHeaderCellStyle("end", virtualWindow.pinnedEnd, index)}
+                />
+              ))}
             </tr>
           </thead>
           <tbody
@@ -1204,7 +1184,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   tableId,
   columnIndex,
   column,
-  regionCell = false,
+  pinned,
   runtime,
   style,
 }: {
@@ -1213,7 +1193,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   readonly tableId: string;
   readonly columnIndex: number;
   readonly column: CompiledColumn;
-  readonly regionCell?: boolean;
+  readonly pinned?: "start" | "end";
   readonly runtime: BrunoTableRuntimeView;
   readonly style?: CSSProperties;
 }) {
@@ -1286,6 +1266,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     </div>
   );
   const headerProps = {
+    "data-pinned-region": pinned,
     id: headerDomId(instanceId, tableId, column.columnId),
     "aria-label": presentation.label,
     "aria-colindex": columnIndex + 1,
@@ -1300,9 +1281,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       ...style,
     } satisfies CSSProperties,
   } as const;
-  return regionCell ? (
-    <div {...headerProps}>{content}</div>
-  ) : (
+  return (
     <th {...headerProps} scope="col">
       {content}
     </th>
@@ -1876,6 +1855,33 @@ function pinnedRegionStyle(side: "start" | "end", width: number): CSSProperties 
     width,
     zIndex: 3,
     ...(side === "start" ? { left: 0 } : { right: 0 }),
+  };
+}
+
+function pinnedHeaderCellStyle(
+  side: "start" | "end",
+  columns: readonly CompiledColumn[],
+  index: number,
+): CSSProperties {
+  const column = columns[index];
+  let offset = 0;
+  if (side === "start") {
+    for (let cursor = 0; cursor < index; cursor += 1) {
+      offset += columns[cursor]?.semantics.width ?? 0;
+    }
+  } else {
+    for (let cursor = index + 1; cursor < columns.length; cursor += 1) {
+      offset += columns[cursor]?.semantics.width ?? 0;
+    }
+  }
+  return {
+    background: "Canvas",
+    minWidth: column?.semantics.width,
+    padding: 0,
+    position: "sticky",
+    width: column?.semantics.width,
+    zIndex: 3,
+    ...(side === "start" ? { left: offset } : { right: offset }),
   };
 }
 

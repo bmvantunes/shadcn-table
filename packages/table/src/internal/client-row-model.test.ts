@@ -173,6 +173,35 @@ describe("Client row model", () => {
     ).toEqual(["blank", "middle", "upper"]);
   });
 
+  it("retains empty text operands with their exact predicate semantics", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const rows = [
+      { id: "blank", name: null },
+      { id: "empty", name: "" },
+      { id: "value", name: "Ada" },
+    ] as const;
+
+    for (const type of ["contains", "startsWith", "endsWith"] as const) {
+      expect(
+        filterClientRows(rows, columns, [{ columnId: "COL_ID_NAME", type, filter: "" }]).map(
+          (row) => row.id,
+        ),
+      ).toEqual(["empty", "value"]);
+    }
+    expect(
+      filterClientRows(rows, columns, [
+        { columnId: "COL_ID_NAME", type: "notContains", filter: "" },
+      ]).map((row) => row.id),
+    ).toEqual(["blank"]);
+  });
+
   it("excludes nullish Number and BigInt values from every ordered filter", () => {
     const columns = compileColumns([
       {
@@ -225,7 +254,7 @@ describe("Client row model", () => {
     ).toEqual(["low", "middle"]);
   });
 
-  it("retains empty ranges and drops invalid text operands, sensitivities, and sparse arrays", () => {
+  it("retains empty ranges and strings while dropping invalid text operands and arrays", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -255,11 +284,12 @@ describe("Client row model", () => {
       { columnId: "COL_ID_COUNT", type: "inRange", filter: 5n, filterTo: 5n },
       { columnId: "COL_ID_COUNT", type: "inRange", filter: 6n, filterTo: 5n },
     ] as const;
+    const emptyText = { columnId: "COL_ID_NAME", type: "contains", filter: "" } as const;
     expect(
       sanitizeClientInitialFilters(
         [
           ...emptyRanges,
-          { columnId: "COL_ID_NAME", type: "contains", filter: "" },
+          emptyText,
           { columnId: "COL_ID_NAME", type: "startsWith", filter: "\u0301" },
           {
             columnId: "COL_ID_NAME",
@@ -277,7 +307,7 @@ describe("Client row model", () => {
         ],
         columns,
       ),
-    ).toEqual(emptyRanges);
+    ).toEqual([...emptyRanges, emptyText]);
     const rows = [{ id: "middle", name: "Ada", score: 5, count: 5n }] as const;
     for (const range of emptyRanges) {
       expect(filterClientRows(rows, columns, [range])).toEqual([]);

@@ -763,7 +763,12 @@ function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCell
       sameInvalidSource(previous.value.invalid, next.value.invalid)
     );
   }
-  return false;
+  const column = next.column;
+  return (
+    column !== undefined &&
+    column.semantics.equivalent(previous.value, next.value) &&
+    column.semantics.formatDisplay(previous.value) === column.semantics.formatDisplay(next.value)
+  );
 }
 
 function sameChrome(previous: BrunoTableChromeSnapshot, next: BrunoTableChromeSnapshot): boolean {

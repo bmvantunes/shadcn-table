@@ -78,9 +78,13 @@ export class BrunoTableViewportRuntime {
   private segmentLogicalBase = 0;
   private segmentPhysicalAnchor = 0;
   private lastPhysicalScrollTop = 0;
+  private horizontalSuspended: boolean | undefined;
+  private horizontalPinnedStartWidth = 0;
+  private horizontalPinningKey = "";
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private layoutKey = "";
+  private layoutPinningKey = "";
   private snapshot: BrunoTableViewportSnapshot = INITIAL_VIEWPORT;
 
   public constructor(private readonly headerHeight: number = ROW_HEIGHT) {
@@ -108,6 +112,9 @@ export class BrunoTableViewportRuntime {
     const previousLogicalScrollTop =
       element === null ? 0 : this.readLogicalScrollTop(element, false);
     this.layoutKey = nextLayoutKey;
+    this.layoutPinningKey = columns
+      .map((column) => `${column.columnId}:${column.pinned ?? "center"}`)
+      .join(",");
     this.layoutColumns = columns;
     this.layout = createLayout(rowCount, columns, this.headerHeight);
     if (element === null) {
@@ -177,6 +184,7 @@ export class BrunoTableViewportRuntime {
     const element = this.element;
     const column = this.layout.columns.find((candidate) => candidate.columnId === target.columnId);
     if (element === null || column === undefined) return;
+    this.rebaseHorizontalCoordinate(element);
     if (target.region === "body") {
       const logicalScrollTop = this.readLogicalScrollTop(element, false);
       const rowTop = this.layout.headerHeight + target.rowIndex * ROW_HEIGHT;
@@ -242,6 +250,9 @@ export class BrunoTableViewportRuntime {
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = element?.scrollTop ?? 0;
+    this.horizontalSuspended = undefined;
+    this.horizontalPinnedStartWidth = 0;
+    this.horizontalPinningKey = "";
     this.element?.addEventListener("scroll", this.handleScroll, { passive: true });
     if (this.element !== null && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.handleResize);
@@ -268,6 +279,9 @@ export class BrunoTableViewportRuntime {
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = 0;
+    this.horizontalSuspended = undefined;
+    this.horizontalPinnedStartWidth = 0;
+    this.horizontalPinningKey = "";
   };
 
   private readonly handleScroll = (): void => this.schedulePublish();
@@ -360,6 +374,7 @@ export class BrunoTableViewportRuntime {
   private readonly publishFromElement = (): void => {
     const element = this.element;
     if (element === null) return;
+    this.rebaseHorizontalCoordinate(element);
     const logicalScrollTop = this.readLogicalScrollTop(element, true);
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const scrollLeft = quantizeScroll(element.scrollLeft);
@@ -376,6 +391,34 @@ export class BrunoTableViewportRuntime {
     this.writeScrollbarOverlay(element, logicalScrollTop);
     this.publishSnapshot(next);
   };
+
+  private rebaseHorizontalCoordinate(element: HTMLElement): void {
+    const nextSuspended = shouldSuspendPinning(this.layout, element.clientWidth);
+    const previousSuspended = this.horizontalSuspended;
+    const previousPinnedStartWidth = this.horizontalPinnedStartWidth;
+    const previousPinningKey = this.horizontalPinningKey;
+    this.horizontalSuspended = nextSuspended;
+    this.horizontalPinnedStartWidth = this.layout.pinnedStartWidth;
+    this.horizontalPinningKey = this.layoutPinningKey;
+    if (previousSuspended === undefined) return;
+    if (previousPinningKey !== this.layoutPinningKey) return;
+    const previousInset = previousSuspended ? previousPinnedStartWidth : 0;
+    const nextInset = nextSuspended ? this.layout.pinnedStartWidth : 0;
+    if (previousInset === nextInset) return;
+    const centerContentWidth = nextSuspended
+      ? this.layout.suspendedCenterWidth
+      : this.layout.centerWidth;
+    const centerViewportWidth = Math.max(
+      element.clientWidth -
+        (nextSuspended ? 0 : this.layout.pinnedStartWidth + this.layout.pinnedEndWidth),
+      0,
+    );
+    const maximum = Math.max(centerContentWidth - centerViewportWidth, 0);
+    element.scrollLeft = Math.min(
+      Math.max(element.scrollLeft - previousInset + nextInset, 0),
+      maximum,
+    );
+  }
 
   private writeScrollbarOverlay(element: HTMLElement, logicalScrollTop: number): void {
     const overlay = this.scrollbarOverlay;

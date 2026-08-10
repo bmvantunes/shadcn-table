@@ -473,20 +473,25 @@ function sanitizeFilterRecord(
   ) {
     const validSensitivity = hasValidTextSensitivity(filter, true);
     const decoded = decode(operand);
-    const normalizedOperand =
-      decoded._tag === "Success" && typeof decoded.value === "string" && validSensitivity
-        ? normalizeText(
-            decoded.value,
-            filter["caseSensitive"] === true,
-            filter["accentSensitive"] === true,
-          )
-        : "";
-    return column.semantics.filterFamily === "text" && normalizedOperand.length > 0
+    const textOperand =
+      decoded._tag === "Success" && typeof decoded.value === "string" ? decoded.value : undefined;
+    const hasMeaningfulNormalizedOperand =
+      textOperand !== undefined &&
+      (textOperand.length === 0 ||
+        normalizeText(
+          textOperand,
+          filter["caseSensitive"] === true,
+          filter["accentSensitive"] === true,
+        ).length > 0);
+    return column.semantics.filterFamily === "text" &&
+      textOperand !== undefined &&
+      hasMeaningfulNormalizedOperand &&
+      validSensitivity
       ? node(
           snapshotFilter(
             filter,
             ["columnId", "type", "filter", "caseSensitive", "accentSensitive"],
-            { filter: decoded._tag === "Success" ? decoded.value : undefined },
+            { filter: textOperand },
           ),
         )
       : undefined;

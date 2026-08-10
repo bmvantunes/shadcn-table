@@ -316,6 +316,125 @@ describe("BrunoTableViewportRuntime", () => {
     ).toBeCloseTo(436, 6);
   });
 
+  it("rebases horizontal coordinates when viewport width suspends and restores pinning", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        pinned: "start",
+        valueType: "text",
+        width: 100,
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CENTER_${String(index)}`,
+        field: "name",
+        headerName: `Center ${String(index)}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        pinned: "end",
+        valueType: "text",
+        width: 100,
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    let resize: (() => void) | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        public constructor(callback: ResizeObserverCallback) {
+          resize = () => callback([], this as unknown as ResizeObserver);
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    let width = 300;
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      get clientWidth() {
+        return width;
+      },
+      removeEventListener: vi.fn(),
+      scrollLeft: 320,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
+
+    width = 260;
+    resize!();
+    callbacks.shift()!(0);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+    expect(element.scrollLeft).toBe(420);
+
+    width = 300;
+    resize!();
+    callbacks.shift()!(0);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
+    expect(element.scrollLeft).toBe(320);
+  });
+
+  it("keeps the native horizontal coordinate when the pinning structure changes", () => {
+    const pinnedColumns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        pinned: "start",
+        valueType: "text",
+        width: 100,
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CENTER_${String(index)}`,
+        field: "name",
+        headerName: `Center ${String(index)}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    ]);
+    const unpinnedColumns = compileColumns(
+      pinnedColumns.map((column) => ({
+        columnId: column.columnId,
+        field: "name",
+        headerName: column.headerName,
+        valueType: "text" as const,
+        width: column.semantics.width,
+      })),
+    );
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 100,
+      removeEventListener: vi.fn(),
+      scrollLeft: 420,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, pinnedColumns);
+    viewport.attach(element);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+
+    viewport.setLayout(100, unpinnedColumns);
+
+    expect(element.scrollLeft).toBe(420);
+  });
+
   it("rebases a queued identity-owned reveal when a same-shape row space is published", () => {
     const columns = compileColumns([
       {
