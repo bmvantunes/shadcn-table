@@ -15,7 +15,13 @@ export default defineConfig({
   plugins: [react(), reactCompiler, tailwindcss()],
   resolve: { alias: shadcnSourceAliases },
   optimizeDeps: {
-    include: ["vite-plus/test/browser", "vitest-browser-react"],
+    include: [
+      "react",
+      "react-dom/client",
+      "react-dom/server",
+      "vite-plus/test/browser",
+      "vitest-browser-react",
+    ],
   },
   test: {
     name: "table-browser",

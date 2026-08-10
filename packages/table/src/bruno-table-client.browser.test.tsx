@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
-import { useEffect } from "react";
+import { act, useEffect } from "react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
@@ -455,6 +457,56 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(staleAlert).toHaveTextContent("Live data delayed");
     await expect.element(staleAlert).toHaveTextContent("Delayed");
     await expect.element(staleAlert).toHaveTextContent("Expected 2 rows but received 1");
+  });
+
+  test("preserves compiled column geometry and static presentation while loading", async () => {
+    const renderer = vi.fn(({ value }: { readonly value: string }) => value);
+    const loadingColumns = [
+      { ...columns[0], pinned: "start" as const, width: 120, cellRenderer: renderer },
+      { ...columns[1], width: 100 },
+      {
+        ...columns[0],
+        columnId: "COL_ID_ALIAS",
+        headerName: "Alias",
+        pinned: "end" as const,
+        width: 140,
+      },
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_LOADING_COLUMNS"
+        getRowId={(row: Row) => row.id}
+        columns={loadingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{ rows, totalRows: 100, version: 1, status: "loading" }}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Loading table rows" });
+    await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+    const loadingName = screen.getByRole("gridcell", { name: "Loading Name" }).nth(0);
+    const loadingScore = screen.getByRole("gridcell", { name: "Loading Score" }).nth(0);
+    const loadingAlias = screen.getByRole("gridcell", { name: "Loading Alias" }).nth(0);
+    await expect.element(loadingName).toHaveAttribute("aria-colindex", "1");
+    await expect.element(loadingScore).toHaveAttribute("aria-colindex", "2");
+    await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "3");
+    expect(loadingName.element().closest('[data-pinned-region="start"]')).not.toBeNull();
+    expect(loadingAlias.element().closest('[data-pinned-region="end"]')).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(loadingName.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
+      expect(loadingScore.element().getBoundingClientRect().width).toBeCloseTo(100, 0);
+      expect(loadingAlias.element().getBoundingClientRect().width).toBeCloseTo(140, 0);
+      expect(loadingAlias.element().getBoundingClientRect().right).toBeCloseTo(
+        grid.element().getBoundingClientRect().right,
+        0,
+      );
+    });
+    expect(
+      (loadingName.element().firstElementChild as HTMLElement | null)?.style.marginInlineEnd,
+    ).toBe("auto");
+    expect(
+      (loadingScore.element().firstElementChild as HTMLElement | null)?.style.marginInlineStart,
+    ).toBe("auto");
+    expect(renderer).not.toHaveBeenCalled();
   });
 
   test("preserves grid focus across ready, loading, and ready lifecycle transitions", async () => {
@@ -3894,6 +3946,92 @@ describe("BrunoTableClient browser surface", () => {
     const firstId = grids[0]!.element().getAttribute("aria-activedescendant");
     const secondId = grids[1]!.element().getAttribute("aria-activedescendant");
     expect(firstId).not.toBe(secondId);
+  });
+
+  test("keeps active descendants unique and interactive across separately hydrated roots", async () => {
+    const hydrationColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <button type="button">Open {row.name}</button>
+        ),
+      },
+    ] as const;
+    const table = (
+      <BrunoTableClient
+        tableId="TABLE_ID_HYDRATED_SHARED"
+        getRowId={(row: Row) => row.id}
+        columns={hydrationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource([rows[0]!])}
+      />
+    );
+    const markup = renderToString(table);
+    const firstHost = document.createElement("div");
+    const secondHost = document.createElement("div");
+    firstHost.innerHTML = markup;
+    secondHost.innerHTML = markup;
+    document.body.append(firstHost, secondHost);
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const firstRecoverableErrors: unknown[] = [];
+    const secondRecoverableErrors: unknown[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let firstRoot: Root | undefined;
+    let secondRoot: Root | undefined;
+    try {
+      await act(async () => {
+        firstRoot = hydrateRoot(firstHost, table, {
+          onRecoverableError: (error) => firstRecoverableErrors.push(error),
+        });
+        secondRoot = hydrateRoot(secondHost, table, {
+          onRecoverableError: (error) => secondRecoverableErrors.push(error),
+        });
+      });
+      const grids = page.getByRole("grid", { name: "Data for TABLE_ID_HYDRATED_SHARED" }).all();
+      await vi.waitFor(() => expect(grids).toHaveLength(2));
+      grids[0]!.element().focus();
+      grids[1]!.element().focus();
+      await vi.waitFor(() => {
+        expect(grids[0]!.element().getAttribute("aria-activedescendant")).not.toBeNull();
+        expect(grids[1]!.element().getAttribute("aria-activedescendant")).not.toBeNull();
+      });
+      const firstId = grids[0]!.element().getAttribute("aria-activedescendant");
+      const secondId = grids[1]!.element().getAttribute("aria-activedescendant");
+      expect(firstId).not.toBe(secondId);
+
+      const globalLookup = vi.spyOn(document, "getElementById").mockImplementation(() => {
+        throw new Error("Interactive lookup must stay inside the owning grid.");
+      });
+      try {
+        grids[1]!
+          .element()
+          .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "F2" }));
+      } finally {
+        globalLookup.mockRestore();
+      }
+      const actions = page.getByRole("button", { name: "Open Ada" }).all();
+      await vi.waitFor(() => expect(document.activeElement).toBe(actions[1]!.element()));
+      expect(firstRecoverableErrors).toEqual([]);
+      expect(secondRecoverableErrors).toEqual([]);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        firstRoot?.unmount();
+        secondRoot?.unmount();
+      });
+      if (previousActEnvironment === undefined) {
+        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+      } else {
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
+      consoleError.mockRestore();
+      firstHost.remove();
+      secondHost.remove();
+    }
   });
 
   test("builds total DOM identities for lone UTF-16 surrogates", async () => {

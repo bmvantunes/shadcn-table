@@ -2052,7 +2052,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     }
   });
 
-  it("partitions source metrics and chrome without waking rows or body", () => {
+  it("partitions source counts, source version, and chrome without waking rows or body", () => {
     const rows = [{ id: "first", name: "Ada" }] as const;
     const iterateRows = vi.spyOn(rows, Symbol.iterator);
     const getRowId = vi.fn((row: Row) => row.id);
@@ -2065,10 +2065,12 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const bodyListener = vi.fn();
     const chromeListener = vi.fn();
     const sourceListener = vi.fn();
+    const sourceVersionListener = vi.fn();
     rowsStore.subscribe(rowsListener);
     runtime.subscribeBody(bodyListener);
     runtime.subscribeChrome(chromeListener);
     runtime.subscribeSource(sourceListener);
+    runtime.subscribeSourceVersion(sourceVersionListener);
     iterateRows.mockClear();
     getRowId.mockClear();
 
@@ -2080,14 +2082,23 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(rowsListener).not.toHaveBeenCalled();
     expect(bodyListener).not.toHaveBeenCalled();
     expect(chromeListener).not.toHaveBeenCalled();
-    expect(sourceListener).toHaveBeenCalledOnce();
-    expect(runtime.getSourceSnapshot().version).toBe(2);
+    expect(sourceListener).not.toHaveBeenCalled();
+    expect(sourceVersionListener).toHaveBeenCalledOnce();
+    expect(runtime.getSourceSnapshot()).toEqual({ totalRows: 1, loadedRows: 1 });
+    expect(runtime.getSourceVersionSnapshot().version).toBe(2);
 
     runtime.publish({ ...source(rows), version: 3, status: "stale", message: "Delayed" });
 
     expect(chromeListener).toHaveBeenCalledOnce();
-    expect(sourceListener).toHaveBeenCalledTimes(2);
-    expect(runtime.getSourceSnapshot().version).toBe(3);
+    expect(sourceListener).not.toHaveBeenCalled();
+    expect(sourceVersionListener).toHaveBeenCalledTimes(2);
+    expect(runtime.getSourceVersionSnapshot().version).toBe(3);
+
+    runtime.publish({ ...source([], "loading", { totalRows: 2 }), version: 3 });
+
+    expect(sourceListener).toHaveBeenCalledOnce();
+    expect(sourceVersionListener).toHaveBeenCalledTimes(2);
+    expect(runtime.getSourceSnapshot()).toEqual({ totalRows: 2, loadedRows: 0 });
   });
 
   it("invokes source retry with an undefined receiver", () => {

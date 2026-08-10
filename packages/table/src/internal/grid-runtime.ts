@@ -71,6 +71,9 @@ export type BrunoTableChromeSnapshot = Readonly<{
 export type BrunoTableSourceSnapshot = Readonly<{
   readonly totalRows: number;
   readonly loadedRows: number;
+}>;
+
+export type BrunoTableSourceVersionSnapshot = Readonly<{
   readonly version: number;
 }>;
 
@@ -91,6 +94,7 @@ export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
 export type BrunoTableRuntimeView = {
   readonly getChromeSnapshot: () => BrunoTableChromeSnapshot;
   readonly getSourceSnapshot: () => BrunoTableSourceSnapshot;
+  readonly getSourceVersionSnapshot: () => BrunoTableSourceVersionSnapshot;
   readonly getBodySnapshot: () => BrunoTableBodySnapshot;
   readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
@@ -99,6 +103,7 @@ export type BrunoTableRuntimeView = {
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly subscribeChrome: (listener: Listener) => () => void;
   readonly subscribeSource: (listener: Listener) => () => void;
+  readonly subscribeSourceVersion: (listener: Listener) => () => void;
   readonly subscribeBody: (listener: Listener) => () => void;
   readonly subscribeRowSpace: (listener: Listener) => () => void;
   readonly subscribeRow: (rowId: BrunoTableRowId, listener: Listener) => () => void;
@@ -164,6 +169,7 @@ export type BrunoTableRowPipelinePublication<TRow> = Readonly<{
 type RuntimeState<TRow> = Readonly<{
   readonly chrome: BrunoTableChromeSnapshot;
   readonly source: BrunoTableSourceSnapshot;
+  readonly sourceVersion: BrunoTableSourceVersionSnapshot;
   readonly body: BrunoTableBodySnapshot;
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
 }>;
@@ -194,6 +200,7 @@ type ColumnConfiguration = Readonly<{
 export class BrunoTableGridRuntime<TRow> {
   private readonly chromeListeners = new Set<Listener>();
   private readonly sourceListeners = new Set<Listener>();
+  private readonly sourceVersionListeners = new Set<Listener>();
   private readonly bodyListeners = new Set<Listener>();
   private readonly rowSpaceListeners = new Set<Listener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
@@ -241,6 +248,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.view = Object.freeze({
         getChromeSnapshot: this.getChromeSnapshot,
         getSourceSnapshot: this.getSourceSnapshot,
+        getSourceVersionSnapshot: this.getSourceVersionSnapshot,
         getBodySnapshot: this.getBodySnapshot,
         getRowSpaceSnapshot: this.getRowSpaceSnapshot,
         getRowSnapshot: this.getRowSnapshot,
@@ -250,6 +258,7 @@ export class BrunoTableGridRuntime<TRow> {
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
         subscribeChrome: this.subscribeChrome,
         subscribeSource: this.subscribeSource,
+        subscribeSourceVersion: this.subscribeSourceVersion,
         subscribeBody: this.subscribeBody,
         subscribeRowSpace: this.subscribeRowSpace,
         subscribeRow: this.subscribeRow,
@@ -319,6 +328,7 @@ export class BrunoTableGridRuntime<TRow> {
   ): ListenerError | undefined {
     const chromeChanged = previous.chrome !== next.chrome;
     const sourceChanged = previous.source !== next.source;
+    const sourceVersionChanged = previous.sourceVersion !== next.sourceVersion;
     const bodyChanged = previous.body !== next.body;
     const rowSpaceChanged = previous.rowSpace !== next.rowSpace;
     this.state = next;
@@ -326,6 +336,9 @@ export class BrunoTableGridRuntime<TRow> {
     let firstError: ListenerError | undefined;
     if (chromeChanged) firstError = notify(this.chromeListeners);
     if (sourceChanged) firstError = firstListenerError(firstError, notify(this.sourceListeners));
+    if (sourceVersionChanged) {
+      firstError = firstListenerError(firstError, notify(this.sourceVersionListeners));
+    }
     if (bodyChanged) firstError = firstListenerError(firstError, notify(this.bodyListeners));
     if (rowSpaceChanged) {
       firstError = firstListenerError(firstError, notify(this.rowSpaceListeners));
@@ -343,6 +356,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getChromeSnapshot = (): BrunoTableChromeSnapshot => this.state.chrome;
 
   public readonly getSourceSnapshot = (): BrunoTableSourceSnapshot => this.state.source;
+
+  public readonly getSourceVersionSnapshot = (): BrunoTableSourceVersionSnapshot =>
+    this.state.sourceVersion;
 
   public readonly getBodySnapshot = (): BrunoTableBodySnapshot => this.state.body;
 
@@ -377,6 +393,9 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeSource = (listener: Listener): (() => void) =>
     subscribe(this.sourceListeners, listener);
+
+  public readonly subscribeSourceVersion = (listener: Listener): (() => void) =>
+    subscribe(this.sourceVersionListeners, listener);
 
   public readonly subscribeBody = (listener: Listener): (() => void) =>
     subscribe(this.bodyListeners, listener);
@@ -516,10 +535,10 @@ export class BrunoTableGridRuntime<TRow> {
     const source = Object.freeze({
       totalRows: publication.totalRows,
       loadedRows: rowSpace?.loadedRows ?? 0,
-      version: publication.version,
     });
+    const sourceVersion = Object.freeze({ version: publication.version });
     const body = bodySnapshot(publication);
-    return Object.freeze({ chrome, source, body, rowSpace });
+    return Object.freeze({ chrome, source, sourceVersion, body, rowSpace });
   }
 
   private stageColumns(
@@ -789,11 +808,14 @@ function sameInvalidSource(
 }
 
 function sameSource(previous: BrunoTableSourceSnapshot, next: BrunoTableSourceSnapshot): boolean {
-  return (
-    previous.totalRows === next.totalRows &&
-    previous.loadedRows === next.loadedRows &&
-    previous.version === next.version
-  );
+  return previous.totalRows === next.totalRows && previous.loadedRows === next.loadedRows;
+}
+
+function sameSourceVersion(
+  previous: BrunoTableSourceVersionSnapshot,
+  next: BrunoTableSourceVersionSnapshot,
+): boolean {
+  return previous.version === next.version;
 }
 
 function sameBody(previous: BrunoTableBodySnapshot, next: BrunoTableBodySnapshot): boolean {
@@ -811,6 +833,9 @@ function stabilizeRuntimeState<TRow>(
   return Object.freeze({
     chrome: sameChrome(previous.chrome, next.chrome) ? previous.chrome : next.chrome,
     source: sameSource(previous.source, next.source) ? previous.source : next.source,
+    sourceVersion: sameSourceVersion(previous.sourceVersion, next.sourceVersion)
+      ? previous.sourceVersion
+      : next.sourceVersion,
     body: sameBody(previous.body, next.body) ? previous.body : next.body,
     rowSpace: next.rowSpace,
   });

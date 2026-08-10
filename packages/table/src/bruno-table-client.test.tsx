@@ -5,6 +5,33 @@ import { BrunoTableClient } from "./bruno-table-client";
 import { installBrunoTableClientRowOrderPlanningListener } from "./internal/render-instrumentation";
 
 describe("BrunoTableClient server rendering", () => {
+  it.each([undefined, null, 42, ""])(
+    "rejects malformed table identity %j before constructing the table",
+    (tableId) => {
+      const rows = [{ id: "ada", name: "Ada" }] as const;
+      const columns = [
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          headerName: "Name",
+          valueType: "text",
+        },
+      ] as const;
+
+      expect(() =>
+        renderToStaticMarkup(
+          <BrunoTableClient
+            tableId={tableId as string}
+            getRowId={(row) => row.id}
+            columns={columns}
+            clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          />,
+        ),
+      ).toThrowError("BrunoTable tableId must be a non-empty string.");
+    },
+  );
+
   it("renders the initial sorted rows without waiting for effects", () => {
     const rows = [
       { id: "ada", name: "Ada", score: 4 },

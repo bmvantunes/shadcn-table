@@ -19,6 +19,7 @@ export { BrunoTableToolbar };
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientProps<TRow, TColumns>,
 ): ReactNode {
+  const tableId = requireBrunoTableId(props.tableId);
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const [rowPipelineAdapter] = useState(
     () =>
@@ -58,19 +59,26 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   useLayoutEffect(
     () =>
       __BRUNO_TABLE_DEVELOPMENT__
-        ? registerBrunoTableIdentity(props.tableId, compiledColumns)
+        ? registerBrunoTableIdentity(tableId, compiledColumns)
         : undefined,
-    [compiledColumns, props.tableId],
+    [compiledColumns, tableId],
   );
 
   return (
     <BrunoTableView
       runtime={runtimeView}
-      tableId={props.tableId}
+      tableId={tableId}
       compiledColumns={compiledColumns}
       toolbar={toolbar}
       rowPipeline={BrunoTableClientRowPipeline}
       rowPipelineAdapter={rowPipelineAdapter}
     />
   );
+}
+
+function requireBrunoTableId(tableId: unknown): string {
+  if (typeof tableId !== "string" || tableId.trim().length === 0) {
+    throw new TypeError("BrunoTable tableId must be a non-empty string.");
+  }
+  return tableId;
 }
