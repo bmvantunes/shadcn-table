@@ -69,7 +69,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     initialFilters: readonly unknown[] | undefined,
     initialOrderBy: ClientOrderBy | undefined,
   ) {
-    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns);
+    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns, {
+      rejectOverBudget: true,
+    });
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
     this.source = snapshotSource(source);
     this.observedRows =

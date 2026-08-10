@@ -98,19 +98,29 @@ export function sanitizeClientOrderBy(
 export function sanitizeClientInitialFilters(
   filters: readonly unknown[] | undefined,
   columns: readonly CompiledColumn[],
+  options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
 ): readonly unknown[] {
   const candidates = snapshotRootEntries(filters);
   if (candidates === undefined) return EMPTY_FILTERS;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  const context: FilterSanitizationContext = {
-    captured: new WeakMap<object, Readonly<Record<string, unknown>> | undefined>(),
-    capturedArrays: new WeakMap<object, readonly unknown[] | undefined>(),
-    completed: new WeakMap<object, Map<number, SanitizedFilterNode | undefined>>(),
-    visited: new WeakSet<object>(),
-  };
+  const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
+  const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
   const sanitized: Readonly<Record<string, unknown>>[] = [];
   for (const filter of candidates) {
+    const context: FilterSanitizationContext = {
+      captured,
+      capturedArrays,
+      completed: new WeakMap<object, Map<number, SanitizedFilterNode | undefined>>(),
+      visited: new WeakSet<object>(),
+      overBudget: false,
+      remainingNodes: CLIENT_FILTER_MAX_NODES,
+    };
     const next = sanitizeFilter(filter, columnsById, context, 0);
+    if (context.overBudget && options?.rejectOverBudget === true) {
+      throw new TypeError(
+        `BrunoTable initialFilters expressions may contain at most ${CLIENT_FILTER_MAX_NODES} nodes and nesting depth ${CLIENT_FILTER_MAX_DEPTH}.`,
+      );
+    }
     if (next !== undefined) sanitized.push(next.filter);
   }
   return snapshotSanitizedFilterArray(filters, sanitized);
@@ -175,14 +185,21 @@ function sanitizeFilter(
   columnsById: ReadonlyMap<string, CompiledColumn>,
   context: FilterSanitizationContext,
   depth: number,
+  precharged = false,
 ): SanitizedFilterNode | undefined {
-  if (
-    depth > CLIENT_FILTER_MAX_DEPTH ||
-    typeof candidate !== "object" ||
-    candidate === null ||
-    context.visited.has(candidate)
-  ) {
+  if (depth > CLIENT_FILTER_MAX_DEPTH) {
+    context.overBudget = true;
     return undefined;
+  }
+  if (typeof candidate !== "object" || candidate === null || context.visited.has(candidate)) {
+    return undefined;
+  }
+  if (!precharged) {
+    if (context.remainingNodes === 0) {
+      context.overBudget = true;
+      return undefined;
+    }
+    context.remainingNodes -= 1;
   }
   const completedAtDepth = context.completed.get(candidate);
   if (completedAtDepth?.has(depth) === true) return completedAtDepth.get(depth);
@@ -191,7 +208,7 @@ function sanitizeFilter(
   try {
     captured = context.captured.get(candidate);
     if (!context.captured.has(candidate)) {
-      captured = captureFilterRecord(asRecord(candidate), context);
+      captured = captureFilterRecord(asRecord(candidate));
       context.captured.set(candidate, captured);
     }
   } catch {
@@ -213,7 +230,6 @@ function sanitizeFilter(
 
 function captureFilterRecord(
   filter: Readonly<Record<string, unknown>>,
-  context: FilterSanitizationContext,
 ): Readonly<Record<string, unknown>> | undefined {
   if (SANITIZED_FILTER_SNAPSHOTS.has(filter)) return filter;
   if (!Object.hasOwn(filter, "type")) return undefined;
@@ -223,11 +239,7 @@ function captureFilterRecord(
   const captured: Record<string, unknown> = { type };
   for (const key of keys) {
     if (!Object.hasOwn(filter, key)) continue;
-    const value = filter[key];
-    captured[key] =
-      (key === "conditions" || (key === "filter" && type === "in")) && value !== undefined
-        ? captureDenseFilterArray(value, context)
-        : value;
+    captured[key] = filter[key];
   }
   return Object.freeze(captured);
 }
@@ -235,16 +247,47 @@ function captureFilterRecord(
 function captureDenseFilterArray(
   value: unknown,
   context: FilterSanitizationContext,
+  reserveConditions: boolean,
 ): readonly unknown[] | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) return value;
-  const existing = context.capturedArrays.get(value);
-  if (existing !== undefined || context.capturedArrays.has(value)) return existing;
-  const captured = snapshotDenseArray(value);
-  const snapshot = captured === undefined ? undefined : Object.freeze(captured);
-  if (snapshot !== undefined) SANITIZED_FILTER_SNAPSHOTS.add(snapshot);
-  context.capturedArrays.set(value, snapshot);
-  return snapshot;
+  if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) {
+    return !reserveConditions || reserveConditionEntries(value.length, context) ? value : undefined;
+  }
+  let captured = context.capturedArrays.get(value);
+  if (!context.capturedArrays.has(value)) {
+    captured = captureFilterArrayLength(value);
+    context.capturedArrays.set(value, captured);
+  }
+  if (captured === undefined) return undefined;
+  if (reserveConditions && !reserveConditionEntries(captured.length, context)) return undefined;
+  if (!captured.attempted) {
+    captured.attempted = true;
+    const snapshot = snapshotDenseArray(value, captured.length);
+    captured.snapshot = snapshot === undefined ? undefined : Object.freeze(snapshot);
+    if (captured.snapshot !== undefined) SANITIZED_FILTER_SNAPSHOTS.add(captured.snapshot);
+  }
+  return captured.snapshot;
+}
+
+function captureFilterArrayLength(value: object): CapturedFilterArray | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const length = value.length;
+    return Number.isSafeInteger(length) && length >= 0
+      ? { attempted: false, length, snapshot: undefined }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function reserveConditionEntries(length: number, context: FilterSanitizationContext): boolean {
+  if (length > context.remainingNodes) {
+    context.overBudget = true;
+    return false;
+  }
+  context.remainingNodes -= length;
+  return true;
 }
 
 function memoizeSanitizedFilter(
@@ -295,12 +338,12 @@ function sanitizeFilterRecord(
 ): SanitizedFilterNode | undefined {
   const type = filter["type"];
   if (type === "AND" || type === "OR") {
-    const candidates = readSanitizerOwnedArray(filter["conditions"]);
+    const candidates = captureDenseFilterArray(filter["conditions"], context, true);
     if (candidates === undefined || candidates.length === 0) return undefined;
     const conditions: Readonly<Record<string, unknown>>[] = [];
     const columnIds = new Set<string>();
     for (const candidate of candidates) {
-      const condition = sanitizeFilter(candidate, columnsById, context, depth + 1);
+      const condition = sanitizeFilter(candidate, columnsById, context, depth + 1, true);
       if (condition === undefined) return undefined;
       conditions.push(condition.filter);
       for (const columnId of condition.columnIds) columnIds.add(columnId);
@@ -341,7 +384,7 @@ function sanitizeFilterRecord(
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
   if (type === "in") {
-    const captured = readSanitizerOwnedArray(operand);
+    const captured = captureDenseFilterArray(operand, context, false);
     if (
       captured === undefined ||
       !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
@@ -438,15 +481,6 @@ function sanitizeFilterRecord(
       : undefined;
   }
   return undefined;
-}
-
-function readSanitizerOwnedArray(value: unknown): readonly unknown[] | undefined {
-  return typeof value === "object" &&
-    value !== null &&
-    SANITIZED_FILTER_SNAPSHOTS.has(value) &&
-    Array.isArray(value)
-    ? value
-    : undefined;
 }
 
 function snapshotFilter(
@@ -648,11 +682,9 @@ function hasValidTextSensitivity(
   );
 }
 
-function snapshotDenseArray(values: unknown): readonly unknown[] | undefined {
+function snapshotDenseArray(values: unknown, length: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
-    const length = values.length;
-    if (!Number.isSafeInteger(length) || length < 0) return undefined;
     const indexes = readOwnArrayIndexes(values, length);
     if (indexes === undefined || indexes.length !== length) return undefined;
     const snapshot: unknown[] = [];
@@ -728,13 +760,22 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
 const CLIENT_FILTER_MAX_DEPTH = 64;
+const CLIENT_FILTER_MAX_NODES = 1_024;
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {
   readonly captured: WeakMap<object, Readonly<Record<string, unknown>> | undefined>;
-  readonly capturedArrays: WeakMap<object, readonly unknown[] | undefined>;
+  readonly capturedArrays: WeakMap<object, CapturedFilterArray | undefined>;
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
+  overBudget: boolean;
+  remainingNodes: number;
+};
+
+type CapturedFilterArray = {
+  attempted: boolean;
+  readonly length: number;
+  snapshot: readonly unknown[] | undefined;
 };
 
 type SanitizedFilterNode = {

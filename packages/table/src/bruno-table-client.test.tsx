@@ -32,6 +32,35 @@ describe("BrunoTableClient server rendering", () => {
     },
   );
 
+  it("rejects an over-budget initial filter instead of silently broadening the result", () => {
+    const rows = [{ id: "ada", name: "Ada" }] as const;
+    const columns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ] as const;
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    const initialFilters = [{ conditions: Array.from({ length: 1_024 }, () => leaf), type: "AND" }];
+
+    expect(() =>
+      renderToStaticMarkup(
+        <BrunoTableClient
+          tableId="TABLE_ID_FILTER_BUDGET"
+          getRowId={(row) => row.id}
+          columns={columns}
+          clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+          initialFilters={initialFilters as never}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        />,
+      ),
+    ).toThrowError(
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+    );
+  });
+
   it("renders the initial sorted rows without waiting for effects", () => {
     const rows = [
       { id: "ada", name: "Ada", score: 4 },

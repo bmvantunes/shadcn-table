@@ -2801,9 +2801,25 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     const region = screen.getByRole("grid", { name: "Data for TABLE_ID_SCROLL" });
+    const gridElement = region.element() as HTMLElement;
     await expect
       .element(screen.getByRole("gridcell", { name: "Row 0" }).nth(0))
       .toBeInTheDocument();
+    const overlay = gridElement.parentElement?.querySelector<HTMLElement>(
+      "[data-bruno-scrollbar-overlay]",
+    );
+    expect(overlay).not.toBeNull();
+    expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+    expect(gridElement.contains(overlay!)).toBe(false);
+    await vi.waitFor(() => {
+      expect(overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-start")).toBe(
+        "160px",
+      );
+      expect(overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-end")).toBe(
+        `${160 + gridElement.offsetWidth - gridElement.clientWidth}px`,
+      );
+    });
+    expect(gridElement.style.cssText).not.toContain("scrollbar-horizontal");
     const initialRows = screen.getByRole("row").all().length;
 
     await region.wheel({ delta: { y: 1200 } });
@@ -2814,12 +2830,26 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("gridcell", { name: "Row 0" }).nth(0))
       .toHaveAttribute("aria-colindex", "1");
     expect(screen.getByRole("row").all().length).toBeLessThan(initialRows + 24);
+    await vi.waitFor(() =>
+      expect(
+        Number.parseFloat(
+          overlay?.style.getPropertyValue("--bruno-table-scrollbar-vertical-thumb-offset") ?? "0",
+        ),
+      ).toBeGreaterThan(0),
+    );
 
     await region.wheel({ delta: { x: 1200 } });
     await expect
       .element(screen.getByRole("columnheader", { name: "Scroll end" }))
       .toBeInTheDocument();
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(wideColumns.length + 1);
+    await vi.waitFor(() =>
+      expect(
+        Number.parseFloat(
+          overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset") ?? "0",
+        ),
+      ).toBeGreaterThan(0),
+    );
   });
 
   test("moves Page Up and Page Down through viewport-relative logical rows", async () => {

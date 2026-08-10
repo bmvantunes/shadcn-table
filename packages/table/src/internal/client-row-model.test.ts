@@ -391,6 +391,11 @@ describe("Client row model", () => {
 
     expect(() => sanitizeClientInitialFilters([cyclic, deep], columns)).not.toThrow();
     expect(sanitizeClientInitialFilters([cyclic, deep], columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters([deep], columns, { rejectOverBudget: true }),
+    ).toThrowError(
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+    );
   });
 
   it("accepts an acyclic compound filter that shares one immutable leaf", () => {
@@ -476,8 +481,13 @@ describe("Client row model", () => {
     ]);
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     let indexedReads = 0;
+    let lengthReads = 0;
     const sourceConditions = new Proxy(Object.freeze([leaf]), {
       get: (target, property, receiver) => {
+        if (property === "length") {
+          lengthReads += 1;
+          if (lengthReads > 1) throw new Error("Nested source array length was read twice.");
+        }
         if (property === "0") {
           indexedReads += 1;
           if (indexedReads > 1) throw new Error("Nested source array was read twice.");
@@ -494,6 +504,90 @@ describe("Client row model", () => {
     const sanitized = sanitizeClientInitialFilters([root], columns);
 
     expect(sanitized).toHaveLength(1);
+    expect(indexedReads).toBe(1);
+    expect(lengthReads).toBe(1);
+    expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([]);
+  });
+
+  it("captures repeated top-level filter aliases once across independent root budgets", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const reads = { columnId: 0, filter: 0, type: 0 };
+    const source = Object.defineProperties(
+      {},
+      {
+        columnId: {
+          get: () => {
+            reads.columnId += 1;
+            return "COL_ID_NAME";
+          },
+        },
+        filter: {
+          get: () => {
+            reads.filter += 1;
+            return "Ada";
+          },
+        },
+        type: {
+          get: () => {
+            reads.type += 1;
+            return "equals";
+          },
+        },
+      },
+    );
+
+    const sanitized = sanitizeClientInitialFilters([source, source], columns);
+
+    expect(sanitized).toHaveLength(2);
+    expect(reads).toEqual({ columnId: 1, filter: 1, type: 1 });
+    expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([
+      { name: "Ada" },
+    ]);
+  });
+
+  it("captures one physical array once when aliases cross conditions and operand roles", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    let indexedReads = 0;
+    let lengthReads = 0;
+    const sharedArray = new Proxy(Object.freeze([leaf]), {
+      get: (target, property, receiver) => {
+        if (property === "length") {
+          lengthReads += 1;
+          if (lengthReads > 1) throw new Error("Cross-role array length was read twice.");
+        }
+        if (property === "0") {
+          indexedReads += 1;
+          if (indexedReads > 1) throw new Error("Cross-role array entry was read twice.");
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    const sanitized = sanitizeClientInitialFilters(
+      [
+        { conditions: sharedArray, type: "AND" },
+        { columnId: "COL_ID_NAME", filter: sharedArray, type: "in" },
+      ],
+      columns,
+    );
+
+    expect(sanitized).toHaveLength(1);
+    expect(lengthReads).toBe(1);
     expect(indexedReads).toBe(1);
   });
 
@@ -835,7 +929,7 @@ describe("Client row model", () => {
     expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
   });
 
-  it("constructs a predicate for a compound filter wider than the engine argument limit", () => {
+  it("rejects a compound filter over the total node budget before materializing conditions", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -845,16 +939,58 @@ describe("Client row model", () => {
       },
     ]);
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
-    const sanitized = sanitizeClientInitialFilters(
-      [{ conditions: Array.from({ length: 150_000 }, () => leaf), type: "AND" }],
-      columns,
+    const ownKeys = vi.fn(Reflect.ownKeys);
+    const overBudgetConditions = new Proxy(
+      Array.from({ length: 1_024 }, () => leaf),
+      { ownKeys },
     );
-    const predicate = createClientFilterPredicate(columns, sanitized);
 
-    expect(sanitized).toHaveLength(1);
-    expect(predicate).toBeTypeOf("function");
-    expect(predicate?.({ name: "Ada" })).toBe(true);
-    expect(predicate?.({ name: "Grace" })).toBe(false);
+    expect(
+      sanitizeClientInitialFilters([{ conditions: overBudgetConditions, type: "AND" }], columns),
+    ).toEqual([]);
+    expect(ownKeys).not.toHaveBeenCalled();
+    expect(() =>
+      sanitizeClientInitialFilters([{ conditions: overBudgetConditions, type: "AND" }], columns, {
+        rejectOverBudget: true,
+      }),
+    ).toThrowError(
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+    );
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ conditions: Array.from({ length: 1_023 }, () => leaf), type: "AND" }],
+        columns,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("applies the filter-node budget across nested condition arrays", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    const lastOwnKeys = vi.fn(Reflect.ownKeys);
+    const groups = Array.from({ length: 32 }, (_, index) => ({
+      conditions:
+        index === 30
+          ? new Proxy(
+              Array.from({ length: 32 }, () => leaf),
+              { ownKeys: lastOwnKeys },
+            )
+          : Array.from({ length: 32 }, () => leaf),
+      type: "AND",
+    }));
+
+    expect(sanitizeClientInitialFilters([{ conditions: groups, type: "AND" }], columns)).toEqual(
+      [],
+    );
+    expect(lastOwnKeys).not.toHaveBeenCalled();
   });
 
   it("reuses already-sanitized filter references for an equivalent column plan", () => {

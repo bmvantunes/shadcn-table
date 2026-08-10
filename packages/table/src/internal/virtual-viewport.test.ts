@@ -88,6 +88,234 @@ describe("BrunoTableViewportRuntime", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("frame-batches pinned-aware scrollbar geometry onto only the overlay subtree", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        pinned: "start",
+        valueType: "text",
+        width: 120,
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CENTER_${index}`,
+        field: "name",
+        headerName: `Center ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        pinned: "end",
+        valueType: "text",
+        width: 140,
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    let scrollListener: EventListener | undefined;
+    const gridSetProperty = vi.fn();
+    const overlaySetProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 800,
+      offsetHeight: 495,
+      offsetWidth: 815,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: gridSetProperty },
+    } as unknown as HTMLElement;
+    const overlay = {
+      style: { setProperty: overlaySetProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    viewport.attachScrollbarOverlay(overlay);
+
+    const initialProperties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(initialProperties.get("--bruno-table-scrollbar-horizontal-start")).toBe("120px");
+    expect(initialProperties.get("--bruno-table-scrollbar-horizontal-end")).toBe("155px");
+    expect(initialProperties.get("--bruno-table-scrollbar-horizontal-bottom")).toBe("15px");
+    expect(initialProperties.get("--bruno-table-scrollbar-vertical-top")).toBe("36px");
+    expect(initialProperties.get("--bruno-table-scrollbar-vertical-right")).toBe("15px");
+    expect(initialProperties.get("--bruno-table-scrollbar-vertical-bottom")).toBe("23px");
+    overlaySetProperty.mockClear();
+    gridSetProperty.mockClear();
+
+    element.scrollLeft = 300;
+    element.scrollTop = 72;
+    scrollListener!(new Event("scroll"));
+    scrollListener!(new Event("scroll"));
+
+    expect(callbacks).toHaveLength(1);
+    expect(overlaySetProperty).not.toHaveBeenCalled();
+    callbacks[0]!(0);
+
+    const scrolledProperties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(
+      Number.parseFloat(scrolledProperties.get("--bruno-table-scrollbar-horizontal-thumb-offset")!),
+    ).toBeGreaterThan(0);
+    expect(
+      Number.parseFloat(scrolledProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!),
+    ).toBeGreaterThan(0);
+    expect(gridSetProperty).toHaveBeenCalledWith(
+      "--bruno-table-row-layer-offset",
+      expect.any(String),
+    );
+    expect(
+      gridSetProperty.mock.calls.some(([property]) => String(property).includes("scrollbar")),
+    ).toBe(false);
+
+    overlaySetProperty.mockClear();
+    element.scrollTop = 3_156;
+    viewport.attach(null);
+    viewport.attach(element);
+    const maximumProperties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(
+      Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!) +
+        Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-height")!),
+    ).toBeCloseTo(436, 6);
+  });
+
+  it("keeps decorative tracks disjoint with overlay-native scrollbars and suspended pinning", () => {
+    const suspendedColumns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        pinned: "start",
+        valueType: "text",
+        width: 600,
+      },
+      {
+        columnId: "COL_ID_CENTER",
+        field: "name",
+        headerName: "Center",
+        valueType: "text",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        pinned: "end",
+        valueType: "text",
+        width: 600,
+      },
+    ]);
+    const overlaySetProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      offsetHeight: 480,
+      offsetWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, suspendedColumns);
+    viewport.attach(element);
+    viewport.attachScrollbarOverlay({
+      style: { setProperty: overlaySetProperty },
+    } as unknown as HTMLElement);
+
+    const properties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(0);
+    expect(properties.get("--bruno-table-scrollbar-horizontal-start")).toBe("0px");
+    expect(properties.get("--bruno-table-scrollbar-horizontal-end")).toBe("0px");
+    expect(properties.get("--bruno-table-scrollbar-vertical-bottom")).toBe("8px");
+
+    overlaySetProperty.mockClear();
+    element.scrollTop = 3_156;
+    viewport.attach(null);
+    viewport.attach(element);
+    const suspendedMaximumProperties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(
+      Number.parseFloat(
+        suspendedMaximumProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!,
+      ) +
+        Number.parseFloat(
+          suspendedMaximumProperties.get("--bruno-table-scrollbar-vertical-thumb-height")!,
+        ),
+    ).toBeCloseTo(436, 6);
+
+    overlaySetProperty.mockClear();
+    viewport.setLayout(
+      100,
+      compileColumns([
+        {
+          columnId: "COL_ID_UNPINNED_START",
+          field: "name",
+          headerName: "Unpinned start",
+          valueType: "text",
+          width: 600,
+        },
+        {
+          columnId: "COL_ID_UNPINNED_CENTER",
+          field: "name",
+          headerName: "Unpinned center",
+          valueType: "text",
+          width: 120,
+        },
+        {
+          columnId: "COL_ID_UNPINNED_END",
+          field: "name",
+          headerName: "Unpinned end",
+          valueType: "text",
+          width: 600,
+        },
+      ]),
+    );
+    const unpinnedProperties = new Map(
+      overlaySetProperty.mock.calls.map(
+        ([property, value]) => [String(property), String(value)] as const,
+      ),
+    );
+    expect(unpinnedProperties.get("--bruno-table-scrollbar-horizontal-start")).toBe("0px");
+    expect(unpinnedProperties.get("--bruno-table-scrollbar-horizontal-end")).toBe("0px");
+    expect(unpinnedProperties.get("--bruno-table-scrollbar-vertical-bottom")).toBe("8px");
+    expect(
+      Number.parseFloat(unpinnedProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!) +
+        Number.parseFloat(unpinnedProperties.get("--bruno-table-scrollbar-vertical-thumb-height")!),
+    ).toBeCloseTo(436, 6);
+  });
+
   it("rebases a queued identity-owned reveal when a same-shape row space is published", () => {
     const columns = compileColumns([
       {

@@ -25,11 +25,13 @@ type Listener = () => void;
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
 export const BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT = 4_000_000;
+export const BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS = 8;
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_OVERSCAN = 4;
 const COLUMN_OVERSCAN = 2;
 const MIN_CENTER_VIEWPORT_WIDTH = 80;
+const MIN_SCROLLBAR_THUMB_SIZE = 24;
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
 
 type ViewportLayout = Readonly<{
@@ -69,6 +71,7 @@ export const BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM = 32;
 export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
   private element: HTMLElement | null = null;
+  private scrollbarOverlay: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private frame: number | null = null;
   private pendingReveal: RevealTarget | undefined;
@@ -247,11 +250,18 @@ export class BrunoTableViewportRuntime {
     this.publishFromElement();
   };
 
+  public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
+    if (this.scrollbarOverlay === element) return;
+    this.scrollbarOverlay = element;
+    this.publishFromElement();
+  };
+
   public readonly dispose = (): void => {
     this.element?.removeEventListener("scroll", this.handleScroll);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.element = null;
+    this.scrollbarOverlay = null;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.pendingReveal = undefined;
@@ -363,8 +373,108 @@ export class BrunoTableViewportRuntime {
       "--bruno-table-row-layer-offset",
       `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`,
     );
+    this.writeScrollbarOverlay(element, logicalScrollTop);
     this.publishSnapshot(next);
   };
+
+  private writeScrollbarOverlay(element: HTMLElement, logicalScrollTop: number): void {
+    const overlay = this.scrollbarOverlay;
+    if (overlay === null) return;
+    const suspendPinning = shouldSuspendPinning(this.layout, element.clientWidth);
+    const pinnedStartWidth = suspendPinning ? 0 : this.layout.pinnedStartWidth;
+    const pinnedEndWidth = suspendPinning ? 0 : this.layout.pinnedEndWidth;
+    const centerContentWidth = suspendPinning
+      ? this.layout.suspendedCenterWidth
+      : this.layout.centerWidth;
+    const centerViewportWidth = Math.max(
+      element.clientWidth - pinnedStartWidth - pinnedEndWidth,
+      0,
+    );
+    const horizontalMaximum = Math.max(centerContentWidth - centerViewportWidth, 0);
+    const horizontalVisible = horizontalMaximum > 0 && centerViewportWidth > 0;
+    const horizontalThumbWidth = scrollbarThumbSize(
+      centerViewportWidth,
+      centerViewportWidth,
+      centerContentWidth,
+    );
+    const horizontalThumbOffset = scrollbarThumbOffset(
+      element.scrollLeft,
+      horizontalMaximum,
+      centerViewportWidth - horizontalThumbWidth,
+    );
+    const bodyViewportHeight = Math.max(element.clientHeight - this.layout.headerHeight, 0);
+    const verticalMaximum = logicalScrollMaximum(this.layout, element.clientHeight);
+    const verticalTrackHeight = Math.max(
+      bodyViewportHeight - (horizontalVisible ? BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS : 0),
+      0,
+    );
+    const verticalThumbHeight = scrollbarThumbSize(
+      verticalTrackHeight,
+      bodyViewportHeight,
+      this.layout.logicalRowHeight,
+    );
+    const verticalThumbOffset = scrollbarThumbOffset(
+      logicalScrollTop,
+      verticalMaximum,
+      verticalTrackHeight - verticalThumbHeight,
+    );
+    const nativeHorizontalWidth = Math.max(
+      finiteDimension(element.offsetHeight, element.clientHeight) - element.clientHeight,
+      0,
+    );
+    const nativeVerticalWidth = Math.max(
+      finiteDimension(element.offsetWidth, element.clientWidth) - element.clientWidth,
+      0,
+    );
+    const style = overlay.style;
+    style.setProperty(
+      "--bruno-table-scrollbar-horizontal-display",
+      horizontalVisible ? "block" : "none",
+    );
+    style.setProperty("--bruno-table-scrollbar-horizontal-start", `${pinnedStartWidth}px`);
+    style.setProperty(
+      "--bruno-table-scrollbar-horizontal-end",
+      `${pinnedEndWidth + nativeVerticalWidth}px`,
+    );
+    style.setProperty("--bruno-table-scrollbar-horizontal-bottom", `${nativeHorizontalWidth}px`);
+    style.setProperty(
+      "--bruno-table-scrollbar-horizontal-thumb-width",
+      `${horizontalThumbWidth}px`,
+    );
+    style.setProperty(
+      "--bruno-table-scrollbar-horizontal-thumb-offset",
+      `${horizontalThumbOffset}px`,
+    );
+    style.setProperty(
+      "--bruno-table-scrollbar-vertical-display",
+      verticalMaximum > 0 && verticalTrackHeight > 0 ? "block" : "none",
+    );
+    style.setProperty("--bruno-table-scrollbar-vertical-top", `${this.layout.headerHeight}px`);
+    style.setProperty("--bruno-table-scrollbar-vertical-right", `${nativeVerticalWidth}px`);
+    style.setProperty(
+      "--bruno-table-scrollbar-vertical-bottom",
+      `${nativeHorizontalWidth + (horizontalVisible ? BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS : 0)}px`,
+    );
+    style.setProperty("--bruno-table-scrollbar-vertical-thumb-height", `${verticalThumbHeight}px`);
+    style.setProperty("--bruno-table-scrollbar-vertical-thumb-offset", `${verticalThumbOffset}px`);
+  }
+}
+
+function finiteDimension(value: number, fallback: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function scrollbarThumbSize(trackSize: number, viewportSize: number, contentSize: number): number {
+  if (trackSize <= 0 || viewportSize <= 0 || contentSize <= viewportSize) return trackSize;
+  return Math.min(
+    Math.max((trackSize * viewportSize) / contentSize, MIN_SCROLLBAR_THUMB_SIZE),
+    trackSize,
+  );
+}
+
+function scrollbarThumbOffset(position: number, maximum: number, travel: number): number {
+  if (maximum <= 0 || travel <= 0) return 0;
+  return (Math.min(Math.max(position, 0), maximum) / maximum) * travel;
 }
 
 function createViewportSnapshot(
