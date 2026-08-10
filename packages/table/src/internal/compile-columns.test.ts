@@ -202,6 +202,12 @@ describe("compileColumns", () => {
       "COL_ID_",
       "COL_ID_ÉTAT",
       "COL_ID_-TOTAL",
+      "COL_ID_A B",
+      "COL_ID_A\tB",
+      "COL_ID_A\nB",
+      "COL_ID_A\u00a0B",
+      "COL_ID_A\u3000B",
+      "COL_ID_BRUNO_TABLE_ROWS",
       "COL_ID_é",
       "COL_ID_ß",
       "COL_ID_δ",
@@ -214,6 +220,17 @@ describe("compileColumns", () => {
         compileColumns([{ columnId, field: "price", headerName: "Price", valueType: "number" }]);
       }).toThrow(ColumnConfigurationError);
     }
+
+    expect(() => {
+      compileColumns([
+        {
+          columnId: "COL_ID_BRUNO_TABLE_ROWS",
+          field: "price",
+          headerName: "Rows",
+          valueType: "number",
+        },
+      ]);
+    }).toThrow("BrunoTable columnId is reserved for the Rows System Column");
 
     expect(() => {
       compileColumns([

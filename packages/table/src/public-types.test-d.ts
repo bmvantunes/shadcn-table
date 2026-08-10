@@ -1,16 +1,22 @@
 import { describe, expectTypeOf, it } from "vitest";
 
+import type { ReactNode } from "react";
+import type { LiveQueryResult } from "effect-view-server/config/query";
+
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
+  BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
+  BrunoTableToolbar,
 } from "./index";
 
 import type {
   BrunoTableClientProps,
+  BrunoTableClientSource,
   BrunoTableColumnField,
   BrunoTableColumnId,
   BrunoTableColumnIdOf,
@@ -18,6 +24,7 @@ import type {
   BrunoTableColumnValue,
   BrunoTableDecodeResult,
   BrunoTableEditableColumnId,
+  BrunoTableEditingCapability,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
   BrunoTableFieldColumnDefinition,
@@ -65,6 +72,18 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const directViewServerResult = null as unknown as LiveQueryResult<Order>;
+const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
+const directViewServerClient = BrunoTableClient({
+  tableId: "view-server-orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void directClientSource;
+void directViewServerClient;
 
 const rawGroupSymbol = {
   columnId: "COL_ID_GROUP_SYMBOL",
@@ -142,6 +161,47 @@ const capabilityColumns = [
 
 type CapabilityColumns = typeof capabilityColumns;
 
+void BrunoTableClient({
+  tableId: "invalid-unknown-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Client component preserves exact Column Identity inference.
+    { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-misspelled-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Client component rejects misspelled Column Identities.
+    { columnId: "COL_ID_SYMBOOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-computed-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Computed columns have no automatic Client sort mapping.
+    { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-nonsortable-sort",
+  columns: capabilityColumns,
+  initialOrderBy: [
+    // @ts-expect-error Client component excludes explicitly nonsortable identities.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
 const noSortingColumns = [
   {
     columnId: "COL_ID_SYMBOL",
@@ -160,6 +220,80 @@ void validColumnId;
 const validUnicodeColumnId: BrunoTableColumnId = "COL_ID_AÉTAT";
 void validUnicodeColumnId;
 
+expectTypeOf<BrunoTableColumnId<"COL_ID_A B">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_A\tB">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_A\u3000B">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROWS">>().toEqualTypeOf<never>();
+
+const rawWhitespaceIdentityColumns = [
+  {
+    columnId: "COL_ID_UNIT PRICE",
+    field: "price",
+    headerName: "Unit price",
+    valueType: "number",
+  },
+] satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-raw-whitespace-identity",
+  // @ts-expect-error Raw Column Identity literals are validated after tuple inference.
+  columns: rawWhitespaceIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_UNIT PRICE", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
+const invalidWhitespaceHelperOptions = {
+  columnId: "COL_ID_UNIT PRICE",
+  field: "price",
+  headerName: "Unit price",
+} as const;
+const invalidWhitespaceHelperColumn = [
+  // @ts-expect-error Column Helper inputs reject whitespace in literal identities.
+  BrunoTableNumberColumn(invalidWhitespaceHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidWhitespaceHelperColumn;
+
+const invalidWhitespaceComputedOptions = {
+  columnId: "COL_ID_UNIT\u3000PRICE",
+  fields: ["price"],
+  headerName: "Unit price",
+  valueType: "number",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "price"> }) => row.price,
+} as const;
+const invalidWhitespaceComputedColumn = [
+  // @ts-expect-error Computed Column inputs reject Unicode whitespace in literal identities.
+  BrunoTableComputedColumn(invalidWhitespaceComputedOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidWhitespaceComputedColumn;
+
+const rawReservedIdentityColumns = [
+  {
+    columnId: "COL_ID_BRUNO_TABLE_ROWS",
+    field: "price",
+    headerName: "Rows",
+    valueType: "number",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-raw-reserved-identity",
+  // @ts-expect-error Consumers cannot claim the Rows System Column identity.
+  columns: rawReservedIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
+const invalidReservedHelperOptions = {
+  columnId: "COL_ID_BRUNO_TABLE_ROWS",
+  field: "price",
+  headerName: "Rows",
+} as const;
+const invalidReservedHelperColumn = [
+  // @ts-expect-error Column Helper inputs reject the reserved Rows identity.
+  BrunoTableNumberColumn(invalidReservedHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidReservedHelperColumn;
+
 // @ts-expect-error A stable column identity must have a non-empty suffix.
 const emptyColumnId: BrunoTableColumnId = "COL_ID_";
 void emptyColumnId;
@@ -173,6 +307,82 @@ const invalidMixedCaseColumnId: BrunoTableColumnId = "COL_ID_Price";
 void invalidMixedCaseColumnId;
 
 describe("BrunoTable public types", () => {
+  it("infers the strict live Client component surface without exposing a table object", () => {
+    const props = {
+      tableId: "orders",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    } satisfies BrunoTableClientProps<Order, Columns>;
+    const callableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[0] = props;
+    const namedProps: BrunoTableClientProps<Order, Columns> = callableProps;
+    const rendered = BrunoTableClient(namedProps);
+
+    expectTypeOf(rendered).toEqualTypeOf<ReactNode>();
+    expectTypeOf(callableProps).toMatchTypeOf<BrunoTableClientProps<Order, Columns>>();
+    expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
+
+    const missingTableId = {
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    };
+    // @ts-expect-error tableId is mandatory for every public Client Table.
+    const invalidMissingTableId: BrunoTableClientProps<Order, Columns> = missingTableId;
+    void invalidMissingTableId;
+
+    const missingRowIdentity = {
+      tableId: "orders",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }] as const,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    };
+    // @ts-expect-error Client identity is mandatory and cannot be replaced by a row index.
+    const invalidMissingRowIdentity: BrunoTableClientProps<Order, Columns> = missingRowIdentity;
+    void invalidMissingRowIdentity;
+
+    // @ts-expect-error the first Client renderer requires a non-empty typed order baseline.
+    void BrunoTableClient({
+      tableId: "orders",
+      columns,
+      getRowId: (row: Order) => row.id,
+      clientSource: {
+        rows: [] as readonly Order[],
+        totalRows: 0,
+        version: 1,
+        status: "ready",
+      },
+    });
+
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error BrunoTable owns the table runtime and exposes no controller prop.
+      table: {},
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error BrunoTable exposes no row-model option.
+      rowModel: {},
+    });
+  });
+
   it("preserves exact identities and values", () => {
     expectTypeOf<"COL_ID_Price" extends BrunoTableColumnId ? true : false>().toEqualTypeOf<false>();
     expectTypeOf<BrunoTableColumnIdOf<Columns>>().toEqualTypeOf<
@@ -202,7 +412,7 @@ describe("BrunoTable public types", () => {
     expectTypeOf<BrunoTableSortableColumnId<NoSortingColumns>>().toBeNever();
   });
 
-  it("omits sorting props when no column exposes sorting capability", () => {
+  it("rejects a Client renderer when no column can supply its required order", () => {
     const props = {
       tableId: "unsortable-orders",
       columns: noSortingColumns,
@@ -213,9 +423,12 @@ describe("BrunoTable public types", () => {
         version: 1,
         status: "ready",
       },
-    } satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+    } as const;
 
-    expectTypeOf(props.columns).toEqualTypeOf<NoSortingColumns>();
+    // @ts-expect-error BrunoTableClient always requires a typed non-empty Initial Order By.
+    const invalidProps: BrunoTableClientProps<Order, NoSortingColumns> = props;
+
+    expectTypeOf(invalidProps).toEqualTypeOf<BrunoTableClientProps<Order, NoSortingColumns>>();
   });
 
   it("keeps widened runtime columns conservatively editable", () => {
@@ -225,26 +438,16 @@ describe("BrunoTable public types", () => {
       BrunoTableEditableColumnId<typeof widenedColumns>
     >().toEqualTypeOf<BrunoTableColumnId>();
 
-    const widenedEditableProps = {
-      tableId: "orders",
-      columns: widenedColumns,
-      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-      getRowId: (row: Order) => row.id,
+    const widenedEditableCapability = {
       editable: true,
       getRowVersion: (row: Order) => row.revision,
       onSaveEdits: (changes) => {
         expectTypeOf(changes[0].changes[0]).not.toBeNever();
         return Promise.resolve();
       },
-      clientSource: {
-        rows: [] as readonly Order[],
-        totalRows: 0,
-        version: 1,
-        status: "ready",
-      },
-    } satisfies BrunoTableClientProps<Order, typeof widenedColumns, bigint>;
+    } satisfies BrunoTableEditingCapability<Order, typeof widenedColumns, bigint>;
 
-    expectTypeOf(widenedEditableProps.getRowVersion).returns.toEqualTypeOf<bigint>();
+    expectTypeOf(widenedEditableCapability.getRowVersion).returns.toEqualTypeOf<bigint>();
   });
 
   it("correlates row-grouped saves with source fields and exact row versions", () => {
@@ -299,6 +502,15 @@ describe("BrunoTable public types", () => {
 
     expectTypeOf(filters).toBeArray();
     expectTypeOf(sorting).toBeArray();
+
+    const emptyCompound = [
+      {
+        type: "OR",
+        // @ts-expect-error Compound filter conditions are non-empty.
+        conditions: [],
+      },
+    ] satisfies BrunoTableFilterExpressions<Order, Columns>;
+    void emptyCompound;
   });
 
   it("accepts direct client and opaque server viewport source envelopes", () => {
@@ -325,31 +537,6 @@ describe("BrunoTable public types", () => {
       },
     } satisfies BrunoTableClientProps<Order, Columns>;
 
-    const editableClientProps = {
-      ...common,
-      editable: true,
-      getRowId: (row: Order) => row.id,
-      getRowVersion: (row: Order) => row.revision,
-      onSaveEdits: (changes) => {
-        expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
-        const [change] = changes[0].changes;
-        if (change.columnId === "COL_ID_PRICE") {
-          expectTypeOf(change.field).toEqualTypeOf<"price">();
-          expectTypeOf(change.after).toEqualTypeOf<number>();
-        } else {
-          expectTypeOf(change.field).toEqualTypeOf<"symbol">();
-          expectTypeOf(change.after).toEqualTypeOf<string>();
-        }
-        return Promise.resolve();
-      },
-      clientSource: {
-        rows: [] as readonly Order[],
-        totalRows: 0,
-        version: 1,
-        status: "ready",
-      },
-    } satisfies BrunoTableClientProps<Order, Columns, bigint>;
-
     const viewport = {
       replace: () => ({ setWindow: () => undefined, release: () => undefined }),
       destroy: () => undefined,
@@ -367,8 +554,62 @@ describe("BrunoTable public types", () => {
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
     expectTypeOf(clientProps.initialFilters[0]!.columnId).toEqualTypeOf<"COL_ID_SYMBOL">();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
-    expectTypeOf(editableClientProps.getRowVersion).returns.toEqualTypeOf<bigint>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
+
+    void BrunoTableClient({
+      ...clientProps,
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }],
+    });
+    const missingColumns = {
+      tableId: "orders",
+      getRowId: (row: Order) => row.id,
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }] as const,
+      clientSource: clientProps.clientSource,
+    };
+    // @ts-expect-error A Client Table cannot omit its column definitions.
+    const invalidMissingColumns: BrunoTableClientProps<Order, Columns> = missingColumns;
+    void invalidMissingColumns;
+
+    const missingClientSource = {
+      tableId: "orders",
+      columns,
+      getRowId: (row: Order) => row.id,
+      initialOrderBy: [{ columnId: "COL_ID_PRICE", direction: "asc" }] as const,
+    };
+    // @ts-expect-error A Client Table cannot omit its live Client Source.
+    const invalidMissingClientSource: BrunoTableClientProps<Order, Columns> = missingClientSource;
+    void invalidMissingClientSource;
+    void BrunoTableClient({
+      ...clientProps,
+      // @ts-expect-error initialOrderBy is a non-empty typed tuple.
+      initialOrderBy: [],
+    });
+
+    const noSortColumns = [
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        isEditable: true,
+        enableSorting: false,
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    // @ts-expect-error BrunoTableClient cannot omit its required non-empty Initial Order By.
+    void BrunoTableClient<Order, typeof noSortColumns>({
+      tableId: "orders-no-sort",
+      columns: noSortColumns,
+      getRowId: (row: Order) => row.id,
+      clientSource: clientProps.clientSource,
+    });
+    void BrunoTableClient<Order, typeof noSortColumns>({
+      tableId: "orders-no-sort",
+      columns: noSortColumns,
+      // @ts-expect-error initialOrderBy is forbidden when no column is sortable.
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: clientProps.clientSource,
+    });
   });
 });
 
@@ -830,7 +1071,7 @@ const editableClientWithoutSave = {
 } as const;
 
 // @ts-expect-error editable Client Tables require an onSaveEdits operation.
-const invalidEditableClientWithoutSave: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithoutSave: BrunoTableEditingCapability<Order, Columns, bigint> =
   editableClientWithoutSave;
 
 const readOnlyClientWithSave = {
@@ -850,8 +1091,7 @@ const readOnlyClientWithSave = {
 } as const;
 
 // @ts-expect-error read-only Client Tables reject edit-only operations.
-const invalidReadOnlyClientWithSave: BrunoTableClientProps<Order, Columns, bigint> =
-  readOnlyClientWithSave;
+const invalidReadOnlyClientWithSave: BrunoTableClientProps<Order, Columns> = readOnlyClientWithSave;
 
 const nonEditableColumns = [
   {
@@ -867,11 +1107,8 @@ const invalidClientWithoutEditableColumns = {
   columns: nonEditableColumns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  // @ts-expect-error no column exposes editable capability.
   editable: true,
-  // @ts-expect-error no column exposes editable capability.
   getRowVersion: (row: Order) => row.revision,
-  // @ts-expect-error no column exposes editable capability.
   onSaveEdits: () => Promise.resolve(),
   clientSource: {
     rows: [] as readonly Order[],
@@ -879,7 +1116,15 @@ const invalidClientWithoutEditableColumns = {
     version: 1,
     status: "ready",
   },
-} satisfies BrunoTableClientProps<Order, typeof nonEditableColumns, bigint>;
+} as const;
+
+// @ts-expect-error no column exposes editable capability.
+const invalidClientWithoutEditableColumnsAssignment: BrunoTableEditingCapability<
+  Order,
+  typeof nonEditableColumns,
+  bigint
+> = invalidClientWithoutEditableColumns;
+void invalidClientWithoutEditableColumnsAssignment;
 
 const editableClientWithGrouping = {
   tableId: "orders",
@@ -899,7 +1144,7 @@ const editableClientWithGrouping = {
 } as const;
 
 // @ts-expect-error editable Client Tables reject grouping even for non-fresh props objects.
-const invalidEditableClientWithGrouping: BrunoTableClientProps<Order, Columns, bigint> =
+const invalidEditableClientWithGrouping: BrunoTableEditingCapability<Order, Columns, bigint> =
   editableClientWithGrouping;
 
 const invalidCrossedSaveCell = {

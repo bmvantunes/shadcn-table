@@ -158,7 +158,7 @@ export function compileColumnValueSemantics(
     const formatSnapshot = Object.freeze({ ...format }) as BrunoTableNumberFormat;
     let formatter: Intl.NumberFormat;
     try {
-      formatter = new Intl.NumberFormat(undefined, formatSnapshot);
+      formatter = new Intl.NumberFormat(BRUNO_TABLE_NUMBER_DISPLAY_LOCALE, formatSnapshot);
     } catch (error) {
       throw new ValueSemanticsConfigurationError(
         `BrunoTable number format is invalid: ${safeErrorMessage(error)}`,
@@ -189,6 +189,8 @@ export function compileColumnValueSemantics(
     decodePersisted: (input) => descriptor.decodePersisted(input),
   });
 }
+
+const BRUNO_TABLE_NUMBER_DISPLAY_LOCALE = "en-US";
 
 function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor {
   if (!isRecord(selection)) {

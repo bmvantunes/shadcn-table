@@ -56,7 +56,13 @@ Rendering
 Expose two public React composition roots:
 
 ```tsx
-<BrunoTableClient tableId={...} getRowId={...} columns={...} clientSource={...} />
+<BrunoTableClient
+  tableId={...}
+  getRowId={...}
+  columns={...}
+  clientSource={...}
+  initialOrderBy={[{ columnId: "COL_ID_CREATED_AT", direction: "desc" }]}
+/>
 <BrunoTableServer tableId={...} columns={...} viewportSource={...} />
 ```
 
@@ -541,35 +547,36 @@ Required layout:
 
 - vertical row virtualizer
 - one grid-level horizontal centre-column virtualizer, never one per row
-- pinned columns rendered outside horizontal virtualization
+- pinned columns rendered outside horizontal virtualization while pinning is active
+- any layout with pinned columns suspends pinning before measurement; after measurement, suspension continues when active pinned widths would leave less than 80 CSS pixels for an existing centre region or when a centreless pinned layout exceeds the viewport, and one bounded start → centre → end window then uses zero pinned insets until the active layout fits
 - one scroll container
 - fixed row height fast path
 - one immutable column-window snapshot shared by headers and every mounted row
-- bounded mounted cells proportional to mounted rows multiplied by pinned plus virtual centre columns, never total centre-column count
+- bounded mounted cells proportional to mounted rows multiplied by active pinned plus virtual centre columns, or by one virtual all-column window while pinning is suspended; never total centre-column count
 
-Rows and columns are virtualized for both Client and Server Tables. The Client Row Pipeline provides the complete final row count and resident rows. The Viewport Row Pipeline provides exact `totalRows` geometry and sparse indexed slots. The horizontal path is identical for both variants: it virtualizes the current visible centre-column sequence after order, visibility, and pinning have been applied. Pinned-start and pinned-end columns remain mounted and contribute to viewport insets, keyboard reveal, and mounted-cell instrumentation.
+Rows and columns are virtualized for both Client and Server Tables. The Client Row Pipeline provides the complete final row count and resident rows. The Viewport Row Pipeline provides exact `totalRows` geometry and sparse indexed slots. The horizontal path is identical for both variants: it virtualizes the current visible centre-column sequence after order, visibility, and pinning have been applied. While pinning is active, pinned-start and pinned-end columns remain mounted and contribute to viewport insets, keyboard reveal, and mounted-cell instrumentation. Before measurement, every layout with pinned columns suspends pinning, clears both insets, and virtualizes all logical columns in start → centre → end order. After measurement, mixed layouts remain suspended until at least 80 CSS pixels remain for the centre, while centreless layouts remain suspended until their total pinned width fits the viewport. Restoration does not change Logical Column Order.
 
 A visual Base UI Scroll Area is permitted only as decoration around that same native owner. Its track and thumb geometry consume the renderer's immutable viewport/pinning snapshot: the horizontal track occupies the effective centre band, the vertical track begins after the sticky header and ends before a visible horizontal track, and neither track feeds offsets back into layout, hit testing, reveal, or virtual-window calculation. See [ReUI data-grid patterns](research/reui-data-grid-patterns.md) for the external pattern and the incompatible pieces that must not cross the Adapter seam.
 
 ### React Compiler virtualization boundary
 
-TanStack Table and TanStack Virtual expose stable objects with mutable internals and getter methods. A compiled component can memoize a getter call against the stable object reference and render stale geometry. The current vendored TanStack Table experimental column-virtualization example keeps React Compiler disabled specifically because `header.getSize()` can be frozen this way.
+TanStack Table, and a future optional TanStack Virtual Adapter, expose stable objects with mutable internals and getter methods. A compiled component can memoize a getter call against the stable object reference and render stale geometry. The current vendored TanStack Table experimental column-virtualization example keeps React Compiler disabled specifically because `header.getSize()` can be frozen this way. The first live Client slice instead uses a BrunoTable-owned custom viewport runtime that publishes immutable geometry snapshots. Its React seam currently isolates two DOM-attachment paths—`BrunoTableViewportAdapter` and `LoadingRows`—behind local `"use no memo"` directives; the runtime and all downstream render islands remain compiler-managed.
 
 Treat compiler isolation as an initial correctness requirement, not an emergency whole-grid opt-out:
 
-- only a small private Virtualizer Adapter may call `useVirtualizer`, read mutable virtualizer getters, or coordinate imperative measurement
-- mark that adapter function `"use no memo"` while the installed version requires it, with a tracked removal test
+- keep imperative measurement inside the custom viewport runtime or a small private Virtualizer Adapter; only that Adapter may call `useVirtualizer` or read mutable virtualizer getters
+- if an adopted Adapter requires it, mark only that function `"use no memo"` and add a tracked removal test
 - never pass mutable TanStack Table, Row, Cell, Column, Header, or Virtualizer instances into compiled cell, row, header, toolbar, or overlay descendants
 - publish immutable vertical and horizontal window snapshots through narrow external-store subscriptions
 - share one horizontal snapshot across header and body so every mounted row renders the same centre-column indexes and virtual padding
 - keep scroll offsets, measurements, and pointer geometry outside React state
-- preserve the private Adapter seam so `@tanstack/react-virtual` can be replaced by `@tanstack/virtual-core` without changing BrunoTable's public API or Grid Runtime
+- preserve the private Adapter seam so a future `@tanstack/react-virtual` or `@tanstack/virtual-core` evaluation cannot change BrunoTable's public API or Grid Runtime
 
-Current TanStack Virtual React options such as `directDomUpdates`, `directDomUpdatesMode`, and `useFlushSync` remain private Adapter policy. Benchmark their exact installed behavior in production builds before selecting defaults. Direct DOM positioning can reduce scroll-only React renders, but transform mode creates stacking contexts that can affect pinned layers, while disabling `flushSync` trades synchronous accuracy for React 19 compatibility and batching. None is a substitute for immutable snapshots or compiler-on correctness tests.
+If BrunoTable adopts TanStack Virtual, React options such as `directDomUpdates`, `directDomUpdatesMode`, and `useFlushSync` remain private Adapter policy. Benchmark their exact installed behavior in production builds before selecting defaults. Direct DOM positioning can reduce scroll-only React renders, but transform mode creates stacking contexts that can affect pinned layers, while disabling `flushSync` trades synchronous accuracy for React 19 compatibility and batching. None is a substitute for immutable snapshots or compiler-on correctness tests.
 
 The public variants must be separate unconditional hook compositions. Do not choose `useClientGridRuntime` versus `useViewportGridRuntime` behind a runtime flag. Provide `BrunoTableView` with a stable runtime reference, and let cells and headers subscribe to narrow external-store selectors instead of placing changing table snapshots in one React context value.
 
-On every TanStack Table, TanStack Virtual, React, or React Compiler upgrade, rerun the compiler-on geometry suite. Remove the escape hatch only after column resize, reorder, pinning, scrolling, keyboard reveal, and both virtual ranges remain live with compilation enabled.
+On every TanStack Table, React, or React Compiler upgrade—and every TanStack Virtual upgrade if that Adapter is adopted—rerun the compiler-on geometry suite. Remove either current DOM-attachment escape hatch only after compiler-on tests prove loading geometry, column resize, reorder, pinning, scrolling, keyboard reveal, and both virtual ranges remain live with compilation enabled.
 
 ### XState
 

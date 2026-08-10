@@ -3,8 +3,15 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": ["esnext", "dom"],
     "noEmit": true,
-    "types": []
+    "skipLibCheck": false,
+    "types": [],
+    "paths": {
+      "@bruno/table": ["../../dist/index.d.mts"],
+      "@bruno/table/effect": ["../../dist/effect.d.mts"]
+    }
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "jsx.tsx"]
 }

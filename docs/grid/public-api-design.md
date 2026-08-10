@@ -171,6 +171,10 @@ type BrunoTableSortingCapability<
   ? { initialOrderBy?: never }
   : { initialOrderBy: BrunoTableSortBy<TColumns> };
 
+type BrunoTableClientSortingCapability<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = { initialOrderBy: BrunoTableSortBy<TColumns> };
+
 type BrunoTablePersistedSortingCapability<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = [BrunoTableSortableColumnId<TColumns>] extends [never]
@@ -185,7 +189,7 @@ type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   initialPersistedState?: BrunoTablePersistedState<TRow, TColumns>;
   onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns>) => void;
   children?: React.ReactNode;
-} & BrunoTableSortingCapability<TColumns>;
+};
 
 type BrunoTableQuickFilterFields<TRow> = readonly [
   BrunoTableStringQueryField<TRow>,
@@ -221,6 +225,7 @@ type BrunoTableClientProps<
   TColumns extends BrunoTableColumns<TRow>,
   TRowVersion = never,
 > = BrunoTableBaseProps<TRow, TColumns> &
+  BrunoTableClientSortingCapability<TColumns> &
   BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
     getRowId: (row: TRow) => BrunoTableRowId;
     clientSource: BrunoTableClientSource<TRow>;
@@ -232,6 +237,7 @@ type BrunoTableServerProps<
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
 > = BrunoTableBaseProps<TRow, TColumns> &
+  BrunoTableSortingCapability<TColumns> &
   BrunoTableGroupingCapability<TColumns> & {
     getRowId?: never;
     viewportSource: BrunoTableServerSource<TViewport>;
@@ -274,7 +280,7 @@ Rules:
 - `getRowId` is mandatory only for `BrunoTableClient`, where it identifies ordinary `TRow` records. Read-only Client flat grouped-summary rows use private Adapter-owned identity and never invoke this callback. `BrunoTableServer` rejects the prop and receives authoritative raw and grouped row keys from its Viewport Source. Row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
-- When at least one Column Identity is sortable, `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline for normal rows. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to this baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a sorting-capable normal table is never unsorted. When no Column Identity is sortable, `initialOrderBy` and persisted normal `orderBy` are forbidden and BrunoTable installs no normal sorting state, persistence, command, or UI. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites a normal baseline or current order when that capability exists.
+- Issue #7's first live `BrunoTableClient` uses `BrunoTableClientSortingCapability`: `initialOrderBy` is always a mandatory non-empty Column Identity-keyed baseline, so a sort-free Client definition is rejected. The broader common and Server design retains `BrunoTableSortingCapability`; there, no sortable identity means `initialOrderBy` and persisted normal `orderBy` are forbidden and no normal sorting state, persistence, command, or UI is installed. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to the baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a sorting-capable normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites a normal baseline or current order when that capability exists.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
@@ -283,7 +289,7 @@ Rules:
 - `retry` is an optional source-owned manual recovery capability. Its `run` callback begins one source recovery attempt, while its `pending` flag is the sole authority for disabling and decorating the control. BrunoTable calls `run` once per explicit activation but never awaits it, interprets its result, changes source status optimistically, schedules another attempt, or reuses this capability for Save Operations. A plain effect-view-server hook result remains directly assignable because the capability is optional; an application that can reconnect may add it at its source-Adapter boundary without making Effect part of BrunoTable's public contract.
 - A ready or stale Client Source is complete only when `rows.length === totalRows`. Treat a mismatch as a configuration error rather than silently applying supposedly global operations to a partial collection.
 - Preserve unchanged row references between source versions and replace only changed rows.
-- `loading` without authoritative rows renders fixed-height `Skeleton` rows from `@bruno/shadcn/skeleton` so virtual geometry remains stable. It does not render a fake Retry action.
+- Every `loading` publication renders fixed-height `Skeleton` rows from `@bruno/shadcn/skeleton` so virtual geometry remains stable, even when it contains a complete candidate row array. Loading candidates never become coherent display evidence; the Client Adapter may retain only previously accepted coherent evidence privately for a later stale, closed, or error publication. Loading does not render a fake Retry action.
 - `stale` retains every coherent row, including a valid empty result, and adds one compact non-dismissible warning `Alert` titled `Live data delayed`. It never offers Retry because the source remains live and may recover itself.
 - `closed` retains coherent rows with a compact non-dismissible warning `Alert` titled `Live updates stopped`; without rows it uses a full-body `Empty` state with the same title.
 - `error` retains coherent rows with a compact non-dismissible destructive `Alert` titled `Live data error`; without rows it uses a full-body destructive `Empty` state. `statusCode` and bounded plain-text `message` may appear as supporting diagnostics, never as markup.
@@ -412,6 +418,12 @@ type BrunoTableEditingCapability<TRow, TColumns extends BrunoTableColumns<TRow>,
   | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 ```
 
+The shape above is the editing-capable end state. Issue #7's first live read-only slice exports
+`BrunoTableClientProps<TRow, TColumns>` as the exact props accepted by the current
+`BrunoTableClient` component: `editable` may be false or omitted, while `getRowVersion` and
+`onSaveEdits` are rejected. The component and named props alias expand together only when the
+editing workflow is implemented.
+
 `editable` is a capability discriminant, not a styling toggle: TypeScript makes `getRowVersion` and `onSaveEdits` mandatory when true and rejects both otherwise. It also rejects `groupRowsColumn` on the editable branch. The return type of `getRowVersion` is inferred without a repeated JSX generic and becomes the exact `expectedVersion` type throughout the Save Workflow. Exact literal columns that contain no potentially editable Column Identity make the editable branch `never`; widened runtime inputs receive the corresponding runtime diagnostic. This avoids impossible half-configured Client states while allowing the same columns to be reused by a read-only Client or Server Table. `BrunoTableServerProps` makes `editable`, `getRowVersion`, and `onSaveEdits` `never` so Viewport editing cannot be enabled accidentally.
 
 Grouping and editing are mutually exclusive Table Instance capabilities. `BrunoTableServer` always installs the read-only branch. `BrunoTableClient` installs grouping and aggregation only when `editable` is false or omitted; when true, its composition root does not register grouping or aggregation features, expose a Group By Region, accept grouped commands, or execute aggregate work. Shared definitions may still declare `isEditable`, `groupBy`, and `aggFunc` because the same tuple may serve different Table Instances. A restored editable instance conservatively drops `groupBy`, `groupOrderBy`, and the reserved Rows width rather than retaining unreachable grouping intent.
@@ -444,7 +456,14 @@ type BrunoTableColumnId = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`
 
 `ColumnIdFirstCharacter` is an ASCII uppercase letter, decimal digit, or underscore. Requiring it
 excludes the empty `COL_ID_` identity during `satisfies` checks; runtime normalization validates
-the same first-character and uppercase-suffix grammar for widened or restored values.
+the same first-character and uppercase-suffix grammar for widened or restored values and rejects
+whitespace anywhere in the identity. `BrunoTableColumnId<TLiteral>` is available when a boundary
+needs to validate a specific literal type for that whitespace rule. BrunoTable's callable Column
+Helpers and Computed Column constructor apply that literal validation during inference. A plain
+array checked with `satisfies BrunoTableColumns<TRow>` intentionally remains the primary raw-column
+shape; TypeScript cannot subtract the open Unicode whitespace set from an unbounded template-literal
+type at that contextual boundary, so runtime normalization remains authoritative for raw arrays and
+for widened or restored identities.
 
 ```ts
 {
@@ -964,6 +983,8 @@ The filter model must support:
 
 The type must reject a compound group containing different Column Identities. Cross-column Grid Filter composition is always the implicit root `AND`; Quick Filter owns its separate OR-across-eligible-fields behavior.
 
+Each top-level Grid Filter expression admits at most 1,024 total node occurrences, including its root, a maximum nesting depth of 64 after that root, and at most 4,096 values in each `in` operand. This runtime work budget bounds hostile recursive input that has escaped the typed boundary without limiting the number of expressions in the implicit-AND root array. `BrunoTableClient` rejects an `initialFilters` expression that exceeds any bound with a `TypeError` at construction rather than silently broadening the result; conservative restoration drops an expression that exceeds any bound.
+
 For example, `contains` must be rejected for a numeric column and `greaterThan` must be rejected for a nonnumeric column.
 
 `inRange` is half-open in both variants: `filter <= value < filterTo`. Client filtering must install the compiled exact comparator instead of TanStack's inclusive `inNumberRange` helper. Runtime filters retain native typed operands; the Server Adapter changes only Column Identity to Query Field and lets effect-view-server own schema-aware transport encoding.
@@ -1009,7 +1030,7 @@ const orderBy = [
 ] satisfies BrunoTableSortBy<typeof columns>;
 ```
 
-`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, a sorting-capable table's `initialOrderBy` receives contextual autocomplete for its sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted normal-row `orderBy` use this shape when the capability exists; a table with no sortable identity admits neither value. The View Server Adapter resolves each Column Identity to its current Query Field only when compiling a raw `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
+`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, a sorting-capable table's `initialOrderBy` receives contextual autocomplete for its sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted normal-row `orderBy` use this shape when the capability exists. A common or Server variant with no sortable identity admits neither value; the first live Client instead rejects that column configuration because it cannot satisfy its mandatory tuple. The View Server Adapter resolves each Column Identity to its current Query Field only when compiling a raw `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
 
 Sorting has no unsorted state in any installed sorting context. A sorting-capable normal `orderBy` and active grouped `groupOrderBy` each may contain from one entry through every target eligible in that context. Plain activation, Shift activation, panel removal/reorder, keyboard behavior, direction toggling, duplicate normalization, visible priority, and the prohibition on removing the final entry are identical. A sort-free normal table installs no such context. BrunoTable does not infer a descending-first cycle for numeric Value Types.
 

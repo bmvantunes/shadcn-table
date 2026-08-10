@@ -41,7 +41,7 @@ Build:
 - mandatory explicit non-empty `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` `` identity on every leaf column, with an ASCII uppercase letter, digit, or underscore as the first suffix character
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
-- conditionally mandatory non-empty Column Identity-keyed `initialOrderBy` when at least one sortable Column Identity exists, with sort-free tables forbidding it
+- issue #7's first live `BrunoTableClient` unconditionally requires non-empty Column Identity-keyed `initialOrderBy` and rejects sort-free Client definitions; the broader common and Server design remains capability-conditional
 - separate typed `BrunoTableGroupSortBy` persistence for grouped summaries, including the reserved Rows System Column Identity
 - optional typed `BrunoTableGroupRowsColumnOptions` for the fixed Rows label, baseline width, and exact-`bigint` presentation
 - Rows-aware persisted-width typing that admits the reserved identity only in `columnWidths`
@@ -106,7 +106,7 @@ Prototype evidence: [`77e8ce4`](https://github.com/bmvantunes/shadcn-table/tree/
 
 Build:
 
-- `<BrunoTableClient tableId getRowId columns clientSource />`
+- `<BrunoTableClient tableId getRowId columns clientSource initialOrderBy />`
 - structurally typed Client Source integration, including direct `useLiveQuery(...)` results
 - shared shadcn lifecycle presentation: fixed-height Skeleton rows while loading, compact persistent Alerts over retained coherent stale/closed/error rows, and full-body Empty states for terminal states without rows
 - Value Type-aware loading Cell Presentation that keeps row height fixed and never samples rows or invokes cell value computation
@@ -127,7 +127,7 @@ Build:
 - pinned start and end columns
 - one native two-axis scroll owner; Scroll Area styling may decorate only that viewport
 - decorative scrollbar tracks derived from the same pinned/header geometry, with hot thumb variables isolated to the overlay subtree
-- separate continuously mounted sticky start/end regions around the virtual centre window
+- separate continuously mounted sticky start/end regions around the virtual centre window while pinning is active; before measurement, or while a narrow mixed layout cannot preserve the minimum centre width or a centreless pinned layout cannot fit, suspend pinning into one start → centre → end virtual window and restore it automatically when the active layout fits
 - one shared immutable centre-column window for header and body
 - basic headers and cells
 - helper-owned semantic layout defaults for start-aligned text, end-aligned numbers, centered checkboxes, and full-width select editors
@@ -152,7 +152,7 @@ Success criteria:
 - 1 million logical rows in stress fixture
 - 1,000 columns in stress fixture
 - bounded mounted cells
-- a 150-column fixture mounts only pinned columns plus the visible and overscanned centre window for each mounted row
+- a 150-column fixture mounts only active pinned columns plus the visible and overscanned centre window, or one bounded visible and overscanned all-column window while pinning is suspended, for each mounted row
 - held-arrow reveal advances by one logical cell and the smallest geometry delta across centre and pinned boundaries; it never delegates to nearest-index alignment
 - end-pinned columns render inside a sticky end region rather than collapsing beside start-pinned cells
 - one-time Active Cell initialization does not replay after row or column virtual-window renders
@@ -161,7 +161,7 @@ Success criteria:
 - no full-grid rerender on a single row replacement
 - React Compiler tests prove nested builder-method UI stays current without subscribing the table root to every state slice
 - compiler-on tests prove horizontal and vertical windows, column resizing, and keyboard reveal never freeze behind a memoized mutable getter
-- production benchmarks compare the exact installed Virtual React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before locking the private default
+- the BrunoTable-owned custom viewport runtime is the private default; if a future TanStack Virtual adoption is proposed, production benchmarks must compare the exact candidate React Adapter, Virtual core, `directDomUpdates` modes, and `useFlushSync` policy before changing it
 - smooth 120 Hz scrolling target on capable hardware
 - exact-numeric hot paths perform no value-kind sampling, schema inspection, or per-cell registry lookup
 - renderer and loading implementation consult the pinned [ReUI data-grid pattern note](research/reui-data-grid-patterns.md), borrowing only the explicitly accepted presentation/performance patterns
@@ -217,7 +217,7 @@ Build:
 - ordered Group By persistence beside one durable base Column Order and Column Pinning snapshot
 - independent durable sorting-capable normal `orderBy` and grouped `groupOrderBy` contexts, with no `initialGroupOrderBy` prop
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
-- mandatory non-empty `initialOrderBy` baseline with valid persisted `orderBy` precedence and no unsorted state when normal sorting is available; sort-free tables install neither value nor normal sorting state
+- mandatory non-empty `initialOrderBy` baseline for the first live Client, with valid persisted `orderBy` precedence and no unsorted state; sort-free common or Server variants install neither value nor normal sorting state
 - schema versioning and sanitization
 - tagged, versioned JSON-safe codecs for exact filter operands
 
@@ -235,7 +235,7 @@ Persist only:
 Success criteria:
 
 - new/removed columns reconcile safely
-- restored `orderBy` sanitization in a sorting-capable table can never produce an empty order; it falls back to `initialOrderBy`, while a sort-free table drops normal sorting persistence entirely
+- restored `orderBy` sanitization in a sorting-capable table can never produce an empty order; it falls back to `initialOrderBy`, while a future sort-free common or Server variant drops normal sorting persistence entirely
 - grouped restoration and every Group By or aggregate-visibility change retain valid `groupOrderBy` priorities and fall back to all active keys ascending when no entry survives
 - clearing grouping restores untouched normal `orderBy`, while re-entering a compatible grouping may restore its dormant grouped order
 - grouped sort IDs autocomplete from potential group keys, aggregate columns, and Rows, then runtime validation admits only active keys, Rows, and visible participating aggregates
@@ -251,7 +251,7 @@ Success criteria:
 - deletion of a row with committed Batch drafts preserves sparse history as blocked missing-row work, projects no phantom body row, disables Save, and exposes explicit review, undo, discard, Reset, or same-identity reconnection
 - disappearance of a row with a pending Immediate operation causes no special transition; after Promise resolution, authoritative absence reconciles that row and releases its owned cell locks
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
-- source JSX and emitted-package consumer type tests prove that sorting-capable `initialOrderBy.columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, and explicitly nonsortable IDs, while sort-free tables reject `initialOrderBy`
+- source JSX and emitted-package consumer type tests prove that `BrunoTableClient` requires a non-empty `initialOrderBy` whose `columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, explicitly nonsortable, and sort-free Client definitions
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`
@@ -640,7 +640,7 @@ Potential later work:
 - pivot
 - server-assisted bulk operations
 - per-cell subscriptions for hot columns
-- custom virtualization adapter without compiler escape hatch
+- compiler-on removal tests for the custom viewport and loading DOM-attachment escape hatches
 
 ## Exact-numeric verification gates
 

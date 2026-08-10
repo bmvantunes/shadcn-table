@@ -1,0 +1,220 @@
+import { describe, expect, it } from "vitest";
+
+import { compileColumns } from "./compile-columns";
+import { BrunoTableNavigationRuntime } from "./navigation";
+
+describe("BrunoTableNavigationRuntime", () => {
+  it("publishes frozen active-cell snapshots and supports projection reset", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    navigation.setShape(["first"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "first",
+      columnId: "COL_ID_NAME",
+    });
+    expect(Object.isFrozen(navigation.getSnapshot())).toBe(true);
+
+    navigation.reset();
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
+  it("falls back to the clamped display position when its raw row identity disappears", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move(2, 0);
+
+    navigation.setShape(["first", "second", "replacement"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 2,
+      rowId: "replacement",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("moves through the coherent header/body space and preserves row identity across reorder", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        pinned: "start",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    expect(navigation.getSnapshot()?.columnId).toBe("COL_ID_SCORE");
+
+    navigation.move(-1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_SCORE" });
+    navigation.move(0, 1);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_NAME" });
+    navigation.move(1, 0);
+    navigation.move(1, 0);
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 1,
+      rowId: "second",
+      columnId: "COL_ID_NAME",
+    });
+
+    navigation.setShape(["second", "first"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
+  });
+
+  it("keeps empty-result headers reachable while query-cleared body focus stays empty", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape([], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+
+    navigation.activateForFocus();
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_NAME",
+    });
+    const activated = navigation.getSnapshot();
+    navigation.activateForFocus();
+    navigation.activateHeader("COL_ID_MISSING");
+    expect(navigation.getSnapshot()).toBe(activated);
+    navigation.move(0, 1);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_SCORE",
+    });
+
+    navigation.setShape(["first"], columns);
+    navigation.move(1, 0);
+    navigation.setShape([], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    navigation.setShape(["replacement"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    navigation.activateForFocus();
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "replacement",
+    });
+    navigation.movePage(-10);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowId: "replacement" });
+
+    navigation.clearForQuery();
+    navigation.setShape(["first"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
+  it("keeps unloaded logical positions out of row identity and navigation", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    navigation.setShape([undefined, "second", undefined, "fourth"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 0 });
+    expect(navigation.getSnapshot()?.rowId).toBeUndefined();
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 1, rowId: "second" });
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 2 });
+    expect(navigation.getSnapshot()?.rowId).toBeUndefined();
+
+    navigation.move(1, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 3, rowId: "fourth" });
+
+    navigation.move(-4, 0);
+    expect(navigation.getSnapshot()).toMatchObject({ region: "header" });
+  });
+
+  it("supports row, column, grid, and header page boundaries", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+
+    navigation.moveToRowEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "first",
+      columnId: "COL_ID_SCORE",
+    });
+    navigation.moveToColumnEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({ rowId: "third", columnId: "COL_ID_SCORE" });
+    navigation.moveToGridEdge("start");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_NAME",
+    });
+    navigation.movePage(2);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowId: "second",
+      columnId: "COL_ID_NAME",
+    });
+    navigation.moveToGridEdge("end");
+    expect(navigation.getSnapshot()).toMatchObject({ rowId: "third", columnId: "COL_ID_SCORE" });
+    navigation.moveToColumnEdge("start");
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      columnId: "COL_ID_SCORE",
+    });
+  });
+});
