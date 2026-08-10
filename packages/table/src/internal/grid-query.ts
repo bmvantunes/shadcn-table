@@ -118,7 +118,7 @@ export function sanitizeClientInitialFilters(
     const next = sanitizeFilter(filter, columnsById, context, 0);
     if (context.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters expressions may contain at most ${CLIENT_FILTER_MAX_NODES} nodes and nesting depth ${CLIENT_FILTER_MAX_DEPTH}.`,
+        `BrunoTable initialFilters expressions may contain at most ${CLIENT_FILTER_MAX_NODES} nodes, nesting depth ${CLIENT_FILTER_MAX_DEPTH}, and ${CLIENT_FILTER_MAX_OPERANDS} values per in operand.`,
       );
     }
     if (next !== undefined) sanitized.push(next.filter);
@@ -251,7 +251,7 @@ function captureDenseFilterArray(
 ): readonly unknown[] | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) {
-    return !reserveConditions || reserveConditionEntries(value.length, context) ? value : undefined;
+    return admitFilterArrayLength(value.length, context, reserveConditions) ? value : undefined;
   }
   let captured = context.capturedArrays.get(value);
   if (!context.capturedArrays.has(value)) {
@@ -259,7 +259,7 @@ function captureDenseFilterArray(
     context.capturedArrays.set(value, captured);
   }
   if (captured === undefined) return undefined;
-  if (reserveConditions && !reserveConditionEntries(captured.length, context)) return undefined;
+  if (!admitFilterArrayLength(captured.length, context, reserveConditions)) return undefined;
   if (!captured.attempted) {
     captured.attempted = true;
     const snapshot = snapshotDenseArray(value, captured.length);
@@ -267,6 +267,17 @@ function captureDenseFilterArray(
     if (captured.snapshot !== undefined) SANITIZED_FILTER_SNAPSHOTS.add(captured.snapshot);
   }
   return captured.snapshot;
+}
+
+function admitFilterArrayLength(
+  length: number,
+  context: FilterSanitizationContext,
+  reserveConditions: boolean,
+): boolean {
+  if (reserveConditions) return reserveConditionEntries(length, context);
+  if (length <= CLIENT_FILTER_MAX_OPERANDS) return true;
+  context.overBudget = true;
+  return false;
 }
 
 function captureFilterArrayLength(value: object): CapturedFilterArray | undefined {
@@ -685,12 +696,9 @@ function hasValidTextSensitivity(
 function snapshotDenseArray(values: unknown, length: number): readonly unknown[] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
-    const indexes = readOwnArrayIndexes(values, length);
-    if (indexes === undefined || indexes.length !== length) return undefined;
     const snapshot: unknown[] = [];
-    for (let position = 0; position < indexes.length; position += 1) {
-      const index = indexes[position];
-      if (index !== position) return undefined;
+    for (let index = 0; index < length; index += 1) {
+      if (!Object.hasOwn(values, index)) return undefined;
       snapshot.push(values[index]);
     }
     return snapshot;
@@ -761,6 +769,7 @@ const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
 const CLIENT_FILTER_MAX_DEPTH = 64;
 const CLIENT_FILTER_MAX_NODES = 1_024;
+const CLIENT_FILTER_MAX_OPERANDS = 4_096;
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {

@@ -57,7 +57,42 @@ describe("BrunoTableClient server rendering", () => {
         />,
       ),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+    );
+  });
+
+  it("rejects an over-budget in operand at the public construction boundary", () => {
+    const rows = [{ id: "ada", score: 1 }] as const;
+    const columns = [
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ] as const;
+
+    expect(() =>
+      renderToStaticMarkup(
+        <BrunoTableClient
+          tableId="TABLE_ID_FILTER_OPERAND_BUDGET"
+          getRowId={(row) => row.id}
+          columns={columns}
+          clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+          initialFilters={
+            [
+              {
+                columnId: "COL_ID_SCORE",
+                filter: Array.from({ length: 4_097 }, (_, index) => index),
+                type: "in",
+              },
+            ] as never
+          }
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        />,
+      ),
+    ).toThrowError(
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
     );
   });
 

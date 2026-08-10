@@ -983,7 +983,7 @@ The filter model must support:
 
 The type must reject a compound group containing different Column Identities. Cross-column Grid Filter composition is always the implicit root `AND`; Quick Filter owns its separate OR-across-eligible-fields behavior.
 
-Each top-level Grid Filter expression admits at most 1,024 total node occurrences, including its root, and a maximum nesting depth of 64 after that root. This runtime work budget bounds hostile recursive input that has escaped the typed boundary without limiting the number of expressions in the implicit-AND root array or the number of values in an `in` operand. `BrunoTableClient` rejects an over-budget or over-depth `initialFilters` expression with a `TypeError` at construction rather than silently broadening the result; conservative restoration may drop an expression that exceeds either bound.
+Each top-level Grid Filter expression admits at most 1,024 total node occurrences, including its root, a maximum nesting depth of 64 after that root, and at most 4,096 values in each `in` operand. This runtime work budget bounds hostile recursive input that has escaped the typed boundary without limiting the number of expressions in the implicit-AND root array. `BrunoTableClient` rejects an `initialFilters` expression that exceeds any bound with a `TypeError` at construction rather than silently broadening the result; conservative restoration drops an expression that exceeds any bound.
 
 For example, `contains` must be rejected for a numeric column and `greaterThan` must be rejected for a nonnumeric column.
 

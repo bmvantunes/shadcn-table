@@ -394,7 +394,7 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([deep], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
     );
   });
 
@@ -929,6 +929,75 @@ describe("Client row model", () => {
     expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
   });
 
+  it("bounds each in operand before materializing hostile values", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const atLimit = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_SCORE",
+          filter: Array.from({ length: 4_096 }, (_, index) => index),
+          type: "in",
+        },
+      ],
+      columns,
+    );
+    expect(
+      (atLimit[0] as { readonly filter: readonly unknown[] } | undefined)?.filter,
+    ).toHaveLength(4_096);
+
+    const ownKeys = vi.fn(Reflect.ownKeys);
+    const overBudgetOperand = new Proxy(
+      Array.from({ length: 4_097 }, (_, index) => index),
+      { ownKeys },
+    );
+    const filter = {
+      columnId: "COL_ID_SCORE",
+      filter: overBudgetOperand,
+      type: "in",
+    };
+
+    expect(sanitizeClientInitialFilters([filter], columns)).toEqual([]);
+    expect(ownKeys).not.toHaveBeenCalled();
+    expect(() =>
+      sanitizeClientInitialFilters([filter], columns, { rejectOverBudget: true }),
+    ).toThrowError(
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+    );
+    expect(ownKeys).not.toHaveBeenCalled();
+  });
+
+  it("captures admitted dense operands without enumerating unrelated own properties", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const values = [1] as number[] & { noise?: string };
+    values.noise = "unrelated";
+    const ownKeys = vi.fn((): never => {
+      throw new Error("Dense operand own keys must not be enumerated.");
+    });
+    const operand = new Proxy(values, { ownKeys });
+
+    const sanitized = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_SCORE", filter: operand, type: "in" }],
+      columns,
+    );
+
+    expect((sanitized[0] as { readonly filter: readonly unknown[] }).filter).toEqual([1]);
+    expect(ownKeys).not.toHaveBeenCalled();
+  });
+
   it("rejects a compound filter over the total node budget before materializing conditions", () => {
     const columns = compileColumns([
       {
@@ -954,7 +1023,7 @@ describe("Client row model", () => {
         rejectOverBudget: true,
       }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes and nesting depth 64.",
+      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
     );
 
     expect(
