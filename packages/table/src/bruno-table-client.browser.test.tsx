@@ -1570,11 +1570,7 @@ describe("BrunoTableClient browser surface", () => {
           expect(grid.element().querySelectorAll(`[id="${ownedId}"]`)).toHaveLength(1);
         }
       }
-      expect(
-        consoleError.mock.calls.some(([message]) =>
-          String(message).includes("Encountered two children with the same key"),
-        ),
-      ).toBe(false);
+      expect(consoleError).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
@@ -3127,7 +3123,9 @@ describe("BrunoTableClient browser surface", () => {
           clientSource={readySource()}
         />,
       );
-      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" }).element();
+      const grid = screen
+        .getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" })
+        .element() as HTMLElement;
       const overlay = grid.parentElement?.querySelector<HTMLElement>(
         "[data-bruno-scrollbar-overlay]",
       );
@@ -3147,6 +3145,8 @@ describe("BrunoTableClient browser surface", () => {
       expect(getComputedStyle(grid).direction).toBe("rtl");
       expect(getComputedStyle(overlay).direction).toBe("rtl");
 
+      // Chromium uses the negative RTL scroll model. Default and reverse models clamp this write
+      // to zero, so a provider change would fail the movement assertion below diagnostically.
       grid.scrollLeft = -640;
       grid.dispatchEvent(new Event("scroll"));
       await vi.waitFor(() =>
@@ -3156,11 +3156,16 @@ describe("BrunoTableClient browser surface", () => {
           ),
         ).toBeLessThan(0),
       );
+      const pinnedRegionInlineSize = 160;
+      const nativeVerticalScrollbarInlineSize = grid.offsetWidth - grid.clientWidth;
       const gridRect = grid.getBoundingClientRect();
       const horizontalTrackRect = horizontalTrack.getBoundingClientRect();
       const verticalTrackRect = verticalTrack.getBoundingClientRect();
-      expect(horizontalTrackRect.right).toBeCloseTo(gridRect.right - 160, 0);
-      expect(horizontalTrackRect.left).toBeGreaterThanOrEqual(gridRect.left + 160 - 1);
+      expect(horizontalTrackRect.right).toBeCloseTo(gridRect.right - pinnedRegionInlineSize, 0);
+      expect(horizontalTrackRect.left).toBeCloseTo(
+        gridRect.left + pinnedRegionInlineSize + nativeVerticalScrollbarInlineSize,
+        0,
+      );
       expect(verticalTrackRect.left).toBeLessThan(gridRect.left + gridRect.width / 2);
     } finally {
       directionStyle.remove();
