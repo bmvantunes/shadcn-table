@@ -636,7 +636,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(-600);
   });
 
-  it("limits class and style direction observation to plausible owners", () => {
+  it("observes inherited direction changes on every ancestor", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_DIRECTION_OBSERVER",
@@ -700,7 +700,7 @@ describe("BrunoTableViewportRuntime", () => {
     ).toEqual(["class", "dir", "style"]);
     expect(
       observations.find(({ target }) => target === intermediateOwner)?.options.attributeFilter,
-    ).toEqual(["dir"]);
+    ).toEqual(["class", "dir", "style"]);
     expect(
       observations.find(({ target }) => target === explicitDirectionOwner)?.options.attributeFilter,
     ).toEqual(["class", "dir", "style"]);

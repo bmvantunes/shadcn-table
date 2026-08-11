@@ -6,7 +6,7 @@ import { act, useEffect } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
-import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import { BrunoTableClient, BrunoTableComputedColumn, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
@@ -521,9 +521,25 @@ describe("BrunoTableClient browser surface", () => {
 
   test("preserves compiled column geometry and static presentation while loading", async () => {
     const renderer = vi.fn(({ value }: { readonly value: string }) => value);
+    const valueGetter = vi.fn(({ row }: { readonly row: Pick<Row, "score"> }) => row.score * 2);
+    const sampledFields: PropertyKey[] = [];
+    const unreadableRow = new Proxy(rows[0]!, {
+      get(target, property, receiver) {
+        sampledFields.push(property);
+        return Reflect.get(target, property, receiver);
+      },
+    });
     const loadingColumns = [
       { ...columns[0], pinned: "start" as const, width: 120, cellRenderer: renderer },
       { ...columns[1], width: 100 },
+      BrunoTableComputedColumn({
+        columnId: "COL_ID_DOUBLE_SCORE",
+        fields: ["score"],
+        headerName: "Double score",
+        valueGetter,
+        valueType: "number",
+        width: 110,
+      }),
       {
         ...columns[0],
         columnId: "COL_ID_ALIAS",
@@ -538,17 +554,21 @@ describe("BrunoTableClient browser surface", () => {
         getRowId={(row: Row) => row.id}
         columns={loadingColumns}
         initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
-        clientSource={{ rows, totalRows: 100, version: 1, status: "loading" }}
+        clientSource={{ rows: [unreadableRow], totalRows: 100, version: 1, status: "loading" }}
       />,
     );
     const grid = screen.getByRole("grid", { name: "Loading table rows" });
-    await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+    await expect.element(grid).toHaveAttribute("aria-colcount", "4");
     const loadingName = screen.getByRole("gridcell", { name: "Loading Name" }).nth(0);
     const loadingScore = screen.getByRole("gridcell", { name: "Loading Score" }).nth(0);
+    const loadingDoubleScore = screen
+      .getByRole("gridcell", { name: "Loading Double score" })
+      .nth(0);
     const loadingAlias = screen.getByRole("gridcell", { name: "Loading Alias" }).nth(0);
     await expect.element(loadingName).toHaveAttribute("aria-colindex", "1");
     await expect.element(loadingScore).toHaveAttribute("aria-colindex", "2");
-    await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "3");
+    await expect.element(loadingDoubleScore).toHaveAttribute("aria-colindex", "3");
+    await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "4");
     const loadingStartRegion = loadingName
       .element()
       .closest<HTMLElement>('[data-bruno-pinned-body-region="start"]');
@@ -562,16 +582,20 @@ describe("BrunoTableClient browser surface", () => {
     ].find((row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingAlias.element().id));
     expect(loadingNameOwner).toBe(loadingAliasOwner);
     expect(loadingNameOwner?.getAttribute("aria-rowindex")).toBe("1");
+    expect(loadingNameOwner?.getAttribute("aria-owns")?.split(" ")).toEqual([
+      loadingName.element().id,
+      loadingScore.element().id,
+      loadingDoubleScore.element().id,
+      loadingAlias.element().id,
+    ]);
     const loadingRowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
-    expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
-    expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
     if (loadingStartRegion === null) throw new Error("The loading start region was not mounted.");
-    expect(
-      loadingStartRegion.style.getPropertyValue("--bruno-table-viewport-inline-size"),
-    ).not.toBe("");
+    expect(loadingStartRegion.closest("[data-bruno-row-layer]")).toBe(loadingRowLayer);
+    expect(loadingStartRegion.style.position).toBe("sticky");
     await vi.waitFor(() => {
       expect(loadingName.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
       expect(loadingScore.element().getBoundingClientRect().width).toBeCloseTo(100, 0);
+      expect(loadingDoubleScore.element().getBoundingClientRect().width).toBeCloseTo(110, 0);
       expect(loadingAlias.element().getBoundingClientRect().width).toBeCloseTo(140, 0);
       expect(loadingAlias.element().getBoundingClientRect().right).toBeCloseTo(
         grid.element().getBoundingClientRect().right,
@@ -585,6 +609,8 @@ describe("BrunoTableClient browser surface", () => {
       (loadingScore.element().firstElementChild as HTMLElement | null)?.style.marginInlineStart,
     ).toBe("auto");
     expect(renderer).not.toHaveBeenCalled();
+    expect(valueGetter).not.toHaveBeenCalled();
+    expect(sampledFields).toEqual([]);
   });
 
   test("preserves grid focus across ready, loading, and ready lifecycle transitions", async () => {
@@ -1414,10 +1440,11 @@ describe("BrunoTableClient browser surface", () => {
     const firstActiveId = grid.element().getAttribute("aria-activedescendant");
     expect(
       screen
-        .getByRole("gridcell", { name: "Loading row" })
+        .getByRole("gridcell", { name: "Loading Name" })
         .all()
         .some((cell) => cell.element().id === firstActiveId),
     ).toBe(true);
+    expect(grid.element().querySelectorAll(`[id="${firstActiveId ?? ""}"]`)).toHaveLength(1);
 
     grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() =>
@@ -1426,10 +1453,11 @@ describe("BrunoTableClient browser surface", () => {
     const secondActiveId = grid.element().getAttribute("aria-activedescendant");
     expect(
       screen
-        .getByRole("gridcell", { name: "Loading row" })
+        .getByRole("gridcell", { name: "Loading Name" })
         .all()
         .some((cell) => cell.element().id === secondActiveId),
     ).toBe(true);
+    expect(grid.element().querySelectorAll(`[id="${secondActiveId ?? ""}"]`)).toHaveLength(1);
 
     await grid.wheel({ delta: { y: 1200 } });
     await vi.waitFor(() =>
@@ -2826,13 +2854,19 @@ describe("BrunoTableClient browser surface", () => {
     );
     expect(pinnedStartOwner).toBe(pinnedEndOwner);
     expect(pinnedStartOwner?.getAttribute("aria-rowindex")).toBe(String(deepRowIndex + 2));
-    const rowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
-    expect(rowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
-    expect(rowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
-    if (pinnedStartRegion === null) throw new Error("The pinned start region was not mounted.");
-    expect(pinnedStartRegion.style.getPropertyValue("--bruno-table-viewport-inline-size")).not.toBe(
-      "",
+    expect(pinnedStartOwner?.getAttribute("aria-owns")?.split(" ")).toEqual(
+      deepRowCells
+        .toSorted(
+          (left, right) =>
+            Number(left.element().getAttribute("aria-colindex")) -
+            Number(right.element().getAttribute("aria-colindex")),
+        )
+        .map((cell) => cell.element().id),
     );
+    const rowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
+    if (pinnedStartRegion === null) throw new Error("The pinned start region was not mounted.");
+    expect(pinnedStartRegion.closest("[data-bruno-row-layer]")).toBe(rowLayer);
+    expect(pinnedStartRegion.style.position).toBe("sticky");
     expect(screen.getByRole("row").all().length).toBeLessThan(30);
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
     expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
@@ -2925,6 +2959,7 @@ describe("BrunoTableClient browser surface", () => {
     expect(backwardCellRect.right).toBeCloseTo(startHeader.getBoundingClientRect().left, 0);
 
     gridElement.scrollLeft = -960;
+    assertPinnedBodyEdges();
     gridElement.dispatchEvent(new Event("scroll"));
     await expect
       .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
@@ -4573,6 +4608,99 @@ describe("BrunoTableClient browser surface", () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(actions[1]!.element()));
       expect(firstRecoverableErrors).toEqual([]);
       expect(secondRecoverableErrors).toEqual([]);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        firstRoot?.unmount();
+        secondRoot?.unmount();
+      });
+      if (previousActEnvironment === undefined) {
+        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+      } else {
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
+      consoleError.mockRestore();
+      firstHost.remove();
+      secondHost.remove();
+    }
+  });
+
+  test("keeps loading-cell ownership unique across separately hydrated roots", async () => {
+    const hydrationColumns = [
+      { ...columns[0], pinned: "start" as const },
+      { ...columns[1], pinned: "end" as const },
+    ] as const;
+    const table = (
+      <BrunoTableClient
+        tableId="TABLE_ID_HYDRATED_LOADING"
+        getRowId={(row: Row) => row.id}
+        columns={hydrationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{ rows: [], totalRows: 20, version: 1, status: "loading" }}
+      />
+    );
+    const markup = renderToString(table);
+    const firstHost = document.createElement("div");
+    const secondHost = document.createElement("div");
+    firstHost.innerHTML = markup;
+    secondHost.innerHTML = markup;
+    document.body.append(firstHost, secondHost);
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const recoverableErrors: unknown[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let firstRoot: Root | undefined;
+    let secondRoot: Root | undefined;
+    try {
+      await act(async () => {
+        firstRoot = hydrateRoot(firstHost, table, {
+          onRecoverableError: (error) => recoverableErrors.push(error),
+        });
+        secondRoot = hydrateRoot(secondHost, table, {
+          onRecoverableError: (error) => recoverableErrors.push(error),
+        });
+      });
+      const grids = page.getByRole("grid", { name: "Loading table rows" }).all();
+      await vi.waitFor(() => expect(grids).toHaveLength(2));
+      const firstCell = grids[0]!
+        .element()
+        .querySelector<HTMLElement>('[role="gridcell"][aria-colindex="1"]');
+      const secondCell = grids[1]!
+        .element()
+        .querySelector<HTMLElement>('[role="gridcell"][aria-colindex="1"]');
+      if (firstCell === null || secondCell === null) {
+        throw new Error("Both hydrated loading grids must mount their pinned start cell.");
+      }
+      expect(firstCell.id).not.toBe("");
+      expect(secondCell.id).not.toBe("");
+      expect(firstCell.id).not.toBe(secondCell.id);
+      expect(firstCell.closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      expect(secondCell.closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      const ownershipSets = grids.map((grid) => {
+        const gridElement = grid.element();
+        const owner = gridElement.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
+        const ownedIds = owner?.getAttribute("aria-owns")?.split(" ") ?? [];
+        const firstRowCellIds = [...gridElement.querySelectorAll<HTMLElement>('[role="gridcell"]')]
+          .filter((cell) => ownedIds.includes(cell.id))
+          .toSorted(
+            (left, right) =>
+              Number(left.getAttribute("aria-colindex")) -
+              Number(right.getAttribute("aria-colindex")),
+          )
+          .map((cell) => cell.id);
+        expect(ownedIds).toEqual(firstRowCellIds);
+        expect(ownedIds).toHaveLength(hydrationColumns.length);
+        for (const ownedId of ownedIds) {
+          expect(gridElement.querySelectorAll(`[id="${ownedId}"]`)).toHaveLength(1);
+        }
+        return ownedIds;
+      });
+      expect(ownershipSets[0]).not.toEqual(ownershipSets[1]);
+      expect(ownershipSets[0]!.some((id) => ownershipSets[1]!.includes(id))).toBe(false);
+      expect(recoverableErrors).toEqual([]);
       expect(consoleError).not.toHaveBeenCalled();
     } finally {
       await act(async () => {

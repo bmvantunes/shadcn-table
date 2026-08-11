@@ -85,8 +85,6 @@ export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
   private element: HTMLElement | null = null;
   private rowLayer: HTMLElement | null = null;
-  private pinnedStartBodyLayer: HTMLElement | null = null;
-  private pinnedEndBodyLayer: HTMLElement | null = null;
   private scrollbarOverlay: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private directionObserver: MutationObserver | null = null;
@@ -109,9 +107,7 @@ export class BrunoTableViewportRuntime {
   private layoutReconciliationPending = false;
   private logicalScrollLeft = 0;
   private pendingLayoutHorizontalCoordinate: HorizontalCoordinateSample | undefined;
-  private pinnedBodyOffset = "0px";
   private rowLayerOffset = "0px";
-  private viewportInlineSize = "0px";
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private layoutKey = "";
@@ -316,23 +312,6 @@ export class BrunoTableViewportRuntime {
     }
     if (this.element !== null && typeof MutationObserver !== "undefined") {
       this.directionObserver = new MutationObserver(this.handleDirectionMutation);
-      const classStyleOwners = new Set<HTMLElement>([this.element]);
-      for (const directionStyleOwner of [
-        this.element.parentElement,
-        this.element.ownerDocument.body,
-        this.element.ownerDocument.documentElement,
-      ]) {
-        if (directionStyleOwner !== null) classStyleOwners.add(directionStyleOwner);
-      }
-      for (
-        let explicitDirectionOwner: HTMLElement | null = this.element;
-        explicitDirectionOwner !== null;
-        explicitDirectionOwner = explicitDirectionOwner.parentElement
-      ) {
-        if (explicitDirectionOwner.hasAttribute?.("dir") === true) {
-          classStyleOwners.add(explicitDirectionOwner);
-        }
-      }
       for (
         let directionOwner: HTMLElement | null = this.element;
         directionOwner !== null;
@@ -340,9 +319,7 @@ export class BrunoTableViewportRuntime {
       ) {
         this.directionObserver.observe(directionOwner, {
           attributes: true,
-          attributeFilter: classStyleOwners.has(directionOwner)
-            ? ["class", "dir", "style"]
-            : ["dir"],
+          attributeFilter: ["class", "dir", "style"],
         });
       }
     }
@@ -356,14 +333,6 @@ export class BrunoTableViewportRuntime {
     if (element !== null) {
       element.style.setProperty("--bruno-table-row-layer-offset", this.rowLayerOffset);
     }
-  };
-
-  public readonly attachPinnedStartBodyLayer = (element: HTMLElement | null): void => {
-    this.attachPinnedBodyLayer("start", element);
-  };
-
-  public readonly attachPinnedEndBodyLayer = (element: HTMLElement | null): void => {
-    this.attachPinnedBodyLayer("end", element);
   };
 
   public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
@@ -381,10 +350,6 @@ export class BrunoTableViewportRuntime {
     this.element = null;
     this.rowLayer?.style.removeProperty("--bruno-table-row-layer-offset");
     this.rowLayer = null;
-    this.clearPinnedBodyLayer(this.pinnedStartBodyLayer);
-    this.clearPinnedBodyLayer(this.pinnedEndBodyLayer);
-    this.pinnedStartBodyLayer = null;
-    this.pinnedEndBodyLayer = null;
     this.scrollbarOverlay = null;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
@@ -406,9 +371,7 @@ export class BrunoTableViewportRuntime {
     this.layoutReconciliationPending = false;
     this.logicalScrollLeft = 0;
     this.pendingLayoutHorizontalCoordinate = undefined;
-    this.pinnedBodyOffset = "0px";
     this.rowLayerOffset = "0px";
-    this.viewportInlineSize = "0px";
   };
 
   private readonly handleScroll = (): void => {
@@ -537,11 +500,7 @@ export class BrunoTableViewportRuntime {
       height: element.clientHeight,
     });
     this.rowLayerOffset = `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`;
-    this.pinnedBodyOffset = `${this.horizontalDirection === "rtl" ? -logicalScrollLeft : logicalScrollLeft}px`;
-    this.viewportInlineSize = `${element.clientWidth}px`;
     this.rowLayer?.style.setProperty("--bruno-table-row-layer-offset", this.rowLayerOffset);
-    this.writePinnedBodyLayer(this.pinnedStartBodyLayer);
-    this.writePinnedBodyLayer(this.pinnedEndBodyLayer);
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
     this.publishSnapshot(next);
     this.directionDirty = false;
@@ -627,25 +586,6 @@ export class BrunoTableViewportRuntime {
       pinnedStartWidth: this.layout.pinnedStartWidth,
       pinningKey: this.layoutPinningKey,
     });
-  }
-
-  private attachPinnedBodyLayer(side: "start" | "end", element: HTMLElement | null): void {
-    const previous = side === "start" ? this.pinnedStartBodyLayer : this.pinnedEndBodyLayer;
-    if (previous === element) return;
-    this.clearPinnedBodyLayer(previous);
-    if (side === "start") this.pinnedStartBodyLayer = element;
-    else this.pinnedEndBodyLayer = element;
-    this.writePinnedBodyLayer(element);
-  }
-
-  private clearPinnedBodyLayer(element: HTMLElement | null): void {
-    element?.style.removeProperty("--bruno-table-pinned-body-offset");
-    element?.style.removeProperty("--bruno-table-viewport-inline-size");
-  }
-
-  private writePinnedBodyLayer(element: HTMLElement | null): void {
-    element?.style.setProperty("--bruno-table-pinned-body-offset", this.pinnedBodyOffset);
-    element?.style.setProperty("--bruno-table-viewport-inline-size", this.viewportInlineSize);
   }
 
   private capturePublishedHorizontalCoordinate(
