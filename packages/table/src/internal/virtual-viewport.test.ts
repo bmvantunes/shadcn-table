@@ -191,6 +191,7 @@ describe("BrunoTableViewportRuntime", () => {
     );
     expect(initialProperties.get("--bruno-table-scrollbar-horizontal-start")).toBe("120px");
     expect(initialProperties.get("--bruno-table-scrollbar-horizontal-end")).toBe("155px");
+    expect(initialProperties.get("direction")).toBe("ltr");
     expect(initialProperties.get("--bruno-table-scrollbar-horizontal-bottom")).toBe("15px");
     expect(initialProperties.get("--bruno-table-scrollbar-vertical-top")).toBe("36px");
     expect(initialProperties.get("--bruno-table-scrollbar-vertical-right")).toBe("15px");
@@ -634,6 +635,71 @@ describe("BrunoTableViewportRuntime", () => {
     mutation!([], {} as MutationObserver);
     callbacks.shift()!(0);
     expect(element.scrollLeft).toBe(-600);
+  });
+
+  it("refreshes computed direction during resize-driven environment reconciliation", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_RESIZE_DIRECTION_${index}`,
+        field: "name",
+        headerName: `Resize direction ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let direction: "ltr" | "rtl" = "ltr";
+    let resize: (() => void) | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        public constructor(callback: ResizeObserverCallback) {
+          resize = () => callback([], this as unknown as ResizeObserver);
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    const ownerDocument = createRtlOwnerDocument("negative", () => direction);
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const overlaySetProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 200,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 600,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    viewport.attachScrollbarOverlay({
+      style: { setProperty: overlaySetProperty },
+    } as unknown as HTMLElement);
+    const initialCenterStart = viewport.getSnapshot().virtualWindow.centerStartIndex;
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+
+    overlaySetProperty.mockClear();
+    direction = "rtl";
+    resize!();
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+    callbacks.shift()!(0);
+
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(element.scrollLeft).toBe(-600);
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(initialCenterStart);
+    expect(overlaySetProperty).toHaveBeenCalledWith("direction", "rtl");
   });
 
   it("observes inherited direction changes on every ancestor", () => {

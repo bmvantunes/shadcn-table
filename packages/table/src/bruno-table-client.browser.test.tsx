@@ -3102,6 +3102,71 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
   });
 
+  test("synchronizes decorative scrollbar direction when RTL belongs only to the scroll owner", async () => {
+    const directionStyle = document.createElement("style");
+    directionStyle.textContent = "[data-bruno-scroll-owner] { direction: rtl; }";
+    document.head.append(directionStyle);
+    try {
+      const screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_GRID_ONLY_RTL"
+          getRowId={(row: Row) => row.id}
+          columns={
+            [
+              { ...wideColumns[0], columnId: "COL_ID_GRID_RTL_START", pinned: "start" },
+              ...wideColumns.slice(1, 10),
+              {
+                ...wideColumns[0],
+                columnId: "COL_ID_GRID_RTL_END",
+                headerName: "Grid-only RTL end",
+                pinned: "end",
+              },
+            ] as const
+          }
+          initialOrderBy={[{ columnId: "COL_ID_GRID_RTL_START", direction: "asc" }]}
+          clientSource={readySource()}
+        />,
+      );
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" }).element();
+      const overlay = grid.parentElement?.querySelector<HTMLElement>(
+        "[data-bruno-scrollbar-overlay]",
+      );
+      if (overlay === undefined || overlay === null) {
+        throw new Error("The grid-only RTL scrollbar overlay was not mounted.");
+      }
+      const horizontalTrack = overlay.querySelector<HTMLElement>(
+        '[data-bruno-scrollbar-track="horizontal"]',
+      );
+      const verticalTrack = overlay.querySelector<HTMLElement>(
+        '[data-bruno-scrollbar-track="vertical"]',
+      );
+      if (horizontalTrack === null || verticalTrack === null) {
+        throw new Error("The grid-only RTL scrollbar tracks were not mounted.");
+      }
+      await vi.waitFor(() => expect(overlay.style.direction).toBe("rtl"));
+      expect(getComputedStyle(grid).direction).toBe("rtl");
+      expect(getComputedStyle(overlay).direction).toBe("rtl");
+
+      grid.scrollLeft = -640;
+      grid.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() =>
+        expect(
+          Number.parseFloat(
+            overlay.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset"),
+          ),
+        ).toBeLessThan(0),
+      );
+      const gridRect = grid.getBoundingClientRect();
+      const horizontalTrackRect = horizontalTrack.getBoundingClientRect();
+      const verticalTrackRect = verticalTrack.getBoundingClientRect();
+      expect(horizontalTrackRect.right).toBeCloseTo(gridRect.right - 160, 0);
+      expect(horizontalTrackRect.left).toBeGreaterThanOrEqual(gridRect.left + 160 - 1);
+      expect(verticalTrackRect.left).toBeLessThan(gridRect.left + gridRect.width / 2);
+    } finally {
+      directionStyle.remove();
+    }
+  });
+
   test("keeps scroll-frame geometry out of the table root and observes zoomed resize", async () => {
     const viewRenders = vi.fn();
     const removeViewRenderListener = installBrunoTableClientViewRenderListener(viewRenders);

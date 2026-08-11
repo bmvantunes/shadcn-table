@@ -86,6 +86,7 @@ export class BrunoTableViewportRuntime {
   private element: HTMLElement | null = null;
   private rowLayer: HTMLElement | null = null;
   private scrollbarOverlay: HTMLElement | null = null;
+  private scrollbarOverlayDirection: HorizontalDirection | undefined;
   private resizeObserver: ResizeObserver | null = null;
   private directionObserver: MutationObserver | null = null;
   private frame: number | null = null;
@@ -338,6 +339,7 @@ export class BrunoTableViewportRuntime {
   public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
     if (this.scrollbarOverlay === element) return;
     this.scrollbarOverlay = element;
+    this.scrollbarOverlayDirection = undefined;
     this.publishFromElement();
   };
 
@@ -351,6 +353,7 @@ export class BrunoTableViewportRuntime {
     this.rowLayer?.style.removeProperty("--bruno-table-row-layer-offset");
     this.rowLayer = null;
     this.scrollbarOverlay = null;
+    this.scrollbarOverlayDirection = undefined;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.pendingReveal = undefined;
@@ -391,7 +394,14 @@ export class BrunoTableViewportRuntime {
     }
     this.schedulePublish();
   };
-  private readonly handleResize = (): void => this.schedulePublish();
+  private readonly handleResize = (): void => {
+    const element = this.element;
+    if (element !== null) {
+      this.directionDirty = true;
+      this.directionMutationNativeScrollLeft = element.scrollLeft;
+    }
+    this.schedulePublish();
+  };
   private readonly handleDirectionMutation = (): void => {
     const element = this.element;
     if (element === null) return;
@@ -640,6 +650,10 @@ export class BrunoTableViewportRuntime {
   ): void {
     const overlay = this.scrollbarOverlay;
     if (overlay === null) return;
+    if (this.scrollbarOverlayDirection !== this.horizontalDirection) {
+      overlay.style.setProperty("direction", this.horizontalDirection);
+      this.scrollbarOverlayDirection = this.horizontalDirection;
+    }
     const horizontal = horizontalMetrics(this.layout, element.clientWidth);
     const suspendPinning = horizontal.suspendPinning;
     const pinnedStartWidth = suspendPinning ? 0 : this.layout.pinnedStartWidth;
