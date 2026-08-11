@@ -33,7 +33,11 @@ import type {
 } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
-import { BrunoTableNavigationRuntime, type BrunoTableActiveCell } from "./navigation";
+import {
+  BrunoTableNavigationRuntime,
+  type BrunoTableActiveCell,
+  type BrunoTableNavigationCommand,
+} from "./navigation";
 import type {
   BrunoTableCellSnapshot,
   BrunoTableChromeSnapshot,
@@ -102,6 +106,41 @@ function navigationDelta(
   if (key === "ArrowLeft") return { row: 0, column: -1 };
   if (key === "ArrowRight") return { row: 0, column: 1 };
   return undefined;
+}
+
+function keyboardNavigationCommand(
+  event: Readonly<
+    Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey"> & {
+      readonly currentTarget: HTMLElement;
+    }
+  >,
+): BrunoTableNavigationCommand | undefined {
+  if (event.altKey) return undefined;
+  const boundaryModifier = event.ctrlKey || event.metaKey;
+  if (event.key === "Home" || event.key === "End") {
+    const edge = event.key === "Home" ? "start" : "end";
+    return boundaryModifier ? { type: "grid-edge", edge } : { type: "row-edge", edge };
+  }
+  if (boundaryModifier && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    return {
+      type: "column-edge",
+      edge: event.key === "ArrowUp" ? "start" : "end",
+    };
+  }
+  if (boundaryModifier && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    return {
+      type: "row-edge",
+      edge: event.key === "ArrowLeft" ? "start" : "end",
+    };
+  }
+  if (event.key === "PageUp" || event.key === "PageDown") {
+    const pageSize = viewportPageSize(event.currentTarget);
+    return { type: "page", rowDelta: event.key === "PageUp" ? -pageSize : pageSize };
+  }
+  const delta = navigationDelta(event.key);
+  return delta === undefined
+    ? undefined
+    : { type: "step", rowDelta: delta.row, columnDelta: delta.column };
 }
 
 function cellDomId(instanceId: string, tableId: string, rowId: string, columnId: string): string {
@@ -914,42 +953,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             }
             return;
           }
-          const boundaryModifier = event.ctrlKey || event.metaKey;
-          const rowEdge = event.key === "Home" ? "start" : event.key === "End" ? "end" : undefined;
-          const columnEdge =
-            boundaryModifier && event.key === "ArrowUp"
-              ? "start"
-              : boundaryModifier && event.key === "ArrowDown"
-                ? "end"
-                : undefined;
-          const modifiedRowEdge =
-            boundaryModifier && event.key === "ArrowLeft"
-              ? "start"
-              : boundaryModifier && event.key === "ArrowRight"
-                ? "end"
-                : undefined;
-          const delta = boundaryModifier ? undefined : navigationDelta(event.key);
-          const pageDelta =
-            event.key === "PageUp"
-              ? -viewportPageSize(event.currentTarget)
-              : event.key === "PageDown"
-                ? viewportPageSize(event.currentTarget)
-                : undefined;
-          if (
-            delta === undefined &&
-            pageDelta === undefined &&
-            rowEdge === undefined &&
-            columnEdge === undefined &&
-            modifiedRowEdge === undefined
-          )
-            return;
+          const command = keyboardNavigationCommand(event);
+          if (command === undefined) return;
           event.preventDefault();
-          if (rowEdge !== undefined && boundaryModifier) navigation.moveToGridEdge(rowEdge);
-          else if (rowEdge !== undefined) navigation.moveToRowEdge(rowEdge);
-          else if (columnEdge !== undefined) navigation.moveToColumnEdge(columnEdge);
-          else if (modifiedRowEdge !== undefined) navigation.moveToRowEdge(modifiedRowEdge);
-          else if (pageDelta !== undefined) navigation.movePage(pageDelta);
-          else if (delta !== undefined) navigation.move(delta.row, delta.column);
+          navigation.navigate(command);
           const next = navigation.getSnapshot();
           if (next !== undefined) {
             revealCell(next.rowIndex, next.columnId, next.region, next.rowId);

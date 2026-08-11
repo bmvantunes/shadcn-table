@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compileColumns } from "./compile-columns";
-import { BrunoTableNavigationRuntime } from "./navigation";
+import { BrunoTableNavigationRuntime, type BrunoTableNavigationCommand } from "./navigation";
 
 describe("BrunoTableNavigationRuntime", () => {
   it("publishes frozen active-cell snapshots and supports projection reset", () => {
@@ -216,5 +216,85 @@ describe("BrunoTableNavigationRuntime", () => {
       region: "header",
       columnId: "COL_ID_SCORE",
     });
+  });
+
+  it("resolves every keyboard command through one deterministic logical model", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        pinned: "start",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_CENTER",
+        field: "name",
+        headerName: "Center",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        pinned: "end",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third", "fourth"], columns);
+
+    const commands: readonly BrunoTableNavigationCommand[] = [
+      { type: "step", rowDelta: 0, columnDelta: 1 },
+      { type: "step", rowDelta: 0, columnDelta: 1 },
+      { type: "row-edge", edge: "start" },
+      { type: "page", rowDelta: 2 },
+      { type: "column-edge", edge: "end" },
+      { type: "grid-edge", edge: "start" },
+    ];
+    const destinations = commands.map((command) => {
+      expect(navigation.navigate(command)).toBe(true);
+      return navigation.getSnapshot();
+    });
+
+    expect(destinations).toEqual([
+      expect.objectContaining({ rowId: "first", columnId: "COL_ID_CENTER" }),
+      expect.objectContaining({ rowId: "first", columnId: "COL_ID_END" }),
+      expect.objectContaining({ rowId: "first", columnId: "COL_ID_START" }),
+      expect.objectContaining({ rowId: "third", columnId: "COL_ID_START" }),
+      expect.objectContaining({ rowId: "fourth", columnId: "COL_ID_START" }),
+      expect.objectContaining({ region: "header", columnId: "COL_ID_START" }),
+    ]);
+  });
+
+  it("preserves every held-key move while reporting clamped repeats as no-ops", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    const notifications: string[] = [];
+    navigation.subscribe(() => {
+      const active = navigation.getSnapshot();
+      notifications.push(`${active?.region}:${String(active?.rowIndex)}`);
+    });
+    navigation.setShape(
+      Array.from({ length: 64 }, (_, index) => `row-${String(index)}`),
+      columns,
+    );
+    notifications.length = 0;
+
+    const moves = Array.from({ length: 80 }, () =>
+      navigation.navigate({ type: "step", rowDelta: 1, columnDelta: 0 }),
+    );
+
+    expect(moves.filter(Boolean)).toHaveLength(63);
+    expect(moves.slice(63)).toEqual(Array.from({ length: 17 }, () => false));
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 63, rowId: "row-63" });
+    expect(notifications).toHaveLength(63);
   });
 });
