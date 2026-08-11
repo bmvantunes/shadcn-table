@@ -3098,9 +3098,8 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
   });
 
-  test("synchronizes decorative scrollbar direction when RTL belongs only to the scroll owner", async () => {
+  test("synchronizes CSSOM-only scroll-owner direction changes with decorative chrome", async () => {
     const directionStyle = document.createElement("style");
-    directionStyle.textContent = "[data-bruno-scroll-owner] { direction: rtl; }";
     document.head.append(directionStyle);
     try {
       const screen = await render(
@@ -3141,14 +3140,33 @@ describe("BrunoTableClient browser surface", () => {
       if (horizontalTrack === null || verticalTrack === null) {
         throw new Error("The grid-only RTL scrollbar tracks were not mounted.");
       }
+      expect(getComputedStyle(grid).direction).toBe("ltr");
+      expect(getComputedStyle(overlay).direction).toBe("ltr");
+      grid.scrollLeft = 320;
+      grid.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() =>
+        expect(
+          Number.parseFloat(
+            overlay.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset"),
+          ),
+        ).toBeGreaterThan(0),
+      );
+
+      const stylesheet = directionStyle.sheet;
+      if (stylesheet === null) {
+        throw new Error("The CSSOM direction stylesheet was not available.");
+      }
+      stylesheet.insertRule("[data-bruno-scroll-owner] { direction: rtl; }", 0);
+      expect(getComputedStyle(grid).direction).toBe("rtl");
+
+      // Chromium uses the negative RTL scroll model. Default and reverse models clamp this write
+      // to zero. This first event after CSSStyleSheet.insertRule() carries real input, proving the
+      // runtime resolves the CSSOM-only direction change before decoding its native coordinate.
+      grid.scrollLeft = -640;
+      grid.dispatchEvent(new Event("scroll"));
       await vi.waitFor(() => expect(overlay.style.direction).toBe("rtl"));
       expect(getComputedStyle(grid).direction).toBe("rtl");
       expect(getComputedStyle(overlay).direction).toBe("rtl");
-
-      // Chromium uses the negative RTL scroll model. Default and reverse models clamp this write
-      // to zero, so a provider change would fail the movement assertion below diagnostically.
-      grid.scrollLeft = -640;
-      grid.dispatchEvent(new Event("scroll"));
       await vi.waitFor(() =>
         expect(
           Number.parseFloat(

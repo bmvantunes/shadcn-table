@@ -85,6 +85,25 @@ function createDeferredReverseRtlHarness(clientWidth = 200): Readonly<{
   });
 }
 
+function observeResizeTargets(): (target: Element) => void {
+  const callbacks = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      readonly #callback: ResizeObserverCallback;
+
+      public constructor(callback: ResizeObserverCallback) {
+        this.#callback = callback;
+      }
+      public observe(target: Element) {
+        callbacks.set(target, this.#callback);
+      }
+      public disconnect() {}
+    },
+  );
+  return (target) => callbacks.get(target)?.([], {} as ResizeObserver);
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -657,14 +676,14 @@ describe("BrunoTableViewportRuntime", () => {
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
-    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
 
     direction = "rtl";
     mutation!([], {} as MutationObserver);
-    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
     expect(element.scrollLeft).toBe(320);
     callbacks.shift()!(0);
-    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(readComputedStyle).toHaveBeenCalledTimes(3);
     expect(element.scrollLeft).toBe(-320);
 
     direction = "ltr";
@@ -734,15 +753,15 @@ describe("BrunoTableViewportRuntime", () => {
       style: { setProperty: overlaySetProperty },
     } as unknown as HTMLElement);
     const initialCenterStart = viewport.getSnapshot().virtualWindow.centerStartIndex;
-    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(readComputedStyle).toHaveBeenCalledTimes(3);
 
     overlaySetProperty.mockClear();
     direction = "rtl";
     resize!();
-    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(readComputedStyle).toHaveBeenCalledTimes(3);
     callbacks.shift()!(0);
 
-    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(readComputedStyle).toHaveBeenCalledTimes(4);
     expect(element.scrollLeft).toBe(-600);
     expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(initialCenterStart);
     expect(overlaySetProperty).toHaveBeenCalledWith("direction", "rtl");
@@ -760,7 +779,6 @@ describe("BrunoTableViewportRuntime", () => {
     );
     const callbacks: FrameRequestCallback[] = [];
     let direction: "ltr" | "rtl" = "ltr";
-    let focusListener: EventListener | undefined;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callbacks.push(callback);
       return callbacks.length;
@@ -771,8 +789,61 @@ describe("BrunoTableViewportRuntime", () => {
       typeof vi.fn
     >;
     const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 200,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 320,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+
+    // Models CSSStyleSheet.insertRule(), which changes computed style without a DOM mutation.
+    direction = "rtl";
+    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_7", "header");
+    callbacks.shift()!(0);
+
+    expect(readComputedStyle).toHaveBeenCalledTimes(3);
+    expect(element.scrollLeft).toBe(-600);
+    expect(
+      viewport
+        .getSnapshot()
+        .virtualWindow.center.some(({ columnId }) => columnId === "COL_ID_CSS_DIRECTION_7"),
+    ).toBe(true);
+
+    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_8", "header");
+    callbacks.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledTimes(4);
+  });
+
+  it("decodes the first native input after a CSS-only direction change", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CSS_INPUT_${index}`,
+        field: "name",
+        headerName: `CSS input ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let direction: "ltr" | "rtl" = "ltr";
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const ownerDocument = createRtlOwnerDocument("negative", () => direction);
+    const element = {
       addEventListener: vi.fn((name: string, listener: EventListener) => {
-        if (name === "focusin") focusListener = listener;
+        if (name === "scroll") scrollListener = listener;
       }),
       clientHeight: 480,
       clientWidth: 200,
@@ -786,25 +857,17 @@ describe("BrunoTableViewportRuntime", () => {
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
-    expect(readComputedStyle).toHaveBeenCalledOnce();
 
-    // Models a focus pseudo-class with no attribute mutation or resize event.
+    // Models a CSSStyleSheet.insertRule() direction change followed immediately by user input.
     direction = "rtl";
-    focusListener!(new Event("focusin"));
-    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_7", "header");
+    element.scrollLeft = -600;
+    scrollListener!(new Event("scroll"));
     callbacks.shift()!(0);
 
-    expect(readComputedStyle).toHaveBeenCalledTimes(2);
     expect(element.scrollLeft).toBe(-600);
-    expect(
-      viewport
-        .getSnapshot()
-        .virtualWindow.center.some(({ columnId }) => columnId === "COL_ID_CSS_DIRECTION_7"),
-    ).toBe(true);
-
-    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_8", "header");
-    callbacks.shift()!(0);
-    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId)).toContain(
+      "COL_ID_CSS_INPUT_7",
+    );
   });
 
   it("observes inherited direction changes on every ancestor", () => {
@@ -1174,10 +1237,15 @@ describe("BrunoTableViewportRuntime", () => {
         width: 100,
       })),
     );
-    const { callbacks, element } = createDeferredReverseRtlHarness();
+    const triggerResize = observeResizeTargets();
+    const { callbacks, commitScrollWidth, element } = createDeferredReverseRtlHarness();
+    const rowLayer = {
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
+    viewport.attachRowLayer(rowLayer);
 
     viewport.setLayout(2, widerColumns);
     for (let frame = 0; frame < 16 && callbacks.length > 0; frame += 1) {
@@ -1186,6 +1254,18 @@ describe("BrunoTableViewportRuntime", () => {
 
     expect(callbacks).toHaveLength(0);
     expect(element.scrollLeft).toBe(0);
+    expect(viewport.getSnapshot().virtualWindow.center[0]?.columnId).toBe(
+      "COL_ID_BOUNDED_REVERSE_0",
+    );
+
+    commitScrollWidth(1_000);
+    triggerResize(rowLayer);
+    callbacks.shift()!(17);
+
+    expect(element.scrollLeft).toBe(800);
+    expect(viewport.getSnapshot().virtualWindow.center[0]?.columnId).toBe(
+      "COL_ID_BOUNDED_REVERSE_0",
+    );
   });
 
   it("retries a reveal after deferred reverse-RTL layout reconciliation", () => {
@@ -1207,26 +1287,35 @@ describe("BrunoTableViewportRuntime", () => {
         width: 100,
       })),
     );
+    const triggerResize = observeResizeTargets();
     const { callbacks, commitScrollWidth, element } = createDeferredReverseRtlHarness();
+    const rowLayer = {
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
+    viewport.attachRowLayer(rowLayer);
 
     viewport.setLayout(2, widerColumns);
-    viewport.revealCell(0, "COL_ID_DEFERRED_REVEAL_9", "header");
-    callbacks.shift()!(0);
+    viewport.revealCell(0, "COL_ID_DEFERRED_REVEAL_5", "header");
+    for (let frame = 0; frame < 16 && callbacks.length > 0; frame += 1) {
+      callbacks.shift()!(frame);
+    }
 
-    expect(callbacks).toHaveLength(1);
+    expect(callbacks).toHaveLength(0);
     expect(
       viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId),
-    ).not.toContain("COL_ID_DEFERRED_REVEAL_9");
+    ).not.toContain("COL_ID_DEFERRED_REVEAL_5");
 
     commitScrollWidth(1_000);
-    callbacks.shift()!(1);
+    triggerResize(rowLayer);
+    callbacks.shift()!(17);
 
     expect(viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId)).toContain(
-      "COL_ID_DEFERRED_REVEAL_9",
+      "COL_ID_DEFERRED_REVEAL_5",
     );
+    expect(element.scrollLeft).toBe(400);
   });
 
   it("resolves a dirty reverse-RTL direction before classifying a widening write", () => {
