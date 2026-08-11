@@ -89,6 +89,7 @@ export class BrunoTableViewportRuntime {
   private scrollbarOverlayDirection: HorizontalDirection | undefined;
   private resizeObserver: ResizeObserver | null = null;
   private directionObserver: MutationObserver | null = null;
+  private stylesheetRoot: HTMLHeadElement | null = null;
   private frame: number | null = null;
   private pendingReveal: RevealTarget | undefined;
   private segmentLogicalBase = 0;
@@ -283,11 +284,15 @@ export class BrunoTableViewportRuntime {
   public readonly attach = (element: HTMLElement | null): void => {
     if (this.element === element) return;
     this.element?.removeEventListener("scroll", this.handleScroll);
+    this.element?.removeEventListener("focusin", this.handleDirectionMutation);
+    this.element?.removeEventListener("focusout", this.handleDirectionMutation);
+    this.stylesheetRoot?.removeEventListener("load", this.handleDirectionMutation, true);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.directionObserver?.disconnect();
     this.directionObserver = null;
     this.element = element;
+    this.stylesheetRoot = element?.ownerDocument?.head ?? null;
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = element?.scrollTop ?? 0;
@@ -307,6 +312,9 @@ export class BrunoTableViewportRuntime {
     this.logicalScrollLeft = 0;
     this.pendingLayoutHorizontalCoordinate = undefined;
     this.element?.addEventListener("scroll", this.handleScroll, { passive: true });
+    this.element?.addEventListener("focusin", this.handleDirectionMutation, { passive: true });
+    this.element?.addEventListener("focusout", this.handleDirectionMutation, { passive: true });
+    this.stylesheetRoot?.addEventListener("load", this.handleDirectionMutation, true);
     if (this.element !== null && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.handleResize);
       this.resizeObserver.observe(this.element);
@@ -321,6 +329,15 @@ export class BrunoTableViewportRuntime {
         this.directionObserver.observe(directionOwner, {
           attributes: true,
           attributeFilter: ["class", "dir", "style"],
+        });
+      }
+      if (this.stylesheetRoot !== null) {
+        this.directionObserver.observe(this.stylesheetRoot, {
+          attributes: true,
+          attributeFilter: ["disabled", "href", "media"],
+          childList: true,
+          characterData: true,
+          subtree: true,
         });
       }
     }
@@ -345,10 +362,14 @@ export class BrunoTableViewportRuntime {
 
   public readonly dispose = (): void => {
     this.element?.removeEventListener("scroll", this.handleScroll);
+    this.element?.removeEventListener("focusin", this.handleDirectionMutation);
+    this.element?.removeEventListener("focusout", this.handleDirectionMutation);
+    this.stylesheetRoot?.removeEventListener("load", this.handleDirectionMutation, true);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.directionObserver?.disconnect();
     this.directionObserver = null;
+    this.stylesheetRoot = null;
     this.element = null;
     this.rowLayer?.style.removeProperty("--bruno-table-row-layer-offset");
     this.rowLayer = null;

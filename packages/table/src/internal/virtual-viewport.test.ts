@@ -36,6 +36,10 @@ function createRtlOwnerDocument(
       getComputedStyle: vi.fn(() => ({ direction: readDirection() })),
     },
     documentElement: { appendChild: vi.fn() },
+    head: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
   } as unknown as Document;
 }
 
@@ -702,6 +706,65 @@ describe("BrunoTableViewportRuntime", () => {
     expect(overlaySetProperty).toHaveBeenCalledWith("direction", "rtl");
   });
 
+  it("refreshes computed direction before reveal after a CSS-only change", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CSS_DIRECTION_${index}`,
+        field: "name",
+        headerName: `CSS direction ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let direction: "ltr" | "rtl" = "ltr";
+    let focusListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const ownerDocument = createRtlOwnerDocument("negative", () => direction);
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "focusin") focusListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 200,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 320,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+
+    // Models a focus pseudo-class with no attribute mutation or resize event.
+    direction = "rtl";
+    focusListener!(new Event("focusin"));
+    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_7", "header");
+    callbacks.shift()!(0);
+
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(element.scrollLeft).toBe(-600);
+    expect(
+      viewport
+        .getSnapshot()
+        .virtualWindow.center.some(({ columnId }) => columnId === "COL_ID_CSS_DIRECTION_7"),
+    ).toBe(true);
+
+    viewport.revealCell(0, "COL_ID_CSS_DIRECTION_8", "header");
+    callbacks.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+  });
+
   it("observes inherited direction changes on every ancestor", () => {
     const columns = compileColumns([
       {
@@ -778,6 +841,13 @@ describe("BrunoTableViewportRuntime", () => {
     expect(
       observations.find(({ target }) => target === documentElement)?.options.attributeFilter,
     ).toEqual(["class", "dir", "style"]);
+    expect(observations.find(({ target }) => target === ownerDocument.head)?.options).toEqual({
+      attributes: true,
+      attributeFilter: ["disabled", "href", "media"],
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
   });
 
   it.each(["ltr", "reverse-rtl"] as const)(
