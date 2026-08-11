@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
 import { act, useEffect } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
@@ -37,10 +38,6 @@ type Row = {
   readonly name: string;
   readonly score: number;
 };
-
-type BrowserCDPSession = Readonly<{
-  readonly send: (method: string, params?: Readonly<Record<string, unknown>>) => Promise<unknown>;
-}>;
 
 const columns = [
   {
@@ -552,8 +549,19 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(loadingName).toHaveAttribute("aria-colindex", "1");
     await expect.element(loadingScore).toHaveAttribute("aria-colindex", "2");
     await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "3");
-    expect(loadingName.element().closest('[data-pinned-region="start"]')).not.toBeNull();
-    expect(loadingAlias.element().closest('[data-pinned-region="end"]')).not.toBeNull();
+    expect(loadingName.element().closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+    expect(loadingAlias.element().closest('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+    const loadingNameOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingName.element().id),
+    );
+    const loadingAliasOwner = [
+      ...grid.element().querySelectorAll<HTMLElement>('[role="row"]'),
+    ].find((row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingAlias.element().id));
+    expect(loadingNameOwner).toBe(loadingAliasOwner);
+    expect(loadingNameOwner?.getAttribute("aria-rowindex")).toBe("1");
+    const loadingRowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
+    expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
+    expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
     await vi.waitFor(() => {
       expect(loadingName.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
       expect(loadingScore.element().getBoundingClientRect().width).toBeCloseTo(100, 0);
@@ -2786,22 +2794,33 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("columnheader")
       .all()
       .map((header) => header.element().getAttribute("aria-colindex"));
-    const bodyColumnIndexes = deepRowCells.map((cell) =>
-      cell.element().getAttribute("aria-colindex"),
-    );
+    const bodyColumnIndexes = deepRowCells
+      .map((cell) => cell.element().getAttribute("aria-colindex"))
+      .toSorted((left, right) => Number(left) - Number(right));
     expect(bodyColumnIndexes).toEqual(headerColumnIndexes);
+    const pinnedStartCell = deepRowCells.find(
+      (cell) => cell.element().getAttribute("aria-colindex") === "1",
+    );
+    if (pinnedStartCell === undefined) throw new Error("The pinned start cell was not mounted.");
     expect(
-      deepRowCells
-        .find((cell) => cell.element().getAttribute("aria-colindex") === "1")
-        ?.element()
-        .closest('[data-pinned-region="start"]'),
+      pinnedStartCell.element().closest('[data-bruno-pinned-body-region="start"]'),
     ).not.toBeNull();
-    expect(
-      deepRowCells
-        .find((cell) => cell.element().getAttribute("aria-colindex") === "150")
-        ?.element()
-        .closest('[data-pinned-region="end"]'),
-    ).not.toBeNull();
+    const pinnedEndCell = deepRowCells.find(
+      (cell) => cell.element().getAttribute("aria-colindex") === "150",
+    );
+    if (pinnedEndCell === undefined) throw new Error("The pinned end cell was not mounted.");
+    expect(pinnedEndCell.element().closest('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+    const pinnedStartOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(pinnedStartCell.element().id),
+    );
+    const pinnedEndOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(pinnedEndCell.element().id),
+    );
+    expect(pinnedStartOwner).toBe(pinnedEndOwner);
+    expect(pinnedStartOwner?.getAttribute("aria-rowindex")).toBe(String(deepRowIndex + 2));
+    const rowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
+    expect(rowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
+    expect(rowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
     expect(screen.getByRole("row").all().length).toBeLessThan(30);
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
     expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
@@ -2846,16 +2865,58 @@ describe("BrunoTableClient browser surface", () => {
     const startHeader = screen.getByRole("columnheader", { name: "RTL start" }).element();
     const endHeader = screen.getByRole("columnheader", { name: "RTL end" }).element();
     const gridRect = gridElement.getBoundingClientRect();
+    const assertPinnedBodyEdges = () => {
+      const bodyCells = screen.getByRole("gridcell").all();
+      const startCell = bodyCells.find(
+        (cell) => cell.element().getAttribute("aria-colindex") === "1",
+      );
+      const endCell = bodyCells.find(
+        (cell) => cell.element().getAttribute("aria-colindex") === "12",
+      );
+      if (startCell === undefined || endCell === undefined) {
+        throw new Error("The RTL pinned body cells were not continuously mounted.");
+      }
+      expect(startCell.element().getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+      expect(endCell.element().getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    };
     expect(getComputedStyle(gridElement).direction).toBe("rtl");
     expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
     expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    const activeCell = () => {
+      const activeId = gridElement.getAttribute("aria-activedescendant");
+      return screen
+        .getByRole("gridcell")
+        .all()
+        .find((cell) => cell.element().id === activeId);
+    };
+    gridElement.focus();
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
+    for (let index = 0; index < 10; index += 1) {
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+    }
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("11"),
+    );
+    const forwardCellRect = activeCell()!.element().getBoundingClientRect();
+    expect(forwardCellRect.left).toBeCloseTo(endHeader.getBoundingClientRect().right, 0);
+    expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+    expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    for (let index = 0; index < 9; index += 1) {
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }));
+    }
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("2"));
+    const backwardCellRect = activeCell()!.element().getBoundingClientRect();
+    expect(backwardCellRect.right).toBeCloseTo(startHeader.getBoundingClientRect().left, 0);
 
     gridElement.scrollLeft = -960;
     gridElement.dispatchEvent(new Event("scroll"));
     await expect
       .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
       .toBeInTheDocument();
-    expect(gridElement.scrollLeft).toBeLessThan(0);
     const overlay = gridElement.parentElement?.querySelector<HTMLElement>(
       "[data-bruno-scrollbar-overlay]",
     );
@@ -2866,6 +2927,31 @@ describe("BrunoTableClient browser surface", () => {
     ).toBeLessThan(0);
     expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
     expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    const directionOwner = gridElement.closest<HTMLElement>('[dir="rtl"]');
+    expect(directionOwner).not.toBeNull();
+    directionOwner!.dir = "ltr";
+    await vi.waitFor(() => expect(getComputedStyle(gridElement).direction).toBe("ltr"));
+    await vi.waitFor(() => expect(gridElement.scrollLeft).toBeGreaterThanOrEqual(0));
+    await vi.waitFor(() =>
+      expect(
+        Number.parseFloat(
+          overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset") ??
+            "-1",
+        ),
+      ).toBeGreaterThanOrEqual(0),
+    );
+    gridElement.scrollLeft = 0;
+    gridElement.dispatchEvent(new Event("scroll"));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 00" }))
+      .toBeInTheDocument();
+    gridElement.scrollLeft = 960;
+    gridElement.dispatchEvent(new Event("scroll"));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
+      .toBeInTheDocument();
   });
 
   test("keeps scroll-frame geometry out of the table root and observes zoomed resize", async () => {
@@ -2888,7 +2974,6 @@ describe("BrunoTableClient browser surface", () => {
       );
       const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" });
       const gridElement = grid.element() as HTMLElement;
-      const initialViewRenders = viewRenders.mock.calls.length;
       const rowLayer = gridElement.querySelector<HTMLElement>("[data-bruno-row-layer]");
       expect(rowLayer).not.toBeNull();
       expect(
@@ -2901,7 +2986,26 @@ describe("BrunoTableClient browser surface", () => {
         .element(screen.getByRole("columnheader", { name: "Wide 07" }))
         .toBeInTheDocument();
       const expandedHeaderCount = screen.getByRole("columnheader").all().length;
+      const expandedColumnIndexes = screen
+        .getByRole("columnheader")
+        .all()
+        .map((header) => header.element().getAttribute("aria-colindex"));
       gridElement.style.zoom = "1.25";
+      await vi.waitFor(() =>
+        expect(gridElement.getBoundingClientRect().width).toBeCloseTo(1_000, 0),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      expect(gridElement.clientWidth).toBe(800);
+      expect(screen.getByRole("columnheader").all()).toHaveLength(expandedHeaderCount);
+      expect(
+        screen
+          .getByRole("columnheader")
+          .all()
+          .map((header) => header.element().getAttribute("aria-colindex")),
+      ).toEqual(expandedColumnIndexes);
+
       gridElement.style.width = "360px";
       await vi.waitFor(() => expect(gridElement.clientWidth).toBe(360));
       await vi.waitFor(() =>
@@ -2909,12 +3013,13 @@ describe("BrunoTableClient browser surface", () => {
       );
       expect(gridElement.getBoundingClientRect().width).toBeCloseTo(450, 0);
 
+      const rendersBeforeScroll = viewRenders.mock.calls.length;
       gridElement.scrollTop = 1_200;
       gridElement.dispatchEvent(new Event("scroll"));
       await expect
         .element(screen.getByRole("gridcell", { name: "Scroll row 040" }).nth(0))
         .toBeInTheDocument();
-      expect(viewRenders).toHaveBeenCalledTimes(initialViewRenders);
+      expect(viewRenders).toHaveBeenCalledTimes(rendersBeforeScroll);
       expect(rowLayer?.style.getPropertyValue("--bruno-table-row-layer-offset")).not.toBe("");
     } finally {
       removeViewRenderListener();
@@ -2922,7 +3027,7 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("keeps exact reveal immediate when reduced motion is preferred", async () => {
-    const session = cdp() as unknown as BrowserCDPSession;
+    const session: PlaywrightCDPSession = cdp();
     await session.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
@@ -3414,7 +3519,7 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("gridcell", { name: "Grace" })
       .nth(0)
       .element()
-      .closest('[data-pinned-region="start"]');
+      .closest('[data-bruno-pinned-body-region="start"]');
     expect(Number(headerLayer?.style.zIndex)).toBeGreaterThan(
       Number((bodyPinnedLayer as HTMLElement | null)?.style.zIndex),
     );
@@ -3662,7 +3767,7 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("gridcell")
       .all()
       .find((cell) => cell.element().getAttribute("aria-colindex") === "60");
-    const endBodyRegion = endBodyCell?.element().closest('[data-pinned-region="end"]');
+    const endBodyRegion = endBodyCell?.element().closest('[data-bruno-pinned-body-region="end"]');
     expect(endBodyRegion?.getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
     expect(endBodyCell?.element().getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
     expect(endBodyCell?.element().getBoundingClientRect().width).toBeCloseTo(120, 0);

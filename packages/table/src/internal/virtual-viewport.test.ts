@@ -3,6 +3,42 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileColumns } from "./compile-columns";
 import { BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT, BrunoTableViewportRuntime } from "./virtual-viewport";
 
+type TestRtlScrollType = "negative" | "default" | "reverse";
+
+function createRtlOwnerDocument(
+  type: TestRtlScrollType,
+  readDirection: () => "ltr" | "rtl" = () => "rtl",
+): Document {
+  let elementIndex = 0;
+  const createElement = vi.fn(() => {
+    const element = {
+      appendChild: vi.fn(),
+      dir: "",
+      style: { cssText: "" },
+    } as unknown as HTMLElement;
+    if (elementIndex === 0) {
+      let scrollLeft = type === "reverse" ? 1 : 0;
+      Object.defineProperty(element, "scrollLeft", {
+        configurable: true,
+        get: () => scrollLeft,
+        set: (value: number) => {
+          scrollLeft = type === "negative" && value > 0 ? 0 : value;
+        },
+      });
+    }
+    elementIndex += 1;
+    return element;
+  });
+  return {
+    body: { appendChild: vi.fn() },
+    createElement,
+    defaultView: {
+      getComputedStyle: vi.fn(() => ({ direction: readDirection() })),
+    },
+    documentElement: { appendChild: vi.fn() },
+  } as unknown as Document;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -398,6 +434,440 @@ describe("BrunoTableViewportRuntime", () => {
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
     expect(element.scrollLeft).toBe(320);
   });
+
+  it.each(["ltr", "reverse-rtl"] as const)(
+    "converts the near-maximum suspended offset before restoring sticky pinning in %s",
+    (direction) => {
+      const columns = compileColumns([
+        {
+          columnId: "COL_ID_THRESHOLD_START",
+          field: "name",
+          headerName: "Threshold start",
+          pinned: "start",
+          valueType: "text",
+          width: 100,
+        },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          columnId: `COL_ID_THRESHOLD_CENTER_${index}`,
+          field: "name",
+          headerName: `Threshold center ${index}`,
+          valueType: "text" as const,
+          width: 100,
+        })),
+        {
+          columnId: "COL_ID_THRESHOLD_END",
+          field: "name",
+          headerName: "Threshold end",
+          pinned: "end",
+          valueType: "text",
+          width: 100,
+        },
+      ]);
+      const callbacks: FrameRequestCallback[] = [];
+      let resize: (() => void) | undefined;
+      let width = 260;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          public constructor(callback: ResizeObserverCallback) {
+            resize = () => callback([], this as unknown as ResizeObserver);
+          }
+          public observe() {}
+          public disconnect() {}
+        },
+      );
+      const element = {
+        addEventListener: vi.fn(),
+        clientHeight: 480,
+        get clientWidth() {
+          return width;
+        },
+        ...(direction === "reverse-rtl"
+          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
+          : {}),
+        removeEventListener: vi.fn(),
+        scrollLeft: direction === "reverse-rtl" ? 0 : 940,
+        scrollTop: 0,
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach(element);
+      expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+
+      width = 300;
+      viewport.setLayout(3, columns);
+      expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
+      expect(element.scrollLeft).toBe(direction === "reverse-rtl" ? 60 : 840);
+
+      resize!();
+      callbacks.shift()!(0);
+      expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
+      expect(element.scrollLeft).toBe(direction === "reverse-rtl" ? 60 : 840);
+    },
+  );
+
+  it.each(["negative", "default", "reverse"] as const)(
+    "normalizes exact RTL reveal writes for the %s native scroll model",
+    (rtlType) => {
+      const columns = compileColumns(
+        Array.from({ length: 10 }, (_, index) => ({
+          columnId: `COL_ID_RTL_${index}`,
+          field: "name",
+          headerName: `RTL ${index}`,
+          valueType: "text" as const,
+          width: 100,
+        })),
+      );
+      const callbacks: FrameRequestCallback[] = [];
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      const maximum = 800;
+      const element = {
+        addEventListener: vi.fn(),
+        clientHeight: 480,
+        clientWidth: 200,
+        ownerDocument: createRtlOwnerDocument(rtlType),
+        parentElement: null,
+        removeEventListener: vi.fn(),
+        scrollLeft: rtlType === "reverse" ? maximum : 0,
+        scrollTop: 0,
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach(element);
+
+      viewport.revealCell(0, "COL_ID_RTL_9", "header");
+      callbacks.shift()!(0);
+      expect(element.scrollLeft).toBe(
+        rtlType === "negative" ? -maximum : rtlType === "reverse" ? 0 : maximum,
+      );
+      expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe("COL_ID_RTL_9");
+
+      viewport.revealCell(0, "COL_ID_RTL_0", "header");
+      callbacks.shift()!(0);
+      if (rtlType === "reverse") expect(element.scrollLeft).toBe(maximum);
+      else expect(Math.abs(element.scrollLeft)).toBe(0);
+      expect(viewport.getSnapshot().virtualWindow.center[0]?.columnId).toBe("COL_ID_RTL_0");
+    },
+  );
+
+  it("frame-batches direction reconciliation and preserves newer native user input", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_DIRECTION_${index}`,
+        field: "name",
+        headerName: `Direction ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let direction: "ltr" | "rtl" = "ltr";
+    let mutation: MutationCallback | undefined;
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        public constructor(callback: MutationCallback) {
+          mutation = callback;
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    const ownerDocument = createRtlOwnerDocument("negative", () => direction);
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 200,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 320,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+
+    direction = "rtl";
+    mutation!([], {} as MutationObserver);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(element.scrollLeft).toBe(320);
+    callbacks.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
+    expect(element.scrollLeft).toBe(-320);
+
+    direction = "ltr";
+    mutation!([], {} as MutationObserver);
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    callbacks.shift()!(0);
+    expect(element.scrollLeft).toBe(480);
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBeGreaterThan(1);
+
+    element.scrollLeft = 600;
+    scrollListener!(new Event("scroll"));
+    direction = "rtl";
+    mutation!([], {} as MutationObserver);
+    callbacks.shift()!(0);
+    expect(element.scrollLeft).toBe(-600);
+  });
+
+  it.each(["ltr", "reverse-rtl"] as const)(
+    "preserves input sampled before a pin-suspending resize in %s",
+    (direction) => {
+      const columns = compileColumns([
+        {
+          columnId: "COL_ID_INPUT_RESIZE_START",
+          field: "name",
+          headerName: "Input resize start",
+          pinned: "start",
+          valueType: "text",
+          width: 100,
+        },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          columnId: `COL_ID_INPUT_RESIZE_CENTER_${index}`,
+          field: "name",
+          headerName: `Input resize center ${index}`,
+          valueType: "text" as const,
+          width: 100,
+        })),
+        {
+          columnId: "COL_ID_INPUT_RESIZE_END",
+          field: "name",
+          headerName: "Input resize end",
+          pinned: "end",
+          valueType: "text",
+          width: 100,
+        },
+      ]);
+      const callbacks: FrameRequestCallback[] = [];
+      let resize: (() => void) | undefined;
+      let scrollListener: EventListener | undefined;
+      let width = 300;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          public constructor(callback: ResizeObserverCallback) {
+            resize = () => callback([], this as unknown as ResizeObserver);
+          }
+          public observe() {}
+          public disconnect() {}
+        },
+      );
+      const element = {
+        addEventListener: vi.fn((name: string, listener: EventListener) => {
+          if (name === "scroll") scrollListener = listener;
+        }),
+        clientHeight: 480,
+        get clientWidth() {
+          return width;
+        },
+        ...(direction === "reverse-rtl"
+          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
+          : {}),
+        removeEventListener: vi.fn(),
+        scrollLeft: direction === "reverse-rtl" ? 900 : 0,
+        scrollTop: 0,
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach(element);
+
+      element.scrollLeft = direction === "reverse-rtl" ? 500 : 400;
+      scrollListener!(new Event("scroll"));
+      width = 260;
+      resize!();
+      callbacks.shift()!(0);
+
+      expect(element.scrollLeft).toBe(direction === "reverse-rtl" ? 440 : 500);
+      expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+    },
+  );
+
+  it("preserves the logical offset when a reverse-RTL resize changes the maximum", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_REVERSE_RESIZE_${index}`,
+        field: "name",
+        headerName: `Reverse resize ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let resize: (() => void) | undefined;
+    let width = 200;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        public constructor(callback: ResizeObserverCallback) {
+          resize = () => callback([], this as unknown as ResizeObserver);
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      get clientWidth() {
+        return width;
+      },
+      ownerDocument: createRtlOwnerDocument("reverse"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 500,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    width = 300;
+    resize!();
+    callbacks.shift()!(0);
+    expect(element.scrollLeft).toBe(400);
+  });
+
+  it("keeps one reverse-RTL geometry generation across a simultaneous resize and layout change", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_COMBINED_${index}`,
+        field: "name",
+        headerName: `Combined ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const widerColumns = compileColumns(
+      columns.map((column, index) => ({
+        columnId: column.columnId,
+        field: "name",
+        headerName: column.headerName,
+        valueType: "text" as const,
+        width: index === columns.length - 1 ? 200 : 100,
+      })),
+    );
+    let width = 200;
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      get clientWidth() {
+        return width;
+      },
+      ownerDocument: createRtlOwnerDocument("reverse"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 500,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    width = 300;
+    viewport.setLayout(2, widerColumns);
+
+    expect(element.scrollLeft).toBe(500);
+    expect(viewport.getSnapshot().virtualWindow.center.map((column) => column.columnId)).toContain(
+      "COL_ID_COMBINED_3",
+    );
+  });
+
+  it.each(["ltr", "reverse-rtl"] as const)(
+    "keeps latest native input authoritative across a simultaneous resize and layout change in %s",
+    (direction) => {
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn(() => 1),
+      );
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      const columns = compileColumns(
+        Array.from({ length: 10 }, (_, index) => ({
+          columnId: `COL_ID_INPUT_${index}`,
+          field: "name",
+          headerName: `Input ${index}`,
+          valueType: "text" as const,
+          width: 100,
+        })),
+      );
+      const widerColumns = compileColumns(
+        columns.map((column, index) => ({
+          columnId: column.columnId,
+          field: "name",
+          headerName: column.headerName,
+          valueType: "text" as const,
+          width: index === columns.length - 1 ? 200 : 100,
+        })),
+      );
+      let width = 200;
+      let scrollListener: EventListener | undefined;
+      const element = {
+        addEventListener: vi.fn((name: string, listener: EventListener) => {
+          if (name === "scroll") scrollListener = listener;
+        }),
+        clientHeight: 480,
+        get clientWidth() {
+          return width;
+        },
+        ...(direction === "reverse-rtl"
+          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
+          : {}),
+        removeEventListener: vi.fn(),
+        scrollLeft: direction === "reverse-rtl" ? 480 : 320,
+        scrollTop: 0,
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach(element);
+
+      width = 300;
+      element.scrollLeft = direction === "reverse-rtl" ? 220 : 480;
+      scrollListener!(new Event("scroll"));
+      viewport.setLayout(2, widerColumns);
+
+      expect(element.scrollLeft).toBe(direction === "reverse-rtl" ? 320 : 480);
+      expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBeGreaterThan(1);
+    },
+  );
 
   it("keeps the native horizontal coordinate when the pinning structure changes", () => {
     const pinnedColumns = compileColumns([
