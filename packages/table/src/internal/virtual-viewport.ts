@@ -316,6 +316,23 @@ export class BrunoTableViewportRuntime {
     }
     if (this.element !== null && typeof MutationObserver !== "undefined") {
       this.directionObserver = new MutationObserver(this.handleDirectionMutation);
+      const classStyleOwners = new Set<HTMLElement>([this.element]);
+      for (const directionStyleOwner of [
+        this.element.parentElement,
+        this.element.ownerDocument.body,
+        this.element.ownerDocument.documentElement,
+      ]) {
+        if (directionStyleOwner !== null) classStyleOwners.add(directionStyleOwner);
+      }
+      for (
+        let explicitDirectionOwner: HTMLElement | null = this.element;
+        explicitDirectionOwner !== null;
+        explicitDirectionOwner = explicitDirectionOwner.parentElement
+      ) {
+        if (explicitDirectionOwner.hasAttribute?.("dir") === true) {
+          classStyleOwners.add(explicitDirectionOwner);
+        }
+      }
       for (
         let directionOwner: HTMLElement | null = this.element;
         directionOwner !== null;
@@ -323,7 +340,9 @@ export class BrunoTableViewportRuntime {
       ) {
         this.directionObserver.observe(directionOwner, {
           attributes: true,
-          attributeFilter: ["class", "dir", "style"],
+          attributeFilter: classStyleOwners.has(directionOwner)
+            ? ["class", "dir", "style"]
+            : ["dir"],
         });
       }
     }

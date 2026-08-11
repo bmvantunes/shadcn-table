@@ -549,7 +549,10 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(loadingName).toHaveAttribute("aria-colindex", "1");
     await expect.element(loadingScore).toHaveAttribute("aria-colindex", "2");
     await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "3");
-    expect(loadingName.element().closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+    const loadingStartRegion = loadingName
+      .element()
+      .closest<HTMLElement>('[data-bruno-pinned-body-region="start"]');
+    expect(loadingStartRegion).not.toBeNull();
     expect(loadingAlias.element().closest('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
     const loadingNameOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
       (row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingName.element().id),
@@ -562,6 +565,10 @@ describe("BrunoTableClient browser surface", () => {
     const loadingRowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
     expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
     expect(loadingRowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
+    if (loadingStartRegion === null) throw new Error("The loading start region was not mounted.");
+    expect(
+      loadingStartRegion.style.getPropertyValue("--bruno-table-viewport-inline-size"),
+    ).not.toBe("");
     await vi.waitFor(() => {
       expect(loadingName.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
       expect(loadingScore.element().getBoundingClientRect().width).toBeCloseTo(100, 0);
@@ -2802,9 +2809,10 @@ describe("BrunoTableClient browser surface", () => {
       (cell) => cell.element().getAttribute("aria-colindex") === "1",
     );
     if (pinnedStartCell === undefined) throw new Error("The pinned start cell was not mounted.");
-    expect(
-      pinnedStartCell.element().closest('[data-bruno-pinned-body-region="start"]'),
-    ).not.toBeNull();
+    const pinnedStartRegion = pinnedStartCell
+      .element()
+      .closest<HTMLElement>('[data-bruno-pinned-body-region="start"]');
+    expect(pinnedStartRegion).not.toBeNull();
     const pinnedEndCell = deepRowCells.find(
       (cell) => cell.element().getAttribute("aria-colindex") === "150",
     );
@@ -2821,6 +2829,10 @@ describe("BrunoTableClient browser surface", () => {
     const rowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
     expect(rowLayer?.style.getPropertyValue("--bruno-table-pinned-body-offset")).toBe("");
     expect(rowLayer?.style.getPropertyValue("--bruno-table-viewport-inline-size")).toBe("");
+    if (pinnedStartRegion === null) throw new Error("The pinned start region was not mounted.");
+    expect(pinnedStartRegion.style.getPropertyValue("--bruno-table-viewport-inline-size")).not.toBe(
+      "",
+    );
     expect(screen.getByRole("row").all().length).toBeLessThan(30);
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
     expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
@@ -2933,7 +2945,9 @@ describe("BrunoTableClient browser surface", () => {
     expect(directionOwner).not.toBeNull();
     directionOwner!.dir = "ltr";
     await vi.waitFor(() => expect(getComputedStyle(gridElement).direction).toBe("ltr"));
-    await vi.waitFor(() => expect(gridElement.scrollLeft).toBeGreaterThanOrEqual(0));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
+      .toBeInTheDocument();
     await vi.waitFor(() =>
       expect(
         Number.parseFloat(

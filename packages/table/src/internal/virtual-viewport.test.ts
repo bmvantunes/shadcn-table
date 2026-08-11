@@ -636,6 +636,76 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(-600);
   });
 
+  it("limits class and style direction observation to plausible owners", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_DIRECTION_OBSERVER",
+        field: "name",
+        headerName: "Direction observer",
+        valueType: "text",
+        width: 100,
+      },
+    ]);
+    const observations: Array<{
+      readonly target: Node;
+      readonly options: MutationObserverInit;
+    }> = [];
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        public constructor(_callback: MutationCallback) {}
+        public observe(target: Node, options: MutationObserverInit) {
+          observations.push({ target, options });
+        }
+        public disconnect() {}
+      },
+    );
+    const ownerDocument = createRtlOwnerDocument("negative", () => "ltr");
+    const documentElement = ownerDocument.documentElement as HTMLElement & {
+      parentElement: HTMLElement | null;
+    };
+    const body = ownerDocument.body as HTMLElement & { parentElement: HTMLElement | null };
+    const explicitDirectionOwner = {
+      hasAttribute: (name: string) => name === "dir",
+      parentElement: body,
+    } as unknown as HTMLElement;
+    const intermediateOwner = {
+      hasAttribute: () => false,
+      parentElement: explicitDirectionOwner,
+    } as unknown as HTMLElement;
+    const directParent = {
+      hasAttribute: () => false,
+      parentElement: intermediateOwner,
+    } as unknown as HTMLElement;
+    body.parentElement = documentElement;
+    documentElement.parentElement = null;
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 200,
+      hasAttribute: () => false,
+      ownerDocument,
+      parentElement: directParent,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    expect(
+      observations.find(({ target }) => target === directParent)?.options.attributeFilter,
+    ).toEqual(["class", "dir", "style"]);
+    expect(
+      observations.find(({ target }) => target === intermediateOwner)?.options.attributeFilter,
+    ).toEqual(["dir"]);
+    expect(
+      observations.find(({ target }) => target === explicitDirectionOwner)?.options.attributeFilter,
+    ).toEqual(["class", "dir", "style"]);
+  });
+
   it.each(["ltr", "reverse-rtl"] as const)(
     "preserves input sampled before a pin-suspending resize in %s",
     (direction) => {
