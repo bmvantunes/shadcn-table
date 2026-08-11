@@ -1640,9 +1640,13 @@ const BrunoTableRow = memo(function BrunoTableRow({
   readonly top: number;
   readonly width: number;
 }) {
-  const ownedCells = [...pinnedStart, ...center, ...pinnedEnd]
-    .map((column) => cellDomId(instanceId, tableId, rowId, column.columnId))
-    .join(" ");
+  const ownedCells = useMemo(
+    () =>
+      [...pinnedStart, ...center, ...pinnedEnd]
+        .map((column) => cellDomId(instanceId, tableId, rowId, column.columnId))
+        .join(" "),
+    [center, instanceId, pinnedEnd, pinnedStart, rowId, tableId],
+  );
   return (
     <tr
       ref={attachBodyLayer}
@@ -2442,9 +2446,13 @@ const LoadingRow = memo(function LoadingRow({
   readonly viewportFill: number;
   readonly width: number;
 }) {
-  const ownedCells = [...pinnedStart, ...center, ...pinnedEnd]
-    .map((column) => loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId))
-    .join(" ");
+  const ownedCells = useMemo(
+    () =>
+      [...pinnedStart, ...center, ...pinnedEnd]
+        .map((column) => loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId))
+        .join(" "),
+    [center, instanceId, logicalRowIndex, pinnedEnd, pinnedStart, tableId],
+  );
   return (
     <tr
       ref={attachBodyLayer}

@@ -91,17 +91,102 @@ function observeResizeTargets(): (target: Element) => void {
     "ResizeObserver",
     class {
       readonly #callback: ResizeObserverCallback;
+      readonly #targets = new Set<Element>();
 
       public constructor(callback: ResizeObserverCallback) {
         this.#callback = callback;
       }
       public observe(target: Element) {
+        this.#targets.add(target);
         callbacks.set(target, this.#callback);
       }
-      public disconnect() {}
+      public disconnect() {
+        for (const target of this.#targets) {
+          if (callbacks.get(target) === this.#callback) callbacks.delete(target);
+        }
+        this.#targets.clear();
+      }
     },
   );
   return (target) => callbacks.get(target)?.([], {} as ResizeObserver);
+}
+
+function installViewportObserverHarness(): Readonly<{
+  readonly frames: FrameRequestCallback[];
+  readonly triggerMutation: (target: Node) => void;
+  readonly triggerResize: (target: Element) => void;
+}> {
+  const frames: FrameRequestCallback[] = [];
+  const mutationCallbacks = new Map<Node, Map<MutationObserver, MutationCallback>>();
+  const resizeCallbacks = new Map<Element, Map<ResizeObserver, ResizeObserverCallback>>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      readonly #callback: ResizeObserverCallback;
+      readonly #targets = new Set<Element>();
+
+      public constructor(callback: ResizeObserverCallback) {
+        this.#callback = callback;
+      }
+      public observe(target: Element) {
+        this.#targets.add(target);
+        const observers = resizeCallbacks.get(target) ?? new Map();
+        observers.set(this as unknown as ResizeObserver, this.#callback);
+        resizeCallbacks.set(target, observers);
+      }
+      public disconnect() {
+        for (const target of this.#targets) {
+          const observers = resizeCallbacks.get(target);
+          observers?.delete(this as unknown as ResizeObserver);
+          if (observers?.size === 0) resizeCallbacks.delete(target);
+        }
+        this.#targets.clear();
+      }
+    },
+  );
+  vi.stubGlobal(
+    "MutationObserver",
+    class {
+      readonly #callback: MutationCallback;
+      readonly #targets = new Set<Node>();
+
+      public constructor(callback: MutationCallback) {
+        this.#callback = callback;
+      }
+      public observe(target: Node) {
+        this.#targets.add(target);
+        const observers = mutationCallbacks.get(target) ?? new Map();
+        observers.set(this as unknown as MutationObserver, this.#callback);
+        mutationCallbacks.set(target, observers);
+      }
+      public disconnect() {
+        for (const target of this.#targets) {
+          const observers = mutationCallbacks.get(target);
+          observers?.delete(this as unknown as MutationObserver);
+          if (observers?.size === 0) mutationCallbacks.delete(target);
+        }
+        this.#targets.clear();
+      }
+    },
+  );
+  return Object.freeze({
+    frames,
+    triggerMutation: (target: Node) => {
+      for (const [observer, callback] of mutationCallbacks.get(target) ?? []) {
+        callback([], observer);
+      }
+    },
+    triggerResize: (target: Element) => {
+      for (const [observer, callback] of resizeCallbacks.get(target) ?? []) {
+        callback([], observer);
+      }
+    },
+  });
 }
 
 afterEach(() => {
@@ -109,6 +194,21 @@ afterEach(() => {
 });
 
 describe("BrunoTableViewportRuntime", () => {
+  it("removes resize target registrations when an observer disconnects", () => {
+    const triggerResize = observeResizeTargets();
+    const callback = vi.fn<ResizeObserverCallback>();
+    const observer = new ResizeObserver(callback);
+    const target = {} as Element;
+
+    observer.observe(target);
+    triggerResize(target);
+    expect(callback).toHaveBeenCalledOnce();
+
+    observer.disconnect();
+    triggerResize(target);
+    expect(callback).toHaveBeenCalledOnce();
+  });
+
   it("publishes detached layout changes once and keeps hot scroll coordinates private", () => {
     const columns = compileColumns([
       {
@@ -303,6 +403,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(bodyLayerSetProperty).toHaveBeenCalledWith("transform", expect.stringContaining("3d"));
     const firstWrite = geometryOrder.findIndex((operation) => operation.startsWith("write"));
     const lastRead = geometryOrder.findLastIndex((operation) => operation.startsWith("read"));
+    expect(lastRead).toBeGreaterThanOrEqual(0);
     expect(firstWrite).toBeGreaterThan(lastRead);
     expect(
       gridSetProperty.mock.calls.some(([property]) => String(property).includes("scrollbar")),
@@ -365,7 +466,8 @@ describe("BrunoTableViewportRuntime", () => {
         isConnected: true,
         style: { setProperty: detachedWrite },
       } as unknown as HTMLElement);
-      cleanup?.();
+      expect(cleanup).toBeTypeOf("function");
+      cleanup!();
     }
     detachedWrite.mockClear();
     const mountedWrites = [vi.fn(), vi.fn(), vi.fn()];
@@ -876,26 +978,10 @@ describe("BrunoTableViewportRuntime", () => {
         width: 100,
       })),
     );
-    const callbacks: FrameRequestCallback[] = [];
+    const observers = installViewportObserverHarness();
     let clientWidthReads = 0;
-    let resize: (() => void) | undefined;
     let scrollListener: EventListener | undefined;
     let width = 200;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    });
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        public constructor(callback: ResizeObserverCallback) {
-          resize = () => callback([], this as unknown as ResizeObserver);
-        }
-        public observe() {}
-        public disconnect() {}
-      },
-    );
     const element = {
       addEventListener: vi.fn((name: string, listener: EventListener) => {
         if (name === "scroll") scrollListener = listener;
@@ -918,17 +1004,17 @@ describe("BrunoTableViewportRuntime", () => {
 
     width = 300;
     clientWidthReads = 0;
-    resize!();
+    observers.triggerResize(element);
     element.scrollLeft = 450;
     scrollListener!(new Event("scroll"));
     element.scrollLeft = 500;
     scrollListener!(new Event("scroll"));
     width = 400;
-    resize!();
+    observers.triggerResize(element);
 
     expect(clientWidthReads).toBe(0);
-    expect(callbacks).toHaveLength(1);
-    callbacks.shift()!(0);
+    expect(observers.frames).toHaveLength(1);
+    observers.frames.shift()!(0);
     expect(element.scrollLeft).toBe(500);
   });
 
@@ -942,27 +1028,11 @@ describe("BrunoTableViewportRuntime", () => {
         width: 100,
       })),
     );
-    const callbacks: FrameRequestCallback[] = [];
+    const observers = installViewportObserverHarness();
     let clientWidthReads = 0;
     let direction: "ltr" | "rtl" = "ltr";
     let width = 200;
-    let mutation: MutationCallback | undefined;
     let scrollListener: EventListener | undefined;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    });
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    vi.stubGlobal(
-      "MutationObserver",
-      class {
-        public constructor(callback: MutationCallback) {
-          mutation = callback;
-        }
-        public observe() {}
-        public disconnect() {}
-      },
-    );
     const ownerDocument = createRtlOwnerDocument("reverse", () => direction);
     const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
       typeof vi.fn
@@ -988,7 +1058,7 @@ describe("BrunoTableViewportRuntime", () => {
     viewport.attach(element);
 
     direction = "rtl";
-    mutation!([], {} as MutationObserver);
+    observers.triggerMutation(element);
     width = 240;
     element.scrollLeft = 0;
     scrollListener!(new Event("scroll"));
@@ -998,12 +1068,12 @@ describe("BrunoTableViewportRuntime", () => {
     scrollListener!(new Event("scroll"));
     element.scrollLeft = 500;
     scrollListener!(new Event("scroll"));
-    mutation!([], {} as MutationObserver);
+    observers.triggerMutation(element);
 
     expect(readComputedStyle).not.toHaveBeenCalled();
     expect(clientWidthReads).toBe(0);
-    expect(callbacks).toHaveLength(1);
-    callbacks.shift()!(0);
+    expect(observers.frames).toHaveLength(1);
+    observers.frames.shift()!(0);
     expect(readComputedStyle).toHaveBeenCalledOnce();
     expect(element.scrollLeft).toBe(500);
   });

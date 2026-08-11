@@ -33,6 +33,7 @@ type HorizontalCoordinateSample = Readonly<{
   readonly pinnedStartWidth: number;
   readonly pinningKey: string;
 }>;
+type HorizontalCoordinateEnvironment = Omit<HorizontalCoordinateSample, "logicalScrollLeft">;
 
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
@@ -788,20 +789,22 @@ export class BrunoTableViewportRuntime {
       if (Math.abs(nativeInputScrollLeft - expectedNativeScrollLeft) > 0.5) {
         this.lastNativeScrollLeft = nativeInputScrollLeft;
         this.horizontalInputPending = true;
-        this.horizontalInputSample = Object.freeze({
-          logicalScrollLeft: logicalScrollLeftFromNative(
+        this.horizontalInputSample = this.createHorizontalCoordinateSample(
+          logicalScrollLeftFromNative(
             nativeInputScrollLeft,
             maximum,
             nextDirection,
             nextRtlScrollType,
           ),
-          direction: nextDirection,
-          rtlScrollType: nextRtlScrollType,
-          viewportWidth: element.clientWidth,
-          suspended: shouldSuspendPinning(this.layout, element.clientWidth),
-          pinnedStartWidth: this.layout.pinnedStartWidth,
-          pinningKey: this.layoutPinningKey,
-        });
+          {
+            direction: nextDirection,
+            rtlScrollType: nextRtlScrollType,
+            viewportWidth: element.clientWidth,
+            suspended: shouldSuspendPinning(this.layout, element.clientWidth),
+            pinnedStartWidth: this.layout.pinnedStartWidth,
+            pinningKey: this.layoutPinningKey,
+          },
+        );
       } else {
         this.horizontalInputPending = false;
         this.horizontalInputSample = undefined;
@@ -823,27 +826,29 @@ export class BrunoTableViewportRuntime {
           ? rtlScrollType(element.ownerDocument)
           : "negative";
       this.horizontalInputPending = true;
-      this.horizontalInputSample = Object.freeze({
-        logicalScrollLeft: logicalScrollLeftFromNative(
+      this.horizontalInputSample = this.createHorizontalCoordinateSample(
+        logicalScrollLeftFromNative(
           nativeInputScrollLeft,
           horizontalScrollMaximum(this.layout, sampleViewportWidth),
           sampleDirection,
           sampleRtlScrollType,
         ),
-        direction: sampleDirection,
-        rtlScrollType: sampleRtlScrollType,
-        viewportWidth: sampleViewportWidth,
-        suspended: inputPrecedesObservedEnvironmentChange
-          ? (this.horizontalSuspended ??
-            shouldSuspendPinning(this.layout, this.horizontalViewportWidth))
-          : shouldSuspendPinning(this.layout, sampleViewportWidth),
-        pinnedStartWidth: inputPrecedesObservedEnvironmentChange
-          ? this.horizontalPinnedStartWidth
-          : this.layout.pinnedStartWidth,
-        pinningKey: inputPrecedesObservedEnvironmentChange
-          ? this.horizontalPinningKey
-          : this.layoutPinningKey,
-      });
+        {
+          direction: sampleDirection,
+          rtlScrollType: sampleRtlScrollType,
+          viewportWidth: sampleViewportWidth,
+          suspended: inputPrecedesObservedEnvironmentChange
+            ? (this.horizontalSuspended ??
+              shouldSuspendPinning(this.layout, this.horizontalViewportWidth))
+            : shouldSuspendPinning(this.layout, sampleViewportWidth),
+          pinnedStartWidth: inputPrecedesObservedEnvironmentChange
+            ? this.horizontalPinnedStartWidth
+            : this.layout.pinnedStartWidth,
+          pinningKey: inputPrecedesObservedEnvironmentChange
+            ? this.horizontalPinningKey
+            : this.layoutPinningKey,
+        },
+      );
     }
     return nextDirection;
   }
@@ -944,8 +949,7 @@ export class BrunoTableViewportRuntime {
     element: HTMLElement,
     logicalScrollLeft: number,
   ): HorizontalCoordinateSample {
-    return Object.freeze({
-      logicalScrollLeft,
+    return this.createHorizontalCoordinateSample(logicalScrollLeft, {
       direction: this.horizontalDirection,
       rtlScrollType: this.rtlScrollType,
       viewportWidth: element.clientWidth,
@@ -958,8 +962,7 @@ export class BrunoTableViewportRuntime {
   private capturePublishedHorizontalCoordinate(
     logicalScrollLeft: number,
   ): HorizontalCoordinateSample {
-    return Object.freeze({
-      logicalScrollLeft,
+    return this.createHorizontalCoordinateSample(logicalScrollLeft, {
       direction: this.horizontalDirection,
       rtlScrollType: this.rtlScrollType,
       viewportWidth: this.horizontalViewportWidth,
@@ -968,6 +971,13 @@ export class BrunoTableViewportRuntime {
       pinnedStartWidth: this.horizontalPinnedStartWidth,
       pinningKey: this.horizontalPinningKey,
     });
+  }
+
+  private createHorizontalCoordinateSample(
+    logicalScrollLeft: number,
+    environment: HorizontalCoordinateEnvironment,
+  ): HorizontalCoordinateSample {
+    return Object.freeze({ logicalScrollLeft, ...environment });
   }
 
   private readLogicalScrollLeft(element: HTMLElement): number {

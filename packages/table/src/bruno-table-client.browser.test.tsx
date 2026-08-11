@@ -3279,6 +3279,7 @@ describe("BrunoTableClient browser surface", () => {
         .all()
         .map((row) => row.element())
         .filter((row) => row.style.transform.startsWith("translate3d"));
+      expect(replacedRows.length).toBeGreaterThan(0);
       const replacedTransforms = replacedRows.map((row) => row.style.transform);
       const replacementRows = manyRows.map((row, index) => ({
         ...row,
