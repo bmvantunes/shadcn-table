@@ -222,17 +222,28 @@ describe("BrunoTableViewportRuntime", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     let scrollListener: EventListener | undefined;
+    const geometryOrder: string[] = [];
     const gridSetProperty = vi.fn();
-    const rowLayerSetProperty = vi.fn();
-    const overlaySetProperty = vi.fn();
+    const bodyLayerSetProperty = vi.fn((_property: string, _value: string) =>
+      geometryOrder.push("write-body-transform"),
+    );
+    const overlaySetProperty = vi.fn((_property: string, _value: string) =>
+      geometryOrder.push("write-overlay"),
+    );
     const element = {
       addEventListener: vi.fn((name: string, listener: EventListener) => {
         if (name === "scroll") scrollListener = listener;
       }),
       clientHeight: 480,
       clientWidth: 800,
-      offsetHeight: 495,
-      offsetWidth: 815,
+      get offsetHeight() {
+        geometryOrder.push("read-offset-height");
+        return 495;
+      },
+      get offsetWidth() {
+        geometryOrder.push("read-offset-width");
+        return 815;
+      },
       removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
@@ -245,7 +256,10 @@ describe("BrunoTableViewportRuntime", () => {
     viewport.setLayout(100, columns);
     viewport.attach(element);
     viewport.attachRowLayer({
-      style: { removeProperty: vi.fn(), setProperty: rowLayerSetProperty },
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement);
+    viewport.attachBodyLayer({
+      style: { setProperty: bodyLayerSetProperty },
     } as unknown as HTMLElement);
     viewport.attachScrollbarOverlay(overlay);
 
@@ -263,10 +277,11 @@ describe("BrunoTableViewportRuntime", () => {
     expect(initialProperties.get("--bruno-table-scrollbar-vertical-bottom")).toBe("23px");
     overlaySetProperty.mockClear();
     gridSetProperty.mockClear();
-    rowLayerSetProperty.mockClear();
+    bodyLayerSetProperty.mockClear();
+    geometryOrder.length = 0;
 
     element.scrollLeft = 300;
-    element.scrollTop = 72;
+    element.scrollTop = 1_200;
     scrollListener!(new Event("scroll"));
     scrollListener!(new Event("scroll"));
 
@@ -285,10 +300,10 @@ describe("BrunoTableViewportRuntime", () => {
     expect(
       Number.parseFloat(scrolledProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!),
     ).toBeGreaterThan(0);
-    expect(rowLayerSetProperty).toHaveBeenCalledWith(
-      "--bruno-table-row-layer-offset",
-      expect.any(String),
-    );
+    expect(bodyLayerSetProperty).toHaveBeenCalledWith("transform", expect.stringContaining("3d"));
+    const firstWrite = geometryOrder.findIndex((operation) => operation.startsWith("write"));
+    const lastRead = geometryOrder.findLastIndex((operation) => operation.startsWith("read"));
+    expect(firstWrite).toBeGreaterThan(lastRead);
     expect(
       gridSetProperty.mock.calls.some(([property]) => String(property).includes("scrollbar")),
     ).toBe(false);
@@ -311,6 +326,66 @@ describe("BrunoTableViewportRuntime", () => {
       Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!) +
         Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-height")!),
     ).toBeCloseTo(436, 6);
+  });
+
+  it("unregisters replaced body layers before a later transform frame", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_BODY_LAYER_CLEANUP",
+        field: "name",
+        headerName: "Body layer cleanup",
+        valueType: "text",
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(1_000, columns);
+    viewport.attach(element);
+
+    const detachedWrite = vi.fn();
+    for (let index = 0; index < 100; index += 1) {
+      const cleanup = viewport.attachBodyLayer({
+        isConnected: true,
+        style: { setProperty: detachedWrite },
+      } as unknown as HTMLElement);
+      cleanup?.();
+    }
+    detachedWrite.mockClear();
+    const mountedWrites = [vi.fn(), vi.fn(), vi.fn()];
+    for (const setProperty of mountedWrites) {
+      viewport.attachBodyLayer({
+        isConnected: true,
+        style: { setProperty },
+      } as unknown as HTMLElement);
+      setProperty.mockClear();
+    }
+
+    element.scrollTop = 1_200;
+    scrollListener!(new Event("scroll"));
+    callbacks.shift()!(0);
+
+    expect(detachedWrite).not.toHaveBeenCalled();
+    for (const setProperty of mountedWrites) {
+      expect(setProperty).toHaveBeenCalledOnce();
+      expect(setProperty).toHaveBeenCalledWith("transform", expect.stringContaining("3d"));
+    }
   });
 
   it("keeps decorative tracks disjoint with overlay-native scrollbars and suspended pinning", () => {
@@ -639,6 +714,8 @@ describe("BrunoTableViewportRuntime", () => {
     );
     const callbacks: FrameRequestCallback[] = [];
     let direction: "ltr" | "rtl" = "ltr";
+    let clientWidthReads = 0;
+    let directionFrameWidth = 200;
     let mutation: MutationCallback | undefined;
     let scrollListener: EventListener | undefined;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -665,7 +742,10 @@ describe("BrunoTableViewportRuntime", () => {
         if (name === "scroll") scrollListener = listener;
       }),
       clientHeight: 480,
-      clientWidth: 200,
+      get clientWidth() {
+        clientWidthReads += 1;
+        return directionFrameWidth;
+      },
       ownerDocument,
       parentElement: null,
       removeEventListener: vi.fn(),
@@ -680,14 +760,19 @@ describe("BrunoTableViewportRuntime", () => {
 
     direction = "rtl";
     mutation!([], {} as MutationObserver);
+    directionFrameWidth = 240;
+    element.scrollLeft = 0;
+    scrollListener!(new Event("scroll"));
     expect(readComputedStyle).toHaveBeenCalledTimes(2);
-    expect(element.scrollLeft).toBe(320);
+    expect(element.scrollLeft).toBe(0);
     callbacks.shift()!(0);
     expect(readComputedStyle).toHaveBeenCalledTimes(3);
     expect(element.scrollLeft).toBe(-320);
 
     direction = "ltr";
     mutation!([], {} as MutationObserver);
+    element.scrollLeft = 0;
+    scrollListener!(new Event("scroll"));
     element.scrollLeft = 480;
     scrollListener!(new Event("scroll"));
     callbacks.shift()!(0);
@@ -700,6 +785,20 @@ describe("BrunoTableViewportRuntime", () => {
     mutation!([], {} as MutationObserver);
     callbacks.shift()!(0);
     expect(element.scrollLeft).toBe(-600);
+
+    readComputedStyle.mockClear();
+    clientWidthReads = 0;
+    for (const nativeScrollLeft of [-640, -680, -720]) {
+      element.scrollLeft = nativeScrollLeft;
+      scrollListener!(new Event("scroll"));
+    }
+    expect(readComputedStyle).not.toHaveBeenCalled();
+    expect(clientWidthReads).toBe(0);
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(clientWidthReads).toBeGreaterThan(0);
+    expect(element.scrollLeft).toBe(-720);
   });
 
   it("refreshes computed direction during resize-driven environment reconciliation", () => {
@@ -765,6 +864,148 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(-600);
     expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(initialCenterStart);
     expect(overlaySetProperty).toHaveBeenCalledWith("direction", "rtl");
+  });
+
+  it("keeps a post-resize reverse-RTL round trip authoritative", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_RESIZE_ROUND_TRIP_${index}`,
+        field: "name",
+        headerName: `Resize round trip ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let clientWidthReads = 0;
+    let resize: (() => void) | undefined;
+    let scrollListener: EventListener | undefined;
+    let width = 200;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        public constructor(callback: ResizeObserverCallback) {
+          resize = () => callback([], this as unknown as ResizeObserver);
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      get clientWidth() {
+        clientWidthReads += 1;
+        return width;
+      },
+      ownerDocument: createRtlOwnerDocument("reverse"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 500,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    width = 300;
+    clientWidthReads = 0;
+    resize!();
+    element.scrollLeft = 450;
+    scrollListener!(new Event("scroll"));
+    element.scrollLeft = 500;
+    scrollListener!(new Event("scroll"));
+    width = 400;
+    resize!();
+
+    expect(clientWidthReads).toBe(0);
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(element.scrollLeft).toBe(500);
+  });
+
+  it("keeps a post-direction reverse-RTL round trip authoritative", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_DIRECTION_ROUND_TRIP_${index}`,
+        field: "name",
+        headerName: `Direction round trip ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const callbacks: FrameRequestCallback[] = [];
+    let clientWidthReads = 0;
+    let direction: "ltr" | "rtl" = "ltr";
+    let width = 200;
+    let mutation: MutationCallback | undefined;
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        public constructor(callback: MutationCallback) {
+          mutation = callback;
+        }
+        public observe() {}
+        public disconnect() {}
+      },
+    );
+    const ownerDocument = createRtlOwnerDocument("reverse", () => direction);
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      get clientWidth() {
+        clientWidthReads += 1;
+        return width;
+      },
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 500,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+
+    direction = "rtl";
+    mutation!([], {} as MutationObserver);
+    width = 240;
+    element.scrollLeft = 0;
+    scrollListener!(new Event("scroll"));
+    readComputedStyle.mockClear();
+    clientWidthReads = 0;
+    element.scrollLeft = 450;
+    scrollListener!(new Event("scroll"));
+    element.scrollLeft = 500;
+    scrollListener!(new Event("scroll"));
+    mutation!([], {} as MutationObserver);
+
+    expect(readComputedStyle).not.toHaveBeenCalled();
+    expect(clientWidthReads).toBe(0);
+    expect(callbacks).toHaveLength(1);
+    callbacks.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(element.scrollLeft).toBe(500);
   });
 
   it("refreshes computed direction before reveal after a CSS-only change", () => {
@@ -2077,13 +2318,13 @@ describe("BrunoTableViewportRuntime", () => {
       scrollTop: 0,
       style: { setProperty: vi.fn() },
     } as unknown as HTMLElement;
-    const rowLayer = {
-      style: { removeProperty: vi.fn(), setProperty },
+    const bodyLayer = {
+      style: { setProperty },
     } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
-    viewport.attachRowLayer(rowLayer);
+    viewport.attachBodyLayer(bodyLayer);
 
     viewport.revealCell(999_999, "COL_ID_NAME");
     callback!(0);
@@ -2094,10 +2335,12 @@ describe("BrunoTableViewportRuntime", () => {
       rowEnd: 1_000_000,
       totalHeight: BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
     });
-    const layerOffsetCall = setProperty.mock.calls.findLast(
-      ([property]) => property === "--bruno-table-row-layer-offset",
+    const layerTransformCall = setProperty.mock.calls.findLast(
+      ([property]) => property === "transform",
     );
-    const layerOffset = Number.parseFloat(String(layerOffsetCall?.[1]));
+    const layerOffset = Number.parseFloat(
+      /translate3d\(0, ([^,]+), 0\)/.exec(String(layerTransformCall?.[1]))?.[1] ?? "NaN",
+    );
     expect(layerOffset + (window.rowEnd - window.rowStart - 1) * 36).toBeLessThanOrEqual(
       BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
     );

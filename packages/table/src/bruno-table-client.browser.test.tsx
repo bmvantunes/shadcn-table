@@ -15,6 +15,7 @@ import {
 import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
+  installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientRowOrderPlanningListener,
   installBrunoTableClientViewRenderListener,
 } from "./internal/render-instrumentation";
@@ -3074,10 +3075,13 @@ describe("BrunoTableClient browser surface", () => {
     const directionOwner = gridElement.closest<HTMLElement>('[dir="rtl"]');
     expect(directionOwner).not.toBeNull();
     directionOwner!.dir = "ltr";
+    gridElement.style.width = "720px";
     await vi.waitFor(() => expect(getComputedStyle(gridElement).direction).toBe("ltr"));
+    await vi.waitFor(() => expect(gridElement.clientWidth).toBe(720));
     await expect
       .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
       .toBeInTheDocument();
+    await vi.waitFor(() => expect(gridElement.scrollLeft).toBeCloseTo(960, 0));
     await vi.waitFor(() =>
       expect(
         Number.parseFloat(
@@ -3192,7 +3196,9 @@ describe("BrunoTableClient browser surface", () => {
 
   test("keeps scroll-frame geometry out of the table root and observes zoomed resize", async () => {
     const viewRenders = vi.fn();
+    const headerRenders = vi.fn();
     const removeViewRenderListener = installBrunoTableClientViewRenderListener(viewRenders);
+    const removeHeaderRenderListener = installBrunoTableClientHeaderRenderListener(headerRenders);
     const manyRows = Array.from({ length: 200 }, (_, index) => ({
       id: `scroll-row-${index}`,
       name: `Scroll row ${String(index).padStart(3, "0")}`,
@@ -3242,22 +3248,68 @@ describe("BrunoTableClient browser surface", () => {
           .map((header) => header.element().getAttribute("aria-colindex")),
       ).toEqual(expandedColumnIndexes);
 
+      const headerRendersBeforeResize = headerRenders.mock.calls.length;
       gridElement.style.width = "360px";
       await vi.waitFor(() => expect(gridElement.clientWidth).toBe(360));
       await vi.waitFor(() =>
         expect(screen.getByRole("columnheader").all().length).toBeLessThan(expandedHeaderCount),
       );
       expect(gridElement.getBoundingClientRect().width).toBeCloseTo(450, 0);
+      expect(headerRenders.mock.calls.length).toBeGreaterThan(headerRendersBeforeResize);
 
       const rendersBeforeScroll = viewRenders.mock.calls.length;
+      const headerRendersBeforeScroll = headerRenders.mock.calls.length;
       gridElement.scrollTop = 1_200;
       gridElement.dispatchEvent(new Event("scroll"));
       await expect
         .element(screen.getByRole("gridcell", { name: "Scroll row 040" }).nth(0))
         .toBeInTheDocument();
       expect(viewRenders).toHaveBeenCalledTimes(rendersBeforeScroll);
-      expect(rowLayer?.style.getPropertyValue("--bruno-table-row-layer-offset")).not.toBe("");
+      expect(headerRenders).toHaveBeenCalledTimes(headerRendersBeforeScroll);
+      expect(rowLayer?.style.getPropertyValue("--bruno-table-row-layer-offset")).toBe("");
+      expect(
+        screen
+          .getByRole("row")
+          .all()
+          .some((row) => row.element().style.transform.startsWith("translate3d")),
+      ).toBe(true);
+
+      const replacedRows = screen
+        .getByRole("row")
+        .all()
+        .map((row) => row.element())
+        .filter((row) => row.style.transform.startsWith("translate3d"));
+      const replacedTransforms = replacedRows.map((row) => row.style.transform);
+      const replacementRows = manyRows.map((row, index) => ({
+        ...row,
+        id: `replacement-row-${index}`,
+        name: `Replacement row ${String(index).padStart(3, "0")}`,
+      }));
+      await screen.rerender(
+        <BrunoTableClient
+          tableId="TABLE_ID_GEOMETRY"
+          getRowId={(row: Row) => row.id}
+          columns={wideColumns}
+          initialOrderBy={[{ columnId: "COL_ID_WIDE_01", direction: "asc" }]}
+          clientSource={{ ...readySource(replacementRows), version: 2 }}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Replacement row 040" }).nth(0))
+        .toBeInTheDocument();
+      expect(replacedRows.every((row) => !row.isConnected)).toBe(true);
+
+      const replacementGrid = screen
+        .getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" })
+        .element() as HTMLElement;
+      replacementGrid.scrollTop = 2_400;
+      replacementGrid.dispatchEvent(new Event("scroll"));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Replacement row 080" }).nth(0))
+        .toBeInTheDocument();
+      expect(replacedRows.map((row) => row.style.transform)).toEqual(replacedTransforms);
     } finally {
+      removeHeaderRenderListener();
       removeViewRenderListener();
     }
   });

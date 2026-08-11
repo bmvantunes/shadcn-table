@@ -29,6 +29,7 @@ import type {
   NamedExoticComponent,
   ReactElement,
   ReactNode,
+  RefCallback,
 } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
@@ -43,6 +44,7 @@ import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import {
   recordBrunoTableClientCellRender,
   recordBrunoTableClientGridSurfaceRender,
+  recordBrunoTableClientHeaderRender,
   recordBrunoTableClientViewRender,
 } from "./render-instrumentation";
 import {
@@ -54,6 +56,19 @@ import {
 } from "./virtual-viewport";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
+type BrunoTableColumnWindow = Readonly<
+  Pick<
+    BrunoTableViewportSnapshot["virtualWindow"],
+    | "pinnedStart"
+    | "center"
+    | "pinnedEnd"
+    | "centerStartIndex"
+    | "centerCount"
+    | "leftPadding"
+    | "rightPadding"
+    | "totalWidth"
+  >
+>;
 type InteractiveDomElement = HTMLElement | SVGElement;
 const INTERACTIVE_DESCENDANT_SELECTOR =
   'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
@@ -695,6 +710,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         columns={columns}
         viewportSnapshot={viewportSnapshot}
         attach={viewport.attach}
+        attachBodyLayer={viewport.attachBodyLayer}
         attachRowLayer={viewport.attachRowLayer}
         attachScrollbarOverlay={viewport.attachScrollbarOverlay}
         focusFallback={focusFallback}
@@ -715,6 +731,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   columns,
   viewportSnapshot,
   attach,
+  attachBodyLayer,
   attachRowLayer,
   attachScrollbarOverlay,
   focusFallback,
@@ -729,6 +746,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly columns: readonly CompiledColumn[];
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly attachRowLayer: (element: HTMLElement | null) => void;
   readonly attachScrollbarOverlay: (element: HTMLElement | null) => void;
   readonly focusFallback: () => void;
@@ -743,9 +761,32 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 }) {
   useLayoutEffect(recordBrunoTableClientGridSurfaceRender);
   const virtualWindow = viewportSnapshot.virtualWindow;
-  const tableWidth = virtualWindow.totalWidth;
+  const columnWindow = useMemo<BrunoTableColumnWindow>(
+    () =>
+      Object.freeze({
+        pinnedStart: virtualWindow.pinnedStart,
+        center: virtualWindow.center,
+        pinnedEnd: virtualWindow.pinnedEnd,
+        centerStartIndex: virtualWindow.centerStartIndex,
+        centerCount: virtualWindow.centerCount,
+        leftPadding: virtualWindow.leftPadding,
+        rightPadding: virtualWindow.rightPadding,
+        totalWidth: virtualWindow.totalWidth,
+      }),
+    [
+      virtualWindow.pinnedStart,
+      virtualWindow.center,
+      virtualWindow.pinnedEnd,
+      virtualWindow.centerStartIndex,
+      virtualWindow.centerCount,
+      virtualWindow.leftPadding,
+      virtualWindow.rightPadding,
+      virtualWindow.totalWidth,
+    ],
+  );
+  const tableWidth = columnWindow.totalWidth;
   const viewportFill =
-    virtualWindow.pinnedEnd.length === 0 ? 0 : Math.max(0, viewportSnapshot.width - tableWidth);
+    columnWindow.pinnedEnd.length === 0 ? 0 : Math.max(0, viewportSnapshot.width - tableWidth);
   const renderedTableWidth = tableWidth + viewportFill;
   const logicalColumns = columns;
   const gridElement = useRef<HTMLDivElement | null>(null);
@@ -827,9 +868,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         tabIndex={0}
         aria-rowcount={rowSpace.totalRows + 1}
         aria-colcount={
-          virtualWindow.pinnedStart.length +
-          virtualWindow.centerCount +
-          virtualWindow.pinnedEnd.length
+          columnWindow.pinnedStart.length + columnWindow.centerCount + columnWindow.pinnedEnd.length
         }
         onFocus={(event) => {
           if (event.target === event.currentTarget) navigation.activateForFocus();
@@ -934,77 +973,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           style={{ position: "relative", width: renderedTableWidth }}
         >
           <table role="presentation" style={{ tableLayout: "fixed", width: renderedTableWidth }}>
-            <thead
-              role="rowgroup"
-              style={{
-                background: "Canvas",
-                position: "sticky",
-                top: 0,
-                width: renderedTableWidth,
-                zIndex: 4,
-              }}
-            >
-              <tr
-                aria-rowindex={1}
-                role="row"
-                style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}
-              >
-                {virtualWindow.pinnedStart.map((column, index) => (
-                  <BrunoTableHeaderCell
-                    key={column.columnId}
-                    pinned="start"
-                    instanceId={instanceId}
-                    tableId={tableId}
-                    columnIndex={index}
-                    column={column}
-                    runtime={runtime}
-                    activateHeaderCommand={activateHeaderCommand}
-                    style={pinnedCellStyle("start", virtualWindow.pinnedStart, index)}
-                  />
-                ))}
-                {virtualWindow.leftPadding > 0 ? (
-                  <th aria-hidden="true" style={{ padding: 0, width: virtualWindow.leftPadding }} />
-                ) : null}
-                {virtualWindow.center.map((column, index) => (
-                  <BrunoTableHeaderCell
-                    key={column.columnId}
-                    instanceId={instanceId}
-                    tableId={tableId}
-                    columnIndex={
-                      virtualWindow.pinnedStart.length + virtualWindow.centerStartIndex + index
-                    }
-                    column={column}
-                    runtime={runtime}
-                    activateHeaderCommand={activateHeaderCommand}
-                    style={{ width: column.semantics.width }}
-                  />
-                ))}
-                {virtualWindow.rightPadding > 0 ? (
-                  <th
-                    aria-hidden="true"
-                    style={{ padding: 0, width: virtualWindow.rightPadding }}
-                  />
-                ) : null}
-                {viewportFill > 0 ? (
-                  <th aria-hidden="true" style={{ padding: 0, width: viewportFill }} />
-                ) : null}
-                {virtualWindow.pinnedEnd.map((column, index) => (
-                  <BrunoTableHeaderCell
-                    key={column.columnId}
-                    pinned="end"
-                    instanceId={instanceId}
-                    tableId={tableId}
-                    columnIndex={
-                      virtualWindow.pinnedStart.length + virtualWindow.centerCount + index
-                    }
-                    column={column}
-                    runtime={runtime}
-                    activateHeaderCommand={activateHeaderCommand}
-                    style={pinnedCellStyle("end", virtualWindow.pinnedEnd, index)}
-                  />
-                ))}
-              </tr>
-            </thead>
+            <BrunoTableHeaderRow
+              activateHeaderCommand={activateHeaderCommand}
+              columnWindow={columnWindow}
+              instanceId={instanceId}
+              renderedTableWidth={renderedTableWidth}
+              runtime={runtime}
+              tableId={tableId}
+              viewportFill={viewportFill}
+            />
             <tbody
               role="rowgroup"
               style={{
@@ -1022,14 +999,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                   return rowId === undefined ? (
                     <UnloadedRow
                       key={`slot:${String(offset)}`}
-                      center={virtualWindow.center}
-                      centerStartIndex={virtualWindow.centerStartIndex}
+                      attachBodyLayer={attachBodyLayer}
+                      center={columnWindow.center}
+                      centerStartIndex={columnWindow.centerStartIndex}
                       instanceId={instanceId}
-                      leftPadding={virtualWindow.leftPadding}
+                      leftPadding={columnWindow.leftPadding}
                       logicalRowIndex={logicalRowIndex}
-                      pinnedEnd={virtualWindow.pinnedEnd}
-                      pinnedStart={virtualWindow.pinnedStart}
-                      rightPadding={virtualWindow.rightPadding}
+                      pinnedEnd={columnWindow.pinnedEnd}
+                      pinnedStart={columnWindow.pinnedStart}
+                      rightPadding={columnWindow.rightPadding}
                       tableId={tableId}
                       top={offset * ROW_HEIGHT}
                       viewportFill={viewportFill}
@@ -1038,17 +1016,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                   ) : (
                     <BrunoTableRow
                       key={`row:${rowId}`}
+                      attachBodyLayer={attachBodyLayer}
                       rowId={rowId}
                       instanceId={instanceId}
                       tableId={tableId}
-                      centerStartIndex={virtualWindow.centerStartIndex}
-                      pinnedStartCount={virtualWindow.pinnedStart.length}
+                      centerStartIndex={columnWindow.centerStartIndex}
+                      pinnedStartCount={columnWindow.pinnedStart.length}
                       runtime={runtime}
-                      center={virtualWindow.center}
-                      pinnedStart={virtualWindow.pinnedStart}
-                      pinnedEnd={virtualWindow.pinnedEnd}
-                      leftPadding={virtualWindow.leftPadding}
-                      rightPadding={virtualWindow.rightPadding}
+                      center={columnWindow.center}
+                      pinnedStart={columnWindow.pinnedStart}
+                      pinnedEnd={columnWindow.pinnedEnd}
+                      leftPadding={columnWindow.leftPadding}
+                      rightPadding={columnWindow.rightPadding}
                       viewportFill={viewportFill}
                       logicalRowIndex={logicalRowIndex}
                       top={offset * ROW_HEIGHT}
@@ -1059,11 +1038,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               )}
             </tbody>
           </table>
-          {virtualWindow.pinnedStart.length > 0 ? (
+          {columnWindow.pinnedStart.length > 0 ? (
             <BrunoTablePinnedBodyRegion
-              columns={virtualWindow.pinnedStart}
+              attachBodyLayer={attachBodyLayer}
+              columns={columnWindow.pinnedStart}
               instanceId={instanceId}
-              pinnedStartCount={virtualWindow.pinnedStart.length}
+              pinnedStartCount={columnWindow.pinnedStart.length}
               rowEnd={virtualWindow.rowEnd}
               rowSpace={rowSpace}
               rowStart={virtualWindow.rowStart}
@@ -1074,12 +1054,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               totalHeight={virtualWindow.totalHeight}
             />
           ) : null}
-          {virtualWindow.pinnedEnd.length > 0 ? (
+          {columnWindow.pinnedEnd.length > 0 ? (
             <BrunoTablePinnedBodyRegion
-              columns={virtualWindow.pinnedEnd}
+              attachBodyLayer={attachBodyLayer}
+              columns={columnWindow.pinnedEnd}
               instanceId={instanceId}
-              pinnedStartCount={virtualWindow.pinnedStart.length}
-              precedingColumnCount={virtualWindow.centerCount}
+              pinnedStartCount={columnWindow.pinnedStart.length}
+              precedingColumnCount={columnWindow.centerCount}
               rowEnd={virtualWindow.rowEnd}
               rowSpace={rowSpace}
               rowStart={virtualWindow.rowStart}
@@ -1239,6 +1220,88 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
       runtime={runtime}
       tableId={tableId}
     />
+  );
+});
+
+const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
+  activateHeaderCommand,
+  columnWindow,
+  instanceId,
+  renderedTableWidth,
+  runtime,
+  tableId,
+  viewportFill,
+}: {
+  readonly activateHeaderCommand: (columnId: string) => void;
+  readonly columnWindow: BrunoTableColumnWindow;
+  readonly instanceId: string;
+  readonly renderedTableWidth: number;
+  readonly runtime: BrunoTableRuntimeView;
+  readonly tableId: string;
+  readonly viewportFill: number;
+}) {
+  useLayoutEffect(recordBrunoTableClientHeaderRender);
+  return (
+    <thead
+      role="rowgroup"
+      style={{
+        background: "Canvas",
+        position: "sticky",
+        top: 0,
+        width: renderedTableWidth,
+        zIndex: 4,
+      }}
+    >
+      <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
+        {columnWindow.pinnedStart.map((column, index) => (
+          <BrunoTableHeaderCell
+            key={column.columnId}
+            pinned="start"
+            instanceId={instanceId}
+            tableId={tableId}
+            columnIndex={index}
+            column={column}
+            runtime={runtime}
+            activateHeaderCommand={activateHeaderCommand}
+            style={pinnedCellStyle("start", columnWindow.pinnedStart, index)}
+          />
+        ))}
+        {columnWindow.leftPadding > 0 ? (
+          <th aria-hidden="true" style={{ padding: 0, width: columnWindow.leftPadding }} />
+        ) : null}
+        {columnWindow.center.map((column, index) => (
+          <BrunoTableHeaderCell
+            key={column.columnId}
+            instanceId={instanceId}
+            tableId={tableId}
+            columnIndex={columnWindow.pinnedStart.length + columnWindow.centerStartIndex + index}
+            column={column}
+            runtime={runtime}
+            activateHeaderCommand={activateHeaderCommand}
+            style={{ width: column.semantics.width }}
+          />
+        ))}
+        {columnWindow.rightPadding > 0 ? (
+          <th aria-hidden="true" style={{ padding: 0, width: columnWindow.rightPadding }} />
+        ) : null}
+        {viewportFill > 0 ? (
+          <th aria-hidden="true" style={{ padding: 0, width: viewportFill }} />
+        ) : null}
+        {columnWindow.pinnedEnd.map((column, index) => (
+          <BrunoTableHeaderCell
+            key={column.columnId}
+            pinned="end"
+            instanceId={instanceId}
+            tableId={tableId}
+            columnIndex={columnWindow.pinnedStart.length + columnWindow.centerCount + index}
+            column={column}
+            runtime={runtime}
+            activateHeaderCommand={activateHeaderCommand}
+            style={pinnedCellStyle("end", columnWindow.pinnedEnd, index)}
+          />
+        ))}
+      </tr>
+    </thead>
   );
 });
 
@@ -1494,6 +1557,7 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
 });
 
 const UnloadedRow = memo(function UnloadedRow({
+  attachBodyLayer,
   center,
   centerStartIndex,
   instanceId,
@@ -1507,6 +1571,7 @@ const UnloadedRow = memo(function UnloadedRow({
   viewportFill,
   width,
 }: {
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly center: readonly CompiledColumn[];
   readonly centerStartIndex: number;
   readonly instanceId: string;
@@ -1523,6 +1588,7 @@ const UnloadedRow = memo(function UnloadedRow({
   return (
     <LoadingRow
       ariaRowIndexOffset={2}
+      attachBodyLayer={attachBodyLayer}
       center={center}
       centerStartIndex={centerStartIndex}
       instanceId={instanceId}
@@ -1540,6 +1606,7 @@ const UnloadedRow = memo(function UnloadedRow({
 });
 
 const BrunoTableRow = memo(function BrunoTableRow({
+  attachBodyLayer,
   rowId,
   instanceId,
   tableId,
@@ -1556,6 +1623,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
   top,
   width,
 }: {
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly rowId: string;
   readonly instanceId: string;
   readonly tableId: string;
@@ -1577,6 +1645,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
     .join(" ");
   return (
     <tr
+      ref={attachBodyLayer}
       role="row"
       aria-rowindex={logicalRowIndex + 2}
       aria-owns={ownedCells === "" ? undefined : ownedCells}
@@ -1587,7 +1656,8 @@ const BrunoTableRow = memo(function BrunoTableRow({
         overflow: "hidden",
         position: "absolute",
         tableLayout: "fixed",
-        top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${top}px)`,
+        top,
+        willChange: "transform",
         width,
       }}
     >
@@ -1622,6 +1692,7 @@ const BrunoTableRow = memo(function BrunoTableRow({
 });
 
 const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
+  attachBodyLayer,
   columns,
   instanceId,
   layerWidth,
@@ -1635,6 +1706,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
   tableId,
   totalHeight,
 }: {
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly columns: readonly CompiledColumn[];
   readonly instanceId: string;
   readonly layerWidth: number;
@@ -1662,6 +1734,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
         const rowId = rowSpace.getRowId(logicalRowIndex);
         return (
           <tr
+            ref={attachBodyLayer}
             key={rowId === undefined ? `slot:${String(offset)}` : `row:${rowId}`}
             role="presentation"
             style={{
@@ -1671,7 +1744,8 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
               overflow: "hidden",
               position: "absolute",
               tableLayout: "fixed",
-              top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
+              top: offset * ROW_HEIGHT,
+              willChange: "transform",
               width,
             }}
           >
@@ -2215,6 +2289,7 @@ const LoadingRows = memo(function LoadingRows({
                 (_, offset) => (
                   <LoadingRow
                     key={`loading-slot-${String(offset)}`}
+                    attachBodyLayer={viewport.attachBodyLayer}
                     center={virtualWindow.center}
                     centerStartIndex={virtualWindow.centerStartIndex}
                     instanceId={instanceId}
@@ -2234,6 +2309,7 @@ const LoadingRows = memo(function LoadingRows({
           </table>
           {virtualWindow.pinnedStart.length > 0 ? (
             <LoadingPinnedBodyRegion
+              attachBodyLayer={viewport.attachBodyLayer}
               columns={virtualWindow.pinnedStart}
               instanceId={instanceId}
               layerWidth={renderedTableWidth}
@@ -2247,6 +2323,7 @@ const LoadingRows = memo(function LoadingRows({
           ) : null}
           {virtualWindow.pinnedEnd.length > 0 ? (
             <LoadingPinnedBodyRegion
+              attachBodyLayer={viewport.attachBodyLayer}
               columns={virtualWindow.pinnedEnd}
               instanceId={instanceId}
               layerWidth={renderedTableWidth}
@@ -2268,6 +2345,7 @@ const LoadingRows = memo(function LoadingRows({
 // oxlint-enable react/react-compiler
 
 const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
+  attachBodyLayer,
   columns,
   instanceId,
   layerWidth,
@@ -2279,6 +2357,7 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
   tableId,
   totalHeight,
 }: {
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly columns: readonly CompiledColumn[];
   readonly instanceId: string;
   readonly layerWidth: number;
@@ -2301,6 +2380,7 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
     >
       {Array.from({ length: rowEnd - rowStart }, (_, offset) => (
         <tr
+          ref={attachBodyLayer}
           key={`pinned-loading-slot-${String(offset)}`}
           role="presentation"
           style={{
@@ -2310,7 +2390,8 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
             overflow: "hidden",
             position: "absolute",
             tableLayout: "fixed",
-            top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
+            top: offset * ROW_HEIGHT,
+            willChange: "transform",
             width,
           }}
         >
@@ -2332,6 +2413,7 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
 
 const LoadingRow = memo(function LoadingRow({
   ariaRowIndexOffset = 1,
+  attachBodyLayer,
   center,
   centerStartIndex,
   instanceId,
@@ -2346,6 +2428,7 @@ const LoadingRow = memo(function LoadingRow({
   width,
 }: {
   readonly ariaRowIndexOffset?: number;
+  readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly center: readonly CompiledColumn[];
   readonly centerStartIndex: number;
   readonly instanceId: string;
@@ -2364,6 +2447,7 @@ const LoadingRow = memo(function LoadingRow({
     .join(" ");
   return (
     <tr
+      ref={attachBodyLayer}
       aria-rowindex={logicalRowIndex + ariaRowIndexOffset}
       aria-owns={ownedCells === "" ? undefined : ownedCells}
       role="row"
@@ -2374,7 +2458,8 @@ const LoadingRow = memo(function LoadingRow({
         overflow: "hidden",
         position: "absolute",
         tableLayout: "fixed",
-        top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(top)}px)`,
+        top,
+        willChange: "transform",
         width,
       }}
     >

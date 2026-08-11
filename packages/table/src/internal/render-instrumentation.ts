@@ -3,6 +3,7 @@ type CellListener = (rowId: string, columnId: string) => void;
 type RowOrderPlanningListener = (tableId: string) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
+let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientCellRenderListener: CellListener | undefined;
 const clientRowOrderPlanningListeners = new Set<RowOrderPlanningListener>();
@@ -53,6 +54,19 @@ export function installBrunoTableClientGridSurfaceRenderListener(listener: Liste
   return () => {
     if (clientGridSurfaceRenderListener === listener) {
       clientGridSurfaceRenderListener = undefined;
+    }
+  };
+}
+
+export function recordBrunoTableClientHeaderRender(): void {
+  clientHeaderRenderListener?.();
+}
+
+export function installBrunoTableClientHeaderRenderListener(listener: Listener): () => void {
+  clientHeaderRenderListener = listener;
+  return () => {
+    if (clientHeaderRenderListener === listener) {
+      clientHeaderRenderListener = undefined;
     }
   };
 }
