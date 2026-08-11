@@ -80,6 +80,7 @@ const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
 });
 
 export const BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM = 32;
+const MAX_REVERSE_RTL_LAYOUT_DEFERRALS = 8;
 
 export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
@@ -108,6 +109,7 @@ export class BrunoTableViewportRuntime {
   private horizontalViewportWidth = 0;
   private lastNativeScrollLeft = 0;
   private layoutReconciliationPending = false;
+  private layoutReconciliationDeferrals = 0;
   private logicalScrollLeft = 0;
   private pendingLayoutHorizontalCoordinate: HorizontalCoordinateSample | undefined;
   private rowLayerOffset = "0px";
@@ -166,6 +168,7 @@ export class BrunoTableViewportRuntime {
     );
     this.setLogicalScrollTop(element, clampedLogicalScrollTop);
     this.layoutReconciliationPending = true;
+    this.layoutReconciliationDeferrals = 0;
     this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
     const projectedLogicalScrollLeft = this.projectLayoutLogicalScrollLeft(
       element,
@@ -179,6 +182,7 @@ export class BrunoTableViewportRuntime {
         element,
         projectedLogicalScrollLeft,
       );
+      this.layoutReconciliationDeferrals = 1;
       this.horizontalInputPending = false;
       this.horizontalInputAfterEnvironmentChange = false;
       this.horizontalInputSample = undefined;
@@ -243,7 +247,7 @@ export class BrunoTableViewportRuntime {
     const element = this.element;
     const column = this.layout.columns.find((candidate) => candidate.columnId === target.columnId);
     if (element === null || column === undefined) return;
-    this.reconcileHorizontalEnvironment(element);
+    const deferredLogicalScrollLeft = this.reconcileHorizontalEnvironment(element);
     if (target.region === "body") {
       const logicalScrollTop = this.readLogicalScrollTop(element, false);
       const rowTop = this.layout.headerHeight + target.rowIndex * ROW_HEIGHT;
@@ -256,6 +260,10 @@ export class BrunoTableViewportRuntime {
         nextLogicalScrollTop = Math.max(rowBottom - element.clientHeight, 0);
       }
       this.setLogicalScrollTop(element, nextLogicalScrollTop);
+    }
+    if (deferredLogicalScrollLeft !== undefined) {
+      this.pendingReveal = target;
+      return;
     }
     const suspendPinning = shouldSuspendPinning(this.layout, element.clientWidth);
     if (!suspendPinning && column.pinned !== undefined) return;
@@ -311,12 +319,14 @@ export class BrunoTableViewportRuntime {
     if (
       this.layoutReconciliationPending &&
       projectedLogicalScrollLeft !== undefined &&
+      this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS &&
       this.shouldDeferReverseRtlLayoutWrite(this.element, projectedLogicalScrollLeft)
     ) {
       this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
         this.element,
         projectedLogicalScrollLeft,
       );
+      this.layoutReconciliationDeferrals += 1;
       this.horizontalInputPending = false;
       this.horizontalInputAfterEnvironmentChange = false;
       this.horizontalInputSample = undefined;
@@ -356,6 +366,7 @@ export class BrunoTableViewportRuntime {
     this.horizontalViewportWidth = element?.clientWidth ?? 0;
     this.lastNativeScrollLeft = element?.scrollLeft ?? 0;
     this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
     this.logicalScrollLeft = 0;
     this.pendingLayoutHorizontalCoordinate = undefined;
     this.element?.addEventListener("scroll", this.handleScroll, { passive: true });
@@ -441,6 +452,7 @@ export class BrunoTableViewportRuntime {
     this.horizontalViewportWidth = 0;
     this.lastNativeScrollLeft = 0;
     this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
     this.logicalScrollLeft = 0;
     this.pendingLayoutHorizontalCoordinate = undefined;
     this.rowLayerOffset = "0px";
@@ -734,12 +746,14 @@ export class BrunoTableViewportRuntime {
       );
       if (
         this.layoutReconciliationPending &&
+        this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS &&
         this.shouldDeferReverseRtlLayoutWrite(element, reconciledLogicalScrollLeft)
       ) {
         this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
           element,
           reconciledLogicalScrollLeft,
         );
+        this.layoutReconciliationDeferrals += 1;
         this.directionDirty = false;
         this.directionMutationNativeScrollLeft = undefined;
         this.horizontalViewportWidth = element.clientWidth;
@@ -748,6 +762,7 @@ export class BrunoTableViewportRuntime {
       this.setLogicalScrollLeft(element, reconciledLogicalScrollLeft);
     }
     this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
     this.pendingLayoutHorizontalCoordinate = undefined;
     this.directionDirty = false;
     this.directionMutationNativeScrollLeft = undefined;

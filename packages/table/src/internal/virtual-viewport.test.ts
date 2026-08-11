@@ -43,6 +43,48 @@ function createRtlOwnerDocument(
   } as unknown as Document;
 }
 
+function createDeferredReverseRtlHarness(clientWidth = 200): Readonly<{
+  callbacks: FrameRequestCallback[];
+  commitScrollWidth: (width: number) => void;
+  element: HTMLElement;
+}> {
+  const callbacks: FrameRequestCallback[] = [];
+  let committedScrollWidth = clientWidth;
+  let nativeScrollLeft = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  const element = {
+    addEventListener: vi.fn(),
+    clientHeight: 480,
+    clientWidth,
+    ownerDocument: createRtlOwnerDocument("reverse"),
+    parentElement: null,
+    removeEventListener: vi.fn(),
+    get scrollLeft() {
+      return nativeScrollLeft;
+    },
+    set scrollLeft(value: number) {
+      const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
+      nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+    },
+    get scrollWidth() {
+      return committedScrollWidth;
+    },
+    scrollTop: 0,
+    style: { setProperty: vi.fn() },
+  } as unknown as HTMLElement;
+  return Object.freeze({
+    callbacks,
+    commitScrollWidth: (width: number) => {
+      committedScrollWidth = width;
+    },
+    element,
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -1110,6 +1152,80 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(1_000);
     expect(viewport.getSnapshot().virtualWindow.center[0]?.columnId).toBe(
       "COL_ID_DEFERRED_REVERSE_0",
+    );
+  });
+
+  it("bounds reverse-RTL reconciliation when the content extent never commits", () => {
+    const initialColumns = compileColumns([
+      {
+        columnId: "COL_ID_BOUNDED_REVERSE_0",
+        field: "name",
+        headerName: "Bounded reverse 0",
+        valueType: "text",
+        width: 100,
+      },
+    ]);
+    const widerColumns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_BOUNDED_REVERSE_${index}`,
+        field: "name",
+        headerName: `Bounded reverse ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const { callbacks, element } = createDeferredReverseRtlHarness();
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, initialColumns);
+    viewport.attach(element);
+
+    viewport.setLayout(2, widerColumns);
+    for (let frame = 0; frame < 16 && callbacks.length > 0; frame += 1) {
+      callbacks.shift()!(frame);
+    }
+
+    expect(callbacks).toHaveLength(0);
+    expect(element.scrollLeft).toBe(0);
+  });
+
+  it("retries a reveal after deferred reverse-RTL layout reconciliation", () => {
+    const initialColumns = compileColumns([
+      {
+        columnId: "COL_ID_DEFERRED_REVEAL_0",
+        field: "name",
+        headerName: "Deferred reveal 0",
+        valueType: "text",
+        width: 100,
+      },
+    ]);
+    const widerColumns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_DEFERRED_REVEAL_${index}`,
+        field: "name",
+        headerName: `Deferred reveal ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const { callbacks, commitScrollWidth, element } = createDeferredReverseRtlHarness();
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, initialColumns);
+    viewport.attach(element);
+
+    viewport.setLayout(2, widerColumns);
+    viewport.revealCell(0, "COL_ID_DEFERRED_REVEAL_9", "header");
+    callbacks.shift()!(0);
+
+    expect(callbacks).toHaveLength(1);
+    expect(
+      viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId),
+    ).not.toContain("COL_ID_DEFERRED_REVEAL_9");
+
+    commitScrollWidth(1_000);
+    callbacks.shift()!(1);
+
+    expect(viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId)).toContain(
+      "COL_ID_DEFERRED_REVEAL_9",
     );
   });
 
