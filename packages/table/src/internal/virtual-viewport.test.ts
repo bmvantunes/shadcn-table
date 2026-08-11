@@ -122,6 +122,7 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     let scrollListener: EventListener | undefined;
     const gridSetProperty = vi.fn();
+    const rowLayerSetProperty = vi.fn();
     const overlaySetProperty = vi.fn();
     const element = {
       addEventListener: vi.fn((name: string, listener: EventListener) => {
@@ -142,6 +143,9 @@ describe("BrunoTableViewportRuntime", () => {
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
+    viewport.attachRowLayer({
+      style: { removeProperty: vi.fn(), setProperty: rowLayerSetProperty },
+    } as unknown as HTMLElement);
     viewport.attachScrollbarOverlay(overlay);
 
     const initialProperties = new Map(
@@ -157,6 +161,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(initialProperties.get("--bruno-table-scrollbar-vertical-bottom")).toBe("23px");
     overlaySetProperty.mockClear();
     gridSetProperty.mockClear();
+    rowLayerSetProperty.mockClear();
 
     element.scrollLeft = 300;
     element.scrollTop = 72;
@@ -178,7 +183,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(
       Number.parseFloat(scrolledProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!),
     ).toBeGreaterThan(0);
-    expect(gridSetProperty).toHaveBeenCalledWith(
+    expect(rowLayerSetProperty).toHaveBeenCalledWith(
       "--bruno-table-row-layer-offset",
       expect.any(String),
     );
@@ -187,6 +192,7 @@ describe("BrunoTableViewportRuntime", () => {
     ).toBe(false);
 
     overlaySetProperty.mockClear();
+    element.scrollLeft = 660;
     element.scrollTop = 3_156;
     viewport.attach(null);
     viewport.attach(element);
@@ -195,6 +201,10 @@ describe("BrunoTableViewportRuntime", () => {
         ([property, value]) => [String(property), String(value)] as const,
       ),
     );
+    expect(
+      Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-horizontal-thumb-offset")!) +
+        Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-horizontal-thumb-width")!),
+    ).toBeCloseTo(540, 6);
     expect(
       Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!) +
         Number.parseFloat(maximumProperties.get("--bruno-table-scrollbar-vertical-thumb-height")!),
@@ -812,11 +822,15 @@ describe("BrunoTableViewportRuntime", () => {
       removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
-      style: { setProperty },
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const rowLayer = {
+      style: { removeProperty: vi.fn(), setProperty },
     } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
+    viewport.attachRowLayer(rowLayer);
 
     viewport.revealCell(999_999, "COL_ID_NAME");
     callback!(0);
