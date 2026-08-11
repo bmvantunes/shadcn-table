@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { page, userEvent } from "vitest/browser";
+import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
 import { act, useEffect } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
-import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import { BrunoTableClient, BrunoTableComputedColumn, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
@@ -14,6 +15,7 @@ import {
 import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
+  installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientRowOrderPlanningListener,
   installBrunoTableClientViewRenderListener,
 } from "./internal/render-instrumentation";
@@ -520,9 +522,25 @@ describe("BrunoTableClient browser surface", () => {
 
   test("preserves compiled column geometry and static presentation while loading", async () => {
     const renderer = vi.fn(({ value }: { readonly value: string }) => value);
+    const valueGetter = vi.fn(({ row }: { readonly row: Pick<Row, "score"> }) => row.score * 2);
+    const sampledFields: PropertyKey[] = [];
+    const unreadableRow = new Proxy(rows[0]!, {
+      get(target, property, receiver) {
+        sampledFields.push(property);
+        return Reflect.get(target, property, receiver);
+      },
+    });
     const loadingColumns = [
       { ...columns[0], pinned: "start" as const, width: 120, cellRenderer: renderer },
       { ...columns[1], width: 100 },
+      BrunoTableComputedColumn({
+        columnId: "COL_ID_DOUBLE_SCORE",
+        fields: ["score"],
+        headerName: "Double score",
+        valueGetter,
+        valueType: "number",
+        width: 110,
+      }),
       {
         ...columns[0],
         columnId: "COL_ID_ALIAS",
@@ -537,22 +555,48 @@ describe("BrunoTableClient browser surface", () => {
         getRowId={(row: Row) => row.id}
         columns={loadingColumns}
         initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
-        clientSource={{ rows, totalRows: 100, version: 1, status: "loading" }}
+        clientSource={{ rows: [unreadableRow], totalRows: 100, version: 1, status: "loading" }}
       />,
     );
     const grid = screen.getByRole("grid", { name: "Loading table rows" });
-    await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+    await expect.element(grid).toHaveAttribute("aria-colcount", "4");
     const loadingName = screen.getByRole("gridcell", { name: "Loading Name" }).nth(0);
     const loadingScore = screen.getByRole("gridcell", { name: "Loading Score" }).nth(0);
+    const loadingDoubleScore = screen
+      .getByRole("gridcell", { name: "Loading Double score" })
+      .nth(0);
     const loadingAlias = screen.getByRole("gridcell", { name: "Loading Alias" }).nth(0);
     await expect.element(loadingName).toHaveAttribute("aria-colindex", "1");
     await expect.element(loadingScore).toHaveAttribute("aria-colindex", "2");
-    await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "3");
-    expect(loadingName.element().closest('[data-pinned-region="start"]')).not.toBeNull();
-    expect(loadingAlias.element().closest('[data-pinned-region="end"]')).not.toBeNull();
+    await expect.element(loadingDoubleScore).toHaveAttribute("aria-colindex", "3");
+    await expect.element(loadingAlias).toHaveAttribute("aria-colindex", "4");
+    const loadingStartRegion = loadingName
+      .element()
+      .closest<HTMLElement>('[data-bruno-pinned-body-region="start"]');
+    expect(loadingStartRegion).not.toBeNull();
+    expect(loadingAlias.element().closest('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+    const loadingNameOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingName.element().id),
+    );
+    const loadingAliasOwner = [
+      ...grid.element().querySelectorAll<HTMLElement>('[role="row"]'),
+    ].find((row) => row.getAttribute("aria-owns")?.split(" ").includes(loadingAlias.element().id));
+    expect(loadingNameOwner).toBe(loadingAliasOwner);
+    expect(loadingNameOwner?.getAttribute("aria-rowindex")).toBe("1");
+    expect(loadingNameOwner?.getAttribute("aria-owns")?.split(" ")).toEqual([
+      loadingName.element().id,
+      loadingScore.element().id,
+      loadingDoubleScore.element().id,
+      loadingAlias.element().id,
+    ]);
+    const loadingRowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
+    if (loadingStartRegion === null) throw new Error("The loading start region was not mounted.");
+    expect(loadingStartRegion.closest("[data-bruno-row-layer]")).toBe(loadingRowLayer);
+    expect(loadingStartRegion.style.position).toBe("sticky");
     await vi.waitFor(() => {
       expect(loadingName.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
       expect(loadingScore.element().getBoundingClientRect().width).toBeCloseTo(100, 0);
+      expect(loadingDoubleScore.element().getBoundingClientRect().width).toBeCloseTo(110, 0);
       expect(loadingAlias.element().getBoundingClientRect().width).toBeCloseTo(140, 0);
       expect(loadingAlias.element().getBoundingClientRect().right).toBeCloseTo(
         grid.element().getBoundingClientRect().right,
@@ -566,6 +610,8 @@ describe("BrunoTableClient browser surface", () => {
       (loadingScore.element().firstElementChild as HTMLElement | null)?.style.marginInlineStart,
     ).toBe("auto");
     expect(renderer).not.toHaveBeenCalled();
+    expect(valueGetter).not.toHaveBeenCalled();
+    expect(sampledFields).toEqual([]);
   });
 
   test("preserves grid focus across ready, loading, and ready lifecycle transitions", async () => {
@@ -1378,7 +1424,7 @@ describe("BrunoTableClient browser surface", () => {
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SPARSE" });
     await expect.element(grid).toHaveAttribute("aria-rowcount", "101");
     await vi.waitFor(() => expect(setRequiredRange).toHaveBeenCalled());
-    const loadingCells = screen.getByRole("gridcell", { name: "Loading row" }).all();
+    const loadingCells = screen.getByRole("gridcell", { name: "Loading Name" }).all();
     expect(
       loadingCells.some(
         (cell) =>
@@ -1395,10 +1441,11 @@ describe("BrunoTableClient browser surface", () => {
     const firstActiveId = grid.element().getAttribute("aria-activedescendant");
     expect(
       screen
-        .getByRole("gridcell", { name: "Loading row" })
+        .getByRole("gridcell", { name: "Loading Name" })
         .all()
         .some((cell) => cell.element().id === firstActiveId),
     ).toBe(true);
+    expect(grid.element().querySelectorAll(`[id="${firstActiveId ?? ""}"]`)).toHaveLength(1);
 
     grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() =>
@@ -1407,10 +1454,11 @@ describe("BrunoTableClient browser surface", () => {
     const secondActiveId = grid.element().getAttribute("aria-activedescendant");
     expect(
       screen
-        .getByRole("gridcell", { name: "Loading row" })
+        .getByRole("gridcell", { name: "Loading Name" })
         .all()
         .some((cell) => cell.element().id === secondActiveId),
     ).toBe(true);
+    expect(grid.element().querySelectorAll(`[id="${secondActiveId ?? ""}"]`)).toHaveLength(1);
 
     await grid.wheel({ delta: { y: 1200 } });
     await vi.waitFor(() =>
@@ -1432,6 +1480,101 @@ describe("BrunoTableClient browser surface", () => {
     expect(
       replacementRequiredRange.mock.calls.every(([, end]) => typeof end === "number" && end <= 2),
     ).toBe(true);
+  });
+
+  test("separates loaded Row Identity keys from unloaded virtual-slot keys", async () => {
+    const collisionRows = [
+      { id: "unloaded-slot-2", name: "Center sentinel identity", score: 1 },
+      { id: "pinned-unloaded-slot-2", name: "Pinned sentinel identity", score: 2 },
+    ] satisfies readonly Row[];
+    const collisionRowsById = new Map(collisionRows.map((row) => [row.id, row]));
+    const compiledColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        pinned: "start",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const getRowId = (index: number) => collisionRows[index]?.id;
+    const rowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      totalRows: 3,
+      getRowId,
+      findRowIndex: (rowId) => {
+        const index = collisionRows.findIndex((row) => row.id === rowId);
+        return index < 0 ? undefined : index;
+      },
+      setRequiredRange: vi.fn(),
+    });
+    const runtime = new BrunoTableGridRuntime<Row>(
+      Object.freeze({
+        status: "loading" as const,
+        totalRows: 3,
+        version: 1,
+        rowSpace: Object.freeze({
+          totalRows: 3,
+          loadedRows: collisionRows.length,
+          getRowId,
+          getRow: (rowId: string) => collisionRowsById.get(rowId),
+          getCellValue: (rowId: string, columnId: string) => {
+            const row = collisionRowsById.get(rowId);
+            return columnId === "COL_ID_NAME" ? row?.name : row?.score;
+          },
+        }),
+        hasCoherentRows: false,
+      }),
+      compiledColumns,
+      Object.freeze({
+        baselineFilters: Object.freeze([]),
+        baselineOrderBy: Object.freeze([
+          Object.freeze({ columnId: "COL_ID_SCORE", direction: "asc" as const }),
+        ]),
+      }),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const screen = await render(
+        <BrunoTableView
+          runtime={runtime.getView()}
+          tableId="TABLE_ID_SPARSE_KEY_NAMESPACE"
+          compiledColumns={compiledColumns}
+          toolbar={new BrunoTableToolbarStore(undefined)}
+          rowPipeline={SparseRowPipeline}
+          rowPipelineAdapter={{ rowSpace, queryGeneration: 0 }}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Center sentinel identity" }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Pinned sentinel identity" }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Loading Name" }))
+        .toBeInTheDocument();
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SPARSE_KEY_NAMESPACE" });
+      const semanticRows = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].filter(
+        (row) => row.getAttribute("aria-rowindex") !== "1",
+      );
+      expect(semanticRows.map((row) => row.getAttribute("aria-rowindex"))).toEqual(["2", "3", "4"]);
+      for (const row of semanticRows) {
+        const ownedIds = row.getAttribute("aria-owns")?.split(" ") ?? [];
+        expect(ownedIds).toHaveLength(compiledColumns.length);
+        for (const ownedId of ownedIds) {
+          expect(grid.element().querySelectorAll(`[id="${ownedId}"]`)).toHaveLength(1);
+        }
+      }
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("retains terminal rows and exposes only source-owned retry", async () => {
@@ -2716,6 +2859,11 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("bounds mounted cells across a 150-column resident source", async () => {
+    const stressRows = Array.from({ length: 5_000 }, (_, index) => ({
+      id: `stress-row-${String(index).padStart(4, "0")}`,
+      name: `Stress row ${String(index).padStart(4, "0")}`,
+      score: index,
+    })) satisfies readonly Row[];
     const stressColumns = Array.from({ length: 150 }, (_, index) => ({
       columnId: `COL_ID_STRESS_${String(index).padStart(3, "0")}`,
       field: "name" as const,
@@ -2731,10 +2879,11 @@ describe("BrunoTableClient browser surface", () => {
         getRowId={(row: Row) => row.id}
         columns={stressColumns}
         initialOrderBy={[{ columnId: "COL_ID_STRESS_000", direction: "asc" }]}
-        clientSource={readySource()}
+        clientSource={readySource(stressRows)}
       />,
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_150_COLUMNS" });
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "5001");
     await expect
       .element(screen.getByRole("columnheader", { name: "Stress 000" }))
       .toBeInTheDocument();
@@ -2742,7 +2891,7 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("columnheader", { name: "Stress 149" }))
       .toBeInTheDocument();
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
-    expect(screen.getByRole("gridcell").all().length).toBeLessThan(40);
+    expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
     await expect
       .element(screen.getByRole("columnheader", { name: "Stress 075" }))
       .not.toBeInTheDocument();
@@ -2758,7 +2907,441 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("columnheader", { name: "Stress 149" }))
       .toBeInTheDocument();
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
-    expect(screen.getByRole("gridcell").all().length).toBeLessThan(40);
+    expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
+
+    const deepRowIndex = 2_500;
+    grid.element().scrollTop = deepRowIndex * BRUNO_TABLE_ROW_HEIGHT;
+    grid.element().dispatchEvent(new Event("scroll"));
+    const deepRowName = `Stress row ${String(deepRowIndex).padStart(4, "0")}`;
+    await vi.waitFor(() =>
+      expect(screen.getByRole("gridcell", { name: deepRowName }).all().length).toBeGreaterThan(2),
+    );
+    const deepRowCells = screen.getByRole("gridcell", { name: deepRowName }).all();
+    expect(deepRowCells[0]?.element().closest('[role="row"]')?.getAttribute("aria-rowindex")).toBe(
+      String(deepRowIndex + 2),
+    );
+
+    const headerColumnIndexes = screen
+      .getByRole("columnheader")
+      .all()
+      .map((header) => header.element().getAttribute("aria-colindex"));
+    const bodyColumnIndexes = deepRowCells
+      .map((cell) => cell.element().getAttribute("aria-colindex"))
+      .toSorted((left, right) => Number(left) - Number(right));
+    expect(bodyColumnIndexes).toEqual(headerColumnIndexes);
+    const pinnedStartCell = deepRowCells.find(
+      (cell) => cell.element().getAttribute("aria-colindex") === "1",
+    );
+    if (pinnedStartCell === undefined) throw new Error("The pinned start cell was not mounted.");
+    const pinnedStartRegion = pinnedStartCell
+      .element()
+      .closest<HTMLElement>('[data-bruno-pinned-body-region="start"]');
+    expect(pinnedStartRegion).not.toBeNull();
+    const pinnedEndCell = deepRowCells.find(
+      (cell) => cell.element().getAttribute("aria-colindex") === "150",
+    );
+    if (pinnedEndCell === undefined) throw new Error("The pinned end cell was not mounted.");
+    expect(pinnedEndCell.element().closest('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+    const pinnedStartOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(pinnedStartCell.element().id),
+    );
+    const pinnedEndOwner = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].find(
+      (row) => row.getAttribute("aria-owns")?.split(" ").includes(pinnedEndCell.element().id),
+    );
+    expect(pinnedStartOwner).toBe(pinnedEndOwner);
+    expect(pinnedStartOwner?.getAttribute("aria-rowindex")).toBe(String(deepRowIndex + 2));
+    expect(pinnedStartOwner?.getAttribute("aria-owns")?.split(" ")).toEqual(
+      deepRowCells
+        .toSorted(
+          (left, right) =>
+            Number(left.element().getAttribute("aria-colindex")) -
+            Number(right.element().getAttribute("aria-colindex")),
+        )
+        .map((cell) => cell.element().id),
+    );
+    const rowLayer = grid.element().querySelector<HTMLElement>("[data-bruno-row-layer]");
+    if (pinnedStartRegion === null) throw new Error("The pinned start region was not mounted.");
+    expect(pinnedStartRegion.closest("[data-bruno-row-layer]")).toBe(rowLayer);
+    expect(pinnedStartRegion.style.position).toBe("sticky");
+    expect(screen.getByRole("row").all().length).toBeLessThan(30);
+    expect(screen.getByRole("columnheader").all().length).toBeLessThan(20);
+    expect(screen.getByRole("gridcell").all().length).toBeLessThan(250);
+  });
+
+  test("keeps logical pinned regions and horizontal reveal correct in RTL", async () => {
+    const rtlColumns = [
+      {
+        ...columns[0],
+        columnId: "COL_ID_RTL_START",
+        headerName: "RTL start",
+        pinned: "start" as const,
+        width: 120,
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_RTL_CENTER_${String(index).padStart(2, "0")}`,
+        headerName: `RTL center ${String(index).padStart(2, "0")}`,
+        width: 160,
+      })),
+      {
+        ...columns[0],
+        columnId: "COL_ID_RTL_END",
+        headerName: "RTL end",
+        pinned: "end" as const,
+        width: 120,
+      },
+    ] as BrunoTableColumns<Row>;
+    const screen = await render(
+      <div dir="rtl">
+        <BrunoTableClient
+          tableId="TABLE_ID_RTL"
+          getRowId={(row: Row) => row.id}
+          columns={rtlColumns}
+          initialOrderBy={[{ columnId: "COL_ID_RTL_START", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </div>,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RTL" });
+    const gridElement = grid.element() as HTMLElement;
+    const startHeader = screen.getByRole("columnheader", { name: "RTL start" }).element();
+    const endHeader = screen.getByRole("columnheader", { name: "RTL end" }).element();
+    const gridRect = gridElement.getBoundingClientRect();
+    const assertPinnedBodyEdges = () => {
+      const bodyCells = screen.getByRole("gridcell").all();
+      const startCell = bodyCells.find(
+        (cell) => cell.element().getAttribute("aria-colindex") === "1",
+      );
+      const endCell = bodyCells.find(
+        (cell) => cell.element().getAttribute("aria-colindex") === "12",
+      );
+      if (startCell === undefined || endCell === undefined) {
+        throw new Error("The RTL pinned body cells were not continuously mounted.");
+      }
+      expect(startCell.element().getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+      expect(endCell.element().getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    };
+    expect(getComputedStyle(gridElement).direction).toBe("rtl");
+    expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+    expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    const activeCell = () => {
+      const activeId = gridElement.getAttribute("aria-activedescendant");
+      return screen
+        .getByRole("gridcell")
+        .all()
+        .find((cell) => cell.element().id === activeId);
+    };
+    gridElement.focus();
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
+    for (let index = 0; index < 10; index += 1) {
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+    }
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("11"),
+    );
+    const forwardCellRect = activeCell()!.element().getBoundingClientRect();
+    expect(forwardCellRect.left).toBeCloseTo(endHeader.getBoundingClientRect().right, 0);
+    expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+    expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    for (let index = 0; index < 9; index += 1) {
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }));
+    }
+    await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("2"));
+    const backwardCellRect = activeCell()!.element().getBoundingClientRect();
+    expect(backwardCellRect.right).toBeCloseTo(startHeader.getBoundingClientRect().left, 0);
+
+    gridElement.scrollLeft = -960;
+    assertPinnedBodyEdges();
+    gridElement.dispatchEvent(new Event("scroll"));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
+      .toBeInTheDocument();
+    const overlay = gridElement.parentElement?.querySelector<HTMLElement>(
+      "[data-bruno-scrollbar-overlay]",
+    );
+    expect(
+      Number.parseFloat(
+        overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset") ?? "0",
+      ),
+    ).toBeLessThan(0);
+    expect(startHeader.getBoundingClientRect().right).toBeCloseTo(gridRect.right, 0);
+    expect(endHeader.getBoundingClientRect().left).toBeCloseTo(gridRect.left, 0);
+    assertPinnedBodyEdges();
+
+    const directionOwner = gridElement.closest<HTMLElement>('[dir="rtl"]');
+    expect(directionOwner).not.toBeNull();
+    directionOwner!.dir = "ltr";
+    gridElement.style.width = "720px";
+    await vi.waitFor(() => expect(getComputedStyle(gridElement).direction).toBe("ltr"));
+    await vi.waitFor(() => expect(gridElement.clientWidth).toBe(720));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
+      .toBeInTheDocument();
+    await vi.waitFor(() => expect(gridElement.scrollLeft).toBeCloseTo(960, 0));
+    await vi.waitFor(() =>
+      expect(
+        Number.parseFloat(
+          overlay?.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset") ??
+            "-1",
+        ),
+      ).toBeGreaterThanOrEqual(0),
+    );
+    gridElement.scrollLeft = 0;
+    gridElement.dispatchEvent(new Event("scroll"));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 00" }))
+      .toBeInTheDocument();
+    gridElement.scrollLeft = 960;
+    gridElement.dispatchEvent(new Event("scroll"));
+    await expect
+      .element(screen.getByRole("columnheader", { name: "RTL center 09" }))
+      .toBeInTheDocument();
+  });
+
+  test("synchronizes CSSOM-only scroll-owner direction changes with decorative chrome", async () => {
+    const directionStyle = document.createElement("style");
+    document.head.append(directionStyle);
+    try {
+      const screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_GRID_ONLY_RTL"
+          getRowId={(row: Row) => row.id}
+          columns={
+            [
+              { ...wideColumns[0], columnId: "COL_ID_GRID_RTL_START", pinned: "start" },
+              ...wideColumns.slice(1, 10),
+              {
+                ...wideColumns[0],
+                columnId: "COL_ID_GRID_RTL_END",
+                headerName: "Grid-only RTL end",
+                pinned: "end",
+              },
+            ] as const
+          }
+          initialOrderBy={[{ columnId: "COL_ID_GRID_RTL_START", direction: "asc" }]}
+          clientSource={readySource()}
+        />,
+      );
+      const grid = screen
+        .getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" })
+        .element() as HTMLElement;
+      const overlay = grid.parentElement?.querySelector<HTMLElement>(
+        "[data-bruno-scrollbar-overlay]",
+      );
+      if (overlay === undefined || overlay === null) {
+        throw new Error("The grid-only RTL scrollbar overlay was not mounted.");
+      }
+      const horizontalTrack = overlay.querySelector<HTMLElement>(
+        '[data-bruno-scrollbar-track="horizontal"]',
+      );
+      const verticalTrack = overlay.querySelector<HTMLElement>(
+        '[data-bruno-scrollbar-track="vertical"]',
+      );
+      if (horizontalTrack === null || verticalTrack === null) {
+        throw new Error("The grid-only RTL scrollbar tracks were not mounted.");
+      }
+      expect(getComputedStyle(grid).direction).toBe("ltr");
+      expect(getComputedStyle(overlay).direction).toBe("ltr");
+      grid.scrollLeft = 320;
+      grid.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() =>
+        expect(
+          Number.parseFloat(
+            overlay.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset"),
+          ),
+        ).toBeGreaterThan(0),
+      );
+
+      const stylesheet = directionStyle.sheet;
+      if (stylesheet === null) {
+        throw new Error("The CSSOM direction stylesheet was not available.");
+      }
+      stylesheet.insertRule("[data-bruno-scroll-owner] { direction: rtl; }", 0);
+      expect(getComputedStyle(grid).direction).toBe("rtl");
+
+      // Chromium uses the negative RTL scroll model. Default and reverse models clamp this write
+      // to zero. This first event after CSSStyleSheet.insertRule() carries real input, proving the
+      // runtime resolves the CSSOM-only direction change before decoding its native coordinate.
+      grid.scrollLeft = -640;
+      grid.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => expect(overlay.style.direction).toBe("rtl"));
+      expect(getComputedStyle(grid).direction).toBe("rtl");
+      expect(getComputedStyle(overlay).direction).toBe("rtl");
+      await vi.waitFor(() =>
+        expect(
+          Number.parseFloat(
+            overlay.style.getPropertyValue("--bruno-table-scrollbar-horizontal-thumb-offset"),
+          ),
+        ).toBeLessThan(0),
+      );
+      const pinnedRegionInlineSize = 160;
+      const nativeVerticalScrollbarInlineSize = grid.offsetWidth - grid.clientWidth;
+      const gridRect = grid.getBoundingClientRect();
+      const horizontalTrackRect = horizontalTrack.getBoundingClientRect();
+      const verticalTrackRect = verticalTrack.getBoundingClientRect();
+      expect(horizontalTrackRect.right).toBeCloseTo(gridRect.right - pinnedRegionInlineSize, 0);
+      expect(horizontalTrackRect.left).toBeCloseTo(
+        gridRect.left + pinnedRegionInlineSize + nativeVerticalScrollbarInlineSize,
+        0,
+      );
+      expect(verticalTrackRect.left).toBeLessThan(gridRect.left + gridRect.width / 2);
+    } finally {
+      directionStyle.remove();
+    }
+  });
+
+  test("keeps scroll-frame geometry out of the table root and observes zoomed resize", async () => {
+    const viewRenders = vi.fn();
+    const headerRenders = vi.fn();
+    const removeViewRenderListener = installBrunoTableClientViewRenderListener(viewRenders);
+    const removeHeaderRenderListener = installBrunoTableClientHeaderRenderListener(headerRenders);
+    const manyRows = Array.from({ length: 200 }, (_, index) => ({
+      id: `scroll-row-${index}`,
+      name: `Scroll row ${String(index).padStart(3, "0")}`,
+      score: index,
+    })) satisfies readonly Row[];
+    try {
+      const screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_GEOMETRY"
+          getRowId={(row: Row) => row.id}
+          columns={wideColumns}
+          initialOrderBy={[{ columnId: "COL_ID_WIDE_01", direction: "asc" }]}
+          clientSource={readySource(manyRows)}
+        />,
+      );
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" });
+      const gridElement = grid.element() as HTMLElement;
+      const rowLayer = gridElement.querySelector<HTMLElement>("[data-bruno-row-layer]");
+      expect(rowLayer).not.toBeNull();
+      expect(
+        gridElement.closest("[data-bruno-table]")?.querySelectorAll("[data-bruno-scroll-owner]"),
+      ).toHaveLength(1);
+      expect(gridElement.style.getPropertyValue("--bruno-table-row-layer-offset")).toBe("");
+      gridElement.style.width = "800px";
+      await vi.waitFor(() => expect(gridElement.clientWidth).toBe(800));
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Wide 07" }))
+        .toBeInTheDocument();
+      const expandedHeaderCount = screen.getByRole("columnheader").all().length;
+      const expandedColumnIndexes = screen
+        .getByRole("columnheader")
+        .all()
+        .map((header) => header.element().getAttribute("aria-colindex"));
+      gridElement.style.zoom = "1.25";
+      await vi.waitFor(() =>
+        expect(gridElement.getBoundingClientRect().width).toBeCloseTo(1_000, 0),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      expect(gridElement.clientWidth).toBe(800);
+      expect(screen.getByRole("columnheader").all()).toHaveLength(expandedHeaderCount);
+      expect(
+        screen
+          .getByRole("columnheader")
+          .all()
+          .map((header) => header.element().getAttribute("aria-colindex")),
+      ).toEqual(expandedColumnIndexes);
+
+      const headerRendersBeforeResize = headerRenders.mock.calls.length;
+      gridElement.style.width = "360px";
+      await vi.waitFor(() => expect(gridElement.clientWidth).toBe(360));
+      await vi.waitFor(() =>
+        expect(screen.getByRole("columnheader").all().length).toBeLessThan(expandedHeaderCount),
+      );
+      expect(gridElement.getBoundingClientRect().width).toBeCloseTo(450, 0);
+      expect(headerRenders.mock.calls.length).toBeGreaterThan(headerRendersBeforeResize);
+
+      const rendersBeforeScroll = viewRenders.mock.calls.length;
+      const headerRendersBeforeScroll = headerRenders.mock.calls.length;
+      gridElement.scrollTop = 1_200;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Scroll row 040" }).nth(0))
+        .toBeInTheDocument();
+      expect(viewRenders).toHaveBeenCalledTimes(rendersBeforeScroll);
+      expect(headerRenders).toHaveBeenCalledTimes(headerRendersBeforeScroll);
+      expect(rowLayer?.style.getPropertyValue("--bruno-table-row-layer-offset")).toBe("");
+      expect(
+        screen
+          .getByRole("row")
+          .all()
+          .some((row) => row.element().style.transform.startsWith("translate3d")),
+      ).toBe(true);
+
+      const replacedRows = screen
+        .getByRole("row")
+        .all()
+        .map((row) => row.element())
+        .filter((row) => row.style.transform.startsWith("translate3d"));
+      expect(replacedRows.length).toBeGreaterThan(0);
+      const replacedTransforms = replacedRows.map((row) => row.style.transform);
+      const replacementRows = manyRows.map((row, index) => ({
+        ...row,
+        id: `replacement-row-${index}`,
+        name: `Replacement row ${String(index).padStart(3, "0")}`,
+      }));
+      await screen.rerender(
+        <BrunoTableClient
+          tableId="TABLE_ID_GEOMETRY"
+          getRowId={(row: Row) => row.id}
+          columns={wideColumns}
+          initialOrderBy={[{ columnId: "COL_ID_WIDE_01", direction: "asc" }]}
+          clientSource={{ ...readySource(replacementRows), version: 2 }}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Replacement row 040" }).nth(0))
+        .toBeInTheDocument();
+      expect(replacedRows.every((row) => !row.isConnected)).toBe(true);
+
+      const replacementGrid = screen
+        .getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" })
+        .element() as HTMLElement;
+      replacementGrid.scrollTop = 2_400;
+      replacementGrid.dispatchEvent(new Event("scroll"));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Replacement row 080" }).nth(0))
+        .toBeInTheDocument();
+      expect(replacedRows.map((row) => row.style.transform)).toEqual(replacedTransforms);
+    } finally {
+      removeHeaderRenderListener();
+      removeViewRenderListener();
+    }
+  });
+
+  test("keeps exact reveal immediate when reduced motion is preferred", async () => {
+    const session: PlaywrightCDPSession = cdp();
+    await session.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    try {
+      const manyRows = Array.from({ length: 200 }, (_, index) => ({
+        id: `reduced-motion-row-${index}`,
+        name: `Reduced motion row ${index}`,
+        score: index,
+      })) satisfies readonly Row[];
+      const screen = await render(
+        <BrunoTableClient {...props} clientSource={readySource(manyRows)} />,
+      );
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+      const gridElement = grid.element() as HTMLElement;
+      expect(window.matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+      gridElement.style.scrollBehavior = "smooth";
+      gridElement.focus();
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+      await vi.waitFor(() => expect(gridElement.scrollTop).toBeGreaterThan(0));
+      const revealedScrollTop = gridElement.scrollTop;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(gridElement.scrollTop).toBe(revealedScrollTop);
+    } finally {
+      await session.send("Emulation.setEmulatedMedia", { features: [] });
+    }
   });
 
   test("rejects an offscreen newly active query value until its source row is repaired", async () => {
@@ -3225,7 +3808,7 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("gridcell", { name: "Grace" })
       .nth(0)
       .element()
-      .closest('[data-pinned-region="start"]');
+      .closest('[data-bruno-pinned-body-region="start"]');
     expect(Number(headerLayer?.style.zIndex)).toBeGreaterThan(
       Number((bodyPinnedLayer as HTMLElement | null)?.style.zIndex),
     );
@@ -3473,7 +4056,7 @@ describe("BrunoTableClient browser surface", () => {
       .getByRole("gridcell")
       .all()
       .find((cell) => cell.element().getAttribute("aria-colindex") === "60");
-    const endBodyRegion = endBodyCell?.element().closest('[data-pinned-region="end"]');
+    const endBodyRegion = endBodyCell?.element().closest('[data-bruno-pinned-body-region="end"]');
     expect(endBodyRegion?.getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
     expect(endBodyCell?.element().getBoundingClientRect().right).toBeCloseTo(gridRight, 0);
     expect(endBodyCell?.element().getBoundingClientRect().width).toBeCloseTo(120, 0);
@@ -4265,6 +4848,100 @@ describe("BrunoTableClient browser surface", () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(actions[1]!.element()));
       expect(firstRecoverableErrors).toEqual([]);
       expect(secondRecoverableErrors).toEqual([]);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        firstRoot?.unmount();
+        secondRoot?.unmount();
+      });
+      if (previousActEnvironment === undefined) {
+        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+      } else {
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
+      consoleError.mockRestore();
+      firstHost.remove();
+      secondHost.remove();
+    }
+  });
+
+  test("keeps loading-cell ownership unique across separately hydrated roots", async () => {
+    const hydrationColumns = [
+      { ...columns[0], pinned: "start" as const },
+      { ...columns[1], pinned: "end" as const },
+    ] as const;
+    const table = (
+      <BrunoTableClient
+        tableId="TABLE_ID_HYDRATED_LOADING"
+        getRowId={(row: Row) => row.id}
+        columns={hydrationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={{ rows: [], totalRows: 20, version: 1, status: "loading" }}
+      />
+    );
+    const markup = renderToString(table);
+    const firstHost = document.createElement("div");
+    const secondHost = document.createElement("div");
+    firstHost.innerHTML = markup;
+    secondHost.innerHTML = markup;
+    document.body.append(firstHost, secondHost);
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const recoverableErrors: unknown[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let firstRoot: Root | undefined;
+    let secondRoot: Root | undefined;
+    try {
+      await act(async () => {
+        firstRoot = hydrateRoot(firstHost, table, {
+          onRecoverableError: (error) => recoverableErrors.push(error),
+        });
+        secondRoot = hydrateRoot(secondHost, table, {
+          onRecoverableError: (error) => recoverableErrors.push(error),
+        });
+      });
+      const gridLocator = page.getByRole("grid", { name: "Loading table rows" });
+      await vi.waitFor(() => expect(gridLocator.all()).toHaveLength(2));
+      const grids = gridLocator.all();
+      const firstCell = grids[0]!
+        .element()
+        .querySelector<HTMLElement>('[role="gridcell"][aria-colindex="1"]');
+      const secondCell = grids[1]!
+        .element()
+        .querySelector<HTMLElement>('[role="gridcell"][aria-colindex="1"]');
+      if (firstCell === null || secondCell === null) {
+        throw new Error("Both hydrated loading grids must mount their pinned start cell.");
+      }
+      expect(firstCell.id).not.toBe("");
+      expect(secondCell.id).not.toBe("");
+      expect(firstCell.id).not.toBe(secondCell.id);
+      expect(firstCell.closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      expect(secondCell.closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      const ownershipSets = grids.map((grid) => {
+        const gridElement = grid.element();
+        const owner = gridElement.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
+        const ownedIds = owner?.getAttribute("aria-owns")?.split(" ") ?? [];
+        const firstRowCellIds = [...gridElement.querySelectorAll<HTMLElement>('[role="gridcell"]')]
+          .filter((cell) => ownedIds.includes(cell.id))
+          .toSorted(
+            (left, right) =>
+              Number(left.getAttribute("aria-colindex")) -
+              Number(right.getAttribute("aria-colindex")),
+          )
+          .map((cell) => cell.id);
+        expect(ownedIds).toEqual(firstRowCellIds);
+        expect(ownedIds).toHaveLength(hydrationColumns.length);
+        for (const ownedId of ownedIds) {
+          expect(gridElement.querySelectorAll(`[id="${ownedId}"]`)).toHaveLength(1);
+        }
+        return ownedIds;
+      });
+      expect(ownershipSets[0]).not.toEqual(ownershipSets[1]);
+      expect(ownershipSets[0]!.some((id) => ownershipSets[1]!.includes(id))).toBe(false);
+      expect(recoverableErrors).toEqual([]);
       expect(consoleError).not.toHaveBeenCalled();
     } finally {
       await act(async () => {

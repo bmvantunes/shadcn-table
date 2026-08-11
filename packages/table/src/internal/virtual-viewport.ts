@@ -21,6 +21,19 @@ export type BrunoTableVirtualWindow = Readonly<{
 }>;
 
 type Listener = () => void;
+type HorizontalDirection = "ltr" | "rtl";
+type RtlScrollType = "negative" | "default" | "reverse";
+
+type HorizontalCoordinateSample = Readonly<{
+  readonly logicalScrollLeft: number;
+  readonly direction: HorizontalDirection;
+  readonly rtlScrollType: RtlScrollType;
+  readonly viewportWidth: number;
+  readonly suspended: boolean;
+  readonly pinnedStartWidth: number;
+  readonly pinningKey: string;
+}>;
+type HorizontalCoordinateEnvironment = Omit<HorizontalCoordinateSample, "logicalScrollLeft">;
 
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
@@ -33,6 +46,7 @@ const COLUMN_OVERSCAN = 2;
 const MIN_CENTER_VIEWPORT_WIDTH = 80;
 const MIN_SCROLLBAR_THUMB_SIZE = 24;
 const EMPTY_COLUMNS: readonly CompiledColumn[] = Object.freeze([]);
+const RTL_SCROLL_TYPES = new WeakMap<Document, RtlScrollType>();
 
 type ViewportLayout = Readonly<{
   readonly rowCount: number;
@@ -67,12 +81,21 @@ const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
 });
 
 export const BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM = 32;
+const MAX_REVERSE_RTL_LAYOUT_DEFERRALS = 8;
+const HORIZONTAL_RECONCILIATION_SETTLED = Symbol("horizontal-reconciliation-settled");
+type HorizontalReconciliation = number | typeof HORIZONTAL_RECONCILIATION_SETTLED;
 
 export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
+  private readonly bodyLayers = new Set<HTMLElement>();
   private element: HTMLElement | null = null;
+  private rowLayer: HTMLElement | null = null;
   private scrollbarOverlay: HTMLElement | null = null;
+  private scrollbarOverlayDirection: HorizontalDirection | undefined;
   private resizeObserver: ResizeObserver | null = null;
+  private rowLayerResizeObserver: ResizeObserver | null = null;
+  private directionObserver: MutationObserver | null = null;
+  private stylesheetRoot: HTMLHeadElement | null = null;
   private frame: number | null = null;
   private pendingReveal: RevealTarget | undefined;
   private segmentLogicalBase = 0;
@@ -81,6 +104,24 @@ export class BrunoTableViewportRuntime {
   private horizontalSuspended: boolean | undefined;
   private horizontalPinnedStartWidth = 0;
   private horizontalPinningKey = "";
+  private horizontalDirection: HorizontalDirection = "ltr";
+  private rtlScrollType: RtlScrollType = "negative";
+  private directionDirty = false;
+  private horizontalInputPending = false;
+  private horizontalInputSample: HorizontalCoordinateSample | undefined;
+  private horizontalInputNativeScrollLeft: number | undefined;
+  private horizontalEventOrder = 0;
+  private horizontalInputEventOrder: number | undefined;
+  private horizontalEnvironmentEventOrder: number | undefined;
+  private directionScrollGuard: number | undefined;
+  private forceGuardedDirectionReconciliation = false;
+  private horizontalViewportWidth = 0;
+  private lastNativeScrollLeft = 0;
+  private layoutReconciliationPending = false;
+  private layoutReconciliationDeferrals = 0;
+  private logicalScrollLeft = 0;
+  private pendingLayoutHorizontalCoordinate: HorizontalCoordinateSample | undefined;
+  private rowLayerOffset = "0px";
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private layoutKey = "";
@@ -111,6 +152,8 @@ export class BrunoTableViewportRuntime {
     const element = this.element;
     const previousLogicalScrollTop =
       element === null ? 0 : this.readLogicalScrollTop(element, false);
+    const previousHorizontalCoordinate =
+      element === null ? undefined : this.captureLayoutSourceCoordinate(element);
     this.layoutKey = nextLayoutKey;
     this.layoutPinningKey = columns
       .map((column) => `${column.columnId}:${column.pinned ?? "center"}`)
@@ -133,17 +176,54 @@ export class BrunoTableViewportRuntime {
       logicalScrollMaximum(this.layout, element.clientHeight),
     );
     this.setLogicalScrollTop(element, clampedLogicalScrollTop);
+    this.layoutReconciliationPending = true;
+    this.layoutReconciliationDeferrals = 0;
+    this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
+    const projectedLogicalScrollLeft = this.projectLayoutLogicalScrollLeft(
+      element,
+      previousHorizontalCoordinate,
+    );
+    if (
+      previousHorizontalCoordinate !== undefined &&
+      this.shouldDeferReverseRtlLayoutWrite(element, projectedLogicalScrollLeft)
+    ) {
+      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+        element,
+        projectedLogicalScrollLeft,
+      );
+      this.layoutReconciliationDeferrals = 1;
+      this.horizontalInputPending = false;
+      this.horizontalInputSample = undefined;
+      this.horizontalInputNativeScrollLeft = undefined;
+      this.horizontalInputEventOrder = undefined;
+      this.directionDirty = false;
+      this.publishCoordinates(
+        element,
+        this.readLogicalScrollTop(element, true),
+        projectedLogicalScrollLeft,
+      );
+      this.schedulePublish();
+      return;
+    }
     this.publishFromElement();
   };
 
   private publishSnapshot(next: BrunoTableViewportSnapshot): void {
+    const sharedVirtualWindow = shareVirtualWindowColumns(
+      next.virtualWindow,
+      this.snapshot.virtualWindow,
+    );
+    const sharedNext =
+      sharedVirtualWindow === next.virtualWindow
+        ? next
+        : Object.freeze({ ...next, virtualWindow: sharedVirtualWindow });
     if (
-      next.width === this.snapshot.width &&
-      next.height === this.snapshot.height &&
-      sameVirtualWindow(next.virtualWindow, this.snapshot.virtualWindow)
+      sharedNext.width === this.snapshot.width &&
+      sharedNext.height === this.snapshot.height &&
+      sameVirtualWindow(sharedNext.virtualWindow, this.snapshot.virtualWindow)
     )
       return;
-    this.snapshot = next;
+    this.snapshot = sharedNext;
     for (const listener of this.listeners) listener();
   }
 
@@ -180,11 +260,11 @@ export class BrunoTableViewportRuntime {
       rowIndex === undefined ? undefined : Object.freeze({ ...pending, rowIndex });
   }
 
-  private applyReveal(target: RevealTarget): void {
+  private applyReveal(target: RevealTarget): HorizontalReconciliation | undefined {
     const element = this.element;
     const column = this.layout.columns.find((candidate) => candidate.columnId === target.columnId);
-    if (element === null || column === undefined) return;
-    this.rebaseHorizontalCoordinate(element);
+    if (element === null || column === undefined) return undefined;
+    const deferredLogicalScrollLeft = this.reconcileHorizontalEnvironment(element);
     if (target.region === "body") {
       const logicalScrollTop = this.readLogicalScrollTop(element, false);
       const rowTop = this.layout.headerHeight + target.rowIndex * ROW_HEIGHT;
@@ -198,8 +278,12 @@ export class BrunoTableViewportRuntime {
       }
       this.setLogicalScrollTop(element, nextLogicalScrollTop);
     }
+    if (typeof deferredLogicalScrollLeft === "number") {
+      this.pendingReveal = target;
+      return deferredLogicalScrollLeft;
+    }
     const suspendPinning = shouldSuspendPinning(this.layout, element.clientWidth);
-    if (!suspendPinning && column.pinned !== undefined) return;
+    if (!suspendPinning && column.pinned !== undefined) return HORIZONTAL_RECONCILIATION_SETTLED;
     const center = suspendPinning ? this.layout.suspendedCenter : this.layout.center;
     const centerOffsets = suspendPinning
       ? this.layout.suspendedCenterOffsets
@@ -208,9 +292,9 @@ export class BrunoTableViewportRuntime {
     const centerOffset = centerOffsets[centerIndex] ?? 0;
     const centerEnd = centerOffset + column.semantics.width;
     // The semantic table keeps pinned columns in the scrollable inline layout and makes
-    // them sticky. Native scrollLeft therefore already identifies the centre-content origin;
-    // subtracting the pinned-start inset would double-count that column space.
-    const centerScrollLeft = element.scrollLeft;
+    // them sticky. The normalized logical scroll coordinate therefore identifies the
+    // centre-content origin; subtracting the pinned-start inset would double-count it.
+    const centerScrollLeft = this.readLogicalScrollLeft(element);
     const centerViewportWidth = Math.max(
       element.clientWidth -
         (suspendPinning ? 0 : this.layout.pinnedStartWidth + this.layout.pinnedEndWidth),
@@ -220,59 +304,170 @@ export class BrunoTableViewportRuntime {
     if (columnWidth > centerViewportWidth) {
       const viewportEnd = centerScrollLeft + centerViewportWidth;
       if (centerEnd <= centerScrollLeft) {
-        element.scrollLeft = Math.max(centerEnd - centerViewportWidth, 0);
+        this.setLogicalScrollLeft(element, Math.max(centerEnd - centerViewportWidth, 0));
       } else if (centerOffset >= viewportEnd) {
-        element.scrollLeft = centerOffset;
+        this.setLogicalScrollLeft(element, centerOffset);
       }
     } else if (centerOffset < centerScrollLeft) {
-      element.scrollLeft = centerOffset;
+      this.setLogicalScrollLeft(element, centerOffset);
     } else if (centerEnd > centerScrollLeft + centerViewportWidth) {
-      element.scrollLeft = centerEnd - centerViewportWidth;
+      this.setLogicalScrollLeft(element, centerEnd - centerViewportWidth);
     }
+    return HORIZONTAL_RECONCILIATION_SETTLED;
   }
 
   public readonly resetVertical = (): void => {
     if (this.element === null) return;
+    this.resolveDirectionAndDetectPendingNativeInput(this.element);
     this.pendingReveal = undefined;
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = 0;
-    this.element.scrollTop = 0;
+    setNativeScrollTop(this.element, 0);
+    if (this.directionDirty) this.refreshHorizontalDirection(this.element);
+    const pendingHorizontalCoordinate =
+      this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate;
+    const projectedLogicalScrollLeft =
+      pendingHorizontalCoordinate === undefined
+        ? undefined
+        : this.projectLayoutLogicalScrollLeft(this.element, pendingHorizontalCoordinate);
+    if (
+      this.layoutReconciliationPending &&
+      projectedLogicalScrollLeft !== undefined &&
+      this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS &&
+      this.shouldDeferReverseRtlLayoutWrite(this.element, projectedLogicalScrollLeft)
+    ) {
+      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+        this.element,
+        projectedLogicalScrollLeft,
+      );
+      this.layoutReconciliationDeferrals += 1;
+      this.horizontalInputPending = false;
+      this.horizontalInputSample = undefined;
+      this.horizontalInputNativeScrollLeft = undefined;
+      this.horizontalInputEventOrder = undefined;
+      this.publishCoordinates(this.element, 0, projectedLogicalScrollLeft);
+      this.schedulePublish();
+      return;
+    }
     this.publishFromElement();
   };
 
   public readonly attach = (element: HTMLElement | null): void => {
     if (this.element === element) return;
     this.element?.removeEventListener("scroll", this.handleScroll);
+    this.element?.removeEventListener("focusin", this.handleDirectionMutation);
+    this.element?.removeEventListener("focusout", this.handleDirectionMutation);
+    this.stylesheetRoot?.removeEventListener("load", this.handleDirectionMutation, true);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.directionObserver?.disconnect();
+    this.directionObserver = null;
     this.element = element;
+    this.stylesheetRoot = element?.ownerDocument?.head ?? null;
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = element?.scrollTop ?? 0;
     this.horizontalSuspended = undefined;
     this.horizontalPinnedStartWidth = 0;
     this.horizontalPinningKey = "";
+    this.horizontalDirection = element === null ? "ltr" : readHorizontalDirection(element);
+    this.rtlScrollType =
+      this.horizontalDirection === "rtl" ? rtlScrollType(element?.ownerDocument) : "negative";
+    this.directionDirty = false;
+    this.horizontalInputPending = false;
+    this.horizontalInputSample = undefined;
+    this.horizontalInputNativeScrollLeft = undefined;
+    this.horizontalEventOrder = 0;
+    this.horizontalInputEventOrder = undefined;
+    this.horizontalEnvironmentEventOrder = undefined;
+    this.directionScrollGuard = undefined;
+    this.forceGuardedDirectionReconciliation = false;
+    this.horizontalViewportWidth = element?.clientWidth ?? 0;
+    this.lastNativeScrollLeft = element?.scrollLeft ?? 0;
+    this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
+    this.logicalScrollLeft = 0;
+    this.pendingLayoutHorizontalCoordinate = undefined;
     this.element?.addEventListener("scroll", this.handleScroll, { passive: true });
+    this.element?.addEventListener("focusin", this.handleDirectionMutation, { passive: true });
+    this.element?.addEventListener("focusout", this.handleDirectionMutation, { passive: true });
+    this.stylesheetRoot?.addEventListener("load", this.handleDirectionMutation, true);
     if (this.element !== null && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.handleResize);
       this.resizeObserver.observe(this.element);
     }
+    if (this.element !== null && typeof MutationObserver !== "undefined") {
+      this.directionObserver = new MutationObserver(this.handleDirectionMutation);
+      for (
+        let directionOwner: HTMLElement | null = this.element;
+        directionOwner !== null;
+        directionOwner = directionOwner.parentElement
+      ) {
+        this.directionObserver.observe(directionOwner, {
+          attributes: true,
+          attributeFilter: ["class", "dir", "style"],
+        });
+      }
+      if (this.stylesheetRoot !== null) {
+        this.directionObserver.observe(this.stylesheetRoot, {
+          attributes: true,
+          attributeFilter: ["disabled", "href", "media"],
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      }
+    }
     this.publishFromElement();
+  };
+
+  public readonly attachRowLayer = (element: HTMLElement | null): void => {
+    if (this.rowLayer === element) return;
+    this.rowLayerResizeObserver?.disconnect();
+    this.rowLayerResizeObserver = null;
+    this.rowLayer = element;
+    if (element !== null) {
+      if (typeof ResizeObserver !== "undefined") {
+        this.rowLayerResizeObserver = new ResizeObserver(this.handleRowLayerResize);
+        this.rowLayerResizeObserver.observe(element);
+      }
+    }
+  };
+
+  public readonly attachBodyLayer = (element: HTMLElement | null): (() => void) | undefined => {
+    if (element === null) return;
+    this.bodyLayers.add(element);
+    element.style.setProperty("transform", rowLayerTransform(this.rowLayerOffset));
+    return () => {
+      this.bodyLayers.delete(element);
+    };
   };
 
   public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
     if (this.scrollbarOverlay === element) return;
     this.scrollbarOverlay = element;
+    this.scrollbarOverlayDirection = undefined;
     this.publishFromElement();
   };
 
   public readonly dispose = (): void => {
     this.element?.removeEventListener("scroll", this.handleScroll);
+    this.element?.removeEventListener("focusin", this.handleDirectionMutation);
+    this.element?.removeEventListener("focusout", this.handleDirectionMutation);
+    this.stylesheetRoot?.removeEventListener("load", this.handleDirectionMutation, true);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.rowLayerResizeObserver?.disconnect();
+    this.rowLayerResizeObserver = null;
+    this.directionObserver?.disconnect();
+    this.directionObserver = null;
+    this.stylesheetRoot = null;
     this.element = null;
+    this.rowLayer = null;
+    this.bodyLayers.clear();
     this.scrollbarOverlay = null;
+    this.scrollbarOverlayDirection = undefined;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.pendingReveal = undefined;
@@ -282,20 +477,81 @@ export class BrunoTableViewportRuntime {
     this.horizontalSuspended = undefined;
     this.horizontalPinnedStartWidth = 0;
     this.horizontalPinningKey = "";
+    this.horizontalDirection = "ltr";
+    this.rtlScrollType = "negative";
+    this.directionDirty = false;
+    this.horizontalInputPending = false;
+    this.horizontalInputSample = undefined;
+    this.horizontalInputNativeScrollLeft = undefined;
+    this.horizontalEventOrder = 0;
+    this.horizontalInputEventOrder = undefined;
+    this.horizontalEnvironmentEventOrder = undefined;
+    this.directionScrollGuard = undefined;
+    this.forceGuardedDirectionReconciliation = false;
+    this.horizontalViewportWidth = 0;
+    this.lastNativeScrollLeft = 0;
+    this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
+    this.logicalScrollLeft = 0;
+    this.pendingLayoutHorizontalCoordinate = undefined;
+    this.rowLayerOffset = "0px";
   };
 
-  private readonly handleScroll = (): void => this.schedulePublish();
-  private readonly handleResize = (): void => this.schedulePublish();
+  private readonly handleScroll = (): void => {
+    const element = this.element;
+    if (element !== null) {
+      if (this.directionScrollGuard !== undefined && element.scrollLeft === 0) {
+        this.forceGuardedDirectionReconciliation = true;
+        this.horizontalInputPending = false;
+        this.horizontalInputNativeScrollLeft = undefined;
+        this.horizontalInputSample = undefined;
+        this.schedulePublish();
+        return;
+      }
+      this.directionScrollGuard = undefined;
+      this.recordPendingNativeInput(element);
+    }
+    this.schedulePublish();
+  };
+  private readonly handleResize = (): void => {
+    const element = this.element;
+    if (element !== null) {
+      if (this.directionDirty) this.recordPendingNativeInput(element);
+      this.horizontalEventOrder += 1;
+      this.horizontalEnvironmentEventOrder ??= this.horizontalEventOrder;
+      this.directionDirty = true;
+    }
+    this.schedulePublish();
+  };
+  private readonly handleDirectionMutation = (): void => {
+    const element = this.element;
+    if (element === null) return;
+    if (this.directionDirty) this.recordPendingNativeInput(element);
+    this.horizontalEventOrder += 1;
+    this.horizontalEnvironmentEventOrder ??= this.horizontalEventOrder;
+    this.directionDirty = true;
+    this.schedulePublish();
+  };
+  private readonly handleRowLayerResize = (): void => {
+    if (!this.layoutReconciliationPending) return;
+    this.layoutReconciliationDeferrals = 0;
+    this.schedulePublish();
+  };
 
   private readonly schedulePublish = (): void => {
     if (this.frame !== null) return;
     this.frame = requestAnimationFrame(() => {
       const reveal = this.pendingReveal;
       this.pendingReveal = undefined;
-      if (reveal !== undefined) this.applyReveal(reveal);
+      const horizontalReconciliation = reveal === undefined ? undefined : this.applyReveal(reveal);
       this.frame = null;
-      this.publishFromElement();
-      if (this.pendingReveal !== undefined) this.schedulePublish();
+      this.publishFromElement(horizontalReconciliation);
+      if (
+        this.pendingReveal !== undefined &&
+        this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS
+      ) {
+        this.schedulePublish();
+      }
     });
   };
 
@@ -367,32 +623,245 @@ export class BrunoTableViewportRuntime {
         physicalScrollTop = physicalAnchor;
       }
     }
-    element.scrollTop = physicalScrollTop;
+    setNativeScrollTop(element, physicalScrollTop);
     this.lastPhysicalScrollTop = physicalScrollTop;
   }
 
-  private readonly publishFromElement = (): void => {
+  private readonly publishFromElement = (
+    horizontalReconciliation?: HorizontalReconciliation,
+  ): void => {
     const element = this.element;
     if (element === null) return;
-    this.rebaseHorizontalCoordinate(element);
+    const reconciliation = horizontalReconciliation ?? this.reconcileHorizontalEnvironment(element);
+    const deferredLogicalScrollLeft =
+      typeof reconciliation === "number" ? reconciliation : undefined;
     const logicalScrollTop = this.readLogicalScrollTop(element, true);
+    const logicalScrollLeft = deferredLogicalScrollLeft ?? this.readLogicalScrollLeft(element);
+    this.publishCoordinates(element, logicalScrollTop, logicalScrollLeft);
+    this.directionDirty = false;
+    this.horizontalInputPending = false;
+    this.horizontalInputSample = undefined;
+    this.horizontalInputNativeScrollLeft = undefined;
+    this.horizontalInputEventOrder = undefined;
+    this.horizontalEnvironmentEventOrder = undefined;
+    this.horizontalViewportWidth = element.clientWidth;
+    this.lastNativeScrollLeft = element.scrollLeft;
+    if (
+      deferredLogicalScrollLeft !== undefined &&
+      this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS
+    ) {
+      this.schedulePublish();
+    }
+    if (this.directionScrollGuard !== undefined) this.schedulePublish();
+  };
+
+  private publishCoordinates(
+    element: HTMLElement,
+    logicalScrollTop: number,
+    logicalScrollLeft: number,
+  ): void {
+    this.logicalScrollLeft = logicalScrollLeft;
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
-    const scrollLeft = quantizeScroll(element.scrollLeft);
+    const structuralLogicalScrollLeft = quantizeScroll(logicalScrollLeft);
     const next = createViewportSnapshot(this.layout, {
       logicalScrollTop: structuralLogicalScrollTop,
-      scrollLeft,
+      scrollLeft: structuralLogicalScrollLeft,
       width: element.clientWidth,
       height: element.clientHeight,
     });
-    element.style.setProperty(
-      "--bruno-table-row-layer-offset",
-      `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`,
-    );
-    this.writeScrollbarOverlay(element, logicalScrollTop);
+    const nextRowLayerOffset = `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`;
+    this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
+    this.writeBodyLayerOffset(nextRowLayerOffset);
     this.publishSnapshot(next);
-  };
+  }
 
-  private rebaseHorizontalCoordinate(element: HTMLElement): void {
+  private writeBodyLayerOffset(nextOffset: string): void {
+    if (nextOffset === this.rowLayerOffset) return;
+    this.rowLayerOffset = nextOffset;
+    const transform = rowLayerTransform(nextOffset);
+    for (const layer of this.bodyLayers) {
+      layer.style.setProperty("transform", transform);
+    }
+  }
+
+  private projectLayoutLogicalScrollLeft(
+    element: HTMLElement,
+    sampledCoordinate: HorizontalCoordinateSample | undefined,
+  ): number {
+    const requestedLogicalScrollLeft =
+      sampledCoordinate?.logicalScrollLeft ?? this.logicalScrollLeft;
+    const sourceInset = sampledCoordinate?.suspended ? sampledCoordinate.pinnedStartWidth : 0;
+    const nextInset = shouldSuspendPinning(this.layout, element.clientWidth)
+      ? this.layout.pinnedStartWidth
+      : 0;
+    const convertedLogicalScrollLeft =
+      sampledCoordinate?.pinningKey === this.layoutPinningKey && sourceInset !== nextInset
+        ? requestedLogicalScrollLeft - sourceInset + nextInset
+        : requestedLogicalScrollLeft;
+    const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    return Math.min(Math.max(convertedLogicalScrollLeft, 0), maximum);
+  }
+
+  private captureLayoutSourceCoordinate(element: HTMLElement): HorizontalCoordinateSample {
+    this.resolveDirectionAndDetectPendingNativeInput(element);
+    const sampledCoordinate = this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate;
+    if (this.directionDirty) {
+      const publishedCoordinate =
+        sampledCoordinate ?? this.capturePublishedHorizontalCoordinate(this.logicalScrollLeft);
+      this.refreshHorizontalDirection(element);
+      return publishedCoordinate;
+    }
+    if (sampledCoordinate !== undefined) return sampledCoordinate;
+    if (element.clientWidth !== this.horizontalViewportWidth) {
+      return this.capturePublishedHorizontalCoordinate(this.logicalScrollLeft);
+    }
+    return this.captureHorizontalCoordinate(element, this.readLogicalScrollLeft(element));
+  }
+
+  private refreshHorizontalDirection(element: HTMLElement): void {
+    const nextDirection = readHorizontalDirection(element);
+    if (nextDirection !== this.horizontalDirection) {
+      this.horizontalDirection = nextDirection;
+      this.rtlScrollType =
+        nextDirection === "rtl" ? rtlScrollType(element.ownerDocument) : "negative";
+    }
+    this.directionDirty = false;
+  }
+
+  private shouldDeferReverseRtlLayoutWrite(
+    element: HTMLElement,
+    logicalScrollLeft: number,
+  ): boolean {
+    if (
+      this.horizontalDirection !== "rtl" ||
+      this.rtlScrollType !== "reverse" ||
+      !Number.isFinite(element.scrollWidth)
+    ) {
+      return false;
+    }
+    const committedMaximum = Math.max(element.scrollWidth - element.clientWidth, 0);
+    const nextMaximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    const requestedNativeScrollLeft = nextMaximum - logicalScrollLeft;
+    return requestedNativeScrollLeft > committedMaximum;
+  }
+
+  private recordPendingNativeInput(element: HTMLElement): void {
+    const comparisonScrollLeft = this.horizontalInputNativeScrollLeft ?? this.lastNativeScrollLeft;
+    if (element.scrollLeft === comparisonScrollLeft) return;
+    this.horizontalEventOrder += 1;
+    this.horizontalInputEventOrder = this.horizontalEventOrder;
+    this.horizontalInputNativeScrollLeft = element.scrollLeft;
+    this.horizontalInputPending = true;
+  }
+
+  private resolveDirectionAndDetectPendingNativeInput(element: HTMLElement): HorizontalDirection {
+    const nextDirection = readHorizontalDirection(element);
+    const directionChanged = nextDirection !== this.horizontalDirection;
+    if (directionChanged && !this.directionDirty) this.directionDirty = true;
+    const nativeInputScrollLeft = this.horizontalInputNativeScrollLeft;
+    if (nativeInputScrollLeft === undefined) return nextDirection;
+    this.horizontalInputNativeScrollLeft = undefined;
+    this.lastNativeScrollLeft = nativeInputScrollLeft;
+    const inputFollowsObservedEnvironmentChange =
+      this.horizontalInputEventOrder !== undefined &&
+      this.horizontalEnvironmentEventOrder !== undefined &&
+      this.horizontalInputEventOrder > this.horizontalEnvironmentEventOrder;
+    if (
+      directionChanged &&
+      inputFollowsObservedEnvironmentChange &&
+      nativeInputScrollLeft === 0 &&
+      this.logicalScrollLeft > 0
+    ) {
+      this.horizontalInputPending = false;
+      this.horizontalInputSample = undefined;
+      return nextDirection;
+    }
+    if (directionChanged && this.horizontalEnvironmentEventOrder === undefined) {
+      const nextRtlScrollType =
+        nextDirection === "rtl" ? rtlScrollType(element.ownerDocument) : "negative";
+      const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+      const expectedNativeScrollLeft = nativeScrollLeftFromLogical(
+        this.logicalScrollLeft,
+        maximum,
+        nextDirection,
+        nextRtlScrollType,
+      );
+      if (Math.abs(nativeInputScrollLeft - expectedNativeScrollLeft) > 0.5) {
+        this.lastNativeScrollLeft = nativeInputScrollLeft;
+        this.horizontalInputPending = true;
+        this.horizontalInputSample = this.createHorizontalCoordinateSample(
+          logicalScrollLeftFromNative(
+            nativeInputScrollLeft,
+            maximum,
+            nextDirection,
+            nextRtlScrollType,
+          ),
+          {
+            direction: nextDirection,
+            rtlScrollType: nextRtlScrollType,
+            viewportWidth: element.clientWidth,
+            suspended: shouldSuspendPinning(this.layout, element.clientWidth),
+            pinnedStartWidth: this.layout.pinnedStartWidth,
+            pinningKey: this.layoutPinningKey,
+          },
+        );
+      } else {
+        this.horizontalInputPending = false;
+        this.horizontalInputSample = undefined;
+      }
+    } else {
+      const inputPrecedesObservedEnvironmentChange =
+        this.horizontalInputEventOrder !== undefined &&
+        this.horizontalEnvironmentEventOrder !== undefined &&
+        this.horizontalInputEventOrder < this.horizontalEnvironmentEventOrder;
+      const sampleViewportWidth = inputPrecedesObservedEnvironmentChange
+        ? this.horizontalViewportWidth
+        : element.clientWidth;
+      const sampleDirection = inputPrecedesObservedEnvironmentChange
+        ? this.horizontalDirection
+        : nextDirection;
+      const sampleRtlScrollType = inputPrecedesObservedEnvironmentChange
+        ? this.rtlScrollType
+        : nextDirection === "rtl"
+          ? rtlScrollType(element.ownerDocument)
+          : "negative";
+      this.horizontalInputPending = true;
+      this.horizontalInputSample = this.createHorizontalCoordinateSample(
+        logicalScrollLeftFromNative(
+          nativeInputScrollLeft,
+          horizontalScrollMaximum(this.layout, sampleViewportWidth),
+          sampleDirection,
+          sampleRtlScrollType,
+        ),
+        {
+          direction: sampleDirection,
+          rtlScrollType: sampleRtlScrollType,
+          viewportWidth: sampleViewportWidth,
+          suspended: inputPrecedesObservedEnvironmentChange
+            ? (this.horizontalSuspended ??
+              shouldSuspendPinning(this.layout, this.horizontalViewportWidth))
+            : shouldSuspendPinning(this.layout, sampleViewportWidth),
+          pinnedStartWidth: inputPrecedesObservedEnvironmentChange
+            ? this.horizontalPinnedStartWidth
+            : this.layout.pinnedStartWidth,
+          pinningKey: inputPrecedesObservedEnvironmentChange
+            ? this.horizontalPinningKey
+            : this.layoutPinningKey,
+        },
+      );
+    }
+    return nextDirection;
+  }
+
+  private reconcileHorizontalEnvironment(element: HTMLElement): HorizontalReconciliation {
+    const nextDirection = this.resolveDirectionAndDetectPendingNativeInput(element);
+    const directionChanged = nextDirection !== this.horizontalDirection;
+    const viewportWidthChanged = element.clientWidth !== this.horizontalViewportWidth;
+    if (directionChanged) {
+      this.horizontalDirection = nextDirection;
+      this.rtlScrollType =
+        nextDirection === "rtl" ? rtlScrollType(element.ownerDocument) : "negative";
+    }
     const nextSuspended = shouldSuspendPinning(this.layout, element.clientWidth);
     const previousSuspended = this.horizontalSuspended;
     const previousPinnedStartWidth = this.horizontalPinnedStartWidth;
@@ -400,51 +869,176 @@ export class BrunoTableViewportRuntime {
     this.horizontalSuspended = nextSuspended;
     this.horizontalPinnedStartWidth = this.layout.pinnedStartWidth;
     this.horizontalPinningKey = this.layoutPinningKey;
-    if (previousSuspended === undefined) return;
-    if (previousPinningKey !== this.layoutPinningKey) return;
-    const previousInset = previousSuspended ? previousPinnedStartWidth : 0;
+    const samePinningStructure = previousPinningKey === this.layoutPinningKey;
+    const previousInset = previousSuspended === true ? previousPinnedStartWidth : 0;
     const nextInset = nextSuspended ? this.layout.pinnedStartWidth : 0;
-    if (previousInset === nextInset) return;
-    const centerContentWidth = nextSuspended
-      ? this.layout.suspendedCenterWidth
-      : this.layout.centerWidth;
-    const centerViewportWidth = Math.max(
-      element.clientWidth -
-        (nextSuspended ? 0 : this.layout.pinnedStartWidth + this.layout.pinnedEndWidth),
-      0,
-    );
-    const maximum = Math.max(centerContentWidth - centerViewportWidth, 0);
-    element.scrollLeft = Math.min(
-      Math.max(element.scrollLeft - previousInset + nextInset, 0),
+    const suspensionCoordinateChanged =
+      previousSuspended !== undefined && samePinningStructure && previousInset !== nextInset;
+    const sampledCoordinate = this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate;
+    const guardedLogicalScrollLeft = this.forceGuardedDirectionReconciliation
+      ? this.directionScrollGuard
+      : undefined;
+    const requestedLogicalScrollLeft =
+      guardedLogicalScrollLeft ??
+      sampledCoordinate?.logicalScrollLeft ??
+      (this.horizontalInputPending ? this.readLogicalScrollLeft(element) : this.logicalScrollLeft);
+    const sourceInset =
+      sampledCoordinate === undefined
+        ? this.horizontalInputPending
+          ? nextInset
+          : previousInset
+        : sampledCoordinate.suspended
+          ? sampledCoordinate.pinnedStartWidth
+          : 0;
+    const sourcePinningKey = sampledCoordinate?.pinningKey ?? previousPinningKey;
+    const sampledEnvironmentChanged =
+      sampledCoordinate !== undefined &&
+      (sampledCoordinate.viewportWidth !== element.clientWidth ||
+        sampledCoordinate.direction !== this.horizontalDirection ||
+        sampledCoordinate.rtlScrollType !== this.rtlScrollType);
+    const sampledSuspensionCoordinateChanged =
+      sourcePinningKey === this.layoutPinningKey && sourceInset !== nextInset;
+    if (
+      this.layoutReconciliationPending ||
+      directionChanged ||
+      this.forceGuardedDirectionReconciliation ||
+      sampledEnvironmentChanged ||
+      sampledSuspensionCoordinateChanged ||
+      (!this.horizontalInputPending && (viewportWidthChanged || suspensionCoordinateChanged))
+    ) {
+      const convertedLogicalScrollLeft = sampledSuspensionCoordinateChanged
+        ? requestedLogicalScrollLeft - sourceInset + nextInset
+        : requestedLogicalScrollLeft;
+      const reconciledLogicalScrollLeft = Math.min(
+        Math.max(convertedLogicalScrollLeft, 0),
+        horizontalScrollMaximum(this.layout, element.clientWidth),
+      );
+      if (
+        this.layoutReconciliationPending &&
+        this.shouldDeferReverseRtlLayoutWrite(element, reconciledLogicalScrollLeft)
+      ) {
+        this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+          element,
+          reconciledLogicalScrollLeft,
+        );
+        if (this.layoutReconciliationDeferrals < MAX_REVERSE_RTL_LAYOUT_DEFERRALS) {
+          this.layoutReconciliationDeferrals += 1;
+        }
+        this.directionDirty = false;
+        this.horizontalViewportWidth = element.clientWidth;
+        return reconciledLogicalScrollLeft;
+      }
+      this.setLogicalScrollLeft(element, reconciledLogicalScrollLeft);
+      if (directionChanged && reconciledLogicalScrollLeft > 0) {
+        this.directionScrollGuard = reconciledLogicalScrollLeft;
+      }
+    }
+    this.layoutReconciliationPending = false;
+    this.layoutReconciliationDeferrals = 0;
+    this.pendingLayoutHorizontalCoordinate = undefined;
+    this.directionDirty = false;
+    this.horizontalViewportWidth = element.clientWidth;
+    if (!directionChanged) {
+      this.directionScrollGuard = undefined;
+      this.forceGuardedDirectionReconciliation = false;
+    }
+    return HORIZONTAL_RECONCILIATION_SETTLED;
+  }
+
+  private captureHorizontalCoordinate(
+    element: HTMLElement,
+    logicalScrollLeft: number,
+  ): HorizontalCoordinateSample {
+    return this.createHorizontalCoordinateSample(logicalScrollLeft, {
+      direction: this.horizontalDirection,
+      rtlScrollType: this.rtlScrollType,
+      viewportWidth: element.clientWidth,
+      suspended: shouldSuspendPinning(this.layout, element.clientWidth),
+      pinnedStartWidth: this.layout.pinnedStartWidth,
+      pinningKey: this.layoutPinningKey,
+    });
+  }
+
+  private capturePublishedHorizontalCoordinate(
+    logicalScrollLeft: number,
+  ): HorizontalCoordinateSample {
+    return this.createHorizontalCoordinateSample(logicalScrollLeft, {
+      direction: this.horizontalDirection,
+      rtlScrollType: this.rtlScrollType,
+      viewportWidth: this.horizontalViewportWidth,
+      suspended:
+        this.horizontalSuspended ?? shouldSuspendPinning(this.layout, this.horizontalViewportWidth),
+      pinnedStartWidth: this.horizontalPinnedStartWidth,
+      pinningKey: this.horizontalPinningKey,
+    });
+  }
+
+  private createHorizontalCoordinateSample(
+    logicalScrollLeft: number,
+    environment: HorizontalCoordinateEnvironment,
+  ): HorizontalCoordinateSample {
+    return Object.freeze({ logicalScrollLeft, ...environment });
+  }
+
+  private readLogicalScrollLeft(element: HTMLElement): number {
+    const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    const nativeScrollLeft = Number.isFinite(element.scrollLeft) ? element.scrollLeft : 0;
+    return logicalScrollLeftFromNative(
+      nativeScrollLeft,
       maximum,
+      this.horizontalDirection,
+      this.rtlScrollType,
     );
   }
 
-  private writeScrollbarOverlay(element: HTMLElement, logicalScrollTop: number): void {
+  private setLogicalScrollLeft(element: HTMLElement, requestedLogicalScrollLeft: number): void {
+    const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    const logicalScrollLeft = Math.min(Math.max(requestedLogicalScrollLeft, 0), maximum);
+    const nativeScrollLeft = nativeScrollLeftFromLogical(
+      logicalScrollLeft,
+      maximum,
+      this.horizontalDirection,
+      this.rtlScrollType,
+    );
+    setNativeScrollLeft(element, nativeScrollLeft);
+    this.logicalScrollLeft = logicalScrollLeft;
+    this.lastNativeScrollLeft = element.scrollLeft;
+  }
+
+  private writeScrollbarOverlay(
+    element: HTMLElement,
+    logicalScrollTop: number,
+    logicalScrollLeft: number,
+  ): void {
     const overlay = this.scrollbarOverlay;
     if (overlay === null) return;
-    const suspendPinning = shouldSuspendPinning(this.layout, element.clientWidth);
+    const directionChanged = this.scrollbarOverlayDirection !== this.horizontalDirection;
+    const horizontal = horizontalMetrics(this.layout, element.clientWidth);
+    const suspendPinning = horizontal.suspendPinning;
     const pinnedStartWidth = suspendPinning ? 0 : this.layout.pinnedStartWidth;
     const pinnedEndWidth = suspendPinning ? 0 : this.layout.pinnedEndWidth;
-    const centerContentWidth = suspendPinning
-      ? this.layout.suspendedCenterWidth
-      : this.layout.centerWidth;
-    const centerViewportWidth = Math.max(
-      element.clientWidth - pinnedStartWidth - pinnedEndWidth,
+    const centerContentWidth = horizontal.contentWidth;
+    const centerViewportWidth = horizontal.viewportWidth;
+    const horizontalMaximum = horizontal.maximum;
+    const nativeVerticalWidth = Math.max(
+      finiteDimension(element.offsetWidth, element.clientWidth) - element.clientWidth,
       0,
     );
-    const horizontalMaximum = Math.max(centerContentWidth - centerViewportWidth, 0);
-    const horizontalVisible = horizontalMaximum > 0 && centerViewportWidth > 0;
+    const horizontalTrackWidth = centerViewportWidth;
+    const horizontalVisible =
+      horizontalMaximum > 0 && centerViewportWidth > 0 && horizontalTrackWidth > 0;
     const horizontalThumbWidth = scrollbarThumbSize(
-      centerViewportWidth,
+      horizontalTrackWidth,
       centerViewportWidth,
       centerContentWidth,
     );
     const horizontalThumbOffset = scrollbarThumbOffset(
-      element.scrollLeft,
+      logicalScrollLeft,
       horizontalMaximum,
-      centerViewportWidth - horizontalThumbWidth,
+      horizontalTrackWidth - horizontalThumbWidth,
     );
+    const horizontalThumbTransform =
+      this.horizontalDirection === "rtl" ? -horizontalThumbOffset : horizontalThumbOffset;
     const bodyViewportHeight = Math.max(element.clientHeight - this.layout.headerHeight, 0);
     const verticalMaximum = logicalScrollMaximum(this.layout, element.clientHeight);
     const verticalTrackHeight = Math.max(
@@ -465,11 +1059,11 @@ export class BrunoTableViewportRuntime {
       finiteDimension(element.offsetHeight, element.clientHeight) - element.clientHeight,
       0,
     );
-    const nativeVerticalWidth = Math.max(
-      finiteDimension(element.offsetWidth, element.clientWidth) - element.clientWidth,
-      0,
-    );
     const style = overlay.style;
+    if (directionChanged) {
+      style.setProperty("direction", this.horizontalDirection);
+      this.scrollbarOverlayDirection = this.horizontalDirection;
+    }
     style.setProperty(
       "--bruno-table-scrollbar-horizontal-display",
       horizontalVisible ? "block" : "none",
@@ -486,7 +1080,7 @@ export class BrunoTableViewportRuntime {
     );
     style.setProperty(
       "--bruno-table-scrollbar-horizontal-thumb-offset",
-      `${horizontalThumbOffset}px`,
+      `${horizontalThumbTransform}px`,
     );
     style.setProperty(
       "--bruno-table-scrollbar-vertical-display",
@@ -608,6 +1202,23 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   );
 }
 
+function shareVirtualWindowColumns(
+  next: BrunoTableVirtualWindow,
+  previous: BrunoTableVirtualWindow,
+): BrunoTableVirtualWindow {
+  const pinnedStart = sameColumns(next.pinnedStart, previous.pinnedStart)
+    ? previous.pinnedStart
+    : next.pinnedStart;
+  const center = sameColumns(next.center, previous.center) ? previous.center : next.center;
+  const pinnedEnd = sameColumns(next.pinnedEnd, previous.pinnedEnd)
+    ? previous.pinnedEnd
+    : next.pinnedEnd;
+  if (pinnedStart === next.pinnedStart && center === next.center && pinnedEnd === next.pinnedEnd) {
+    return next;
+  }
+  return Object.freeze({ ...next, pinnedStart, center, pinnedEnd });
+}
+
 function sameColumns(left: readonly CompiledColumn[], right: readonly CompiledColumn[]): boolean {
   return left.length === right.length && left.every((column, index) => column === right[index]);
 }
@@ -689,6 +1300,32 @@ function physicalScrollMaximum(layout: ViewportLayout, viewportHeight: number): 
   return Math.max(layout.physicalRowHeight + layout.headerHeight - viewportHeight, 0);
 }
 
+function horizontalMetrics(
+  layout: ViewportLayout,
+  viewportWidth: number,
+): Readonly<{
+  suspendPinning: boolean;
+  contentWidth: number;
+  viewportWidth: number;
+  maximum: number;
+}> {
+  const suspendPinning = shouldSuspendPinning(layout, viewportWidth);
+  const contentWidth = suspendPinning ? layout.suspendedCenterWidth : layout.centerWidth;
+  const viewport = suspendPinning
+    ? viewportWidth
+    : Math.max(viewportWidth - layout.pinnedStartWidth - layout.pinnedEndWidth, 0);
+  return {
+    suspendPinning,
+    contentWidth,
+    viewportWidth: viewport,
+    maximum: Math.max(contentWidth - viewport, 0),
+  };
+}
+
+function horizontalScrollMaximum(layout: ViewportLayout, viewportWidth: number): number {
+  return horizontalMetrics(layout, viewportWidth).maximum;
+}
+
 function logicalScrollMaximum(layout: ViewportLayout, viewportHeight: number): number {
   return Math.max(layout.logicalRowHeight + layout.headerHeight - viewportHeight, 0);
 }
@@ -712,4 +1349,87 @@ function quantizeScroll(value: number): number {
   return (
     Math.floor(value / BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM) * BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM
   );
+}
+
+function rowLayerTransform(offset: string): string {
+  return `translate3d(0, ${offset}, 0)`;
+}
+
+function setNativeScrollTop(element: HTMLElement, top: number): void {
+  if (typeof element.scrollTo === "function") {
+    element.scrollTo({ behavior: "instant", top });
+    return;
+  }
+  element.scrollTop = top;
+}
+
+function setNativeScrollLeft(element: HTMLElement, left: number): void {
+  if (typeof element.scrollTo === "function") {
+    element.scrollTo({ behavior: "instant", left });
+    return;
+  }
+  element.scrollLeft = left;
+}
+
+function logicalScrollLeftFromNative(
+  nativeScrollLeft: number,
+  maximum: number,
+  direction: HorizontalDirection,
+  rtlType: RtlScrollType,
+): number {
+  const logicalScrollLeft =
+    direction === "ltr"
+      ? nativeScrollLeft
+      : rtlType === "negative"
+        ? -nativeScrollLeft
+        : rtlType === "reverse"
+          ? maximum - nativeScrollLeft
+          : nativeScrollLeft;
+  return Math.min(Math.max(logicalScrollLeft, 0), maximum);
+}
+
+function nativeScrollLeftFromLogical(
+  logicalScrollLeft: number,
+  maximum: number,
+  direction: HorizontalDirection,
+  rtlType: RtlScrollType,
+): number {
+  const clampedLogicalScrollLeft = Math.min(Math.max(logicalScrollLeft, 0), maximum);
+  return direction === "ltr"
+    ? clampedLogicalScrollLeft
+    : rtlType === "negative"
+      ? -clampedLogicalScrollLeft
+      : rtlType === "reverse"
+        ? maximum - clampedLogicalScrollLeft
+        : clampedLogicalScrollLeft;
+}
+
+function readHorizontalDirection(element: HTMLElement): HorizontalDirection {
+  const computedDirection =
+    element.ownerDocument?.defaultView?.getComputedStyle?.(element)?.direction;
+  if (computedDirection === "rtl") return "rtl";
+  return element.getAttribute?.("dir")?.toLowerCase() === "rtl" ? "rtl" : "ltr";
+}
+
+function rtlScrollType(ownerDocument: Document | undefined): RtlScrollType {
+  if (ownerDocument === undefined) return "negative";
+  const cached = RTL_SCROLL_TYPES.get(ownerDocument);
+  if (cached !== undefined) return cached;
+  const outer = ownerDocument.createElement("div");
+  const inner = ownerDocument.createElement("div");
+  outer.dir = "rtl";
+  outer.style.cssText =
+    "position:absolute;visibility:hidden;overflow:scroll;width:4px;height:1px;top:-9999px;";
+  inner.style.cssText = "width:8px;height:1px;";
+  outer.appendChild(inner);
+  (ownerDocument.body ?? ownerDocument.documentElement).appendChild(outer);
+  let type: RtlScrollType;
+  if (outer.scrollLeft > 0) type = "reverse";
+  else {
+    outer.scrollLeft = 1;
+    type = outer.scrollLeft === 0 ? "negative" : "default";
+  }
+  outer.parentNode?.removeChild(outer);
+  RTL_SCROLL_TYPES.set(ownerDocument, type);
+  return type;
 }
