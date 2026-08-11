@@ -1021,7 +1021,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                   const rowId = rowSpace.getRowId(logicalRowIndex);
                   return rowId === undefined ? (
                     <UnloadedRow
-                      key={`unloaded-slot-${String(offset)}`}
+                      key={`slot:${String(offset)}`}
                       center={virtualWindow.center}
                       centerStartIndex={virtualWindow.centerStartIndex}
                       instanceId={instanceId}
@@ -1037,7 +1037,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                     />
                   ) : (
                     <BrunoTableRow
-                      key={rowId}
+                      key={`row:${rowId}`}
                       rowId={rowId}
                       instanceId={instanceId}
                       tableId={tableId}
@@ -1650,6 +1650,78 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
 }) {
   const width = totalColumnWidth(columns);
   return (
+    <BrunoTablePinnedOverlayShell
+      layerWidth={layerWidth}
+      side={side}
+      top={ROW_HEIGHT}
+      totalHeight={totalHeight}
+      width={width}
+    >
+      {Array.from({ length: rowEnd - rowStart }, (_, offset) => {
+        const logicalRowIndex = rowStart + offset;
+        const rowId = rowSpace.getRowId(logicalRowIndex);
+        return (
+          <tr
+            key={rowId === undefined ? `slot:${String(offset)}` : `row:${rowId}`}
+            role="presentation"
+            style={{
+              display: "table",
+              height: ROW_HEIGHT,
+              maxHeight: ROW_HEIGHT,
+              overflow: "hidden",
+              position: "absolute",
+              tableLayout: "fixed",
+              top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
+              width,
+            }}
+          >
+            {columns.map((column, index) =>
+              rowId === undefined ? (
+                <LoadingCell
+                  key={column.columnId}
+                  column={column}
+                  columnIndex={
+                    side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+                  }
+                  id={loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId)}
+                />
+              ) : (
+                <BrunoTableCell
+                  key={column.columnId}
+                  column={column}
+                  columnIndex={
+                    side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+                  }
+                  instanceId={instanceId}
+                  rowId={rowId}
+                  runtime={runtime}
+                  tableId={tableId}
+                />
+              ),
+            )}
+          </tr>
+        );
+      })}
+    </BrunoTablePinnedOverlayShell>
+  );
+});
+
+const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell({
+  children,
+  layerWidth,
+  side,
+  top,
+  totalHeight,
+  width,
+}: {
+  readonly children: ReactNode;
+  readonly layerWidth: number;
+  readonly side: "start" | "end";
+  readonly top: number;
+  readonly totalHeight: number;
+  readonly width: number;
+}) {
+  return (
     <div
       style={{
         display: "flex",
@@ -1657,7 +1729,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
         insetInlineStart: 0,
         pointerEvents: "none",
         position: "absolute",
-        top: ROW_HEIGHT,
+        top,
         width: layerWidth,
         zIndex: 3,
       }}
@@ -1681,51 +1753,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
             role="presentation"
             style={{ display: "block", height: totalHeight, position: "relative" }}
           >
-            {Array.from({ length: rowEnd - rowStart }, (_, offset) => {
-              const logicalRowIndex = rowStart + offset;
-              const rowId = rowSpace.getRowId(logicalRowIndex);
-              return (
-                <tr
-                  key={rowId ?? `pinned-unloaded-slot-${String(logicalRowIndex)}`}
-                  role="presentation"
-                  style={{
-                    display: "table",
-                    height: ROW_HEIGHT,
-                    maxHeight: ROW_HEIGHT,
-                    overflow: "hidden",
-                    position: "absolute",
-                    tableLayout: "fixed",
-                    top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
-                    width,
-                  }}
-                >
-                  {columns.map((column, index) =>
-                    rowId === undefined ? (
-                      <LoadingCell
-                        key={column.columnId}
-                        column={column}
-                        columnIndex={
-                          side === "start" ? index : pinnedStartCount + precedingColumnCount + index
-                        }
-                        id={loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId)}
-                      />
-                    ) : (
-                      <BrunoTableCell
-                        key={column.columnId}
-                        column={column}
-                        columnIndex={
-                          side === "start" ? index : pinnedStartCount + precedingColumnCount + index
-                        }
-                        instanceId={instanceId}
-                        rowId={rowId}
-                        runtime={runtime}
-                        tableId={tableId}
-                      />
-                    ),
-                  )}
-                </tr>
-              );
-            })}
+            {children}
           </tbody>
         </table>
       </div>
@@ -2264,68 +2292,41 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
 }) {
   const width = totalColumnWidth(columns);
   return (
-    <div
-      style={{
-        display: "flex",
-        height: totalHeight,
-        insetInlineStart: 0,
-        pointerEvents: "none",
-        position: "absolute",
-        top: 0,
-        width: layerWidth,
-        zIndex: 3,
-      }}
+    <BrunoTablePinnedOverlayShell
+      layerWidth={layerWidth}
+      side={side}
+      top={0}
+      totalHeight={totalHeight}
+      width={width}
     >
-      <div
-        data-bruno-pinned-body-region={side}
-        data-pinned-region={side}
-        style={{
-          background: "Canvas",
-          height: totalHeight,
-          insetInlineEnd: side === "end" ? 0 : undefined,
-          insetInlineStart: side === "start" ? 0 : undefined,
-          marginInlineStart: side === "end" ? "auto" : undefined,
-          pointerEvents: "auto",
-          position: "sticky",
-          width,
-        }}
-      >
-        <table role="presentation" style={{ tableLayout: "fixed", width }}>
-          <tbody
-            role="presentation"
-            style={{ display: "block", height: totalHeight, position: "relative" }}
-          >
-            {Array.from({ length: rowEnd - rowStart }, (_, offset) => (
-              <tr
-                key={`pinned-loading-slot-${String(rowStart + offset)}`}
-                role="presentation"
-                style={{
-                  display: "table",
-                  height: ROW_HEIGHT,
-                  maxHeight: ROW_HEIGHT,
-                  overflow: "hidden",
-                  position: "absolute",
-                  tableLayout: "fixed",
-                  top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
-                  width,
-                }}
-              >
-                {columns.map((column, index) => (
-                  <LoadingCell
-                    key={column.columnId}
-                    column={column}
-                    columnIndex={
-                      side === "start" ? index : pinnedStartCount + precedingColumnCount + index
-                    }
-                    id={loadingCellDomId(instanceId, tableId, rowStart + offset, column.columnId)}
-                  />
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      {Array.from({ length: rowEnd - rowStart }, (_, offset) => (
+        <tr
+          key={`pinned-loading-slot-${String(offset)}`}
+          role="presentation"
+          style={{
+            display: "table",
+            height: ROW_HEIGHT,
+            maxHeight: ROW_HEIGHT,
+            overflow: "hidden",
+            position: "absolute",
+            tableLayout: "fixed",
+            top: `calc(var(--bruno-table-row-layer-offset, 0px) + ${String(offset * ROW_HEIGHT)}px)`,
+            width,
+          }}
+        >
+          {columns.map((column, index) => (
+            <LoadingCell
+              key={column.columnId}
+              column={column}
+              columnIndex={
+                side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+              }
+              id={loadingCellDomId(instanceId, tableId, rowStart + offset, column.columnId)}
+            />
+          ))}
+        </tr>
+      ))}
+    </BrunoTablePinnedOverlayShell>
   );
 });
 

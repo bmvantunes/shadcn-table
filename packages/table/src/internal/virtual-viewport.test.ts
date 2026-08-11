@@ -704,6 +704,14 @@ describe("BrunoTableViewportRuntime", () => {
     expect(
       observations.find(({ target }) => target === explicitDirectionOwner)?.options.attributeFilter,
     ).toEqual(["class", "dir", "style"]);
+    expect(observations.find(({ target }) => target === body)?.options.attributeFilter).toEqual([
+      "class",
+      "dir",
+      "style",
+    ]);
+    expect(
+      observations.find(({ target }) => target === documentElement)?.options.attributeFilter,
+    ).toEqual(["class", "dir", "style"]);
   });
 
   it.each(["ltr", "reverse-rtl"] as const)(

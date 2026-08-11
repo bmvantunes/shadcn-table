@@ -1481,6 +1481,105 @@ describe("BrunoTableClient browser surface", () => {
     ).toBe(true);
   });
 
+  test("separates loaded Row Identity keys from unloaded virtual-slot keys", async () => {
+    const collisionRows = [
+      { id: "unloaded-slot-2", name: "Center sentinel identity", score: 1 },
+      { id: "pinned-unloaded-slot-2", name: "Pinned sentinel identity", score: 2 },
+    ] satisfies readonly Row[];
+    const collisionRowsById = new Map(collisionRows.map((row) => [row.id, row]));
+    const compiledColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        pinned: "start",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const getRowId = (index: number) => collisionRows[index]?.id;
+    const rowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      totalRows: 3,
+      getRowId,
+      findRowIndex: (rowId) => {
+        const index = collisionRows.findIndex((row) => row.id === rowId);
+        return index < 0 ? undefined : index;
+      },
+      setRequiredRange: vi.fn(),
+    });
+    const runtime = new BrunoTableGridRuntime<Row>(
+      Object.freeze({
+        status: "loading" as const,
+        totalRows: 3,
+        version: 1,
+        rowSpace: Object.freeze({
+          totalRows: 3,
+          loadedRows: collisionRows.length,
+          getRowId,
+          getRow: (rowId: string) => collisionRowsById.get(rowId),
+          getCellValue: (rowId: string, columnId: string) => {
+            const row = collisionRowsById.get(rowId);
+            return columnId === "COL_ID_NAME" ? row?.name : row?.score;
+          },
+        }),
+        hasCoherentRows: false,
+      }),
+      compiledColumns,
+      Object.freeze({
+        baselineFilters: Object.freeze([]),
+        baselineOrderBy: Object.freeze([
+          Object.freeze({ columnId: "COL_ID_SCORE", direction: "asc" as const }),
+        ]),
+      }),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const screen = await render(
+        <BrunoTableView
+          runtime={runtime.getView()}
+          tableId="TABLE_ID_SPARSE_KEY_NAMESPACE"
+          compiledColumns={compiledColumns}
+          toolbar={new BrunoTableToolbarStore(undefined)}
+          rowPipeline={SparseRowPipeline}
+          rowPipelineAdapter={{ rowSpace, queryGeneration: 0 }}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Center sentinel identity" }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Pinned sentinel identity" }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Loading Name" }))
+        .toBeInTheDocument();
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SPARSE_KEY_NAMESPACE" });
+      const semanticRows = [...grid.element().querySelectorAll<HTMLElement>('[role="row"]')].filter(
+        (row) => row.getAttribute("aria-rowindex") !== "1",
+      );
+      expect(semanticRows.map((row) => row.getAttribute("aria-rowindex"))).toEqual(["2", "3", "4"]);
+      for (const row of semanticRows) {
+        const ownedIds = row.getAttribute("aria-owns")?.split(" ") ?? [];
+        expect(ownedIds).toHaveLength(compiledColumns.length);
+        for (const ownedId of ownedIds) {
+          expect(grid.element().querySelectorAll(`[id="${ownedId}"]`)).toHaveLength(1);
+        }
+      }
+      expect(
+        consoleError.mock.calls.some(([message]) =>
+          String(message).includes("Encountered two children with the same key"),
+        ),
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   test("retains terminal rows and exposes only source-owned retry", async () => {
     const run = vi.fn();
     const screen = await render(
@@ -4663,8 +4762,9 @@ describe("BrunoTableClient browser surface", () => {
           onRecoverableError: (error) => recoverableErrors.push(error),
         });
       });
-      const grids = page.getByRole("grid", { name: "Loading table rows" }).all();
-      await vi.waitFor(() => expect(grids).toHaveLength(2));
+      const gridLocator = page.getByRole("grid", { name: "Loading table rows" });
+      await vi.waitFor(() => expect(gridLocator.all()).toHaveLength(2));
+      const grids = gridLocator.all();
       const firstCell = grids[0]!
         .element()
         .querySelector<HTMLElement>('[role="gridcell"][aria-colindex="1"]');
