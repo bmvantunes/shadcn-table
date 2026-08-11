@@ -4655,6 +4655,96 @@ describe("BrunoTableClient browser surface", () => {
     });
   });
 
+  test("preserves held-key intent across both virtual axes without rerendering the table root", async () => {
+    const heldRows = Array.from({ length: 180 }, (_, index) => ({
+      id: `held-row-${String(index).padStart(3, "0")}`,
+      name: `Held row ${String(index).padStart(3, "0")}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const heldCenterColumnIndexes = [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    ] as const;
+    const heldColumns = [
+      {
+        ...columns[0],
+        columnId: "COL_ID_HELD_START",
+        headerName: "Held start",
+        pinned: "start" as const,
+        width: 120,
+      },
+      ...heldCenterColumnIndexes.map((index) => ({
+        ...columns[0],
+        columnId: `COL_ID_HELD_CENTER_${index}` as const,
+        headerName: `Held center ${index}`,
+        width: 120,
+      })),
+      {
+        ...columns[0],
+        columnId: "COL_ID_HELD_END",
+        headerName: "Held end",
+        pinned: "end" as const,
+        width: 120,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_HELD_NAVIGATION"
+        getRowId={(row: Row) => row.id}
+        columns={heldColumns}
+        initialOrderBy={[{ columnId: "COL_ID_HELD_START", direction: "asc" }]}
+        clientSource={readySource(heldRows)}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_HELD_NAVIGATION" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+
+    let tableRootRenders = 0;
+    let gridSurfaceRenders = 0;
+    const restoreTableRootListener = installBrunoTableClientViewRenderListener(() => {
+      tableRootRenders += 1;
+    });
+    const restoreGridSurfaceListener = installBrunoTableClientGridSurfaceRenderListener(() => {
+      gridSurfaceRenders += 1;
+    });
+    try {
+      for (let index = 0; index < 75; index += 1) {
+        grid
+          .element()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", repeat: true }),
+          );
+      }
+      for (let index = 0; index < heldColumns.length - 1; index += 1) {
+        grid
+          .element()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight", repeat: true }),
+          );
+      }
+
+      await vi.waitFor(() => {
+        const activeId = grid.element().getAttribute("aria-activedescendant");
+        expect(activeId).not.toBeNull();
+        const destinations = grid.element().querySelectorAll(`[id="${activeId ?? ""}"]`);
+        expect(destinations).toHaveLength(1);
+        const destination = destinations.item(0);
+        expect(grid.element().querySelectorAll('[role="row"][aria-rowindex="77"]')).toHaveLength(1);
+        expect(destination?.getAttribute("aria-colindex")).toBe(String(heldColumns.length));
+        expect(destination?.textContent).toBe("Held row 075");
+      });
+      expect(document.activeElement).toBe(grid.element());
+      expect(tableRootRenders).toBe(0);
+      expect(gridSurfaceRenders).toBeLessThanOrEqual(2);
+    } finally {
+      restoreGridSurfaceListener();
+      restoreTableRootListener();
+    }
+  });
+
   test("uses a clamped display-position fallback when an active Row Identity disappears", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
@@ -5512,6 +5602,42 @@ describe("BrunoTableClient browser surface", () => {
     const activeId = grid.element().getAttribute("aria-activedescendant");
     const destination = screen.getByRole("gridcell", { name: "Row 12", exact: true });
     expect(activeId).toBe(destination.element().id);
+    expect(destination.element()).not.toHaveAttribute("data-bruno-active-proxy");
+  });
+
+  test("reveals an offscreen reconciled boundary cell after a clamped command", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(largeRows)} />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
+    grid.element().focus();
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+    await vi.waitFor(() => {
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Row 12", exact: true }).element().id,
+      );
+    });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const reorderedRows = largeRows.map((row) =>
+      row.id === "row-12" ? { ...row, score: 1_000 } : row,
+    );
+    await screen.rerender(
+      <BrunoTableClient {...props} clientSource={readySource(reorderedRows)} />,
+    );
+    const proxy = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    await expect.element(proxy).toHaveAttribute("data-bruno-active-proxy");
+
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+
+    await vi.waitFor(() => expect(grid.element().scrollTop).toBeGreaterThan(2_000));
+    const destination = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(destination.element().id);
     expect(destination.element()).not.toHaveAttribute("data-bruno-active-proxy");
   });
 

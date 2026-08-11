@@ -7,6 +7,13 @@ export type BrunoTableActiveCell = Readonly<{
   readonly columnId: string;
 }>;
 
+export type BrunoTableNavigationCommand =
+  | Readonly<{ readonly type: "step"; readonly rowDelta: number; readonly columnDelta: number }>
+  | Readonly<{ readonly type: "page"; readonly rowDelta: number }>
+  | Readonly<{ readonly type: "row-edge"; readonly edge: "start" | "end" }>
+  | Readonly<{ readonly type: "column-edge"; readonly edge: "start" | "end" }>
+  | Readonly<{ readonly type: "grid-edge"; readonly edge: "start" | "end" }>;
+
 type Listener = () => void;
 
 export type BrunoTableNavigationRowSpace = Readonly<{
@@ -110,8 +117,34 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
-  public readonly move = (rowDelta: number, columnDelta: number): void => {
-    if (this.activeCell === undefined || this.columns.length === 0) return;
+  public readonly navigate = (command: BrunoTableNavigationCommand): boolean => {
+    if (this.activeCell === undefined || this.columns.length === 0) return false;
+    if (command.type === "step") {
+      return this.resolveStep(command.rowDelta, command.columnDelta);
+    }
+    if (command.type === "page") return this.resolvePage(command.rowDelta);
+    if (command.type === "row-edge") return this.resolveRowEdge(command.edge);
+    if (command.type === "column-edge") return this.resolveColumnEdge(command.edge);
+    return this.resolveGridEdge(command.edge);
+  };
+
+  public readonly move = (rowDelta: number, columnDelta: number): boolean =>
+    this.navigate({ type: "step", rowDelta, columnDelta });
+
+  public readonly movePage = (rowDelta: number): boolean =>
+    this.navigate({ type: "page", rowDelta });
+
+  public readonly moveToRowEdge = (edge: "start" | "end"): boolean =>
+    this.navigate({ type: "row-edge", edge });
+
+  public readonly moveToColumnEdge = (edge: "start" | "end"): boolean =>
+    this.navigate({ type: "column-edge", edge });
+
+  public readonly moveToGridEdge = (edge: "start" | "end"): boolean =>
+    this.navigate({ type: "grid-edge", edge });
+
+  private readonly resolveStep = (rowDelta: number, columnDelta: number): boolean => {
+    if (this.activeCell === undefined || this.columns.length === 0) return false;
     const currentColumn = Math.max(
       this.columns.findIndex((column) => column.columnId === this.activeCell?.columnId),
       0,
@@ -119,38 +152,35 @@ export class BrunoTableNavigationRuntime {
     const nextColumn = Math.max(0, Math.min(this.columns.length - 1, currentColumn + columnDelta));
     if (this.activeCell.region === "header") {
       if (rowDelta > 0 && this.rowSpace.totalRows > 0) {
-        this.setActive({
+        return this.setActive({
           region: "body",
           rowIndex: 0,
           ...rowIdentity(this.rowSpace, 0),
           columnId: this.columns[nextColumn]!.columnId,
         });
-        return;
       }
       if (rowDelta === 0 && columnDelta !== 0) {
-        this.setActive({
+        return this.setActive({
           region: "header",
           rowIndex: 0,
           columnId: this.columns[nextColumn]!.columnId,
         });
       }
-      return;
+      return false;
     }
     if (this.rowSpace.totalRows === 0) {
-      this.setActive(undefined);
-      return;
+      return this.setActive(undefined);
     }
     const nextBodyRow = this.activeCell.rowIndex + rowDelta;
     if (rowDelta < 0 && nextBodyRow < 0) {
-      this.setActive({
+      return this.setActive({
         region: "header",
         rowIndex: 0,
         columnId: this.columns[nextColumn]!.columnId,
       });
-      return;
     }
     const rowIndex = Math.max(0, Math.min(this.rowSpace.totalRows - 1, nextBodyRow));
-    this.setActive({
+    return this.setActive({
       region: "body",
       rowIndex,
       ...rowIdentity(this.rowSpace, rowIndex),
@@ -158,13 +188,13 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
-  public readonly movePage = (rowDelta: number): void => {
-    if (this.activeCell === undefined || this.rowSpace.totalRows === 0) return;
+  private readonly resolvePage = (rowDelta: number): boolean => {
+    if (this.activeCell === undefined || this.rowSpace.totalRows === 0) return false;
     const target =
       this.activeCell.region === "header"
         ? Math.max(0, Math.min(this.rowSpace.totalRows - 1, rowDelta > 0 ? rowDelta - 1 : 0))
         : Math.max(0, Math.min(this.rowSpace.totalRows - 1, this.activeCell.rowIndex + rowDelta));
-    this.setActive({
+    return this.setActive({
       region: "body",
       rowIndex: target,
       ...rowIdentity(this.rowSpace, target),
@@ -172,22 +202,25 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
-  public readonly moveToRowEdge = (edge: "start" | "end"): void => {
-    if (this.activeCell === undefined || this.columns.length === 0) return;
-    this.setActive({
+  private readonly resolveRowEdge = (edge: "start" | "end"): boolean => {
+    if (this.activeCell === undefined || this.columns.length === 0) return false;
+    return this.setActive({
       ...this.activeCell,
       columnId: this.columns[edge === "start" ? 0 : this.columns.length - 1]!.columnId,
     });
   };
 
-  public readonly moveToColumnEdge = (edge: "start" | "end"): void => {
-    if (this.activeCell === undefined || this.columns.length === 0) return;
+  private readonly resolveColumnEdge = (edge: "start" | "end"): boolean => {
+    if (this.activeCell === undefined || this.columns.length === 0) return false;
     if (edge === "start" || this.rowSpace.totalRows === 0) {
-      this.setActive({ region: "header", rowIndex: 0, columnId: this.activeCell.columnId });
-      return;
+      return this.setActive({
+        region: "header",
+        rowIndex: 0,
+        columnId: this.activeCell.columnId,
+      });
     }
     const rowIndex = this.rowSpace.totalRows - 1;
-    this.setActive({
+    return this.setActive({
       region: "body",
       rowIndex,
       ...rowIdentity(this.rowSpace, rowIndex),
@@ -195,18 +228,17 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
-  public readonly moveToGridEdge = (edge: "start" | "end"): void => {
-    if (this.columns.length === 0) return;
+  private readonly resolveGridEdge = (edge: "start" | "end"): boolean => {
+    if (this.columns.length === 0) return false;
     if (edge === "start" || this.rowSpace.totalRows === 0) {
-      this.setActive({
+      return this.setActive({
         region: "header",
         rowIndex: 0,
         columnId: this.columns[edge === "start" ? 0 : this.columns.length - 1]!.columnId,
       });
-      return;
     }
     const rowIndex = this.rowSpace.totalRows - 1;
-    this.setActive({
+    return this.setActive({
       region: "body",
       rowIndex,
       ...rowIdentity(this.rowSpace, rowIndex),
@@ -214,16 +246,18 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
-  private readonly setActive = (next: BrunoTableActiveCell | undefined): void => {
+  private readonly setActive = (next: BrunoTableActiveCell | undefined): boolean => {
     if (
       this.activeCell?.region === next?.region &&
       this.activeCell?.rowIndex === next?.rowIndex &&
       this.activeCell?.rowId === next?.rowId &&
       this.activeCell?.columnId === next?.columnId
-    )
-      return;
+    ) {
+      return false;
+    }
     this.activeCell = next === undefined ? undefined : Object.freeze(next);
     for (const listener of this.listeners) listener();
+    return true;
   };
 }
 
