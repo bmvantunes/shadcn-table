@@ -103,6 +103,7 @@ export class BrunoTableViewportRuntime {
   private directionDirty = false;
   private directionMutationNativeScrollLeft: number | undefined;
   private horizontalInputPending = false;
+  private horizontalInputAfterEnvironmentChange = false;
   private horizontalInputSample: HorizontalCoordinateSample | undefined;
   private horizontalViewportWidth = 0;
   private lastNativeScrollLeft = 0;
@@ -141,14 +142,7 @@ export class BrunoTableViewportRuntime {
     const previousLogicalScrollTop =
       element === null ? 0 : this.readLogicalScrollTop(element, false);
     const previousHorizontalCoordinate =
-      element === null
-        ? undefined
-        : (this.horizontalInputSample ??
-          (this.horizontalInputPending && this.directionDirty
-            ? undefined
-            : this.directionDirty || element.clientWidth !== this.horizontalViewportWidth
-              ? this.capturePublishedHorizontalCoordinate(this.logicalScrollLeft)
-              : this.captureHorizontalCoordinate(element, this.readLogicalScrollLeft(element))));
+      element === null ? undefined : this.captureLayoutSourceCoordinate(element);
     this.layoutKey = nextLayoutKey;
     this.layoutPinningKey = columns
       .map((column) => `${column.columnId}:${column.pinned ?? "center"}`)
@@ -173,6 +167,31 @@ export class BrunoTableViewportRuntime {
     this.setLogicalScrollTop(element, clampedLogicalScrollTop);
     this.layoutReconciliationPending = true;
     this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
+    const projectedLogicalScrollLeft = this.projectLayoutLogicalScrollLeft(
+      element,
+      previousHorizontalCoordinate,
+    );
+    if (
+      previousHorizontalCoordinate !== undefined &&
+      this.shouldDeferReverseRtlLayoutWrite(element, projectedLogicalScrollLeft)
+    ) {
+      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+        element,
+        projectedLogicalScrollLeft,
+      );
+      this.horizontalInputPending = false;
+      this.horizontalInputAfterEnvironmentChange = false;
+      this.horizontalInputSample = undefined;
+      this.directionDirty = false;
+      this.directionMutationNativeScrollLeft = undefined;
+      this.publishCoordinates(
+        element,
+        this.readLogicalScrollTop(element, true),
+        projectedLogicalScrollLeft,
+      );
+      this.schedulePublish();
+      return;
+    }
     this.publishFromElement();
   };
 
@@ -273,11 +292,38 @@ export class BrunoTableViewportRuntime {
 
   public readonly resetVertical = (): void => {
     if (this.element === null) return;
+    this.detectPendingNativeInput(this.element);
     this.pendingReveal = undefined;
     this.segmentLogicalBase = 0;
     this.segmentPhysicalAnchor = 0;
     this.lastPhysicalScrollTop = 0;
     setNativeScrollTop(this.element, 0);
+    if (this.directionDirty && !this.horizontalInputAfterEnvironmentChange) {
+      this.refreshHorizontalDirection(this.element);
+    }
+    const pendingHorizontalCoordinate = this.horizontalInputAfterEnvironmentChange
+      ? undefined
+      : (this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate);
+    const projectedLogicalScrollLeft =
+      pendingHorizontalCoordinate === undefined
+        ? undefined
+        : this.projectLayoutLogicalScrollLeft(this.element, pendingHorizontalCoordinate);
+    if (
+      this.layoutReconciliationPending &&
+      projectedLogicalScrollLeft !== undefined &&
+      this.shouldDeferReverseRtlLayoutWrite(this.element, projectedLogicalScrollLeft)
+    ) {
+      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+        this.element,
+        projectedLogicalScrollLeft,
+      );
+      this.horizontalInputPending = false;
+      this.horizontalInputAfterEnvironmentChange = false;
+      this.horizontalInputSample = undefined;
+      this.publishCoordinates(this.element, 0, projectedLogicalScrollLeft);
+      this.schedulePublish();
+      return;
+    }
     this.publishFromElement();
   };
 
@@ -305,6 +351,7 @@ export class BrunoTableViewportRuntime {
     this.directionDirty = false;
     this.directionMutationNativeScrollLeft = undefined;
     this.horizontalInputPending = false;
+    this.horizontalInputAfterEnvironmentChange = false;
     this.horizontalInputSample = undefined;
     this.horizontalViewportWidth = element?.clientWidth ?? 0;
     this.lastNativeScrollLeft = element?.scrollLeft ?? 0;
@@ -389,6 +436,7 @@ export class BrunoTableViewportRuntime {
     this.directionDirty = false;
     this.directionMutationNativeScrollLeft = undefined;
     this.horizontalInputPending = false;
+    this.horizontalInputAfterEnvironmentChange = false;
     this.horizontalInputSample = undefined;
     this.horizontalViewportWidth = 0;
     this.lastNativeScrollLeft = 0;
@@ -400,34 +448,22 @@ export class BrunoTableViewportRuntime {
 
   private readonly handleScroll = (): void => {
     const element = this.element;
-    if (element !== null) {
-      const comparisonScrollLeft =
-        this.directionMutationNativeScrollLeft ?? this.lastNativeScrollLeft;
-      if (element.scrollLeft !== comparisonScrollLeft) {
-        this.horizontalInputPending = true;
-        if (!this.directionDirty) {
-          this.horizontalInputSample = this.captureHorizontalCoordinate(
-            element,
-            this.readLogicalScrollLeft(element),
-          );
-        }
-      }
-    }
+    if (element !== null) this.detectPendingNativeInput(element);
     this.schedulePublish();
   };
   private readonly handleResize = (): void => {
     const element = this.element;
     if (element !== null) {
+      if (!this.directionDirty) this.directionMutationNativeScrollLeft = element.scrollLeft;
       this.directionDirty = true;
-      this.directionMutationNativeScrollLeft = element.scrollLeft;
     }
     this.schedulePublish();
   };
   private readonly handleDirectionMutation = (): void => {
     const element = this.element;
     if (element === null) return;
+    if (!this.directionDirty) this.directionMutationNativeScrollLeft = element.scrollLeft;
     this.directionDirty = true;
-    this.directionMutationNativeScrollLeft = element.scrollLeft;
     this.schedulePublish();
   };
 
@@ -518,9 +554,25 @@ export class BrunoTableViewportRuntime {
   private readonly publishFromElement = (): void => {
     const element = this.element;
     if (element === null) return;
-    this.reconcileHorizontalEnvironment(element);
+    const deferredLogicalScrollLeft = this.reconcileHorizontalEnvironment(element);
     const logicalScrollTop = this.readLogicalScrollTop(element, true);
-    const logicalScrollLeft = this.readLogicalScrollLeft(element);
+    const logicalScrollLeft = deferredLogicalScrollLeft ?? this.readLogicalScrollLeft(element);
+    this.publishCoordinates(element, logicalScrollTop, logicalScrollLeft);
+    this.directionDirty = false;
+    this.directionMutationNativeScrollLeft = undefined;
+    this.horizontalInputPending = false;
+    this.horizontalInputAfterEnvironmentChange = false;
+    this.horizontalInputSample = undefined;
+    this.horizontalViewportWidth = element.clientWidth;
+    this.lastNativeScrollLeft = element.scrollLeft;
+    if (deferredLogicalScrollLeft !== undefined) this.schedulePublish();
+  };
+
+  private publishCoordinates(
+    element: HTMLElement,
+    logicalScrollTop: number,
+    logicalScrollLeft: number,
+  ): void {
     this.logicalScrollLeft = logicalScrollLeft;
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const structuralLogicalScrollLeft = quantizeScroll(logicalScrollLeft);
@@ -534,15 +586,94 @@ export class BrunoTableViewportRuntime {
     this.rowLayer?.style.setProperty("--bruno-table-row-layer-offset", this.rowLayerOffset);
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
     this.publishSnapshot(next);
+  }
+
+  private projectLayoutLogicalScrollLeft(
+    element: HTMLElement,
+    sampledCoordinate: HorizontalCoordinateSample | undefined,
+  ): number {
+    const requestedLogicalScrollLeft =
+      sampledCoordinate?.logicalScrollLeft ?? this.logicalScrollLeft;
+    const sourceInset = sampledCoordinate?.suspended ? sampledCoordinate.pinnedStartWidth : 0;
+    const nextInset = shouldSuspendPinning(this.layout, element.clientWidth)
+      ? this.layout.pinnedStartWidth
+      : 0;
+    const convertedLogicalScrollLeft =
+      sampledCoordinate?.pinningKey === this.layoutPinningKey && sourceInset !== nextInset
+        ? requestedLogicalScrollLeft - sourceInset + nextInset
+        : requestedLogicalScrollLeft;
+    const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    return Math.min(Math.max(convertedLogicalScrollLeft, 0), maximum);
+  }
+
+  private captureLayoutSourceCoordinate(element: HTMLElement): HorizontalCoordinateSample {
+    this.detectPendingNativeInput(element);
+    const sampledCoordinate = this.horizontalInputAfterEnvironmentChange
+      ? undefined
+      : (this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate);
+    if (this.directionDirty) {
+      const publishedCoordinate =
+        sampledCoordinate ?? this.capturePublishedHorizontalCoordinate(this.logicalScrollLeft);
+      this.refreshHorizontalDirection(element);
+      if (this.horizontalInputAfterEnvironmentChange) {
+        return this.captureHorizontalCoordinate(element, this.readLogicalScrollLeft(element));
+      }
+      return publishedCoordinate;
+    }
+    if (sampledCoordinate !== undefined) return sampledCoordinate;
+    if (element.clientWidth !== this.horizontalViewportWidth) {
+      return this.capturePublishedHorizontalCoordinate(this.logicalScrollLeft);
+    }
+    return this.captureHorizontalCoordinate(element, this.readLogicalScrollLeft(element));
+  }
+
+  private refreshHorizontalDirection(element: HTMLElement): void {
+    const nextDirection = readHorizontalDirection(element);
+    if (nextDirection !== this.horizontalDirection) {
+      this.horizontalDirection = nextDirection;
+      this.rtlScrollType =
+        nextDirection === "rtl" ? rtlScrollType(element.ownerDocument) : "negative";
+    }
     this.directionDirty = false;
     this.directionMutationNativeScrollLeft = undefined;
-    this.horizontalInputPending = false;
-    this.horizontalInputSample = undefined;
-    this.horizontalViewportWidth = element.clientWidth;
-    this.lastNativeScrollLeft = element.scrollLeft;
-  };
+  }
 
-  private reconcileHorizontalEnvironment(element: HTMLElement): void {
+  private shouldDeferReverseRtlLayoutWrite(
+    element: HTMLElement,
+    logicalScrollLeft: number,
+  ): boolean {
+    if (
+      this.horizontalDirection !== "rtl" ||
+      this.rtlScrollType !== "reverse" ||
+      !Number.isFinite(element.scrollWidth)
+    ) {
+      return false;
+    }
+    const committedMaximum = Math.max(element.scrollWidth - element.clientWidth, 0);
+    const nextMaximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    const requestedNativeScrollLeft = nextMaximum - logicalScrollLeft;
+    return requestedNativeScrollLeft > committedMaximum;
+  }
+
+  private detectPendingNativeInput(element: HTMLElement): void {
+    const comparisonScrollLeft =
+      this.directionMutationNativeScrollLeft ?? this.lastNativeScrollLeft;
+    if (element.scrollLeft === comparisonScrollLeft) return;
+    this.lastNativeScrollLeft = element.scrollLeft;
+    this.horizontalInputPending = true;
+    if (this.directionDirty) {
+      this.horizontalInputAfterEnvironmentChange = true;
+      return;
+    }
+    this.horizontalInputAfterEnvironmentChange = false;
+    this.horizontalInputSample = this.captureHorizontalCoordinate(
+      element,
+      this.readLogicalScrollLeft(element),
+    );
+  }
+
+  private reconcileHorizontalEnvironment(element: HTMLElement): number | undefined {
+    this.detectPendingNativeInput(element);
     const nextDirection = this.directionDirty
       ? readHorizontalDirection(element)
       : this.horizontalDirection;
@@ -565,7 +696,9 @@ export class BrunoTableViewportRuntime {
     const nextInset = nextSuspended ? this.layout.pinnedStartWidth : 0;
     const suspensionCoordinateChanged =
       previousSuspended !== undefined && samePinningStructure && previousInset !== nextInset;
-    const sampledCoordinate = this.pendingLayoutHorizontalCoordinate ?? this.horizontalInputSample;
+    const sampledCoordinate = this.horizontalInputAfterEnvironmentChange
+      ? undefined
+      : (this.horizontalInputSample ?? this.pendingLayoutHorizontalCoordinate);
     const requestedLogicalScrollLeft =
       sampledCoordinate?.logicalScrollLeft ??
       (this.horizontalInputPending ? this.readLogicalScrollLeft(element) : this.logicalScrollLeft);
@@ -595,13 +728,31 @@ export class BrunoTableViewportRuntime {
       const convertedLogicalScrollLeft = sampledSuspensionCoordinateChanged
         ? requestedLogicalScrollLeft - sourceInset + nextInset
         : requestedLogicalScrollLeft;
-      this.setLogicalScrollLeft(element, convertedLogicalScrollLeft);
+      const reconciledLogicalScrollLeft = Math.min(
+        Math.max(convertedLogicalScrollLeft, 0),
+        horizontalScrollMaximum(this.layout, element.clientWidth),
+      );
+      if (
+        this.layoutReconciliationPending &&
+        this.shouldDeferReverseRtlLayoutWrite(element, reconciledLogicalScrollLeft)
+      ) {
+        this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+          element,
+          reconciledLogicalScrollLeft,
+        );
+        this.directionDirty = false;
+        this.directionMutationNativeScrollLeft = undefined;
+        this.horizontalViewportWidth = element.clientWidth;
+        return reconciledLogicalScrollLeft;
+      }
+      this.setLogicalScrollLeft(element, reconciledLogicalScrollLeft);
     }
     this.layoutReconciliationPending = false;
     this.pendingLayoutHorizontalCoordinate = undefined;
     this.directionDirty = false;
     this.directionMutationNativeScrollLeft = undefined;
     this.horizontalViewportWidth = element.clientWidth;
+    return undefined;
   }
 
   private captureHorizontalCoordinate(
