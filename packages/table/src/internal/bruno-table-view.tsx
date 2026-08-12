@@ -1,5 +1,6 @@
 import { Alert, AlertDescription, AlertTitle } from "@bruno/shadcn/alert";
 import { Button } from "@bruno/shadcn/button";
+import { DirectionProvider } from "@bruno/shadcn/direction";
 import {
   Empty,
   EmptyContent,
@@ -1177,6 +1178,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (gesture.currentX > right) return gesture.direction === "rtl" ? "start" : "end";
 
     const remainingCells = headerCells.filter((cell) => cell.columnIndex !== gesture.sourceIndex);
+    if (!remainingCells.some((cell) => logicalColumns[cell.columnIndex]?.pinned === undefined)) {
+      return undefined;
+    }
     let referenceCell = remainingCells.at(-1);
     for (const cell of remainingCells) {
       if (
@@ -2138,35 +2142,37 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
         runtime={runtime}
         tableId={tableId}
       />
-      <DropdownMenu
-        open={open}
-        onOpenChange={(nextOpen) => {
-          if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-          setOpen(nextOpen);
-          if (!nextOpen) restoreColumnFocus(column.columnId);
-        }}
-      >
-        <DropdownMenuTrigger
-          aria-label={`Column menu for ${column.headerName}`}
-          data-bruno-active-header-menu-trigger=""
-          id={headerDomId(instanceId, tableId, `${column.columnId}-menu-proxy`)}
-          style={VISUALLY_HIDDEN}
-          tabIndex={-1}
-        />
-        {open ? (
-          <ColumnManagementMenu
-            allColumns={allColumns}
-            announce={announce}
-            column={column}
-            command={command}
-            direction={menuDirection}
-            preventMenuFinalFocus
-            restoreColumnFocus={restoreColumnFocus}
-            runtime={runtime}
-            visibleColumnIds={visibleColumnIds}
+      <DirectionProvider direction={menuDirection}>
+        <DropdownMenu
+          open={open}
+          onOpenChange={(nextOpen) => {
+            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
+            setOpen(nextOpen);
+            if (!nextOpen) restoreColumnFocus(column.columnId);
+          }}
+        >
+          <DropdownMenuTrigger
+            aria-label={`Column menu for ${column.headerName}`}
+            data-bruno-active-header-menu-trigger=""
+            id={headerDomId(instanceId, tableId, `${column.columnId}-menu-proxy`)}
+            style={VISUALLY_HIDDEN}
+            tabIndex={-1}
           />
-        ) : null}
-      </DropdownMenu>
+          {open ? (
+            <ColumnManagementMenu
+              allColumns={allColumns}
+              announce={announce}
+              column={column}
+              command={command}
+              direction={menuDirection}
+              preventMenuFinalFocus
+              restoreColumnFocus={restoreColumnFocus}
+              runtime={runtime}
+              visibleColumnIds={visibleColumnIds}
+            />
+          ) : null}
+        </DropdownMenu>
+      </DirectionProvider>
     </>
   );
 });
@@ -2453,41 +2459,43 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       >
         <ArrowsHorizontalIcon aria-hidden="true" />
       </button>
-      <DropdownMenu
-        open={menuOpen}
-        onOpenChange={(nextOpen) => {
-          if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-          setMenuOpen(nextOpen);
-          if (!nextOpen) restoreColumnFocus(column.columnId);
-        }}
-      >
-        <DropdownMenuTrigger
-          aria-label={`Column menu for ${column.headerName}`}
-          aria-keyshortcuts="Shift+F10 ContextMenu"
-          className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-          tabIndex={-1}
-          onPointerDown={(event) => {
-            if (event.button === 0) {
-              setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
-              activateHeaderForResize(column.columnId);
-            }
+      <DirectionProvider direction={menuDirection}>
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={(nextOpen) => {
+            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
+            setMenuOpen(nextOpen);
+            if (!nextOpen) restoreColumnFocus(column.columnId);
           }}
         >
-          <DotsThreeVerticalIcon aria-hidden="true" />
-        </DropdownMenuTrigger>
-        {menuOpen ? (
-          <ColumnManagementMenu
-            allColumns={allColumns}
-            announce={announce}
-            column={column}
-            command={command}
-            direction={menuDirection}
-            restoreColumnFocus={restoreColumnFocus}
-            runtime={runtime}
-            visibleColumnIds={visibleColumnIds}
-          />
-        ) : null}
-      </DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`Column menu for ${column.headerName}`}
+            aria-keyshortcuts="Shift+F10 ContextMenu"
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+            tabIndex={-1}
+            onPointerDown={(event) => {
+              if (event.button === 0) {
+                setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
+                activateHeaderForResize(column.columnId);
+              }
+            }}
+          >
+            <DotsThreeVerticalIcon aria-hidden="true" />
+          </DropdownMenuTrigger>
+          {menuOpen ? (
+            <ColumnManagementMenu
+              allColumns={allColumns}
+              announce={announce}
+              column={column}
+              command={command}
+              direction={menuDirection}
+              restoreColumnFocus={restoreColumnFocus}
+              runtime={runtime}
+              visibleColumnIds={visibleColumnIds}
+            />
+          ) : null}
+        </DropdownMenu>
+      </DirectionProvider>
       <span
         aria-label={`Resize ${column.headerName}`}
         aria-orientation="vertical"

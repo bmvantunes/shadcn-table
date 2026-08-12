@@ -242,6 +242,26 @@ describe("BrunoTable column management browser surface", () => {
     await screen.rerender(<></>);
   });
 
+  test("uses RTL direction for keyboard submenu navigation", async () => {
+    const screen = await render(
+      <div dir="rtl">
+        <BrunoTableClient<Row, typeof columns>
+          {...tableProps}
+          tableId="TABLE_ID_COLUMN_MANAGEMENT_RTL_MENU_KEYBOARD"
+        />
+      </div>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+    const move = screen.getByRole("menuitem", { name: "Move" });
+    move.element().focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Move toward logical start" }))
+      .toBeInTheDocument();
+  });
+
   test("pointer reorder crosses into a pinned region atomically", async () => {
     const screen = await render(
       <BrunoTableClient<Row, typeof interleavedColumns>

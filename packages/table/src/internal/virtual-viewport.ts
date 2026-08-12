@@ -479,6 +479,7 @@ export class BrunoTableViewportRuntime {
 
   public readonly attach = (element: HTMLElement | null): void => {
     if (this.element === element) return;
+    this.clearColumnWidthPreview(false);
     this.element?.removeEventListener("scroll", this.handleScroll);
     this.element?.removeEventListener("focusin", this.handleDirectionMutation);
     this.element?.removeEventListener("focusout", this.handleDirectionMutation);

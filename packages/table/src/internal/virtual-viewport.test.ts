@@ -1143,6 +1143,51 @@ describe("BrunoTableViewportRuntime", () => {
     expect(removeProperty).toHaveBeenCalled();
   });
 
+  it("clears an active width preview before replacing the viewport element", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_ATTACH_PREVIEW",
+        field: "name",
+        headerName: "Attach preview",
+        valueType: "text" as const,
+        width: 160,
+      },
+    ]);
+    const oldRemoveProperty = vi.fn();
+    const oldElement = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 500,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: oldRemoveProperty, setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const newElement = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 500,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(oldElement);
+    viewport.previewColumnWidth("COL_ID_ATTACH_PREVIEW", 300);
+    viewport.attach(newElement);
+
+    expect(oldRemoveProperty).toHaveBeenCalledWith(
+      brunoTableColumnCssVariable("width", "COL_ID_ATTACH_PREVIEW"),
+    );
+    expect(viewport.getSnapshot().virtualWindow.center[0]?.semantics.width).toBe(160);
+  });
+
   it("refreshes computed direction before reveal after a CSS-only change", () => {
     const columns = compileColumns(
       Array.from({ length: 10 }, (_, index) => ({

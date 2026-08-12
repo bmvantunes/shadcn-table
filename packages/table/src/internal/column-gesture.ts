@@ -58,7 +58,7 @@ export type BrunoTableColumnGestureActor = Readonly<{
 }>;
 
 export function createBrunoTableColumnGestureActor(): BrunoTableColumnGestureActor {
-  const actor = createActor(brunoTableColumnGestureMachine);
+  let actor = createActor(brunoTableColumnGestureMachine);
   const initialSnapshot = Object.freeze({
     value: "idle" as const,
     status: "stopped" as const,
@@ -66,6 +66,7 @@ export function createBrunoTableColumnGestureActor(): BrunoTableColumnGestureAct
   });
   const projection = new Store<BrunoTableColumnGestureSnapshot>(initialSnapshot);
   let started = false;
+  let stopped = false;
   const readProjection = (): BrunoTableColumnGestureSnapshot => {
     const snapshot = actor.getSnapshot();
     return Object.freeze({
@@ -86,10 +87,16 @@ export function createBrunoTableColumnGestureActor(): BrunoTableColumnGestureAct
     }
     projection.setState(() => next);
   };
-  actor.subscribe(publishProjection);
+  let actorSubscription = actor.subscribe(publishProjection);
   return Object.freeze({
     start: () => {
       if (!started) {
+        if (stopped) {
+          actorSubscription.unsubscribe();
+          actor = createActor(brunoTableColumnGestureMachine);
+          actorSubscription = actor.subscribe(publishProjection);
+          stopped = false;
+        }
         started = true;
         actor.start();
       }
@@ -98,6 +105,7 @@ export function createBrunoTableColumnGestureActor(): BrunoTableColumnGestureAct
     stop: () => {
       if (started) {
         started = false;
+        stopped = true;
         actor.stop();
       }
       publishProjection();

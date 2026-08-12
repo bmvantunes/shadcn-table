@@ -39,6 +39,10 @@ describe("BrunoTable column gesture workflow", () => {
     expect(actor.getSnapshot().value).toBe("idle");
     expect(actor.getSnapshot().kind).toBe(undefined);
     actor.stop();
+    expect(actor.getSnapshot().status).toBe("stopped");
+    actor.start();
+    expect(actor.getSnapshot().status).toBe("active");
+    expect(actor.getSnapshot().value).toBe("idle");
     unsubscribe();
   });
 });

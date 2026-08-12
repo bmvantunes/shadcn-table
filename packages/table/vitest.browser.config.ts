@@ -13,9 +13,10 @@ const reactCompiler = await babel({
 export default defineConfig({
   define: { __BRUNO_TABLE_DEVELOPMENT__: "true" },
   plugins: [react(), reactCompiler, tailwindcss()],
-  resolve: { alias: shadcnSourceAliases },
+  resolve: { alias: shadcnSourceAliases, dedupe: ["react", "react-dom"] },
   optimizeDeps: {
     include: [
+      "@bruno/shadcn/direction",
       "react",
       "react-dom/client",
       "react-dom/server",

@@ -268,6 +268,41 @@ describe("BrunoTable column management", () => {
     ).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]);
   });
 
+  it("recomputes visible order when a pinned column is unpinned", () => {
+    const state = createBrunoTableColumnLayout(columns);
+    const pinned = applyBrunoTableGridCommand(state, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SCORE",
+      pinned: "start",
+    });
+    const unpinned = applyBrunoTableGridCommand(pinned, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SCORE",
+      pinned: undefined,
+    });
+
+    expect(pinned.visibleColumnIds).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]);
+    expect(unpinned.visibleColumnIds).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]);
+  });
+
+  it("keeps hidden columns hidden when resetting pinning", () => {
+    const state = createBrunoTableColumnLayout(columns);
+    const pinned = applyBrunoTableGridCommand(state, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SCORE",
+      pinned: "start",
+    });
+    const hidden = applyBrunoTableGridCommand(pinned, {
+      type: "column.visibility.commit",
+      columnId: "COL_ID_NAME",
+      visible: false,
+    });
+    const reset = applyBrunoTableGridCommand(hidden, { type: "column.reset.pinning" });
+
+    expect(reset.visibleColumnIds).toEqual(["COL_ID_SCORE", "COL_ID_STATUS"]);
+    expect(reset.allColumns.find((column) => column.columnId === "COL_ID_NAME")).toBeDefined();
+  });
+
   it("resets order without changing visibility or current pinning", () => {
     const state = createBrunoTableColumnLayout(columns);
     const reordered = applyBrunoTableGridCommand(state, {

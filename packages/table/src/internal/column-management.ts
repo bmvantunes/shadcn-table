@@ -393,7 +393,10 @@ function setColumnPinning(
       candidate.columnId === columnId ? withColumnPin(candidate, pinned) : candidate,
     ),
   );
-  const visibleColumnIds = groupVisibleColumnIdsByPin(allColumns, state.visibleColumnIds);
+  const visibleColumnIds =
+    pinned === undefined && column.pinned !== undefined
+      ? getLogicalVisibleColumnIdsFromColumns(allColumns, state.visibleColumnIds)
+      : groupVisibleColumnIdsByPin(allColumns, state.visibleColumnIds);
   return nextState(
     state,
     allColumns,
@@ -464,7 +467,7 @@ function resetPinning(state: BrunoTableColumnLayoutState): BrunoTableColumnLayou
   return nextState(
     state,
     allColumns,
-    Object.freeze(getBrunoTableLogicalColumnOrder(allColumns).map((column) => column.columnId)),
+    getLogicalVisibleColumnIdsFromColumns(allColumns, state.visibleColumnIds),
     clearPinningOverrides(state.committedOverrides),
   );
 }
