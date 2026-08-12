@@ -1,11 +1,15 @@
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
+type ColumnPreviewStyleWriteListener = (property: string) => void;
 type RowOrderPlanningListener = (tableId: string) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
 let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientCellRenderListener: CellListener | undefined;
+let clientColumnResizeFrameListener: Listener | undefined;
+let clientColumnReorderFrameListener: Listener | undefined;
+let clientColumnPreviewStyleWriteListener: ColumnPreviewStyleWriteListener | undefined;
 const clientRowOrderPlanningListeners = new Set<RowOrderPlanningListener>();
 
 export function recordBrunoTableClientRowOrderPlanning(tableId: string): void {
@@ -54,6 +58,43 @@ export function installBrunoTableClientGridSurfaceRenderListener(listener: Liste
   return () => {
     if (clientGridSurfaceRenderListener === listener) {
       clientGridSurfaceRenderListener = undefined;
+    }
+  };
+}
+
+export function recordBrunoTableClientColumnResizeFrame(): void {
+  clientColumnResizeFrameListener?.();
+}
+
+export function installBrunoTableClientColumnResizeFrameListener(listener: Listener): () => void {
+  clientColumnResizeFrameListener = listener;
+  return () => {
+    if (clientColumnResizeFrameListener === listener) clientColumnResizeFrameListener = undefined;
+  };
+}
+
+export function recordBrunoTableClientColumnReorderFrame(): void {
+  clientColumnReorderFrameListener?.();
+}
+
+export function installBrunoTableClientColumnReorderFrameListener(listener: Listener): () => void {
+  clientColumnReorderFrameListener = listener;
+  return () => {
+    if (clientColumnReorderFrameListener === listener) clientColumnReorderFrameListener = undefined;
+  };
+}
+
+export function recordBrunoTableClientColumnPreviewStyleWrite(property: string): void {
+  clientColumnPreviewStyleWriteListener?.(property);
+}
+
+export function installBrunoTableClientColumnPreviewStyleWriteListener(
+  listener: ColumnPreviewStyleWriteListener,
+): () => void {
+  clientColumnPreviewStyleWriteListener = listener;
+  return () => {
+    if (clientColumnPreviewStyleWriteListener === listener) {
+      clientColumnPreviewStyleWriteListener = undefined;
     }
   };
 }

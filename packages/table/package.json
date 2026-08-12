@@ -37,7 +37,10 @@
     "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted"
   },
   "dependencies": {
-    "@tanstack/react-table": "9.0.0"
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-table": "9.0.0",
+    "@tanstack/store": "0.11.1",
+    "xstate": "^5.32.5"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",

@@ -40,7 +40,8 @@ describe("BrunoTableNavigationRuntime", () => {
     ]);
     const navigation = new BrunoTableNavigationRuntime();
     navigation.setShape(["first", "second", "third"], columns);
-    navigation.move(2, 0);
+    navigation.move("down");
+    navigation.move("down");
 
     navigation.setShape(["first", "second", "replacement"], columns);
 
@@ -72,13 +73,13 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.setShape(["first", "second"], columns);
     expect(navigation.getSnapshot()?.columnId).toBe("COL_ID_SCORE");
 
-    navigation.move(-1, 0);
+    navigation.move("up");
     expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_SCORE" });
-    navigation.move(0, 1);
+    navigation.move("right");
     expect(navigation.getSnapshot()).toMatchObject({ region: "header", columnId: "COL_ID_NAME" });
-    navigation.move(1, 0);
-    navigation.move(1, 0);
-    navigation.move(1, 0);
+    navigation.move("down");
+    navigation.move("down");
+    navigation.move("down");
     expect(navigation.getSnapshot()).toMatchObject({
       region: "body",
       rowIndex: 1,
@@ -88,6 +89,40 @@ describe("BrunoTableNavigationRuntime", () => {
 
     navigation.setShape(["second", "first"], columns);
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
+  });
+
+  it("preserves the active column identity across reorder and chooses its old position when hidden", () => {
+    const firstColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        valueType: "text",
+      },
+    ]);
+    const reorderedColumns = [firstColumns[2]!, firstColumns[0]!, firstColumns[1]!];
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first"], firstColumns);
+    navigation.move("right");
+
+    navigation.setShape(["first"], reorderedColumns);
+    expect(navigation.getSnapshot()).toMatchObject({ columnId: "COL_ID_SCORE" });
+
+    const hiddenActiveColumns = [firstColumns[2]!, firstColumns[0]!];
+    navigation.setShape(["first"], hiddenActiveColumns);
+    expect(navigation.getSnapshot()).toMatchObject({ columnId: "COL_ID_NAME" });
   });
 
   it("keeps empty-result headers reachable while query-cleared body focus stays empty", () => {
@@ -118,14 +153,14 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.activateForFocus();
     navigation.activateHeader("COL_ID_MISSING");
     expect(navigation.getSnapshot()).toBe(activated);
-    navigation.move(0, 1);
+    navigation.move("right");
     expect(navigation.getSnapshot()).toMatchObject({
       region: "header",
       columnId: "COL_ID_SCORE",
     });
 
     navigation.setShape(["first"], columns);
-    navigation.move(1, 0);
+    navigation.move("down");
     navigation.setShape([], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
     navigation.setShape(["replacement"], columns);
@@ -158,17 +193,20 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 0 });
     expect(navigation.getSnapshot()?.rowId).toBeUndefined();
 
-    navigation.move(1, 0);
+    navigation.move("down");
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 1, rowId: "second" });
 
-    navigation.move(1, 0);
+    navigation.move("down");
     expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 2 });
     expect(navigation.getSnapshot()?.rowId).toBeUndefined();
 
-    navigation.move(1, 0);
+    navigation.move("down");
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 3, rowId: "fourth" });
 
-    navigation.move(-4, 0);
+    navigation.move("up");
+    navigation.move("up");
+    navigation.move("up");
+    navigation.move("up");
     expect(navigation.getSnapshot()).toMatchObject({ region: "header" });
   });
 
@@ -245,8 +283,8 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.setShape(["first", "second", "third", "fourth"], columns);
 
     const commands: readonly BrunoTableNavigationCommand[] = [
-      { type: "step", rowDelta: 0, columnDelta: 1 },
-      { type: "step", rowDelta: 0, columnDelta: 1 },
+      { type: "step", direction: "right" },
+      { type: "step", direction: "right" },
       { type: "row-edge", edge: "start" },
       { type: "page", rowDelta: 2 },
       { type: "column-edge", edge: "end" },
@@ -289,7 +327,7 @@ describe("BrunoTableNavigationRuntime", () => {
     notifications.length = 0;
 
     const moves = Array.from({ length: 80 }, () =>
-      navigation.navigate({ type: "step", rowDelta: 1, columnDelta: 0 }),
+      navigation.navigate({ type: "step", direction: "down" }),
     );
 
     expect(moves.filter(Boolean)).toHaveLength(63);

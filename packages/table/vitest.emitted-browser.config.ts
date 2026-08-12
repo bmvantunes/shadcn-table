@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: { dedupe: ["react", "react-dom"] },
   optimizeDeps: {
     include: [
+      "@bruno/shadcn/direction",
       "react",
       "react/jsx-runtime",
       "react-dom/client",

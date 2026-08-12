@@ -167,3 +167,118 @@ test("hydrates emitted custom controls after removing their inert server boundar
     actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
   }
 });
+
+test("runs emitted column management commands through the accessible menu", async () => {
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      width: 160,
+    },
+    {
+      columnId: "COL_ID_EMITTED_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      width: 96,
+    },
+  ] as const;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_COLUMN_MANAGEMENT"
+      getRowId={(row: Row) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_NAME", direction: "asc" }]}
+      clientSource={source}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+  await userEvent.click(screen.getByRole("menuitemradio", { name: "Pin to logical end" }));
+  await vi.waitFor(() => {
+    const header = screen
+      .getByRole("grid")
+      .element()
+      .querySelector<HTMLElement>('th[data-bruno-column-id="COL_ID_EMITTED_NAME"]');
+    expect(header).not.toBeNull();
+    expect(header).toHaveAttribute("data-pinned-region", "end");
+  });
+});
+
+test("runs emitted resize, reorder, visibility, and reset commands", async () => {
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_LAYOUT_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      width: 160,
+    },
+    {
+      columnId: "COL_ID_EMITTED_LAYOUT_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      width: 96,
+    },
+  ] as const;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_LAYOUT_COMMANDS"
+      getRowId={(row: Row) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_LAYOUT_NAME", direction: "asc" }]}
+      clientSource={source}
+    />,
+  );
+  const grid = screen.getByRole("grid").element();
+  const resize = screen.getByRole("separator", { name: "Resize Name" });
+  resize.element().focus();
+  await userEvent.keyboard("{ArrowRight}");
+  await expect.element(resize).toHaveAttribute("aria-valuenow", "170");
+  resize.element().dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      clientX: 100,
+      pointerId: 30,
+    }),
+  );
+  window.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, clientX: 130, pointerId: 30 }),
+  );
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  window.dispatchEvent(
+    new PointerEvent("pointerup", { bubbles: true, clientX: 130, pointerId: 30 }),
+  );
+  await expect.element(resize).toHaveAttribute("aria-valuenow", "200");
+
+  await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+  await userEvent.hover(screen.getByRole("menuitem", { name: "Move" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Move toward logical end" }));
+  await vi.waitFor(() =>
+    expect(
+      [...grid.querySelectorAll<HTMLElement>("th[data-bruno-column-id]")].map(
+        (header) => header.dataset["brunoColumnId"],
+      ),
+    ).toEqual(["COL_ID_EMITTED_LAYOUT_SCORE", "COL_ID_EMITTED_LAYOUT_NAME"]),
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+  await userEvent.hover(screen.getByRole("menuitem", { name: "Visibility" }));
+  await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Score" }));
+  await vi.waitFor(() => expect(grid).toHaveAttribute("aria-colcount", "1"));
+
+  await userEvent.keyboard("{Escape}");
+  const nameMenu = screen.getByRole("button", { name: "Column menu for Name" });
+  await vi.waitFor(() => expect(document.activeElement).toBe(nameMenu.element()));
+  await userEvent.click(nameMenu);
+  await vi.waitFor(() => expect(nameMenu).toHaveAttribute("aria-expanded", "true"));
+  await userEvent.hover(screen.getByRole("menuitem", { name: "Reset" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Reset complete layout" }));
+  await vi.waitFor(() => expect(grid).toHaveAttribute("aria-colcount", "2"));
+  await expect
+    .element(screen.getByRole("separator", { name: "Resize Name" }))
+    .toHaveAttribute("aria-valuenow", "160");
+});

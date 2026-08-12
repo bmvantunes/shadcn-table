@@ -1,6 +1,7 @@
 import {
   columnOrderingFeature,
   columnPinningFeature,
+  columnVisibilityFeature,
   columnFilteringFeature,
   createFilteredRowModel,
   createSortedRowModel,
@@ -13,6 +14,10 @@ import { useMemo } from "react";
 import type { ColumnDef, Row, RowData, Table } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
+import {
+  getBrunoTableLogicalColumnOrder,
+  type BrunoTableColumnLayoutSnapshot,
+} from "./column-management";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -21,6 +26,7 @@ import { createClientFilterPredicate } from "./client-row-model";
 
 const clientFeatures = tableFeatures({
   columnOrderingFeature,
+  columnVisibilityFeature,
   columnPinningFeature,
   columnFilteringFeature,
   rowSortingFeature,
@@ -50,7 +56,22 @@ export function useClientRowIds(
   orderBy: ClientOrderBy,
   filters?: readonly unknown[],
   tableId = "",
+  columnLayout?: BrunoTableColumnLayoutSnapshot,
 ): BrunoTableClientRowModelResult {
+  // Layout state supplies controlled TanStack inputs. The returned `logicalColumns` below is the
+  // only Client logical order consumed by rendering and navigation.
+  const requestedColumns = useMemo(() => {
+    if (columnLayout === undefined) return compiledColumns;
+    const currentById = new Map(
+      compiledColumns.map((column) => [column.columnId, column] as const),
+    );
+    return Object.freeze(
+      columnLayout.allColumns.flatMap((requested) => {
+        const current = currentById.get(requested.columnId);
+        return current === undefined ? [] : [mergeColumnLayout(current, requested)];
+      }),
+    );
+  }, [columnLayout, compiledColumns]);
   const tieBreaker = orderBy.at(-1);
   const filterPredicate = useMemo(() => {
     return createClientFilterPredicate<ClientRow>(compiledColumns, filters, (column, row) =>
@@ -75,31 +96,64 @@ export function useClientRowIds(
     [orderBy],
   );
   const columnOrder = useMemo(
-    () => compiledColumns.map((column) => column.columnId),
-    [compiledColumns],
+    () => requestedColumns.map((column) => column.columnId),
+    [requestedColumns],
   );
-  const columnPinning = useMemo(
-    () => ({
-      start: compiledColumns
+  const columnPinning = useMemo(() => {
+    const logicalColumns = getBrunoTableLogicalColumnOrder(requestedColumns);
+    if (columnLayout === undefined) {
+      return {
+        start: logicalColumns
+          .filter((column) => column.pinned === "start")
+          .map((column) => column.columnId),
+        end: logicalColumns
+          .filter((column) => column.pinned === "end")
+          .map((column) => column.columnId),
+      };
+    }
+    const requestedById = new Map<string, CompiledColumn>(
+      requestedColumns.map((column) => [column.columnId, column] as const),
+    );
+    const visibleIds = new Set(columnLayout.visibleColumnIds);
+    const pinningOrder = [
+      ...columnLayout.visibleColumnIds.flatMap((columnId) => {
+        const column = requestedById.get(columnId);
+        return column === undefined ? [] : [column];
+      }),
+      ...logicalColumns.filter((column) => !visibleIds.has(column.columnId)),
+    ];
+    return {
+      start: pinningOrder
         .filter((column) => column.pinned === "start")
         .map((column) => column.columnId),
-      end: compiledColumns
+      end: pinningOrder
         .filter((column) => column.pinned === "end")
         .map((column) => column.columnId),
-    }),
-    [compiledColumns],
-  );
+    };
+  }, [columnLayout, requestedColumns]);
+  const columnVisibility = useMemo(() => {
+    if (columnLayout === undefined) return {};
+    const visible = new Set(columnLayout.visibleColumnIds);
+    return Object.fromEntries(
+      requestedColumns.map((column) => [column.columnId, visible.has(column.columnId)]),
+    );
+  }, [columnLayout, requestedColumns]);
   const table = useTable(
     {
       features: clientFeatures,
       columns: adapterColumns,
       data: rows,
       getRowId: (row) => row.rowId,
-      state: { columnFilters, columnOrder, columnPinning, sorting },
+      state: { columnFilters, columnOrder, columnPinning, columnVisibility, sorting },
     },
     () => null,
   );
-  const logicalColumns = stableLogicalColumns(table, compiledColumns);
+  const logicalColumns =
+    LOGICAL_COLUMNS_BY_REQUEST.get(requestedColumns) ??
+    stabilizeLogicalColumns(
+      requestedColumns,
+      readLogicalColumns(table, requestedColumns, compiledColumns),
+    );
 
   let rowModel: ReturnType<typeof table.getRowModel> | undefined;
   let invalid: BrunoTableInvalidCellValue["invalid"] | undefined;
@@ -129,38 +183,51 @@ export type BrunoTableClientRowModelResult =
 
 function readLogicalColumns(
   table: ClientTable,
-  compiledColumns: readonly CompiledColumn[],
+  requestedColumns: readonly CompiledColumn[],
+  currentColumns: readonly CompiledColumn[],
 ): readonly CompiledColumn[] {
   const compiledById = new Map<string, CompiledColumn>(
-    compiledColumns.map((column) => [column.columnId, column]),
+    currentColumns.map((column) => [column.columnId, column]),
+  );
+  const requestedById = new Map<string, CompiledColumn>(
+    requestedColumns.map((column) => [column.columnId, column] as const),
   );
   const ordered = [
-    ...table.getStartLeafColumns(),
-    ...table.getCenterLeafColumns(),
-    ...table.getEndLeafColumns(),
+    ...table.getStartVisibleLeafColumns(),
+    ...table.getCenterVisibleLeafColumns(),
+    ...table.getEndVisibleLeafColumns(),
   ].flatMap((column) => {
-    const compiled = compiledById.get(column.id);
-    return compiled === undefined ? [] : [compiled];
+    const current = compiledById.get(column.id);
+    const requested = requestedById.get(column.id);
+    return current === undefined || requested === undefined
+      ? []
+      : [mergeColumnLayout(current, requested)];
   });
-  if (ordered.length !== compiledColumns.length) {
+  const visibleIds = new Set(table.getVisibleLeafColumns().map((column) => column.id));
+  const visibleRequestedCount = requestedColumns.reduce(
+    (count, column) => count + (visibleIds.has(column.columnId) ? 1 : 0),
+    0,
+  );
+  if (ordered.length !== visibleRequestedCount) {
     throw new TypeError("BrunoTable could not resolve its private Logical Column Order.");
   }
   return Object.freeze(ordered);
 }
 
-const LOGICAL_COLUMNS_BY_DEFINITION = new WeakMap<
-  readonly CompiledColumn[],
-  readonly CompiledColumn[]
->();
-
-function stableLogicalColumns(
-  table: ClientTable,
-  compiledColumns: readonly CompiledColumn[],
-): readonly CompiledColumn[] {
-  const current = LOGICAL_COLUMNS_BY_DEFINITION.get(compiledColumns);
-  if (current !== undefined) return current;
-  const next = readLogicalColumns(table, compiledColumns);
-  LOGICAL_COLUMNS_BY_DEFINITION.set(compiledColumns, next);
+function mergeColumnLayout(current: CompiledColumn, requested: CompiledColumn): CompiledColumn {
+  let next = current;
+  if (current.semantics.width !== requested.semantics.width) {
+    next = Object.freeze({
+      ...next,
+      semantics: Object.freeze({ ...next.semantics, width: requested.semantics.width }),
+    });
+  }
+  if (current.pinned !== requested.pinned) {
+    const withPin = { ...next };
+    if (requested.pinned === undefined) delete withPin.pinned;
+    else withPin.pinned = requested.pinned;
+    next = Object.freeze(withPin);
+  }
   return next;
 }
 
@@ -219,6 +286,10 @@ function compareRowIds(left: string, right: string): -1 | 0 | 1 {
 
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);
 const ROW_IDS_BY_MODEL = new WeakMap<object, readonly string[]>();
+const LOGICAL_COLUMNS_BY_REQUEST = new WeakMap<
+  readonly CompiledColumn[],
+  readonly CompiledColumn[]
+>();
 
 function stableRowIds(rowModel: { readonly rows: readonly { readonly id: string }[] }) {
   const cached = ROW_IDS_BY_MODEL.get(rowModel);
@@ -226,4 +297,20 @@ function stableRowIds(rowModel: { readonly rows: readonly { readonly id: string 
   const rowIds = Object.freeze(rowModel.rows.map((row) => row.id));
   ROW_IDS_BY_MODEL.set(rowModel, rowIds);
   return rowIds;
+}
+
+function stabilizeLogicalColumns(
+  requestedColumns: readonly CompiledColumn[],
+  nextColumns: readonly CompiledColumn[],
+): readonly CompiledColumn[] {
+  const previousColumns = LOGICAL_COLUMNS_BY_REQUEST.get(requestedColumns);
+  if (
+    previousColumns !== undefined &&
+    previousColumns.length === nextColumns.length &&
+    previousColumns.every((column, index) => column === nextColumns[index])
+  ) {
+    return previousColumns;
+  }
+  LOGICAL_COLUMNS_BY_REQUEST.set(requestedColumns, nextColumns);
+  return nextColumns;
 }

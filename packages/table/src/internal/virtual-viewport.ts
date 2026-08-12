@@ -1,4 +1,13 @@
 import type { CompiledColumn } from "./compile-columns";
+import {
+  BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE,
+  BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE,
+  BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE,
+  BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE,
+  brunoTableColumnCssVariable,
+  brunoTablePinnedWidthCssVariable,
+} from "./column-management";
+import { recordBrunoTableClientColumnPreviewStyleWrite } from "./render-instrumentation";
 
 export type BrunoTableViewportSnapshot = Readonly<{
   readonly width: number;
@@ -34,6 +43,11 @@ type HorizontalCoordinateSample = Readonly<{
   readonly pinningKey: string;
 }>;
 type HorizontalCoordinateEnvironment = Omit<HorizontalCoordinateSample, "logicalScrollLeft">;
+type PreviewHorizontalState = Readonly<{
+  readonly suspended: boolean | undefined;
+  readonly pinnedStartWidth: number;
+  readonly pinningKey: string;
+}>;
 
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
@@ -87,6 +101,7 @@ type HorizontalReconciliation = number | typeof HORIZONTAL_RECONCILIATION_SETTLE
 
 export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
+  private readonly environmentListeners = new Set<Listener>();
   private readonly bodyLayers = new Set<HTMLElement>();
   private element: HTMLElement | null = null;
   private rowLayer: HTMLElement | null = null;
@@ -124,6 +139,10 @@ export class BrunoTableViewportRuntime {
   private rowLayerOffset = "0px";
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
+  private previewLayout: ViewportLayout | undefined;
+  private previewLogicalScrollLeft: number | undefined;
+  private previewHorizontalState: PreviewHorizontalState | undefined;
+  private readonly previewStyleProperties = new Set<string>();
   private layoutKey = "";
   private layoutPinningKey = "";
   private snapshot: BrunoTableViewportSnapshot = INITIAL_VIEWPORT;
@@ -139,6 +158,23 @@ export class BrunoTableViewportRuntime {
     return () => this.listeners.delete(listener);
   };
 
+  public readonly subscribeEnvironment = (listener: Listener): (() => void) => {
+    this.environmentListeners.add(listener);
+    return () => this.environmentListeners.delete(listener);
+  };
+
+  public readonly scrollByLogical = (delta: number): boolean => {
+    const element = this.element;
+    if (element === null || !Number.isFinite(delta) || delta === 0) return false;
+    const current = this.readLogicalScrollLeft(element);
+    const maximum = horizontalScrollMaximum(this.layout, element.clientWidth);
+    const next = Math.min(Math.max(current + delta, 0), maximum);
+    if (next === current) return false;
+    this.setLogicalScrollLeft(element, next);
+    this.schedulePublish();
+    return true;
+  };
+
   public readonly setLayout = (
     rowCount: number,
     columns: readonly CompiledColumn[],
@@ -149,6 +185,7 @@ export class BrunoTableViewportRuntime {
       .map((column) => `${column.columnId}:${column.pinned ?? "center"}:${column.semantics.width}`)
       .join(",")}`;
     if (nextLayoutKey === this.layoutKey && this.layoutColumns === columns) return;
+    this.clearColumnWidthPreview(false);
     const element = this.element;
     const previousLogicalScrollTop =
       element === null ? 0 : this.readLogicalScrollTop(element, false);
@@ -206,6 +243,93 @@ export class BrunoTableViewportRuntime {
       return;
     }
     this.publishFromElement();
+  };
+
+  /**
+   * Updates the imperative geometry used by exact reveal and scrollbar math
+   * without publishing a React snapshot. The header/body CSS variables are
+   * written by the same rAF that computes the pointer preview.
+   */
+  public readonly previewColumnWidth = (columnId: string, width: number): void => {
+    const columns = this.layoutColumns;
+    if (columns === undefined) return;
+    if (this.previewLayout === undefined) {
+      this.previewLayout = this.layout;
+      this.previewLogicalScrollLeft =
+        this.element === null ? 0 : this.readLogicalScrollLeft(this.element);
+      this.previewHorizontalState = Object.freeze({
+        suspended: this.horizontalSuspended,
+        pinnedStartWidth: this.horizontalPinnedStartWidth,
+        pinningKey: this.horizontalPinningKey,
+      });
+    }
+    this.layout = updateColumnWidthPreviewLayout(this.layout, columnId, width);
+    const element = this.element;
+    const logicalScrollLeft =
+      this.previewLogicalScrollLeft ?? (element === null ? 0 : this.readLogicalScrollLeft(element));
+    let previewWindow: BrunoTableVirtualWindow | undefined;
+    if (element !== null) {
+      const previewScrollLeft = Math.min(
+        logicalScrollLeft,
+        horizontalScrollMaximum(this.layout, element.clientWidth),
+      );
+      const previewViewport = {
+        logicalScrollTop: this.readLogicalScrollTop(element, false),
+        scrollLeft: previewScrollLeft,
+        width: element.clientWidth,
+        height: element.clientHeight,
+      };
+      previewWindow = calculateVirtualWindow(this.layout, previewViewport);
+      if (!sameVirtualWindowStructure(this.snapshot.virtualWindow, previewWindow)) {
+        this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
+      }
+      this.writeColumnPreviewStyles(columnId, previewWindow);
+      void element.scrollWidth;
+      this.setLogicalScrollLeft(element, previewScrollLeft);
+      this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
+      return;
+    }
+    this.writeColumnPreviewStyles(columnId, previewWindow);
+  };
+
+  public readonly clearColumnWidthPreview = (publishSnapshot = true): void => {
+    if (this.previewLayout === undefined) return;
+    this.layout = this.previewLayout;
+    this.previewLayout = undefined;
+    const logicalScrollLeft = this.previewLogicalScrollLeft;
+    this.previewLogicalScrollLeft = undefined;
+    const previewHorizontalState = this.previewHorizontalState;
+    this.previewHorizontalState = undefined;
+    this.horizontalSuspended = previewHorizontalState?.suspended;
+    this.horizontalPinnedStartWidth = previewHorizontalState?.pinnedStartWidth ?? 0;
+    this.horizontalPinningKey = previewHorizontalState?.pinningKey ?? "";
+    for (const property of this.previewStyleProperties) {
+      this.element?.style.removeProperty(property);
+    }
+    this.previewStyleProperties.clear();
+    if (this.element !== null) {
+      const logicalScrollTop = this.readLogicalScrollTop(this.element, false);
+      const restoredLogicalScrollLeft =
+        logicalScrollLeft === undefined
+          ? this.readLogicalScrollLeft(this.element)
+          : Math.min(
+              logicalScrollLeft,
+              horizontalScrollMaximum(this.layout, this.element.clientWidth),
+            );
+      this.logicalScrollLeft = restoredLogicalScrollLeft;
+      this.setLogicalScrollLeft(this.element, restoredLogicalScrollLeft);
+      this.writeScrollbarOverlay(this.element, logicalScrollTop, restoredLogicalScrollLeft);
+      if (publishSnapshot) {
+        this.publishSnapshot(
+          createViewportSnapshot(this.layout, {
+            logicalScrollTop,
+            scrollLeft: restoredLogicalScrollLeft,
+            width: this.element.clientWidth,
+            height: this.element.clientHeight,
+          }),
+        );
+      }
+    }
   };
 
   private publishSnapshot(next: BrunoTableViewportSnapshot): void {
@@ -355,6 +479,7 @@ export class BrunoTableViewportRuntime {
 
   public readonly attach = (element: HTMLElement | null): void => {
     if (this.element === element) return;
+    this.clearColumnWidthPreview(false);
     this.element?.removeEventListener("scroll", this.handleScroll);
     this.element?.removeEventListener("focusin", this.handleDirectionMutation);
     this.element?.removeEventListener("focusout", this.handleDirectionMutation);
@@ -452,6 +577,7 @@ export class BrunoTableViewportRuntime {
   };
 
   public readonly dispose = (): void => {
+    this.clearColumnWidthPreview();
     this.element?.removeEventListener("scroll", this.handleScroll);
     this.element?.removeEventListener("focusin", this.handleDirectionMutation);
     this.element?.removeEventListener("focusout", this.handleDirectionMutation);
@@ -632,7 +758,25 @@ export class BrunoTableViewportRuntime {
   ): void => {
     const element = this.element;
     if (element === null) return;
+    const previousDirection = this.horizontalDirection;
+    const previousViewportWidth = this.horizontalViewportWidth;
+    const previousSuspended = this.horizontalSuspended;
+    const previousPinnedStartWidth = this.horizontalPinnedStartWidth;
+    const previousPinningKey = this.horizontalPinningKey;
     const reconciliation = horizontalReconciliation ?? this.reconcileHorizontalEnvironment(element);
+    const environmentChanged =
+      previousDirection !== this.horizontalDirection ||
+      previousViewportWidth !== element.clientWidth ||
+      previousSuspended !== this.horizontalSuspended ||
+      previousPinnedStartWidth !== this.horizontalPinnedStartWidth ||
+      previousPinningKey !== this.horizontalPinningKey;
+    const externalEnvironmentChanged =
+      previousDirection !== this.horizontalDirection ||
+      previousViewportWidth !== element.clientWidth ||
+      (this.previewLayout === undefined && environmentChanged);
+    if (externalEnvironmentChanged) {
+      for (const listener of this.environmentListeners) listener();
+    }
     const deferredLogicalScrollLeft =
       typeof reconciliation === "number" ? reconciliation : undefined;
     const logicalScrollTop = this.readLogicalScrollTop(element, true);
@@ -672,7 +816,7 @@ export class BrunoTableViewportRuntime {
     const nextRowLayerOffset = `${element.scrollTop + next.virtualWindow.rowStart * ROW_HEIGHT - logicalScrollTop}px`;
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
     this.writeBodyLayerOffset(nextRowLayerOffset);
-    this.publishSnapshot(next);
+    if (this.previewLayout === undefined) this.publishSnapshot(next);
   }
 
   private writeBodyLayerOffset(nextOffset: string): void {
@@ -682,6 +826,67 @@ export class BrunoTableViewportRuntime {
     for (const layer of this.bodyLayers) {
       layer.style.setProperty("transform", transform);
     }
+  }
+
+  private writeColumnPreviewStyles(
+    columnId: string,
+    previewWindow?: BrunoTableVirtualWindow,
+  ): void {
+    const element = this.element;
+    if (element === null) return;
+    const set = (property: string, value: string): void => {
+      element.style.setProperty(property, value);
+      recordBrunoTableClientColumnPreviewStyleWrite(property);
+      this.previewStyleProperties.add(property);
+    };
+    const column = this.layout.columns.find((candidate) => candidate.columnId === columnId);
+    if (column === undefined) return;
+    set(brunoTableColumnCssVariable("width", columnId), `${column.semantics.width}px`);
+    if (column.pinned === "start") {
+      const columnIndex = this.layout.pinnedStart.findIndex(
+        (candidate) => candidate.columnId === columnId,
+      );
+      let offset = 0;
+      for (const [index, candidate] of this.layout.pinnedStart.entries()) {
+        if (index >= columnIndex) {
+          set(
+            brunoTableColumnCssVariable("pinned-start-offset", candidate.columnId),
+            `${offset}px`,
+          );
+        }
+        offset += candidate.semantics.width;
+      }
+      set(brunoTablePinnedWidthCssVariable("start"), `${this.layout.pinnedStartWidth}px`);
+    } else if (column.pinned === "end") {
+      const columnIndex = this.layout.pinnedEnd.findIndex(
+        (candidate) => candidate.columnId === columnId,
+      );
+      let offset = 0;
+      for (let index = this.layout.pinnedEnd.length - 1; index >= 0; index -= 1) {
+        const candidate = this.layout.pinnedEnd[index]!;
+        if (index <= columnIndex) {
+          set(brunoTableColumnCssVariable("pinned-end-offset", candidate.columnId), `${offset}px`);
+        }
+        offset += candidate.semantics.width;
+      }
+      set(brunoTablePinnedWidthCssVariable("end"), `${this.layout.pinnedEndWidth}px`);
+    }
+    const viewportFill =
+      this.layout.pinnedEnd.length === 0
+        ? 0
+        : Math.max(0, element.clientWidth - this.layout.totalWidth);
+    set(BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE, `${viewportFill}px`);
+    const nextWindow =
+      previewWindow ??
+      calculateVirtualWindow(this.layout, {
+        logicalScrollTop: this.readLogicalScrollTop(element, false),
+        scrollLeft: this.readLogicalScrollLeft(element),
+        width: element.clientWidth,
+        height: element.clientHeight,
+      });
+    set(BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE, `${nextWindow.leftPadding}px`);
+    set(BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE, `${nextWindow.rightPadding}px`);
+    set(BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE, `${this.layout.totalWidth + viewportFill}px`);
   }
 
   private projectLayoutLogicalScrollLeft(
@@ -1202,6 +1407,21 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   );
 }
 
+function sameVirtualWindowStructure(
+  left: BrunoTableVirtualWindow,
+  right: BrunoTableVirtualWindow,
+): boolean {
+  return (
+    left.rowStart === right.rowStart &&
+    left.rowEnd === right.rowEnd &&
+    left.centerStartIndex === right.centerStartIndex &&
+    left.centerCount === right.centerCount &&
+    sameColumnIdentities(left.pinnedStart, right.pinnedStart) &&
+    sameColumnIdentities(left.center, right.center) &&
+    sameColumnIdentities(left.pinnedEnd, right.pinnedEnd)
+  );
+}
+
 function shareVirtualWindowColumns(
   next: BrunoTableVirtualWindow,
   previous: BrunoTableVirtualWindow,
@@ -1221,6 +1441,123 @@ function shareVirtualWindowColumns(
 
 function sameColumns(left: readonly CompiledColumn[], right: readonly CompiledColumn[]): boolean {
   return left.length === right.length && left.every((column, index) => column === right[index]);
+}
+
+function sameColumnIdentities(
+  left: readonly CompiledColumn[],
+  right: readonly CompiledColumn[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((column, index) => column.columnId === right[index]?.columnId)
+  );
+}
+
+function updateColumnWidthPreviewLayout(
+  layout: ViewportLayout,
+  columnId: string,
+  width: number,
+): ViewportLayout {
+  const pinnedStartIndex = layout.pinnedStart.findIndex((column) => column.columnId === columnId);
+  const centerIndex = layout.center.findIndex((column) => column.columnId === columnId);
+  const pinnedEndIndex = layout.pinnedEnd.findIndex((column) => column.columnId === columnId);
+  const region =
+    pinnedStartIndex >= 0
+      ? "start"
+      : centerIndex >= 0
+        ? "center"
+        : pinnedEndIndex >= 0
+          ? "end"
+          : undefined;
+  if (region === undefined) return layout;
+  const regionIndex =
+    region === "start" ? pinnedStartIndex : region === "center" ? centerIndex : pinnedEndIndex;
+  const currentColumn =
+    region === "start"
+      ? layout.pinnedStart[regionIndex]
+      : region === "center"
+        ? layout.center[regionIndex]
+        : layout.pinnedEnd[regionIndex];
+  if (currentColumn === undefined || currentColumn.semantics.width === width) return layout;
+  const nextColumn = Object.freeze({
+    ...currentColumn,
+    semantics: Object.freeze({ ...currentColumn.semantics, width }),
+  });
+  const pinnedStart =
+    region === "start"
+      ? replaceColumnAt(layout.pinnedStart, regionIndex, nextColumn)
+      : layout.pinnedStart;
+  const center =
+    region === "center" ? replaceColumnAt(layout.center, regionIndex, nextColumn) : layout.center;
+  const pinnedEnd =
+    region === "end"
+      ? replaceColumnAt(layout.pinnedEnd, regionIndex, nextColumn)
+      : layout.pinnedEnd;
+  const delta = width - currentColumn.semantics.width;
+  const centerOffsets =
+    region === "center"
+      ? applyColumnOffsetDelta(layout.centerOffsets, regionIndex, delta)
+      : layout.centerOffsets;
+  const suspendedIndex =
+    region === "start"
+      ? regionIndex
+      : region === "center"
+        ? layout.pinnedStart.length + regionIndex
+        : layout.pinnedStart.length + layout.center.length + regionIndex;
+  const suspendedCenter = replaceColumnAt(layout.suspendedCenter, suspendedIndex, nextColumn);
+  const suspendedCenterOffsets = applyColumnOffsetDelta(
+    layout.suspendedCenterOffsets,
+    suspendedIndex,
+    delta,
+  );
+  const columns = replaceColumnAt(
+    layout.columns,
+    layout.columns.findIndex((column) => column.columnId === columnId),
+    nextColumn,
+  );
+  const pinnedStartWidth = layout.pinnedStartWidth + (region === "start" ? delta : 0);
+  const pinnedEndWidth = layout.pinnedEndWidth + (region === "end" ? delta : 0);
+  const centerWidth = layout.centerWidth + (region === "center" ? delta : 0);
+  const suspendedCenterWidth = layout.suspendedCenterWidth + delta;
+  return Object.freeze({
+    ...layout,
+    columns,
+    pinnedStart,
+    center,
+    pinnedEnd,
+    centerOffsets,
+    suspendedCenter,
+    suspendedCenterOffsets,
+    suspendedCenterWidth,
+    pinnedStartWidth,
+    pinnedEndWidth,
+    centerWidth,
+    totalWidth: layout.totalWidth + delta,
+  });
+}
+
+function replaceColumnAt(
+  columns: readonly CompiledColumn[],
+  index: number,
+  column: CompiledColumn,
+): readonly CompiledColumn[] {
+  if (index < 0 || index >= columns.length) return columns;
+  const next = [...columns];
+  next[index] = column;
+  return Object.freeze(next);
+}
+
+function applyColumnOffsetDelta(
+  offsets: readonly number[],
+  index: number,
+  delta: number,
+): readonly number[] {
+  if (delta === 0 || index < 0 || index + 1 >= offsets.length) return offsets;
+  const next = [...offsets];
+  for (let offsetIndex = index + 1; offsetIndex < next.length; offsetIndex += 1) {
+    next[offsetIndex] = next[offsetIndex]! + delta;
+  }
+  return Object.freeze(next);
 }
 
 function createLayout(
