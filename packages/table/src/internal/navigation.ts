@@ -55,7 +55,11 @@ export class BrunoTableNavigationRuntime {
     const listeners = this.columnListeners.get(columnId) ?? new Set<Listener>();
     listeners.add(listener);
     this.columnListeners.set(columnId, listeners);
+    let active = true;
     return () => {
+      if (!active) return;
+      active = false;
+      if (this.columnListeners.get(columnId) !== listeners) return;
       listeners.delete(listener);
       if (listeners.size === 0) this.columnListeners.delete(columnId);
     };

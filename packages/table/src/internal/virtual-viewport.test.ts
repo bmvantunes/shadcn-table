@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
+import { brunoTableColumnCssVariable } from "./column-management";
 import { BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT, BrunoTableViewportRuntime } from "./virtual-viewport";
 
 type TestRtlScrollType = "negative" | "default" | "reverse";
@@ -1105,6 +1106,7 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const removeProperty = vi.fn();
+    const setProperty = vi.fn();
     const element = {
       addEventListener: vi.fn(),
       clientHeight: 480,
@@ -1114,19 +1116,24 @@ describe("BrunoTableViewportRuntime", () => {
       removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
-      style: { removeProperty, setProperty: vi.fn() },
+      style: { removeProperty, setProperty },
     } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
     const publications = vi.fn();
     viewport.setLayout(2, columns);
-    viewport.subscribe(publications);
     viewport.attach(element);
+    viewport.subscribe(publications);
+    const publicationsBeforePreview = publications.mock.calls.length;
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
 
     viewport.previewColumnWidth("COL_ID_PREVIEW_START", 300);
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(0);
-    expect(publications).toHaveBeenCalled();
+    expect(publications.mock.calls.length).toBeGreaterThan(publicationsBeforePreview);
+    expect(setProperty).toHaveBeenCalledWith(
+      brunoTableColumnCssVariable("width", "COL_ID_PREVIEW_START"),
+      "300px",
+    );
 
     viewport.clearColumnWidthPreview();
     expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(

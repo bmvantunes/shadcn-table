@@ -27,6 +27,29 @@ describe("BrunoTable virtual reorder geometry", () => {
     expect(resolveBrunoTableReorderTargetIndex(cells, 20, "rtl", 1, 0, 2)).toBe(2);
   });
 
+  it("clamps pointer targets to the active logical region", () => {
+    const leftWindow = [
+      { columnIndex: 0, left: 0, width: 100 },
+      { columnIndex: 1, left: 100, width: 100 },
+      { columnIndex: 2, left: 200, width: 100 },
+    ] as const;
+    expect(resolveBrunoTableReorderTargetIndex(leftWindow, -100, "ltr", 1, 0, 2)).toBe(0);
+    expect(resolveBrunoTableReorderTargetIndex(mountedRightWindow, 1_000, "ltr", 5, 4, 5)).toBe(5);
+  });
+
+  it("falls back to the source when no remaining cell is mounted", () => {
+    expect(
+      resolveBrunoTableReorderTargetIndex(
+        [{ columnIndex: 2, left: 0, width: 100 }],
+        50,
+        "ltr",
+        2,
+        2,
+        2,
+      ),
+    ).toBe(2);
+  });
+
   it("projects mounted columns through an unmounted source placeholder", () => {
     expect(projectBrunoTableLogicalColumnIndex(4, 1, 6)).toBe(3);
     expect(projectBrunoTableLogicalColumnIndex(5, 1, 6)).toBe(4);

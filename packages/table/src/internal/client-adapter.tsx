@@ -14,7 +14,10 @@ import { useMemo } from "react";
 import type { ColumnDef, Row, RowData, Table } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
-import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
+import {
+  getBrunoTableLogicalColumnOrder,
+  type BrunoTableColumnLayoutSnapshot,
+} from "./column-management";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -96,17 +99,38 @@ export function useClientRowIds(
     () => requestedColumns.map((column) => column.columnId),
     [requestedColumns],
   );
-  const columnPinning = useMemo(
-    () => ({
-      start: requestedColumns
+  const columnPinning = useMemo(() => {
+    const logicalColumns = getBrunoTableLogicalColumnOrder(requestedColumns);
+    if (columnLayout === undefined) {
+      return {
+        start: logicalColumns
+          .filter((column) => column.pinned === "start")
+          .map((column) => column.columnId),
+        end: logicalColumns
+          .filter((column) => column.pinned === "end")
+          .map((column) => column.columnId),
+      };
+    }
+    const requestedById = new Map<string, CompiledColumn>(
+      requestedColumns.map((column) => [column.columnId, column] as const),
+    );
+    const visibleIds = new Set(columnLayout.visibleColumnIds);
+    const pinningOrder = [
+      ...columnLayout.visibleColumnIds.flatMap((columnId) => {
+        const column = requestedById.get(columnId);
+        return column === undefined ? [] : [column];
+      }),
+      ...logicalColumns.filter((column) => !visibleIds.has(column.columnId)),
+    ];
+    return {
+      start: pinningOrder
         .filter((column) => column.pinned === "start")
         .map((column) => column.columnId),
-      end: requestedColumns
+      end: pinningOrder
         .filter((column) => column.pinned === "end")
         .map((column) => column.columnId),
-    }),
-    [requestedColumns],
-  );
+    };
+  }, [columnLayout, requestedColumns]);
   const columnVisibility = useMemo(() => {
     if (columnLayout === undefined) return {};
     const visible = new Set(columnLayout.visibleColumnIds);

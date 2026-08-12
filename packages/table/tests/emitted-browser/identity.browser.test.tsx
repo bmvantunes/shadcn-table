@@ -200,7 +200,7 @@ test("runs emitted column management commands through the accessible menu", asyn
     const header = screen
       .getByRole("grid")
       .element()
-      .querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_EMITTED_NAME"]');
+      .querySelector<HTMLElement>('th[data-bruno-column-id="COL_ID_EMITTED_NAME"]');
     expect(header).not.toBeNull();
     expect(header).toHaveAttribute("data-pinned-region", "end");
   });

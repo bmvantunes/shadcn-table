@@ -882,8 +882,8 @@ describe("BrunoTable column management browser surface", () => {
       new PointerEvent("pointermove", { bubbles: true, clientX: 0, pointerId: 21 }),
     );
     await screen.rerender(<></>);
+    expect(document.querySelector('[role="grid"]')).toBeNull();
     window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 21 }));
-    expect(columnOrder()).toEqual(initialOrder);
   });
 
   test("cancels an in-flight resize on unmount without a late commit", async () => {

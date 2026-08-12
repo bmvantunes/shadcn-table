@@ -9,8 +9,8 @@ import {
   createBrunoTableColumnLayout,
   getBrunoTableColumnWidthBounds,
   getBrunoTableColumnLayoutSnapshot,
+  isBrunoTableColumnLayoutCommand,
   reconcileBrunoTableColumnLayout,
-  type BrunoTableColumnLayoutCommand,
   type BrunoTableColumnLayoutSnapshot,
   type BrunoTableColumnLayoutState,
   type BrunoTableGridCommand,
@@ -557,12 +557,10 @@ export class BrunoTableGridRuntime<TRow> {
       this.resetColumnFiltersImpl(command.columnId);
       return;
     }
+    if (!isBrunoTableColumnLayoutCommand(command)) return;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const previousCommands = this.columnCommands;
-    const nextLayout = applyBrunoTableGridCommand(
-      this.columnLayout,
-      command as BrunoTableColumnLayoutCommand,
-    );
+    const nextLayout = applyBrunoTableGridCommand(this.columnLayout, command);
     if (nextLayout === this.columnLayout) return;
     this.columnLayout = nextLayout;
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(nextLayout);

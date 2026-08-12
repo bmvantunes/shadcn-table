@@ -25,10 +25,12 @@ import {
   DropdownMenuTrigger,
 } from "@bruno/shadcn/dropdown-menu";
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowsHorizontalIcon,
   DotsThreeVerticalIcon,
-  EyeIcon,
   PushPinIcon,
+  PushPinSlashIcon,
 } from "@phosphor-icons/react";
 import {
   Children,
@@ -180,6 +182,32 @@ function totalColumnWidth(columns: readonly CompiledColumn[]): number {
 
 function columnHeaderName(columns: readonly CompiledColumn[], columnId: string): string {
   return columns.find((column) => column.columnId === columnId)?.headerName ?? columnId;
+}
+
+function commitBrunoTableColumnResize(
+  runtime: BrunoTableRuntimeView,
+  columnId: string,
+  requestedWidth: number,
+): number {
+  const command = runtime.getColumnCommandSnapshot(columnId);
+  const width = clampBrunoTableColumnWidth(requestedWidth, {
+    min: command.minWidth,
+    max: command.maxWidth,
+  });
+  if (width !== command.width) {
+    runtime.dispatchGridCommand({ type: "column.resize.commit", columnId, width });
+  }
+  return runtime.getColumnCommandSnapshot(columnId).width;
+}
+
+function readBrunoTableMenuDirection(element?: Element | null): "ltr" | "rtl" {
+  if (typeof document === "undefined") return "ltr";
+  const source = element ?? document.activeElement;
+  const grid = source?.closest<HTMLElement>('[role="grid"]') ?? null;
+  const ownerDocument = source?.ownerDocument ?? document;
+  return getComputedStyle(grid ?? ownerDocument.documentElement).direction === "rtl"
+    ? "rtl"
+    : "ltr";
 }
 
 function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
@@ -1118,6 +1146,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       max: gesture.maxWidth,
     });
     previewColumnWidth(gesture.columnId, width);
+    gesture.target.setAttribute("aria-valuenow", String(width));
     recordBrunoTableClientColumnResizeFrame();
   };
 
@@ -1163,7 +1192,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
 
   const autoScrollReorder = (gesture: BrunoTableColumnGesture): boolean => {
-    if (gesture.sourcePinned !== undefined) return false;
     const { left: centerLeft, right: centerRight } = gesture.reorderCenterBounds;
     const edge = 48;
     const physicalDelta =
@@ -1323,6 +1351,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         });
       }
       const settledWidth = runtime.getColumnCommandSnapshot(gesture.columnId).width;
+      gesture.target.setAttribute("aria-valuenow", String(settledWidth));
       if (commit) {
         setAnnouncement(
           `${columnHeaderName(columns, gesture.columnId)} width ${String(settledWidth)} pixels`,
@@ -1381,7 +1410,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (
       event.button !== 0 ||
       columnGesture.current !== undefined ||
-      columnGestureActor.getSnapshot().status !== "active"
+      columnGestureActor.getSnapshot().status !== "active" ||
+      columnGestureActor.getSnapshot().value !== "idle"
     )
       return;
     event.preventDefault();
@@ -1454,10 +1484,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       frame: null,
     };
     columnGestureActor.send({ type: "START", kind });
-    if (columnGestureActor.getSnapshot().value !== "active") {
-      columnGesture.current = undefined;
-      return;
-    }
     window.addEventListener("pointermove", columnGesture.current.onPointerMove, true);
     window.addEventListener("pointerup", columnGesture.current.onPointerUp, true);
     window.addEventListener("pointercancel", columnGesture.current.onPointerCancel, true);
@@ -1486,21 +1512,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     let width: number | undefined;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       const physicalDelta = event.key === "ArrowRight" ? step : -step;
-      width = column.semantics.width + (direction === "rtl" ? -physicalDelta : physicalDelta);
+      width = command.width + (direction === "rtl" ? -physicalDelta : physicalDelta);
     }
     if (event.key === "Home") width = command.minWidth;
     if (event.key === "End") width = command.maxWidth;
     if (width === undefined) return;
     event.preventDefault();
-    const nextWidth = clampBrunoTableColumnWidth(width, {
-      min: command.minWidth,
-      max: command.maxWidth,
-    });
-    runtime.dispatchGridCommand({
-      type: "column.resize.commit",
-      columnId: column.columnId,
-      width: nextWidth,
-    });
+    const nextWidth = commitBrunoTableColumnResize(runtime, column.columnId, width);
     setAnnouncement(`${column.headerName} width ${String(nextWidth)} pixels`);
   };
   useEffect(() => {
@@ -1509,6 +1527,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     columnResizeKeyDownHandler.current = resizeColumnWithKeyboard;
   });
   useEffect(() => {
+    columnGestureActor.start();
     return () => {
       gestureCancel.current();
       columnGestureActor.stop();
@@ -1708,18 +1727,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               const direction =
                 getComputedStyle(event.currentTarget).direction === "rtl" ? "rtl" : "ltr";
               const physicalDelta = event.key === "ArrowRight" ? delta : -delta;
-              runtime.dispatchGridCommand({
-                type: "column.resize.commit",
-                columnId: activeColumn.columnId,
-                width: clampBrunoTableColumnWidth(
-                  activeColumn.semantics.width +
-                    (direction === "rtl" ? -physicalDelta : physicalDelta),
-                  { min: command.minWidth, max: command.maxWidth },
-                ),
-              });
-              setAnnouncement(
-                `${activeColumn.headerName} width ${String(runtime.getColumnCommandSnapshot(activeColumn.columnId).width)} pixels`,
+              const nextWidth = commitBrunoTableColumnResize(
+                runtime,
+                activeColumn.columnId,
+                command.width + (direction === "rtl" ? -physicalDelta : physicalDelta),
               );
+              setAnnouncement(`${activeColumn.headerName} width ${String(nextWidth)} pixels`);
               return;
             }
           }
@@ -2103,6 +2116,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   readonly visibleColumnIds: readonly string[];
 }) {
   const [open, setOpen] = useState(false);
+  const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
   const columnId = column?.columnId ?? "";
   const subscribe = useMemo(
     () => (listener: () => void) => runtime.subscribeColumnCommands(columnId, listener),
@@ -2127,6 +2141,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
       <DropdownMenu
         open={open}
         onOpenChange={(nextOpen) => {
+          if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
           setOpen(nextOpen);
           if (!nextOpen) restoreColumnFocus(column.columnId);
         }}
@@ -2144,6 +2159,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
             announce={announce}
             column={column}
             command={command}
+            direction={menuDirection}
             preventMenuFinalFocus
             restoreColumnFocus={restoreColumnFocus}
             runtime={runtime}
@@ -2357,6 +2373,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       ? `Sort by ${column.headerName}`
       : `Sort by ${column.headerName}, currently ${presentation.direction}${sortPriorityLabel(command.sortPriority)}`;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
   const pinLabel = command.pinned === undefined ? "unpinned" : `pinned ${command.pinned}`;
   const subscribeActiveResize = useMemo(
     () => (listener: () => void) => navigation.subscribeColumn(column.columnId, listener),
@@ -2439,6 +2456,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       <DropdownMenu
         open={menuOpen}
         onOpenChange={(nextOpen) => {
+          if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
           setMenuOpen(nextOpen);
           if (!nextOpen) restoreColumnFocus(column.columnId);
         }}
@@ -2449,7 +2467,10 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
           tabIndex={-1}
           onPointerDown={(event) => {
-            if (event.button === 0) activateHeaderForResize(column.columnId);
+            if (event.button === 0) {
+              setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
+              activateHeaderForResize(column.columnId);
+            }
           }}
         >
           <DotsThreeVerticalIcon aria-hidden="true" />
@@ -2460,6 +2481,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             announce={announce}
             column={column}
             command={command}
+            direction={menuDirection}
             restoreColumnFocus={restoreColumnFocus}
             runtime={runtime}
             visibleColumnIds={visibleColumnIds}
@@ -2513,6 +2535,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   announce,
   column,
   command,
+  direction,
   preventMenuFinalFocus = false,
   restoreColumnFocus,
   runtime,
@@ -2522,12 +2545,15 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   readonly announce: (message: string) => void;
   readonly column: CompiledColumn;
   readonly command: BrunoTableColumnCommandSnapshot;
+  readonly direction: "ltr" | "rtl";
   readonly preventMenuFinalFocus?: boolean;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly visibleColumnIds: readonly string[];
 }) {
   const index = visibleColumnIds.indexOf(column.columnId);
+  const MoveStartIcon = direction === "rtl" ? ArrowRightIcon : ArrowLeftIcon;
+  const MoveEndIcon = direction === "rtl" ? ArrowLeftIcon : ArrowRightIcon;
   const groupIndexes = visibleColumnIds.flatMap((id, candidateIndex) => {
     const candidate = allColumns.find((columnToCheck) => columnToCheck.columnId === id);
     return candidate?.pinned === command.pinned ? [candidateIndex] : [];
@@ -2633,7 +2659,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
             Pin to logical end
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="none">
-            <EyeIcon aria-hidden="true" />
+            <PushPinSlashIcon aria-hidden="true" />
             Unpin
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
@@ -2642,11 +2668,11 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
         <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem disabled={isFirst} onClick={() => move(index - 1)}>
-            <ArrowsHorizontalIcon aria-hidden="true" />
+            <MoveStartIcon aria-hidden="true" />
             Move toward logical start
           </DropdownMenuItem>
           <DropdownMenuItem disabled={isLast} onClick={() => move(index + 1)}>
-            <ArrowsHorizontalIcon aria-hidden="true" />
+            <MoveEndIcon aria-hidden="true" />
             Move toward logical end
           </DropdownMenuItem>
         </DropdownMenuSubContent>

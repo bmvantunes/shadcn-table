@@ -83,8 +83,8 @@ describe("BrunoTable column management", () => {
       pinned: "start",
     });
     expect(view.getColumnLayoutSnapshot().allColumns.map((column) => column.columnId)).toEqual([
-      "COL_ID_SCORE",
       "COL_ID_NAME",
+      "COL_ID_SCORE",
       "COL_ID_STATUS",
     ]);
     expect(view.getColumnLayoutSnapshot().visibleColumnIds).toEqual([
@@ -238,6 +238,59 @@ describe("BrunoTable column management", () => {
     ]);
   });
 
+  it("resets pinning without rewriting the independent column order", () => {
+    const state = createBrunoTableColumnLayout(columns);
+    const pinned = applyBrunoTableGridCommand(state, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SCORE",
+      pinned: "start",
+    });
+    const reset = applyBrunoTableGridCommand(pinned, { type: "column.reset.pinning" });
+
+    expect(pinned.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_NAME",
+      "COL_ID_SCORE",
+      "COL_ID_STATUS",
+    ]);
+    expect(
+      getBrunoTableColumnLayoutSnapshot(pinned).columns.map((column) => column.columnId),
+    ).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]);
+    expect(reset.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_NAME",
+      "COL_ID_SCORE",
+      "COL_ID_STATUS",
+    ]);
+    expect(reset.allColumns.find((column) => column.columnId === "COL_ID_SCORE")?.pinned).toBe(
+      undefined,
+    );
+    expect(
+      getBrunoTableColumnLayoutSnapshot(reset).columns.map((column) => column.columnId),
+    ).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]);
+  });
+
+  it("resets order without changing visibility or current pinning", () => {
+    const state = createBrunoTableColumnLayout(columns);
+    const reordered = applyBrunoTableGridCommand(state, {
+      type: "column.reorder.commit",
+      columnId: "COL_ID_SCORE",
+      targetIndex: 0,
+      pinned: undefined,
+    });
+    const hidden = applyBrunoTableGridCommand(reordered, {
+      type: "column.visibility.commit",
+      columnId: "COL_ID_NAME",
+      visible: false,
+    });
+    const reset = applyBrunoTableGridCommand(hidden, { type: "column.reset.order" });
+
+    expect(reset.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_NAME",
+      "COL_ID_SCORE",
+      "COL_ID_STATUS",
+    ]);
+    expect(reset.visibleColumnIds).toEqual(["COL_ID_SCORE", "COL_ID_STATUS"]);
+  });
+
   it("clamps committed widths and preserves no-op identity", () => {
     const state = createBrunoTableColumnLayout(columns);
     const tooSmall = applyBrunoTableGridCommand(state, {
@@ -257,7 +310,7 @@ describe("BrunoTable column management", () => {
     });
 
     expect(tooSmall.allColumns[0]?.semantics.width).toBe(BRUNO_TABLE_MIN_COLUMN_WIDTH);
-    expect(tooLarge.allColumns[0]?.semantics.width).toBe(BRUNO_TABLE_MIN_COLUMN_WIDTH);
+    expect(tooLarge.allColumns[0]?.semantics.width).toBe(BRUNO_TABLE_MAX_COLUMN_WIDTH);
     expect(noOp).toBe(state);
     expect(BRUNO_TABLE_MAX_COLUMN_WIDTH).toBeGreaterThan(BRUNO_TABLE_MIN_COLUMN_WIDTH);
   });
@@ -338,14 +391,72 @@ describe("BrunoTable column management", () => {
     const snapshot = getBrunoTableColumnLayoutSnapshot(next);
 
     expect(snapshot.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_NAME",
+      "COL_ID_SCORE",
+      "COL_ID_NEW",
+    ]);
+    expect(snapshot.columns.map((column) => column.columnId)).toEqual([
       "COL_ID_SCORE",
       "COL_ID_NAME",
       "COL_ID_NEW",
     ]);
     expect(snapshot.visibleColumnIds).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_NEW"]);
-    expect(snapshot.allColumns[1]?.headerName).toBe("Renamed Name");
-    expect(snapshot.allColumns[1]?.semantics.width).toBe(220);
-    expect(snapshot.allColumns[0]?.pinned).toBe("start");
+    const name = snapshot.allColumns.find((column) => column.columnId === "COL_ID_NAME");
+    const score = snapshot.allColumns.find((column) => column.columnId === "COL_ID_SCORE");
+    expect(name?.headerName).toBe("Renamed Name");
+    expect(name?.semantics.width).toBe(220);
+    expect(score?.pinned).toBe("start");
+  });
+
+  it("applies definition width and pin changes when the user has not overridden them", () => {
+    const state = createBrunoTableColumnLayout(columns);
+    const replacement = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        width: 220,
+        pinned: "end",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        width: 72,
+      },
+    ]);
+    const next = reconcileBrunoTableColumnLayout(state, replacement);
+    const name = next.allColumns.find((column) => column.columnId === "COL_ID_NAME");
+
+    expect(name?.semantics.width).toBe(220);
+    expect(name?.pinned).toBe("end");
+  });
+
+  it("retains a visible column when all previously visible identities are removed", () => {
+    const state = applyBrunoTableGridCommand(createBrunoTableColumnLayout(columns), {
+      type: "column.visibility.commit",
+      columnId: "COL_ID_SCORE",
+      visible: false,
+    });
+    const hiddenOnly = applyBrunoTableGridCommand(state, {
+      type: "column.visibility.commit",
+      columnId: "COL_ID_STATUS",
+      visible: false,
+    });
+    const replacement = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+
+    const next = reconcileBrunoTableColumnLayout(hiddenOnly, replacement);
+
+    expect(next.visibleColumnIds).toEqual(["COL_ID_SCORE"]);
   });
 
   it("reorders visible columns without losing hidden-column durability", () => {

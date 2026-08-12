@@ -1,3 +1,4 @@
+import { Store } from "@tanstack/store";
 import { assign, createActor, createMachine } from "xstate";
 
 export type BrunoTableColumnGestureKind = "resize" | "reorder";
@@ -42,7 +43,7 @@ const brunoTableColumnGestureMachine = createMachine({
   },
 });
 
-type BrunoTableColumnGestureSnapshot = Readonly<{
+export type BrunoTableColumnGestureSnapshot = Readonly<{
   readonly value: "idle" | "active";
   readonly status: "active" | "done" | "error" | "stopped";
   readonly kind: BrunoTableColumnGestureKind | undefined;
@@ -53,28 +54,65 @@ export type BrunoTableColumnGestureActor = Readonly<{
   readonly stop: () => void;
   readonly send: (event: BrunoTableColumnGestureEvent) => void;
   readonly getSnapshot: () => BrunoTableColumnGestureSnapshot;
+  readonly subscribe: (listener: () => void) => () => void;
 }>;
 
 export function createBrunoTableColumnGestureActor(): BrunoTableColumnGestureActor {
   const actor = createActor(brunoTableColumnGestureMachine);
-  actor.start();
+  const initialSnapshot = Object.freeze({
+    value: "idle" as const,
+    status: "stopped" as const,
+    kind: undefined,
+  });
+  const projection = new Store<BrunoTableColumnGestureSnapshot>(initialSnapshot);
+  let started = false;
+  const readProjection = (): BrunoTableColumnGestureSnapshot => {
+    const snapshot = actor.getSnapshot();
+    return Object.freeze({
+      value: snapshot.value === "active" ? "active" : "idle",
+      status: snapshot.status,
+      kind: snapshot.context.kind,
+    });
+  };
+  const publishProjection = (): void => {
+    const next = readProjection();
+    const previous = projection.get();
+    if (
+      previous.value === next.value &&
+      previous.status === next.status &&
+      previous.kind === next.kind
+    ) {
+      return;
+    }
+    projection.setState(() => next);
+  };
+  actor.subscribe(publishProjection);
   return Object.freeze({
     start: () => {
-      actor.start();
+      if (!started) {
+        started = true;
+        actor.start();
+      }
+      publishProjection();
     },
     stop: () => {
-      actor.stop();
+      if (started) {
+        started = false;
+        actor.stop();
+      }
+      publishProjection();
     },
     send: (event: BrunoTableColumnGestureEvent) => {
+      if (!started) return;
       actor.send(event);
+      publishProjection();
     },
     getSnapshot: () => {
-      const snapshot = actor.getSnapshot();
-      return Object.freeze({
-        value: snapshot.value === "active" ? "active" : "idle",
-        status: snapshot.status,
-        kind: snapshot.context.kind,
-      });
+      return projection.get();
+    },
+    subscribe: (listener) => {
+      const subscription = projection.subscribe(listener);
+      return () => subscription.unsubscribe();
     },
   });
 }

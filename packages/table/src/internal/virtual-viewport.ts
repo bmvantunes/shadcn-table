@@ -142,7 +142,6 @@ export class BrunoTableViewportRuntime {
   private previewLayout: ViewportLayout | undefined;
   private previewLogicalScrollLeft: number | undefined;
   private previewHorizontalState: PreviewHorizontalState | undefined;
-  private previewSnapshotPublished = false;
   private readonly previewStyleProperties = new Set<string>();
   private layoutKey = "";
   private layoutPinningKey = "";
@@ -263,9 +262,8 @@ export class BrunoTableViewportRuntime {
         pinnedStartWidth: this.horizontalPinnedStartWidth,
         pinningKey: this.horizontalPinningKey,
       });
-      this.previewSnapshotPublished = false;
     }
-    this.layout = createColumnWidthPreviewLayout(this.previewLayout, columnId, width);
+    this.layout = updateColumnWidthPreviewLayout(this.layout, columnId, width);
     const element = this.element;
     const logicalScrollLeft =
       this.previewLogicalScrollLeft ?? (element === null ? 0 : this.readLogicalScrollLeft(element));
@@ -275,29 +273,21 @@ export class BrunoTableViewportRuntime {
         logicalScrollLeft,
         horizontalScrollMaximum(this.layout, element.clientWidth),
       );
-      this.setLogicalScrollLeft(element, previewScrollLeft);
-      previewWindow = calculateVirtualWindow(this.layout, {
+      const previewViewport = {
         logicalScrollTop: this.readLogicalScrollTop(element, false),
         scrollLeft: previewScrollLeft,
         width: element.clientWidth,
         height: element.clientHeight,
-      });
-      const previewSnapshot = createViewportSnapshot(this.layout, {
-        logicalScrollTop: this.readLogicalScrollTop(element, false),
-        scrollLeft: previewScrollLeft,
-        width: element.clientWidth,
-        height: element.clientHeight,
-      });
-      const pinningShapeChanged =
-        shouldSuspendPinning(this.previewLayout, element.clientWidth) !==
-        shouldSuspendPinning(this.layout, element.clientWidth);
-      if (
-        pinningShapeChanged &&
-        !sameVirtualWindowStructure(this.snapshot.virtualWindow, previewWindow)
-      ) {
-        this.publishSnapshot(previewSnapshot);
-        this.previewSnapshotPublished = true;
+      };
+      previewWindow = calculateVirtualWindow(this.layout, previewViewport);
+      if (!sameVirtualWindowStructure(this.snapshot.virtualWindow, previewWindow)) {
+        this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
       }
+      this.writeColumnPreviewStyles(columnId, previewWindow);
+      void element.scrollWidth;
+      this.setLogicalScrollLeft(element, previewScrollLeft);
+      this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
+      return;
     }
     this.writeColumnPreviewStyles(columnId, previewWindow);
   };
@@ -313,8 +303,6 @@ export class BrunoTableViewportRuntime {
     this.horizontalSuspended = previewHorizontalState?.suspended;
     this.horizontalPinnedStartWidth = previewHorizontalState?.pinnedStartWidth ?? 0;
     this.horizontalPinningKey = previewHorizontalState?.pinningKey ?? "";
-    const previewSnapshotPublished = this.previewSnapshotPublished;
-    this.previewSnapshotPublished = false;
     for (const property of this.previewStyleProperties) {
       this.element?.style.removeProperty(property);
     }
@@ -331,7 +319,7 @@ export class BrunoTableViewportRuntime {
       this.logicalScrollLeft = restoredLogicalScrollLeft;
       this.setLogicalScrollLeft(this.element, restoredLogicalScrollLeft);
       this.writeScrollbarOverlay(this.element, logicalScrollTop, restoredLogicalScrollLeft);
-      if (publishSnapshot || previewSnapshotPublished) {
+      if (publishSnapshot) {
         this.publishSnapshot(
           createViewportSnapshot(this.layout, {
             logicalScrollTop,
@@ -898,11 +886,6 @@ export class BrunoTableViewportRuntime {
     set(BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE, `${nextWindow.leftPadding}px`);
     set(BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE, `${nextWindow.rightPadding}px`);
     set(BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE, `${this.layout.totalWidth + viewportFill}px`);
-    this.writeScrollbarOverlay(
-      element,
-      this.readLogicalScrollTop(element, false),
-      this.readLogicalScrollLeft(element),
-    );
   }
 
   private projectLayoutLogicalScrollLeft(
@@ -1432,9 +1415,9 @@ function sameVirtualWindowStructure(
     left.rowEnd === right.rowEnd &&
     left.centerStartIndex === right.centerStartIndex &&
     left.centerCount === right.centerCount &&
-    sameColumns(left.pinnedStart, right.pinnedStart) &&
-    sameColumns(left.center, right.center) &&
-    sameColumns(left.pinnedEnd, right.pinnedEnd)
+    sameColumnIdentities(left.pinnedStart, right.pinnedStart) &&
+    sameColumnIdentities(left.center, right.center) &&
+    sameColumnIdentities(left.pinnedEnd, right.pinnedEnd)
   );
 }
 
@@ -1459,34 +1442,82 @@ function sameColumns(left: readonly CompiledColumn[], right: readonly CompiledCo
   return left.length === right.length && left.every((column, index) => column === right[index]);
 }
 
-function createColumnWidthPreviewLayout(
+function sameColumnIdentities(
+  left: readonly CompiledColumn[],
+  right: readonly CompiledColumn[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((column, index) => column.columnId === right[index]?.columnId)
+  );
+}
+
+function updateColumnWidthPreviewLayout(
   layout: ViewportLayout,
   columnId: string,
   width: number,
 ): ViewportLayout {
-  const replaceWidth = (columns: readonly CompiledColumn[]): readonly CompiledColumn[] => {
-    const index = columns.findIndex((column) => column.columnId === columnId);
-    if (index < 0) return columns;
-    const column = columns[index]!;
-    if (column.semantics.width === width) return columns;
-    const next = [...columns];
-    next[index] = Object.freeze({
-      ...column,
-      semantics: Object.freeze({ ...column.semantics, width }),
-    });
-    return Object.freeze(next);
-  };
-  const pinnedStart = replaceWidth(layout.pinnedStart);
-  const center = replaceWidth(layout.center);
-  const pinnedEnd = replaceWidth(layout.pinnedEnd);
-  const columns = Object.freeze([...pinnedStart, ...center, ...pinnedEnd]);
-  const centerOffsets = columnOffsets(center);
-  const suspendedCenter = Object.freeze([...pinnedStart, ...center, ...pinnedEnd]);
-  const suspendedCenterOffsets = columnOffsets(suspendedCenter);
-  const pinnedStartWidth = totalColumnWidth(pinnedStart);
-  const pinnedEndWidth = totalColumnWidth(pinnedEnd);
-  const centerWidth = centerOffsets.at(-1) ?? 0;
-  const suspendedCenterWidth = suspendedCenterOffsets.at(-1) ?? 0;
+  const pinnedStartIndex = layout.pinnedStart.findIndex((column) => column.columnId === columnId);
+  const centerIndex = layout.center.findIndex((column) => column.columnId === columnId);
+  const pinnedEndIndex = layout.pinnedEnd.findIndex((column) => column.columnId === columnId);
+  const region =
+    pinnedStartIndex >= 0
+      ? "start"
+      : centerIndex >= 0
+        ? "center"
+        : pinnedEndIndex >= 0
+          ? "end"
+          : undefined;
+  if (region === undefined) return layout;
+  const regionIndex =
+    region === "start" ? pinnedStartIndex : region === "center" ? centerIndex : pinnedEndIndex;
+  const currentColumn =
+    region === "start"
+      ? layout.pinnedStart[regionIndex]
+      : region === "center"
+        ? layout.center[regionIndex]
+        : layout.pinnedEnd[regionIndex];
+  if (currentColumn === undefined || currentColumn.semantics.width === width) return layout;
+  const nextColumn = Object.freeze({
+    ...currentColumn,
+    semantics: Object.freeze({ ...currentColumn.semantics, width }),
+  });
+  const pinnedStart =
+    region === "start"
+      ? replaceColumnAt(layout.pinnedStart, regionIndex, nextColumn)
+      : layout.pinnedStart;
+  const center =
+    region === "center" ? replaceColumnAt(layout.center, regionIndex, nextColumn) : layout.center;
+  const pinnedEnd =
+    region === "end"
+      ? replaceColumnAt(layout.pinnedEnd, regionIndex, nextColumn)
+      : layout.pinnedEnd;
+  const delta = width - currentColumn.semantics.width;
+  const centerOffsets =
+    region === "center"
+      ? applyColumnOffsetDelta(layout.centerOffsets, regionIndex, delta)
+      : layout.centerOffsets;
+  const suspendedIndex =
+    region === "start"
+      ? regionIndex
+      : region === "center"
+        ? layout.pinnedStart.length + regionIndex
+        : layout.pinnedStart.length + layout.center.length + regionIndex;
+  const suspendedCenter = replaceColumnAt(layout.suspendedCenter, suspendedIndex, nextColumn);
+  const suspendedCenterOffsets = applyColumnOffsetDelta(
+    layout.suspendedCenterOffsets,
+    suspendedIndex,
+    delta,
+  );
+  const columns = replaceColumnAt(
+    layout.columns,
+    layout.columns.findIndex((column) => column.columnId === columnId),
+    nextColumn,
+  );
+  const pinnedStartWidth = layout.pinnedStartWidth + (region === "start" ? delta : 0);
+  const pinnedEndWidth = layout.pinnedEndWidth + (region === "end" ? delta : 0);
+  const centerWidth = layout.centerWidth + (region === "center" ? delta : 0);
+  const suspendedCenterWidth = layout.suspendedCenterWidth + delta;
   return Object.freeze({
     ...layout,
     columns,
@@ -1500,8 +1531,32 @@ function createColumnWidthPreviewLayout(
     pinnedStartWidth,
     pinnedEndWidth,
     centerWidth,
-    totalWidth: pinnedStartWidth + centerWidth + pinnedEndWidth,
+    totalWidth: layout.totalWidth + delta,
   });
+}
+
+function replaceColumnAt(
+  columns: readonly CompiledColumn[],
+  index: number,
+  column: CompiledColumn,
+): readonly CompiledColumn[] {
+  if (index < 0 || index >= columns.length) return columns;
+  const next = [...columns];
+  next[index] = column;
+  return Object.freeze(next);
+}
+
+function applyColumnOffsetDelta(
+  offsets: readonly number[],
+  index: number,
+  delta: number,
+): readonly number[] {
+  if (delta === 0 || index < 0 || index + 1 >= offsets.length) return offsets;
+  const next = [...offsets];
+  for (let offsetIndex = index + 1; offsetIndex < next.length; offsetIndex += 1) {
+    next[offsetIndex] = next[offsetIndex]! + delta;
+  }
+  return Object.freeze(next);
 }
 
 function createLayout(
