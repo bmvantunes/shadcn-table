@@ -1078,6 +1078,64 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(500);
   });
 
+  it("publishes a structural pinned-resize preview at the suspension threshold and restores it", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_PREVIEW_START",
+        field: "name",
+        headerName: "Preview start",
+        valueType: "text" as const,
+        width: 160,
+        pinned: "start" as const,
+      },
+      {
+        columnId: "COL_ID_PREVIEW_CENTER",
+        field: "name",
+        headerName: "Preview center",
+        valueType: "text" as const,
+        width: 160,
+      },
+      {
+        columnId: "COL_ID_PREVIEW_END",
+        field: "name",
+        headerName: "Preview end",
+        valueType: "text" as const,
+        width: 140,
+        pinned: "end" as const,
+      },
+    ]);
+    const removeProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 500,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty, setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    const publications = vi.fn();
+    viewport.setLayout(2, columns);
+    viewport.subscribe(publications);
+    viewport.attach(element);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
+
+    viewport.previewColumnWidth("COL_ID_PREVIEW_START", 300);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(0);
+    expect(publications).toHaveBeenCalled();
+
+    viewport.clearColumnWidthPreview();
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
+      "COL_ID_PREVIEW_START",
+    );
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
+    expect(removeProperty).toHaveBeenCalled();
+  });
+
   it("refreshes computed direction before reveal after a CSS-only change", () => {
     const columns = compileColumns(
       Array.from({ length: 10 }, (_, index) => ({

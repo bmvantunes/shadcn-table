@@ -2,6 +2,7 @@ import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type {
   BrunoTableInvalidCellValue,
   BrunoTableRowPipelinePublication,
@@ -36,6 +37,7 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
   BrunoTableRowPipelineRuntimeView,
   BrunoTableClientRowPipelineAdapterView
 > & {
+  readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly filters: readonly unknown[];
   readonly queryGeneration: number;
   readonly orderBy: readonly {
@@ -60,9 +62,15 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
     props.runtime.getQuerySnapshot,
     props.runtime.getQuerySnapshot,
   );
+  const columnLayout = useSyncExternalStore(
+    props.runtime.subscribeColumnStructure,
+    props.runtime.getColumnStructureSnapshot,
+    props.runtime.getColumnStructureSnapshot,
+  );
   return (
     <ClientResolvedRowOrder
       {...props}
+      columnLayout={columnLayout}
       columns={query.columns}
       filters={query.filters}
       orderBy={query.orderBy}
@@ -80,6 +88,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   filters,
   orderBy,
   queryGeneration,
+  columnLayout,
 }: ClientResolvedRowOrderProps) {
   const rowsStore = useMemo(
     () =>
@@ -93,7 +102,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     rowsStore.getSnapshot,
     rowsStore.getSnapshot,
   );
-  const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId);
+  const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId, columnLayout);
   const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
   const nextRowIds =
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;

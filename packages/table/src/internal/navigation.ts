@@ -7,8 +7,13 @@ export type BrunoTableActiveCell = Readonly<{
   readonly columnId: string;
 }>;
 
+export type BrunoTableNavigationDirection = "up" | "down" | "left" | "right";
+
 export type BrunoTableNavigationCommand =
-  | Readonly<{ readonly type: "step"; readonly rowDelta: number; readonly columnDelta: number }>
+  | Readonly<{
+      readonly type: "step";
+      readonly direction: BrunoTableNavigationDirection;
+    }>
   | Readonly<{ readonly type: "page"; readonly rowDelta: number }>
   | Readonly<{ readonly type: "row-edge"; readonly edge: "start" | "end" }>
   | Readonly<{ readonly type: "column-edge"; readonly edge: "start" | "end" }>
@@ -30,6 +35,7 @@ const EMPTY_ROW_SPACE: BrunoTableNavigationRowSpace = Object.freeze({
 
 export class BrunoTableNavigationRuntime {
   private readonly listeners = new Set<Listener>();
+  private readonly columnListeners = new Map<string, Set<Listener>>();
   private rowSpace = EMPTY_ROW_SPACE;
   private columns: readonly CompiledColumn[] = [];
   private activeCell: BrunoTableActiveCell | undefined;
@@ -40,6 +46,19 @@ export class BrunoTableNavigationRuntime {
   public readonly subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  public readonly getColumnSnapshot = (columnId: string): boolean =>
+    this.activeCell?.region === "header" && this.activeCell.columnId === columnId;
+
+  public readonly subscribeColumn = (columnId: string, listener: Listener): (() => void) => {
+    const listeners = this.columnListeners.get(columnId) ?? new Set<Listener>();
+    listeners.add(listener);
+    this.columnListeners.set(columnId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.columnListeners.delete(columnId);
+    };
   };
 
   public readonly reset = (): void => {
@@ -80,6 +99,10 @@ export class BrunoTableNavigationRuntime {
     columns: readonly CompiledColumn[],
   ): void => {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const previousColumns = this.columns;
+    const previousColumnIndex = previousColumns.findIndex(
+      (column) => column.columnId === this.activeCell?.columnId,
+    );
     this.rowSpace = rowSpace;
     this.columns = columns;
     const firstColumn = this.columns[0];
@@ -87,10 +110,16 @@ export class BrunoTableNavigationRuntime {
       this.setActive(undefined);
       return;
     }
-    const previousColumnIndex = this.columns.findIndex(
+    const activeColumnIndex = this.columns.findIndex(
       (column) => column.columnId === this.activeCell?.columnId,
     );
-    const column = this.columns[previousColumnIndex >= 0 ? previousColumnIndex : 0]!;
+    const fallbackColumnIndex =
+      activeColumnIndex >= 0
+        ? activeColumnIndex
+        : previousColumnIndex >= 0
+          ? Math.min(previousColumnIndex, this.columns.length - 1)
+          : 0;
+    const column = this.columns[fallbackColumnIndex]!;
     const matchingRowIndex =
       this.activeCell?.rowId === undefined
         ? undefined
@@ -120,7 +149,7 @@ export class BrunoTableNavigationRuntime {
   public readonly navigate = (command: BrunoTableNavigationCommand): boolean => {
     if (this.activeCell === undefined || this.columns.length === 0) return false;
     if (command.type === "step") {
-      return this.resolveStep(command.rowDelta, command.columnDelta);
+      return this.resolveStep(command.direction);
     }
     if (command.type === "page") return this.resolvePage(command.rowDelta);
     if (command.type === "row-edge") return this.resolveRowEdge(command.edge);
@@ -128,8 +157,8 @@ export class BrunoTableNavigationRuntime {
     return this.resolveGridEdge(command.edge);
   };
 
-  public readonly move = (rowDelta: number, columnDelta: number): boolean =>
-    this.navigate({ type: "step", rowDelta, columnDelta });
+  public readonly move = (direction: BrunoTableNavigationDirection): boolean =>
+    this.navigate({ type: "step", direction });
 
   public readonly movePage = (rowDelta: number): boolean =>
     this.navigate({ type: "page", rowDelta });
@@ -143,8 +172,10 @@ export class BrunoTableNavigationRuntime {
   public readonly moveToGridEdge = (edge: "start" | "end"): boolean =>
     this.navigate({ type: "grid-edge", edge });
 
-  private readonly resolveStep = (rowDelta: number, columnDelta: number): boolean => {
+  private readonly resolveStep = (direction: BrunoTableNavigationDirection): boolean => {
     if (this.activeCell === undefined || this.columns.length === 0) return false;
+    const rowDelta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
+    const columnDelta = direction === "left" ? -1 : direction === "right" ? 1 : 0;
     const currentColumn = Math.max(
       this.columns.findIndex((column) => column.columnId === this.activeCell?.columnId),
       0,
@@ -255,8 +286,22 @@ export class BrunoTableNavigationRuntime {
     ) {
       return false;
     }
+    const previousHeaderColumnId =
+      this.activeCell?.region === "header" ? this.activeCell.columnId : undefined;
+    const nextHeaderColumnId = next?.region === "header" ? next.columnId : undefined;
     this.activeCell = next === undefined ? undefined : Object.freeze(next);
     for (const listener of this.listeners) listener();
+    const changedColumnIds = new Set(
+      [previousHeaderColumnId, nextHeaderColumnId].filter(
+        (columnId): columnId is string => columnId !== undefined,
+      ),
+    );
+    for (const columnId of changedColumnIds) {
+      const listeners = this.columnListeners.get(columnId);
+      if (listeners !== undefined) {
+        for (const listener of listeners) listener();
+      }
+    }
     return true;
   };
 }
