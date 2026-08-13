@@ -28,9 +28,11 @@ for layout and applies the committed value to its CSS width variable.
 
 During a pointer resize, BrunoTable writes the provisional width to the grid's CSS variable from
 the imperative animation-frame path. Ordinary preview frames change neither React state nor the
-durable runtime snapshot. If the preview crosses the deterministic narrow-width
-pinning-suspension threshold, the viewport may publish one structural snapshot so the mounted
-start/centre/end regions remain geometrically valid; this is a bounded region-shape transition,
+durable runtime snapshot. If the preview crosses the deterministic narrow-width pinning-suspension
+threshold, or if its recalculated centre window no longer fits inside the currently mounted slice,
+the viewport may publish one bounded structural snapshot for that preview call so the mounted
+start/centre/end regions remain geometrically valid. The latter covers, for example, shrinking a
+wide first centre column until later columns must mount. This is a bounded region-shape transition,
 not a committed layout update. Finishing the gesture cancels any pending frame, clears the
 preview, and emits one final typed command; cancelling or unmounting emits none. Pointer reorder
 uses the same geometry-owned transform preview rule.

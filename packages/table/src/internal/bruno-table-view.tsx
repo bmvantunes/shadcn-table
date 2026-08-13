@@ -120,6 +120,7 @@ type BrunoTableColumnWindow = Readonly<
     | "pinnedStart"
     | "center"
     | "pinnedEnd"
+    | "pinningSuspended"
     | "centerStartIndex"
     | "centerCount"
     | "leftPadding"
@@ -139,6 +140,7 @@ type BrunoTableColumnGesture = {
   readonly maxWidth: number;
   readonly direction: "ltr" | "rtl";
   readonly sourcePinned: "start" | "end" | undefined;
+  readonly pinningSuspended: boolean;
   readonly groupStart: number;
   readonly groupEnd: number;
   readonly target: HTMLElement;
@@ -1009,6 +1011,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         pinnedStart: virtualWindow.pinnedStart,
         center: virtualWindow.center,
         pinnedEnd: virtualWindow.pinnedEnd,
+        pinningSuspended: virtualWindow.pinningSuspended,
         centerStartIndex: virtualWindow.centerStartIndex,
         centerCount: virtualWindow.centerCount,
         leftPadding: virtualWindow.leftPadding,
@@ -1019,6 +1022,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       virtualWindow.pinnedStart,
       virtualWindow.center,
       virtualWindow.pinnedEnd,
+      virtualWindow.pinningSuspended,
       virtualWindow.centerStartIndex,
       virtualWindow.centerCount,
       virtualWindow.leftPadding,
@@ -1184,9 +1188,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const remainingCells = headerCells.filter((cell) => cell.columnIndex !== gesture.sourceIndex);
     if (!remainingCells.some((cell) => logicalColumns[cell.columnIndex]?.pinned === undefined)) {
       // A narrow centreless layout temporarily renders formerly pinned columns
-      // in the centre window. Dropping within that window must preserve the
-      // source pin; it is not an implicit unpin command.
-      return gesture.sourcePinned;
+      // in the centre window. Only that suspended projection preserves the
+      // source pin; a fitting all-pinned layout keeps the centre gap as the
+      // pointer's explicit unpin drop zone.
+      return gesture.pinningSuspended ? gesture.sourcePinned : undefined;
     }
     let referenceCell = remainingCells.at(-1);
     for (const cell of remainingCells) {
@@ -1519,6 +1524,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       maxWidth: runtime.getColumnCommandSnapshot(column.columnId).maxWidth,
       direction,
       sourcePinned: column.pinned,
+      pinningSuspended: columnWindow.pinningSuspended,
       groupStart: 0,
       groupEnd: Math.max(0, logicalColumns.length - 1),
       target,

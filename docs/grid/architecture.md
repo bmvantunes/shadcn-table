@@ -658,10 +658,12 @@ mutable width store in the Adapter.
 
 Pointer resize previews write CSS width variables from an imperative, frame-batched geometry path.
 Ordinary preview frames do not publish React state, update the durable layout snapshot, or rebuild
-the row model. The only structural exception is a single viewport publication when a preview
-crosses the deterministic narrow-width pinning-suspension threshold; that publication changes the
-mounted region shape, not the committed column layout, and is bounded to the threshold
-transition. Keyboard resize and the final pointer release dispatch one typed
+the row model. The bounded structural exceptions are a viewport publication when a preview crosses
+the deterministic narrow-width pinning-suspension threshold, or when a recalculated preview window
+no longer fits inside the currently mounted centre slice (for example, shrinking a wide first
+centre column exposes later columns). Each preview call publishes at most one viewport snapshot;
+these publications change the mounted region shape, not the committed column layout. Keyboard
+resize and the final pointer release dispatch one typed
 `column.resize.commit`; cancellation and unmount clear the preview and detach the gesture's
 global listeners without committing. Pointer reorder follows the same rule with CSS transforms and
 one final `column.reorder.commit`. See
