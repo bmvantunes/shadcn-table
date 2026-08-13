@@ -1,11 +1,13 @@
+import { BRUNO_TABLE_TEST_LISTENER_DIAGNOSTIC_SENTINEL } from "./test-diagnostic-build-contract";
+
 const registrationCounts = new WeakMap<Set<unknown>, Map<unknown, number>>();
 
 export function installTableScopedListener<T>(
   listenersByTableId: Map<string, Set<T>>,
   tableId: string,
   listener: T,
-  onInstall?: () => void,
-  onRemove?: () => void,
+  onInstall?: (buildContract: string) => void,
+  onRemove?: (buildContract: string) => void,
 ): () => void {
   let listeners = listenersByTableId.get(tableId);
   if (listeners === undefined) {
@@ -19,7 +21,7 @@ export function installTableScopedListener<T>(
     registrationCounts.set(listeners as Set<unknown>, registrations);
   }
   registrations.set(listener, (registrations.get(listener) ?? 0) + 1);
-  onInstall?.();
+  onInstall?.(BRUNO_TABLE_TEST_LISTENER_DIAGNOSTIC_SENTINEL);
   let active = true;
   return () => {
     if (!active) return;
@@ -37,6 +39,6 @@ export function installTableScopedListener<T>(
     if (listeners?.size === 0 && listenersByTableId.get(tableId) === listeners) {
       listenersByTableId.delete(tableId);
     }
-    onRemove?.();
+    onRemove?.(BRUNO_TABLE_TEST_LISTENER_DIAGNOSTIC_SENTINEL);
   };
 }

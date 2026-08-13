@@ -2,6 +2,8 @@ import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "vite-plus";
 
+import { brunoTableProductionDefines } from "./config/production-defines.js";
+
 const reactCompilerOptions = {
   compilationMode: "infer",
   target: "19",
@@ -15,19 +17,11 @@ const reactCompilerForLibrary = await babel({
   plugins: [["babel-plugin-react-compiler", reactCompilerOptions]],
 });
 
-const brunoTableDevelopmentDefine = {
-  name: "bruno-table-development-define",
-  transform(code: string, id: string) {
-    if (!id.endsWith("/src/bruno-table-client.tsx")) return;
-    return code.replaceAll(
-      "__BRUNO_TABLE_DEVELOPMENT__",
-      'globalThis.process?.env?.NODE_ENV !== "production"',
-    );
-  },
-};
-
 const config: UserConfig = defineConfig({
-  define: { __BRUNO_TABLE_DEVELOPMENT__: "true" },
+  define: {
+    __BRUNO_TABLE_DEVELOPMENT__: "true",
+    __BRUNO_TABLE_TEST_DIAGNOSTICS__: "true",
+  },
   plugins: [react(), reactCompilerForVite],
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
@@ -69,7 +63,7 @@ const config: UserConfig = defineConfig({
         };
       },
     },
-    plugins: [reactCompilerForLibrary, brunoTableDevelopmentDefine],
+    plugins: [brunoTableProductionDefines(), reactCompilerForLibrary],
   },
   lint: {
     ignorePatterns: ["tests/emitted-consumer/**"],

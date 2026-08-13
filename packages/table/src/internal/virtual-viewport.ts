@@ -860,7 +860,9 @@ export class BrunoTableViewportRuntime {
     if (element === null) return;
     const set = (property: string, value: string): void => {
       element.style.setProperty(property, value);
-      recordBrunoTableClientColumnPreviewStyleWrite(property);
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableClientColumnPreviewStyleWrite(property);
+      }
       this.previewStyleProperties.add(property);
     };
     const column = this.layout.columns.find((candidate) => candidate.columnId === columnId);

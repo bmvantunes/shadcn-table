@@ -60,6 +60,13 @@ import type {
 
 import type { CompiledColumn } from "./compile-columns";
 import {
+  BrunoTableCellCommitDiagnosticProbe,
+  BrunoTableGridSurfaceCommitDiagnosticProbe,
+  BrunoTableHeaderCommitDiagnosticProbe,
+  BrunoTableRowCommitDiagnosticProbe,
+  BrunoTableViewCommitDiagnosticProbe,
+} from "./commit-diagnostic-probes";
+import {
   createBrunoTableColumnGestureActor,
   type BrunoTableColumnGestureActor,
 } from "./column-gesture";
@@ -93,16 +100,11 @@ import type {
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import {
-  recordBrunoTableClientCellRender,
   recordBrunoTableClientColumnPreviewStyleWrite,
   recordBrunoTableClientColumnReorderFrame,
   recordBrunoTableClientColumnResizeFrame,
   recordBrunoTableClientColumnGestureFrame,
   recordBrunoTableClientColumnGestureListener,
-  recordBrunoTableClientGridSurfaceRender,
-  recordBrunoTableClientHeaderRender,
-  recordBrunoTableClientRowRender,
-  recordBrunoTableClientViewRender,
   hasBrunoTableClientColumnGestureFrameListener,
 } from "./render-instrumentation";
 import {
@@ -399,7 +401,6 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   rowPipeline,
   rowPipelineAdapter,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
-  useLayoutEffect(() => recordBrunoTableClientViewRender(tableId));
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
     () => () => tableElement.current?.focus({ preventScroll: true }),
@@ -413,6 +414,9 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       data-bruno-table={tableId}
       tabIndex={-1}
     >
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableViewCommitDiagnosticProbe commitEvidence={compiledColumns} tableId={tableId} />
+      ) : null}
       <ToolbarOutlet toolbar={toolbar} />
       <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
       <BrunoTableGridBody
@@ -1003,7 +1007,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     rowId?: string,
   ) => void;
 }) {
-  useLayoutEffect(() => recordBrunoTableClientGridSurfaceRender(tableId));
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
     () =>
@@ -1143,7 +1146,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const grid = gridElement.current;
     if (grid === null) return;
     grid.style.setProperty(property, value);
-    recordBrunoTableClientColumnPreviewStyleWrite(property);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnPreviewStyleWrite(property);
+    }
     previewProperties.current.add(property);
   };
 
@@ -1156,7 +1161,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     });
     previewColumnWidth(gesture.columnId, width);
     gesture.target.setAttribute("aria-valuenow", String(width));
-    recordBrunoTableClientColumnResizeFrame();
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientColumnResizeFrame();
   };
 
   const readReorderGeometry = (direction: "ltr" | "rtl"): readonly BrunoTableReorderGeometry[] =>
@@ -1302,7 +1307,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     } else {
       reorderTarget.current = null;
     }
-    recordBrunoTableClientColumnReorderFrame();
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientColumnReorderFrame();
     gesture.reorderPreviewApplied = true;
     return true;
   };
@@ -1310,7 +1315,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const scheduleGestureFrame = (): void => {
     const gesture = columnGesture.current;
     if (gesture === undefined || gesture.frame !== null) return;
-    const measureFrame = hasBrunoTableClientColumnGestureFrameListener(tableId);
+    const measureFrame =
+      __BRUNO_TABLE_TEST_DIAGNOSTICS__ && hasBrunoTableClientColumnGestureFrameListener(tableId);
     const frameId = requestAnimationFrame(() => {
       const startedAt = measureFrame ? performance.now() : undefined;
       gesture.frame = null;
@@ -1352,7 +1358,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       (gesture.previewedX !== gesture.currentX ||
         (gesture.kind === "reorder" && !gesture.reorderPreviewApplied));
     if (needsSynchronousFinalPreview) {
-      const measureSynchronousWork = hasBrunoTableClientColumnGestureFrameListener(tableId);
+      const measureSynchronousWork =
+        __BRUNO_TABLE_TEST_DIAGNOSTICS__ && hasBrunoTableClientColumnGestureFrameListener(tableId);
       const startedAt = measureSynchronousWork ? performance.now() : undefined;
       if (gesture.kind === "resize") applyResizePreview(gesture);
       else if (applyReorderPreview(gesture, false)) gesture.previewedX = gesture.currentX;
@@ -1367,33 +1374,43 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (gesture.frame !== null) {
       const frameId = gesture.frame;
       cancelAnimationFrame(frameId);
-      recordBrunoTableClientColumnGestureFrame(tableId, {
-        phase: "cancelled",
-        kind: gesture.kind,
-        frameId,
-      });
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableClientColumnGestureFrame(tableId, {
+          phase: "cancelled",
+          kind: gesture.kind,
+          frameId,
+        });
+      }
     }
     gesture.frame = null;
     window.removeEventListener("pointermove", gesture.onPointerMove, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "detach",
-      event: "pointermove",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "detach",
+        event: "pointermove",
+      });
+    }
     window.removeEventListener("pointerup", gesture.onPointerUp, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "detach",
-      event: "pointerup",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "detach",
+        event: "pointerup",
+      });
+    }
     window.removeEventListener("pointercancel", gesture.onPointerCancel, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "detach",
-      event: "pointercancel",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "detach",
+        event: "pointercancel",
+      });
+    }
     window.removeEventListener("keydown", gesture.onKeyDown, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "detach",
-      event: "keydown",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "detach",
+        event: "keydown",
+      });
+    }
     try {
       if (gesture.target.hasPointerCapture?.(gesture.pointerId)) {
         gesture.target.releasePointerCapture?.(gesture.pointerId);
@@ -1554,25 +1571,33 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     };
     columnGestureActor.send({ type: "START", kind });
     window.addEventListener("pointermove", columnGesture.current.onPointerMove, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "attach",
-      event: "pointermove",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "attach",
+        event: "pointermove",
+      });
+    }
     window.addEventListener("pointerup", columnGesture.current.onPointerUp, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "attach",
-      event: "pointerup",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "attach",
+        event: "pointerup",
+      });
+    }
     window.addEventListener("pointercancel", columnGesture.current.onPointerCancel, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "attach",
-      event: "pointercancel",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "attach",
+        event: "pointercancel",
+      });
+    }
     window.addEventListener("keydown", columnGesture.current.onKeyDown, true);
-    recordBrunoTableClientColumnGestureListener(tableId, {
-      phase: "attach",
-      event: "keydown",
-    });
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnGestureListener(tableId, {
+        phase: "attach",
+        event: "keydown",
+      });
+    }
     if (kind === "resize") {
       writePreviewProperty(
         brunoTableColumnCssVariable("width", column.columnId),
@@ -1769,6 +1794,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 
   return (
     <div style={{ position: "relative" }}>
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableGridSurfaceCommitDiagnosticProbe
+          commitEvidence={[columns, columnLayout, queryGeneration, rowSpace, viewportSnapshot]}
+          tableId={tableId}
+        />
+      ) : null}
       <div
         ref={attachGrid}
         data-bruno-scroll-owner=""
@@ -2326,7 +2357,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   readonly viewportFill: number;
   readonly visibleColumnIds: readonly string[];
 }) {
-  useLayoutEffect(() => recordBrunoTableClientHeaderRender(tableId));
   return (
     <thead
       role="rowgroup"
@@ -2339,6 +2369,9 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
       }}
     >
       <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
+        {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+          <BrunoTableHeaderCommitDiagnosticProbe commitEvidence={columnWindow} tableId={tableId} />
+        ) : null}
         {columnWindow.pinnedStart.map((column, index) => (
           <BrunoTableHeaderCell
             allColumns={allColumns}
@@ -3090,24 +3123,7 @@ const UnloadedRow = memo(function UnloadedRow({
   );
 });
 
-const BrunoTableRow = memo(function BrunoTableRow({
-  attachBodyLayer,
-  rowId,
-  instanceId,
-  tableId,
-  centerStartIndex,
-  pinnedStartCount,
-  runtime,
-  center,
-  pinnedStart,
-  pinnedEnd,
-  leftPadding,
-  rightPadding,
-  viewportFill,
-  logicalRowIndex,
-  top,
-  width,
-}: {
+type BrunoTableRowProps = Readonly<{
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly rowId: string;
   readonly instanceId: string;
@@ -3124,12 +3140,27 @@ const BrunoTableRow = memo(function BrunoTableRow({
   readonly logicalRowIndex: number;
   readonly top: number;
   readonly width: number;
-}) {
-  // Render-count diagnostics must observe committed rows, never execute external listeners during
-  // React render, because a concurrent render can be abandoned before it reaches the DOM.
-  useLayoutEffect(() => {
-    recordBrunoTableClientRowRender(tableId, rowId);
-  });
+}>;
+
+const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
+  const {
+    attachBodyLayer,
+    rowId,
+    instanceId,
+    tableId,
+    centerStartIndex,
+    pinnedStartCount,
+    runtime,
+    center,
+    pinnedStart,
+    pinnedEnd,
+    leftPadding,
+    rightPadding,
+    viewportFill,
+    logicalRowIndex,
+    top,
+    width,
+  } = props;
   const ownedCells = useMemo(
     () =>
       [...pinnedStart, ...center, ...pinnedEnd]
@@ -3155,6 +3186,13 @@ const BrunoTableRow = memo(function BrunoTableRow({
         width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(width)}px)`,
       }}
     >
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableRowCommitDiagnosticProbe
+          commitEvidence={props}
+          rowId={rowId}
+          tableId={tableId}
+        />
+      ) : null}
       {pinnedStart.length > 0 ? (
         <td
           aria-hidden="true"
@@ -3365,21 +3403,17 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
   );
 });
 
-const BrunoTableCell = memo(function BrunoTableCell({
-  runtime,
-  rowId,
-  instanceId,
-  tableId,
-  columnIndex,
-  column,
-}: {
+type BrunoTableCellProps = Readonly<{
   readonly runtime: BrunoTableRuntimeView;
   readonly rowId: string;
   readonly instanceId?: string;
   readonly tableId?: string;
   readonly columnIndex?: number;
   readonly column: CompiledColumn;
-}) {
+}>;
+
+const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) {
+  const { runtime, rowId, instanceId, tableId, columnIndex, column } = props;
   const rowAware = cellPresentationUsesRawRow(column);
   const subscribe = useMemo(
     () => (listener: () => void) =>
@@ -3400,9 +3434,6 @@ const BrunoTableCell = memo(function BrunoTableCell({
   const value = rowAware
     ? runtime.getCellValueSnapshot(rowId, column.columnId)
     : cellSnapshot?.value;
-  useLayoutEffect(() => {
-    recordBrunoTableClientCellRender(rowId, column.columnId, tableId);
-  });
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
   const className = invalid || rowMissing ? undefined : resolveCellClassName(column, row, value);
   const content = rowMissing ? null : invalid ? (
@@ -3450,6 +3481,14 @@ const BrunoTableCell = memo(function BrunoTableCell({
       role="gridcell"
       style={cellStyle}
     >
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableCellCommitDiagnosticProbe
+          columnId={column.columnId}
+          commitEvidence={[props, snapshot]}
+          rowId={rowId}
+          tableId={tableId}
+        />
+      ) : null}
       {cellContent}
     </td>
   );

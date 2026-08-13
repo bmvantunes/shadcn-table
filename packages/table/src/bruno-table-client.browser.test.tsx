@@ -6018,6 +6018,69 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("reports committed row and cell probes in the browser development build", async () => {
+    const rowRenders = vi.fn();
+    const cellRenders = vi.fn();
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(props.tableId, rowRenders);
+    const removeCells = installBrunoTableClientCellRenderListenerForTable(
+      props.tableId,
+      cellRenders,
+    );
+    try {
+      const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+
+      await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+      expect(rowRenders).toHaveBeenCalledWith("grace");
+      expect(cellRenders).toHaveBeenCalledWith("grace", "COL_ID_NAME");
+    } finally {
+      removeCells();
+      removeRows();
+    }
+  });
+
+  test("reports position-only row commits and column-only cell commits", async () => {
+    const rowRenders = vi.fn();
+    const cellRenders = vi.fn();
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(props.tableId, rowRenders);
+    const removeCells = installBrunoTableClientCellRenderListenerForTable(
+      props.tableId,
+      cellRenders,
+    );
+    try {
+      const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+      await expect.element(screen.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+
+      rowRenders.mockClear();
+      cellRenders.mockClear();
+      await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Name" }))
+        .toHaveAttribute("aria-sort", "ascending");
+      await vi.waitFor(() =>
+        expect(rowRenders.mock.calls.map(([rowId]) => rowId)).toEqual(
+          expect.arrayContaining(["ada", "grace"]),
+        ),
+      );
+
+      cellRenders.mockClear();
+      const resize = screen.getByRole("separator", { name: "Resize Name" });
+      resize.element().focus();
+      await userEvent.keyboard("{ArrowRight}");
+      await expect.element(resize).toHaveAttribute("aria-valuenow", "170");
+      await vi.waitFor(() =>
+        expect(cellRenders.mock.calls).toEqual(
+          expect.arrayContaining([
+            ["ada", "COL_ID_NAME"],
+            ["grace", "COL_ID_NAME"],
+          ]),
+        ),
+      );
+    } finally {
+      removeCells();
+      removeRows();
+    }
+  });
+
   test("reports row and cell renders only after a suspended tree commits", async () => {
     let releaseSuspension!: () => void;
     let suspended = true;
