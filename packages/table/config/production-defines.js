@@ -2,6 +2,21 @@ import { transformAsync, types as babelTypes } from "@babel/core";
 
 function replaceBrunoTableProductionDefines(replaceDevelopment) {
   const diagnosticFalseNodes = new WeakSet();
+  const createNodeEnvironment = () =>
+    babelTypes.optionalMemberExpression(
+      babelTypes.optionalMemberExpression(
+        babelTypes.memberExpression(
+          babelTypes.identifier("globalThis"),
+          babelTypes.identifier("process"),
+        ),
+        babelTypes.identifier("env"),
+        false,
+        true,
+      ),
+      babelTypes.identifier("NODE_ENV"),
+      false,
+      true,
+    );
   return {
     name: "replace-bruno-table-production-defines",
     visitor: {
@@ -13,25 +28,19 @@ function replaceBrunoTableProductionDefines(replaceDevelopment) {
           return;
         }
         if (!replaceDevelopment || path.node.name !== "__BRUNO_TABLE_DEVELOPMENT__") return;
-        const processEnvironment = babelTypes.optionalMemberExpression(
-          babelTypes.optionalMemberExpression(
-            babelTypes.memberExpression(
-              babelTypes.identifier("globalThis"),
-              babelTypes.identifier("process"),
-            ),
-            babelTypes.identifier("env"),
-            false,
-            true,
-          ),
-          babelTypes.identifier("NODE_ENV"),
-          false,
-          true,
-        );
         path.replaceWith(
-          babelTypes.binaryExpression(
-            "!==",
-            processEnvironment,
-            babelTypes.stringLiteral("production"),
+          babelTypes.logicalExpression(
+            "&&",
+            babelTypes.binaryExpression(
+              "===",
+              babelTypes.unaryExpression("typeof", createNodeEnvironment()),
+              babelTypes.stringLiteral("string"),
+            ),
+            babelTypes.binaryExpression(
+              "!==",
+              createNodeEnvironment(),
+              babelTypes.stringLiteral("production"),
+            ),
           ),
         );
       },
