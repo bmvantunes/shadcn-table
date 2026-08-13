@@ -1,4 +1,5 @@
 import type { BrunoTableGridCommand } from "./column-management";
+import { installTableScopedListener } from "./listener-registry";
 
 type GridCommandListener = (command: BrunoTableGridCommand) => void;
 
@@ -22,21 +23,15 @@ export function installBrunoTableGridCommandListener(
   tableId: string,
   listener: GridCommandListener,
 ): () => void {
-  let listeners = listenersByTableId.get(tableId);
-  if (listeners === undefined) {
-    listeners = new Set<GridCommandListener>();
-    listenersByTableId.set(tableId, listeners);
-  }
-  listeners.add(listener);
-  listenerCount += 1;
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    listeners?.delete(listener);
-    if (listeners?.size === 0 && listenersByTableId.get(tableId) === listeners) {
-      listenersByTableId.delete(tableId);
-    }
-    listenerCount -= 1;
-  };
+  return installTableScopedListener(
+    listenersByTableId,
+    tableId,
+    listener,
+    () => {
+      listenerCount += 1;
+    },
+    () => {
+      listenerCount -= 1;
+    },
+  );
 }

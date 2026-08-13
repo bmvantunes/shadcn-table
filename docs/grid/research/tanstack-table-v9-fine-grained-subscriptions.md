@@ -97,7 +97,7 @@ const writeCommittedColumnWidths = () => {
 };
 
 writeCommittedColumnWidths();
-const unsubscribe = brunoTableLayoutRuntime.subscribeColumnLayout(writeCommittedColumnWidths);
+const unsubscribe = gridRuntimeView.subscribeColumnLayout(writeCommittedColumnWidths);
 
 return unsubscribe;
 ```

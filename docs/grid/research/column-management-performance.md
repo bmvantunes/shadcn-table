@@ -14,7 +14,7 @@ pointer reorder each:
   viewport publication);
 - commit exactly once at pointer release through the typed private Grid Command boundary;
 - keep row-order planning and mounted-cell publication within fixed bounds for the fixture's
-  mounted row/column window rather than the complete 160-column definition; and
+  mounted row/column window rather than the complete 160-column definition;
 - write only one resize preview property and no more than the fixed mounted-column reorder preview
   bound; and
 - leave no render/listener work pending after cancellation or unmount.

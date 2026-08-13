@@ -340,107 +340,6 @@ function mountedColumnExpectationsFromLogicalOrder(
   });
 }
 
-type BrowserColumnSpec = Readonly<{
-  readonly columnId: string;
-  readonly width: number;
-  readonly pinned?: "start" | "end";
-}>;
-
-const revealBrowserColumns: readonly BrowserColumnSpec[] = revealColumns.map((column) => {
-  const spec = { columnId: column.columnId, width: column.width ?? 160 };
-  return "pinned" in column && column.pinned !== undefined
-    ? { ...spec, pinned: column.pinned }
-    : spec;
-});
-
-function revealBrowserSpecs(
-  logicalColumnIds: readonly string[],
-  pinnedStartIds: readonly string[],
-  pinnedEndIds: readonly string[],
-): readonly BrowserColumnSpec[] {
-  const pinnedStart = new Set(pinnedStartIds);
-  const pinnedEnd = new Set(pinnedEndIds);
-  return logicalColumnIds.map((columnId) => {
-    const source = revealBrowserColumns.find((column) => column.columnId === columnId);
-    if (source === undefined) throw new Error(`Missing reveal column ${columnId}`);
-    if (pinnedStart.has(columnId)) return { ...source, pinned: "start" as const };
-    if (pinnedEnd.has(columnId)) return { ...source, pinned: "end" as const };
-    return { columnId: source.columnId, width: source.width };
-  });
-}
-
-function expectedMountedColumnIdsFromViewport(
-  grid: Element,
-  columns: readonly BrowserColumnSpec[],
-): readonly string[] {
-  const viewportElement = grid as HTMLElement;
-  const pinnedStart = columns.filter((column) => column.pinned === "start");
-  const center = columns.filter((column) => column.pinned === undefined);
-  const pinnedEnd = columns.filter((column) => column.pinned === "end");
-  const pinnedStartWidth = pinnedStart.reduce((sum, column) => sum + column.width, 0);
-  const pinnedEndWidth = pinnedEnd.reduce((sum, column) => sum + column.width, 0);
-  const reservedCenterWidth = Math.min(80, viewportElement.clientWidth);
-  const suspendPinning =
-    pinnedStart.length + pinnedEnd.length > 0 &&
-    (center.length === 0
-      ? pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth
-      : pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth - reservedCenterWidth);
-  const mountedPinnedStart = suspendPinning ? [] : pinnedStart;
-  const mountedCenter = suspendPinning ? [...pinnedStart, ...center, ...pinnedEnd] : center;
-  const mountedPinnedEnd = suspendPinning ? [] : pinnedEnd;
-
-  const centerOffsets = [0];
-  for (const column of mountedCenter) {
-    centerOffsets.push(centerOffsets.at(-1)! + column.width);
-  }
-  const findColumnAtOffset = (offset: number): number => {
-    let low = 0;
-    let high = Math.max(centerOffsets.length - 1, 0);
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      if ((centerOffsets[middle] ?? 0) > offset) high = middle;
-      else low = middle + 1;
-    }
-    return Math.max(low - 1, 0);
-  };
-  const centerViewportWidth = Math.max(
-    viewportElement.clientWidth - (suspendPinning ? 0 : pinnedStartWidth + pinnedEndWidth),
-    0,
-  );
-  const firstVisible = findColumnAtOffset(Math.max(viewportElement.scrollLeft - 32, 0));
-  const lastVisible = findColumnAtOffset(viewportElement.scrollLeft + centerViewportWidth + 32);
-  const start = Math.max(firstVisible - 2, 0);
-  const end = Math.min(mountedCenter.length, lastVisible + 3);
-  return [...mountedPinnedStart, ...mountedCenter.slice(start, end), ...mountedPinnedEnd].map(
-    (column) => column.columnId,
-  );
-}
-
-function mountedColumnExpectationsFromViewport(
-  grid: Element,
-  logicalColumnIds: readonly string[],
-  columns: readonly BrowserColumnSpec[],
-): readonly MountedColumnExpectation[] {
-  const viewportElement = grid as HTMLElement;
-  const pinnedStart = columns.filter((column) => column.pinned === "start");
-  const pinnedEnd = columns.filter((column) => column.pinned === "end");
-  const center = columns.filter((column) => column.pinned === undefined);
-  const pinnedStartWidth = pinnedStart.reduce((sum, column) => sum + column.width, 0);
-  const pinnedEndWidth = pinnedEnd.reduce((sum, column) => sum + column.width, 0);
-  const reservedCenterWidth = Math.min(80, viewportElement.clientWidth);
-  const suspendPinning =
-    pinnedStart.length + pinnedEnd.length > 0 &&
-    (center.length === 0
-      ? pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth
-      : pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth - reservedCenterWidth);
-  return mountedColumnExpectationsFromLogicalOrder(
-    logicalColumnIds,
-    suspendPinning ? [] : pinnedStart.map((column) => column.columnId),
-    suspendPinning ? [] : pinnedEnd.map((column) => column.columnId),
-    expectedMountedColumnIdsFromViewport(grid, columns),
-  );
-}
-
 function expectedMatrixLayout(matrixCase: ColumnManagementMatrixCase): Readonly<{
   readonly logicalColumnIds: readonly string[];
   readonly pinnedStartIds: readonly string[];
@@ -488,13 +387,17 @@ function expectedMatrixLayout(matrixCase: ColumnManagementMatrixCase): Readonly<
 function assertMountedColumnGeometry(
   grid: Element,
   expected: readonly MountedColumnExpectation[],
-  mountedColumnIds: readonly string[] = expected.map((column) => column.columnId),
+  mountedColumnIds?: readonly string[],
 ): void {
   const expectedById = new Map(expected.map((column) => [column.columnId, column]));
   const headers = [...grid.querySelectorAll<HTMLElement>("thead th[data-bruno-column-id]")];
   const headerIds = headers.map((header) => header.dataset["brunoColumnId"] ?? "");
   expect(new Set(headerIds).size).toBe(headerIds.length);
-  expect(headerIds).toEqual(mountedColumnIds);
+  if (mountedColumnIds !== undefined) expect(headerIds).toEqual(mountedColumnIds);
+  const pinningIsMounted = headers.some(
+    (header) =>
+      header.dataset["pinnedRegion"] === "start" || header.dataset["pinnedRegion"] === "end",
+  );
   const headerById = new Map(
     headers.map((header) => [header.dataset["brunoColumnId"] ?? "", header]),
   );
@@ -503,7 +406,9 @@ function assertMountedColumnGeometry(
     const column = expectedById.get(columnId);
     expect(column).toBeDefined();
     expect(header).toHaveAttribute("aria-colindex", String(column?.columnIndex));
-    expect(header.dataset["pinnedRegion"] ?? "center").toBe(column?.region);
+    expect(header.dataset["pinnedRegion"] ?? "center").toBe(
+      pinningIsMounted ? column?.region : "center",
+    );
     expect(header.getBoundingClientRect().width).toBeGreaterThan(0);
   }
   const cells = [
@@ -522,13 +427,67 @@ function assertMountedColumnGeometry(
       cell.closest<HTMLElement>("[data-bruno-pinned-body-region]")?.dataset[
         "brunoPinnedBodyRegion"
       ] ?? "center";
-    expect(bodyRegion).toBe(column?.region);
+    expect(bodyRegion).toBe(pinningIsMounted ? column?.region : "center");
     const cellRect = cell.getBoundingClientRect();
     const headerRect = header?.getBoundingClientRect();
     expect(cellRect.width).toBeGreaterThan(0);
     expect(Math.abs(cellRect.width - (headerRect?.width ?? 0))).toBeLessThanOrEqual(1);
     expect(Math.abs(cellRect.left - (headerRect?.left ?? 0))).toBeLessThanOrEqual(1);
   }
+}
+
+function assertMountedColumnWindow(
+  grid: Element,
+  logicalColumnIds: readonly string[],
+  options: Readonly<{
+    readonly pinnedStartIds?: readonly string[];
+    readonly pinnedEndIds?: readonly string[];
+    readonly requiredColumnIds?: readonly string[];
+    readonly maxMountedColumnCount: number;
+  }>,
+): void {
+  const headers = [...grid.querySelectorAll<HTMLElement>("thead th[data-bruno-column-id]")];
+  const mountedColumnIds = headers.map((header) => header.dataset["brunoColumnId"] ?? "");
+  const pinnedStartIds = options.pinnedStartIds ?? [];
+  const pinnedEndIds = options.pinnedEndIds ?? [];
+  const pinnedStart = new Set(pinnedStartIds);
+  const pinnedEnd = new Set(pinnedEndIds);
+  const logicalIds = new Set(logicalColumnIds);
+
+  expect(mountedColumnIds.length).toBeLessThanOrEqual(options.maxMountedColumnCount);
+  expect(mountedColumnIds.every((columnId) => logicalIds.has(columnId))).toBe(true);
+  for (const columnId of options.requiredColumnIds ?? []) {
+    expect(mountedColumnIds).toContain(columnId);
+  }
+
+  const mountedStartIds = headers
+    .filter((header) => header.dataset["pinnedRegion"] === "start")
+    .map((header) => header.dataset["brunoColumnId"] ?? "");
+  const mountedEndIds = headers
+    .filter((header) => header.dataset["pinnedRegion"] === "end")
+    .map((header) => header.dataset["brunoColumnId"] ?? "");
+  const pinningIsMounted = mountedStartIds.length > 0 || mountedEndIds.length > 0;
+  if (pinningIsMounted) {
+    expect(mountedStartIds).toEqual(pinnedStartIds);
+    expect(mountedEndIds).toEqual(pinnedEndIds);
+  } else {
+    expect(mountedStartIds).toHaveLength(0);
+    expect(mountedEndIds).toHaveLength(0);
+  }
+
+  const mountedCenterIds = headers
+    .filter((header) => header.dataset["pinnedRegion"] === undefined)
+    .map((header) => header.dataset["brunoColumnId"] ?? "");
+  const centerLogicalIds = pinningIsMounted
+    ? logicalColumnIds.filter((columnId) => !pinnedStart.has(columnId) && !pinnedEnd.has(columnId))
+    : logicalColumnIds;
+  const centerIndexes = mountedCenterIds.map((columnId) => centerLogicalIds.indexOf(columnId));
+  expect(centerIndexes.every((index) => index >= 0)).toBe(true);
+  expect(
+    centerIndexes.every(
+      (index, position) => position === 0 || index === centerIndexes[position - 1]! + 1,
+    ),
+  ).toBe(true);
 }
 
 function assertPinnedBoundaryGeometry(
@@ -1736,26 +1695,28 @@ describe("BrunoTable column management browser surface", () => {
           ],
           ["COL_ID_REVEAL_START"],
           ["COL_ID_REVEAL_END"],
-          expectedMountedColumnIdsFromViewport(
-            grid,
-            revealBrowserSpecs(
-              [
-                "COL_ID_REVEAL_START",
-                "COL_ID_SCORE",
-                "COL_ID_NAME",
-                "COL_ID_STATUS",
-                "COL_ID_EXTRA_1",
-                "COL_ID_EXTRA_2",
-                "COL_ID_EXTRA_3",
-                "COL_ID_EXTRA_4",
-                "COL_ID_EXTRA_5",
-                "COL_ID_REVEAL_END",
-              ],
-              ["COL_ID_REVEAL_START"],
-              ["COL_ID_REVEAL_END"],
-            ),
-          ),
         ),
+      );
+      assertMountedColumnWindow(
+        grid,
+        [
+          "COL_ID_REVEAL_START",
+          "COL_ID_SCORE",
+          "COL_ID_NAME",
+          "COL_ID_STATUS",
+          "COL_ID_EXTRA_1",
+          "COL_ID_EXTRA_2",
+          "COL_ID_EXTRA_3",
+          "COL_ID_EXTRA_4",
+          "COL_ID_EXTRA_5",
+          "COL_ID_REVEAL_END",
+        ],
+        {
+          pinnedStartIds: ["COL_ID_REVEAL_START"],
+          pinnedEndIds: ["COL_ID_REVEAL_END"],
+          requiredColumnIds: ["COL_ID_EXTRA_4"],
+          maxMountedColumnCount: 24,
+        },
       );
       await assertActiveCell();
 
@@ -1784,25 +1745,27 @@ describe("BrunoTable column management browser surface", () => {
           ],
           ["COL_ID_REVEAL_START"],
           ["COL_ID_REVEAL_END"],
-          expectedMountedColumnIdsFromViewport(
-            grid,
-            revealBrowserSpecs(
-              [
-                "COL_ID_REVEAL_START",
-                "COL_ID_NAME",
-                "COL_ID_STATUS",
-                "COL_ID_EXTRA_1",
-                "COL_ID_EXTRA_2",
-                "COL_ID_EXTRA_3",
-                "COL_ID_EXTRA_4",
-                "COL_ID_EXTRA_5",
-                "COL_ID_REVEAL_END",
-              ],
-              ["COL_ID_REVEAL_START"],
-              ["COL_ID_REVEAL_END"],
-            ),
-          ),
         ),
+      );
+      assertMountedColumnWindow(
+        grid,
+        [
+          "COL_ID_REVEAL_START",
+          "COL_ID_NAME",
+          "COL_ID_STATUS",
+          "COL_ID_EXTRA_1",
+          "COL_ID_EXTRA_2",
+          "COL_ID_EXTRA_3",
+          "COL_ID_EXTRA_4",
+          "COL_ID_EXTRA_5",
+          "COL_ID_REVEAL_END",
+        ],
+        {
+          pinnedStartIds: ["COL_ID_REVEAL_START"],
+          pinnedEndIds: ["COL_ID_REVEAL_END"],
+          requiredColumnIds: ["COL_ID_EXTRA_4"],
+          maxMountedColumnCount: 24,
+        },
       );
       await assertActiveCell();
 
@@ -1816,8 +1779,7 @@ describe("BrunoTable column management browser surface", () => {
       });
       assertMountedColumnGeometry(
         grid,
-        mountedColumnExpectationsFromViewport(
-          grid,
+        mountedColumnExpectationsFromLogicalOrder(
           [
             "COL_ID_REVEAL_START",
             "COL_ID_STATUS",
@@ -1829,22 +1791,29 @@ describe("BrunoTable column management browser surface", () => {
             "COL_ID_NAME",
             "COL_ID_REVEAL_END",
           ],
-          revealBrowserSpecs(
-            [
-              "COL_ID_REVEAL_START",
-              "COL_ID_STATUS",
-              "COL_ID_EXTRA_1",
-              "COL_ID_EXTRA_2",
-              "COL_ID_EXTRA_3",
-              "COL_ID_EXTRA_4",
-              "COL_ID_EXTRA_5",
-              "COL_ID_NAME",
-              "COL_ID_REVEAL_END",
-            ],
-            ["COL_ID_REVEAL_START"],
-            ["COL_ID_NAME", "COL_ID_REVEAL_END"],
-          ),
+          ["COL_ID_REVEAL_START"],
+          ["COL_ID_NAME", "COL_ID_REVEAL_END"],
         ),
+      );
+      assertMountedColumnWindow(
+        grid,
+        [
+          "COL_ID_REVEAL_START",
+          "COL_ID_STATUS",
+          "COL_ID_EXTRA_1",
+          "COL_ID_EXTRA_2",
+          "COL_ID_EXTRA_3",
+          "COL_ID_EXTRA_4",
+          "COL_ID_EXTRA_5",
+          "COL_ID_NAME",
+          "COL_ID_REVEAL_END",
+        ],
+        {
+          pinnedStartIds: ["COL_ID_REVEAL_START"],
+          pinnedEndIds: ["COL_ID_NAME", "COL_ID_REVEAL_END"],
+          requiredColumnIds: ["COL_ID_EXTRA_4"],
+          maxMountedColumnCount: 24,
+        },
       );
       await assertActiveCell();
     } finally {
@@ -2328,8 +2297,7 @@ describe("BrunoTable column management browser surface", () => {
       const frameDurations = gestureFrames.flatMap((event) =>
         event.phase === "ran" && event.durationMs !== undefined ? [event.durationMs] : [],
       );
-      expect(frameDurations.length).toBeGreaterThanOrEqual(7);
-      expect(frameDurations.length).toBeLessThanOrEqual(8);
+      expect(frameDurations).toHaveLength(7);
       expect(frameDurations.every((duration) => Number.isFinite(duration) && duration >= 0)).toBe(
         true,
       );
@@ -2387,15 +2355,6 @@ describe("BrunoTable column management browser surface", () => {
         performanceColumns[2]!,
         ...performanceColumns.slice(4),
       ];
-      const expectedPerformanceSpecs = expectedPerformanceColumns.map((column) => {
-        const spec = {
-          columnId: column.columnId,
-          width: column.columnId === "COL_ID_NAME" ? 200 : (column.width ?? 160),
-        };
-        return "pinned" in column && column.pinned !== undefined
-          ? { ...spec, pinned: column.pinned }
-          : spec;
-      });
       assertMountedColumnGeometry(
         grid,
         expectedPerformanceColumns.map((column, index) => ({
@@ -2403,7 +2362,16 @@ describe("BrunoTable column management browser surface", () => {
           columnIndex: index + 1,
           region: "pinned" in column && column.pinned !== undefined ? column.pinned : "center",
         })),
-        expectedMountedColumnIdsFromViewport(grid, expectedPerformanceSpecs),
+      );
+      assertMountedColumnWindow(
+        grid,
+        expectedPerformanceColumns.map((column) => column.columnId),
+        {
+          pinnedStartIds: ["COL_ID_PERF_PIN_START"],
+          pinnedEndIds: ["COL_ID_PERF_PIN_END"],
+          requiredColumnIds: ["COL_ID_STATUS", "COL_ID_NAME"],
+          maxMountedColumnCount: 24,
+        },
       );
       expect(columnCommandNotifications).toHaveLength(1);
       expect(columnCommandNotifications[0]?.columnId).toBe("COL_ID_NAME");

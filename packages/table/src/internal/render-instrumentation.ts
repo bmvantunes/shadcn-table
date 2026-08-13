@@ -1,3 +1,5 @@
+import { installTableScopedListener } from "./listener-registry";
+
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
 type RowRenderListener = (rowId: string) => void;
@@ -48,32 +50,6 @@ let hasGlobalViewRenderListener = false;
 let hasGlobalGridSurfaceRenderListener = false;
 let hasGlobalHeaderRenderListener = false;
 
-function installTableScopedListener<T>(
-  listenersByTableId: Map<string, Set<T>>,
-  tableId: string,
-  listener: T,
-  onInstall?: () => void,
-  onRemove?: () => void,
-): () => void {
-  let listeners = listenersByTableId.get(tableId);
-  if (listeners === undefined) {
-    listeners = new Set<T>();
-    listenersByTableId.set(tableId, listeners);
-  }
-  listeners.add(listener);
-  onInstall?.();
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    listeners?.delete(listener);
-    if (listeners?.size === 0 && listenersByTableId.get(tableId) === listeners) {
-      listenersByTableId.delete(tableId);
-    }
-    onRemove?.();
-  };
-}
-
 function notifySafely<T>(listeners: Iterable<T>, notify: (listener: T) => void): void {
   for (const listener of listeners) {
     try {
@@ -98,23 +74,17 @@ export function installBrunoTableClientColumnGestureListener(
   tableId: string,
   listener: ColumnGestureListener,
 ): () => void {
-  let listeners = clientColumnGestureListeners.get(tableId);
-  if (listeners === undefined) {
-    listeners = new Set<ColumnGestureListener>();
-    clientColumnGestureListeners.set(tableId, listeners);
-  }
-  listeners.add(listener);
-  clientColumnGestureListenerCount += 1;
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    listeners?.delete(listener);
-    if (listeners?.size === 0 && clientColumnGestureListeners.get(tableId) === listeners) {
-      clientColumnGestureListeners.delete(tableId);
-    }
-    clientColumnGestureListenerCount -= 1;
-  };
+  return installTableScopedListener(
+    clientColumnGestureListeners,
+    tableId,
+    listener,
+    () => {
+      clientColumnGestureListenerCount += 1;
+    },
+    () => {
+      clientColumnGestureListenerCount -= 1;
+    },
+  );
 }
 
 export function recordBrunoTableClientColumnGestureFrame(
@@ -138,23 +108,17 @@ export function installBrunoTableClientColumnGestureFrameListener(
   tableId: string,
   listener: ColumnGestureFrameListener,
 ): () => void {
-  let listeners = clientColumnGestureFrameListeners.get(tableId);
-  if (listeners === undefined) {
-    listeners = new Set<ColumnGestureFrameListener>();
-    clientColumnGestureFrameListeners.set(tableId, listeners);
-  }
-  listeners.add(listener);
-  clientColumnGestureFrameListenerCount += 1;
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    listeners?.delete(listener);
-    if (listeners?.size === 0 && clientColumnGestureFrameListeners.get(tableId) === listeners) {
-      clientColumnGestureFrameListeners.delete(tableId);
-    }
-    clientColumnGestureFrameListenerCount -= 1;
-  };
+  return installTableScopedListener(
+    clientColumnGestureFrameListeners,
+    tableId,
+    listener,
+    () => {
+      clientColumnGestureFrameListenerCount += 1;
+    },
+    () => {
+      clientColumnGestureFrameListenerCount -= 1;
+    },
+  );
 }
 
 export function recordBrunoTableClientRowOrderPlanning(tableId: string): void {
