@@ -37,6 +37,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
         rowPipelineAdapter.getPublication(),
         compiledColumns,
         rowPipelineAdapter.getQueryConfiguration(compiledColumns),
+        tableId,
       ),
   );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));

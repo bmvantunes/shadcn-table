@@ -182,7 +182,8 @@ The grid must support:
   - table state primitives
   - sorting/filtering configuration
   - header groups
-  - column sizing, visibility, order, and pinning
+  - visibility, order, and pinning; committed column widths remain owned by BrunoTable's
+    private layout runtime, with any TanStack sizing state derived privately if needed
 - TanStack Virtual or a custom adapter:
   - vertical and horizontal virtualization
   - isolated from React Compiler if required

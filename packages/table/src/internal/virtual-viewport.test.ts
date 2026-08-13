@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
-import { brunoTableColumnCssVariable } from "./column-management";
+import {
+  BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE,
+  brunoTableColumnCssVariable,
+} from "./column-management";
 import { BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT, BrunoTableViewportRuntime } from "./virtual-viewport";
 
 type TestRtlScrollType = "negative" | "default" | "reverse";
@@ -1135,12 +1138,131 @@ describe("BrunoTableViewportRuntime", () => {
       "300px",
     );
 
+    const publicationsAfterSuspension = publications.mock.calls.length;
+    viewport.previewColumnWidth("COL_ID_PREVIEW_START", 160);
+    expect(publications.mock.calls.length).toBeGreaterThan(publicationsAfterSuspension);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
+      "COL_ID_PREVIEW_START",
+    );
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
+
     viewport.clearColumnWidthPreview();
     expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
       "COL_ID_PREVIEW_START",
     );
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
     expect(removeProperty).toHaveBeenCalled();
+  });
+
+  it("publishes one bounded structural preview when shrinking a wide centre exposes columns", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_WIDE_PREVIEW",
+        field: "name",
+        headerName: "Wide preview",
+        valueType: "text" as const,
+        width: 800,
+      },
+      ...Array.from({ length: 12 }, (_unused, index) => ({
+        columnId: `COL_ID_EXPOSED_${String(index)}`,
+        field: "name" as const,
+        headerName: `Exposed ${String(index)}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    ]);
+    const setProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    const publications = vi.fn();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    viewport.subscribe(publications);
+
+    expect(
+      viewport.getSnapshot().virtualWindow.center.map(({ columnId }) => columnId),
+    ).not.toContain("COL_ID_EXPOSED_4");
+
+    viewport.previewColumnWidth("COL_ID_WIDE_PREVIEW", 100);
+
+    const previewWindow = viewport.getSnapshot().virtualWindow;
+    expect(previewWindow.center.map(({ columnId }) => columnId)).toContain("COL_ID_EXPOSED_3");
+    expect(publications).toHaveBeenCalledTimes(1);
+    expect(setProperty).toHaveBeenCalledWith(
+      brunoTableColumnCssVariable("width", "COL_ID_WIDE_PREVIEW"),
+      "100px",
+    );
+    expect(setProperty).toHaveBeenCalledWith(
+      BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE,
+      `${String(previewWindow.rightPadding)}px`,
+    );
+
+    const publicationCounts: number[] = [];
+    for (const width of [90, 80, 70, 60]) {
+      const publicationCountBeforePreview = publications.mock.calls.length;
+      viewport.previewColumnWidth("COL_ID_WIDE_PREVIEW", width);
+      publicationCounts.push(publications.mock.calls.length - publicationCountBeforePreview);
+    }
+    expect(publicationCounts).toEqual([0, 0, 1, 0]);
+    expect(publicationCounts.every((count) => count <= 1)).toBe(true);
+  });
+
+  it("keeps preview padding aligned with the retained mounted slice when widening a centre column", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_WIDEN_PREVIEW",
+        field: "name",
+        headerName: "Widen preview",
+        valueType: "text" as const,
+        width: 100,
+      },
+      ...Array.from({ length: 12 }, (_unused, index) => ({
+        columnId: `COL_ID_WIDENED_${String(index)}`,
+        field: "name" as const,
+        headerName: `Widened ${String(index)}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    ]);
+    const setProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    const publications = vi.fn();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    viewport.subscribe(publications);
+
+    const mountedWindow = viewport.getSnapshot().virtualWindow;
+    expect(mountedWindow.center.length).toBeGreaterThan(3);
+    expect(mountedWindow.center[0]?.columnId).toBe("COL_ID_WIDEN_PREVIEW");
+
+    viewport.previewColumnWidth("COL_ID_WIDEN_PREVIEW", 800);
+
+    expect(publications).not.toHaveBeenCalled();
+    const rightPaddingWrites = setProperty.mock.calls
+      .filter(([property]) => property === BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE)
+      .map(([, value]) => value);
+    expect(rightPaddingWrites.at(-1)).toBe("800px");
   });
 
   it("clears an active width preview before replacing the viewport element", () => {

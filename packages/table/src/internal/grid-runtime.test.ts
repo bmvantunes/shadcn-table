@@ -70,6 +70,7 @@ function createClientRuntime(
     adapter.getPublication(),
     columns,
     adapter.getQueryConfiguration(columns),
+    "TABLE_ID_GRID_RUNTIME_CREATE_CLIENT",
   );
   const view = runtime.getView();
   const acceptCurrentRows = () => {
@@ -126,6 +127,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getPublication(),
       runtimeColumns,
       adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_GRID_RUNTIME_DETECTOR",
     );
     const detector = vi.fn<BrunoTableClientRowOrderChangeDetector>(() => true);
     const createDetector = vi.fn(() => detector);
@@ -170,6 +172,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
         ]),
       }),
+      "TABLE_ID_GRID_RUNTIME_SPARSE_LOADING",
     );
 
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
@@ -201,6 +204,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
         ]),
       }),
+      "TABLE_ID_GRID_RUNTIME_SPARSE_EMPTY",
     );
 
     expect(runtime.getBodySnapshot()).toEqual({ kind: "rows" });
@@ -931,6 +935,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getPublication(),
       numberColumns,
       adapter.getQueryConfiguration(numberColumns),
+      "TABLE_ID_GRID_RUNTIME_INVALID_VALUE",
     );
 
     const value = runtime.getCellValueSnapshot("invalid", "COL_ID_SCORE");
@@ -1126,6 +1131,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getPublication(),
       wideColumns,
       adapter.getQueryConfiguration(wideColumns),
+      "TABLE_ID_GRID_RUNTIME_LAZY_VALUES",
     );
 
     expect(runtime.getCellValueSnapshot("first", "COL_ID_LAZY_0000")).toBe("Ada");
@@ -1268,6 +1274,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getPublication(),
       canonicalColumns,
       adapter.getQueryConfiguration(canonicalColumns),
+      "TABLE_ID_GRID_RUNTIME_CANONICAL_VALUES",
     );
 
     expect(runtime.getRowSnapshot("first")).toBe(raw);
@@ -1320,6 +1327,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getPublication(),
       runtimeColumns,
       adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_GRID_RUNTIME_RETAINED_ROWS",
     );
     const rowsStore = adapter.createRowsStore(runtime.getView(), () => () => true);
     const unsubscribe = rowsStore.subscribe(() => undefined);

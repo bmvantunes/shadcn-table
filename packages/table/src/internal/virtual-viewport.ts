@@ -21,7 +21,10 @@ export type BrunoTableVirtualWindow = Readonly<{
   readonly pinnedStart: readonly CompiledColumn[];
   readonly center: readonly CompiledColumn[];
   readonly pinnedEnd: readonly CompiledColumn[];
+  /** Whether the deterministic narrow-width policy is projecting pinned columns into centre. */
+  readonly pinningSuspended: boolean;
   readonly centerStartIndex: number;
+  /** Full logical centre-column count; `center` is only the mounted virtual slice. */
   readonly centerCount: number;
   readonly leftPadding: number;
   readonly rightPadding: number;
@@ -140,6 +143,7 @@ export class BrunoTableViewportRuntime {
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private previewLayout: ViewportLayout | undefined;
+  private previewPublishedSuspended: boolean | undefined;
   private previewLogicalScrollLeft: number | undefined;
   private previewHorizontalState: PreviewHorizontalState | undefined;
   private readonly previewStyleProperties = new Set<string>();
@@ -255,6 +259,10 @@ export class BrunoTableViewportRuntime {
     if (columns === undefined) return;
     if (this.previewLayout === undefined) {
       this.previewLayout = this.layout;
+      this.previewPublishedSuspended =
+        this.element === null
+          ? undefined
+          : shouldSuspendPinning(this.layout, this.element.clientWidth);
       this.previewLogicalScrollLeft =
         this.element === null ? 0 : this.readLogicalScrollLeft(this.element);
       this.previewHorizontalState = Object.freeze({
@@ -280,10 +288,25 @@ export class BrunoTableViewportRuntime {
         height: element.clientHeight,
       };
       previewWindow = calculateVirtualWindow(this.layout, previewViewport);
-      if (!sameVirtualWindowStructure(this.snapshot.virtualWindow, previewWindow)) {
+      // Ordinary width previews keep the committed mounted window stable. A
+      // preview may publish one structural viewport snapshot when the current
+      // preview crosses the deterministic narrow-width policy boundary. Track
+      // the last published state so an oscillating preview publishes both the
+      // enter and exit transitions.
+      const isSuspended = shouldSuspendPinning(this.layout, element.clientWidth);
+      const reuseMountedWindow =
+        this.previewPublishedSuspended === isSuspended &&
+        mountedWindowCoversPreviewWindow(this.snapshot.virtualWindow, previewWindow);
+      if (!reuseMountedWindow) {
         this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
+        this.previewPublishedSuspended = isSuspended;
       }
-      this.writeColumnPreviewStyles(columnId, previewWindow);
+      this.writeColumnPreviewStyles(
+        columnId,
+        reuseMountedWindow
+          ? mountedWindowPreviewPadding(this.layout, this.snapshot.virtualWindow)
+          : previewWindow,
+      );
       void element.scrollWidth;
       this.setLogicalScrollLeft(element, previewScrollLeft);
       this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
@@ -296,6 +319,7 @@ export class BrunoTableViewportRuntime {
     if (this.previewLayout === undefined) return;
     this.layout = this.previewLayout;
     this.previewLayout = undefined;
+    this.previewPublishedSuspended = undefined;
     const logicalScrollLeft = this.previewLogicalScrollLeft;
     this.previewLogicalScrollLeft = undefined;
     const previewHorizontalState = this.previewHorizontalState;
@@ -830,7 +854,7 @@ export class BrunoTableViewportRuntime {
 
   private writeColumnPreviewStyles(
     columnId: string,
-    previewWindow?: BrunoTableVirtualWindow,
+    previewWindow?: Pick<BrunoTableVirtualWindow, "leftPadding" | "rightPadding">,
   ): void {
     const element = this.element;
     if (element === null) return;
@@ -1382,6 +1406,7 @@ function calculateVirtualWindow(
     pinnedStart,
     center: Object.freeze(center.slice(columnStart, columnEnd)),
     pinnedEnd,
+    pinningSuspended: suspendPinning,
     centerStartIndex: columnStart,
     centerCount: center.length,
     leftPadding,
@@ -1395,6 +1420,7 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   return (
     left.rowStart === right.rowStart &&
     left.rowEnd === right.rowEnd &&
+    left.pinningSuspended === right.pinningSuspended &&
     left.centerStartIndex === right.centerStartIndex &&
     left.centerCount === right.centerCount &&
     left.leftPadding === right.leftPadding &&
@@ -1407,19 +1433,37 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   );
 }
 
-function sameVirtualWindowStructure(
-  left: BrunoTableVirtualWindow,
-  right: BrunoTableVirtualWindow,
+function mountedWindowCoversPreviewWindow(
+  mounted: BrunoTableVirtualWindow,
+  preview: BrunoTableVirtualWindow,
 ): boolean {
+  const mountedEnd = mounted.centerStartIndex + mounted.center.length;
+  const previewEnd = preview.centerStartIndex + preview.center.length;
   return (
-    left.rowStart === right.rowStart &&
-    left.rowEnd === right.rowEnd &&
-    left.centerStartIndex === right.centerStartIndex &&
-    left.centerCount === right.centerCount &&
-    sameColumnIdentities(left.pinnedStart, right.pinnedStart) &&
-    sameColumnIdentities(left.center, right.center) &&
-    sameColumnIdentities(left.pinnedEnd, right.pinnedEnd)
+    mounted.pinningSuspended === preview.pinningSuspended &&
+    mounted.centerCount === preview.centerCount &&
+    mounted.pinnedStart.length === preview.pinnedStart.length &&
+    mounted.pinnedEnd.length === preview.pinnedEnd.length &&
+    preview.centerStartIndex >= mounted.centerStartIndex &&
+    previewEnd <= mountedEnd
   );
+}
+
+function mountedWindowPreviewPadding(
+  layout: ViewportLayout,
+  mounted: BrunoTableVirtualWindow,
+): Pick<BrunoTableVirtualWindow, "leftPadding" | "rightPadding"> {
+  const centerOffsets = mounted.pinningSuspended
+    ? layout.suspendedCenterOffsets
+    : layout.centerOffsets;
+  const centerWidth = mounted.pinningSuspended ? layout.suspendedCenterWidth : layout.centerWidth;
+  const leftPadding = centerOffsets[mounted.centerStartIndex] ?? 0;
+  const mountedEnd = mounted.centerStartIndex + mounted.center.length;
+  const mountedWidth = (centerOffsets[mountedEnd] ?? centerWidth) - leftPadding;
+  return {
+    leftPadding,
+    rightPadding: Math.max(centerWidth - leftPadding - mountedWidth, 0),
+  };
 }
 
 function shareVirtualWindowColumns(
@@ -1441,16 +1485,6 @@ function shareVirtualWindowColumns(
 
 function sameColumns(left: readonly CompiledColumn[], right: readonly CompiledColumn[]): boolean {
   return left.length === right.length && left.every((column, index) => column === right[index]);
-}
-
-function sameColumnIdentities(
-  left: readonly CompiledColumn[],
-  right: readonly CompiledColumn[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((column, index) => column.columnId === right[index]?.columnId)
-  );
 }
 
 function updateColumnWidthPreviewLayout(
@@ -1624,6 +1658,7 @@ function emptyVirtualWindow(): BrunoTableVirtualWindow {
     pinnedStart: EMPTY_COLUMNS,
     center: EMPTY_COLUMNS,
     pinnedEnd: EMPTY_COLUMNS,
+    pinningSuspended: false,
     centerStartIndex: 0,
     centerCount: 0,
     leftPadding: 0,

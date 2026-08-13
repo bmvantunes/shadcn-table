@@ -10,7 +10,7 @@ Can the private renderer combine TanStack Table v9 stable, TanStack Virtual 3.14
 
 ## Verdict
 
-Yes, with a custom renderer Adapter and exact reveal geometry. TanStack Table correctly supplies one `start + centre + end` Logical Column Order and one-step Cell navigation. TanStack Virtual correctly bounds the mounted row and centre-column windows. BrunoTable must own the seam between them instead of calling the example's broad `scrollToIndex` reveal.
+Yes, with a custom renderer Adapter and exact reveal geometry. The prototype established that a private TanStack Adapter can project one `start + centre + end` Logical Column Order and one-step Cell navigation, while TanStack Virtual can bound the mounted row and centre-column windows. In the production architecture BrunoTable's layout runtime owns the committed Logical Column Order and the Adapter consumes it as controlled TanStack input; BrunoTable must own that seam instead of calling the example's broad `scrollToIndex` reveal.
 
 The prototype uses 5,000 rows and 150 columns with two start-pinned columns and one end-pinned column. At a 1280 × 720 viewport it mounted 28 rows and 15 columns. The exact installed React Virtual hook passed the repository's compiler-on lint/type check and ran correctly in the browser. Keep it behind a private Adapter because this prototype validates the current release, not every future release or configuration.
 
@@ -38,7 +38,10 @@ This is cell-by-cell reveal, not index alignment or a guessed multi-column jump.
 
 ### Subscription and initialization boundaries
 
-The table owner selects only structural pinning and sizing state. Each mounted row selects the active Column Identity for only that Row Identity from `table.atoms.cellSelection`; focus movement therefore does not subscribe the grid root to Cell Selection.
+The table owner selects only structural pinning/order/visibility state. Committed widths and live
+resize previews belong to BrunoTable's layout runtime. Each mounted row selects the active Column
+Identity for only that Row Identity from `table.atoms.cellSelection`; focus movement therefore does
+not subscribe the grid root to Cell Selection.
 
 The live test also caught a repeating initialization effect: after the first virtual-window scroll render it reset focus to the first cell. Initial Active Cell installation must be guarded as one-shot initialization or installed directly in the owned store, never replayed from changing row/column arrays.
 
@@ -46,6 +49,6 @@ The live test also caught a repeating initialization effect: after the first vir
 
 - Keep TanStack Table and Virtual types out of public BrunoTable APIs.
 - Keep one shared immutable column-window snapshot for header, body, hit testing, and reveal.
-- Cache centre-column geometry when production sizing/order/visibility state changes; do not rebuild it inside every key repeat.
+- Cache centre-column geometry when production layout width/order/visibility state changes; do not rebuild it inside every key repeat.
 - Drive scroll readouts, measurement, and other high-frequency diagnostics outside React state.
 - Treat this as architectural and interaction proof, not proof of the final 120 Hz budget. Add automated browser interaction benchmarks with production cell renderers and representative hardware.

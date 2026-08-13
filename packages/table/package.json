@@ -32,9 +32,10 @@
     "test": "vp test --exclude \"src/**/*.browser.test.tsx\"",
     "test:browser": "vp test --config vitest.browser.config.ts --run",
     "test:browser:emitted": "vp test --config vitest.emitted-browser.config.ts --run",
+    "test:bench:column-management": "vp test bench src/internal/column-management.bench.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted"
+    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:column-management"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
