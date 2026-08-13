@@ -4,6 +4,7 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumnId } from "./index";
+import { BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE } from "./internal/column-management";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnCommandSubscriptionListener } from "./internal/grid-subscription-instrumentation";
@@ -254,14 +255,44 @@ const wideFirstPreviewColumns = [
   })),
 ] as const;
 
+const retainedFirstPreviewColumns = [
+  {
+    ...columns[0]!,
+    columnId: "COL_ID_RETAINED_FIRST_PREVIEW",
+    headerName: "Retained first preview",
+    width: 100,
+  },
+  ...Array.from({ length: 20 }, (_unused, index) => ({
+    columnId: `COL_ID_RETAINED_EXPOSED_${String(index)}` as BrunoTableColumnId,
+    field: "name" as const,
+    headerName: `Retained exposed ${String(index)}`,
+    valueType: "text" as const,
+    width: 100,
+  })),
+] as const;
+
 type BrowserScreen = Awaited<ReturnType<typeof render>>;
-type ColumnGestureFrameEvent = Readonly<{
-  readonly tableId: string;
-  readonly phase: "scheduled" | "cancelled" | "ran";
-  readonly kind: "resize" | "reorder";
-  readonly frameId: number;
-  readonly durationMs?: number;
-}>;
+type ColumnGestureFrameEvent =
+  | Readonly<{
+      readonly tableId: string;
+      readonly phase: "scheduled" | "cancelled";
+      readonly kind: "resize" | "reorder";
+      readonly frameId: number;
+    }>
+  | Readonly<{
+      readonly tableId: string;
+      readonly phase: "ran";
+      readonly kind: "resize" | "reorder";
+      readonly frameId: number;
+      readonly durationMs: number;
+    }>
+  | Readonly<{
+      readonly tableId: string;
+      readonly phase: "synchronous";
+      readonly kind: "resize" | "reorder";
+      readonly frameId?: never;
+      readonly durationMs: number;
+    }>;
 type ColumnGestureListenerEvent = Readonly<{
   readonly tableId: string;
   readonly phase: "attach" | "detach";
@@ -1527,6 +1558,80 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
+  test("keeps retained resize padding correct without publishing a render cascade", async () => {
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_RETAINED_PREVIEW";
+    const gridSurfaceRenders = vi.fn();
+    const rowRenders = vi.fn();
+    const removeGridSurface = installBrunoTableClientGridSurfaceRenderListenerForTable(
+      tableId,
+      gridSurfaceRenders,
+    );
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(tableId, rowRenders);
+
+    try {
+      const screen = await render(
+        <div style={{ width: 240 }}>
+          <BrunoTableClient<Row, typeof retainedFirstPreviewColumns>
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={retainedFirstPreviewColumns}
+            initialOrderBy={[{ columnId: "COL_ID_RETAINED_FIRST_PREVIEW", direction: "asc" }]}
+            clientSource={source}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` }).element();
+      const initialMountedColumns = columnOrder(grid);
+      expect(initialMountedColumns).toContain("COL_ID_RETAINED_EXPOSED_3");
+      gridSurfaceRenders.mockClear();
+      rowRenders.mockClear();
+
+      const resizeHandle = screen.getByRole("separator", {
+        name: "Resize Retained first preview",
+      });
+      const startX = resizeHandle.element().getBoundingClientRect().right - 1;
+      resizeHandle.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: startX,
+          pointerId: 53,
+        }),
+      );
+      for (const width of [200, 400, 600, 800]) {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            clientX: startX + (width - 100),
+            pointerId: 53,
+          }),
+        );
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await vi.waitFor(() =>
+          expect(resizeHandle).toHaveAttribute("aria-valuenow", String(width)),
+        );
+      }
+
+      expect(columnOrder(grid)).toEqual(initialMountedColumns);
+      expect(gridSurfaceRenders).toHaveLength(0);
+      expect(rowRenders).toHaveLength(0);
+      expect(grid.style.getPropertyValue(BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE)).toBe(
+        "1600px",
+      );
+
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: startX + 700,
+          pointerId: 53,
+        }),
+      );
+    } finally {
+      removeGridSurface();
+      removeRows();
+    }
+  });
+
   test("keeps pointer reorder boundaries logical in RTL", async () => {
     const screen = await render(
       <div dir="rtl">
@@ -2443,9 +2548,12 @@ describe("BrunoTable column management browser surface", () => {
         await flushGestureFrame(24, 1);
       }
       expect(commands).toHaveLength(1);
+      previewStyleWrites.mockClear();
       window.dispatchEvent(
         new PointerEvent("pointerup", { bubbles: true, clientX: 100, pointerId: 32 }),
       );
+      expect(previewStyleWrites.mock.calls.length).toBeGreaterThan(0);
+      expect(previewStyleWrites.mock.calls.length).toBeLessThanOrEqual(24);
       await vi.waitFor(() => expect(commands).toHaveLength(2));
       expectTypedCommand(commands[1], {
         type: "column.reorder.commit",
@@ -2469,13 +2577,23 @@ describe("BrunoTable column management browser surface", () => {
       expect(frameDurations.every((duration) => Number.isFinite(duration) && duration >= 0)).toBe(
         true,
       );
-      const observedMax = Math.max(...frameDurations);
+      const synchronousDurations = gestureFrames.flatMap((event) =>
+        event.phase === "synchronous" && event.durationMs !== undefined ? [event.durationMs] : [],
+      );
+      expect(synchronousDurations).toHaveLength(1);
+      expect(
+        synchronousDurations.every((duration) => Number.isFinite(duration) && duration >= 0),
+      ).toBe(true);
+      expect(gestureFrames.find((event) => event.phase === "synchronous")?.frameId).toBeUndefined();
+      const observedDurations = [...frameDurations, ...synchronousDurations];
+      const observedMax = Math.max(...observedDurations);
       console.info(
         JSON.stringify({
           benchmark: "BrunoTable many-column pointer gestures",
           columns: performanceColumns.length,
           referenceFrameBudgetMs: 8.33,
           observedFrameDurationsMs: frameDurations,
+          observedSynchronousDurationsMs: synchronousDurations,
           observedMaxMs: observedMax,
         }),
       );

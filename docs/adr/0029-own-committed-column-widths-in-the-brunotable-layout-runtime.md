@@ -32,10 +32,14 @@ durable runtime snapshot. If the preview crosses the deterministic narrow-width 
 threshold, or if its recalculated centre window no longer fits inside the currently mounted slice,
 the viewport may publish one bounded structural snapshot for that preview call so the mounted
 start/centre/end regions remain geometrically valid. The latter covers, for example, shrinking a
-wide first centre column until later columns must mount. This is a bounded region-shape transition,
-not a committed layout update. Finishing the gesture cancels any pending frame, clears the
-preview, and emits one final typed command; cancelling or unmounting emits none. Pointer reorder
-uses the same geometry-owned transform preview rule.
+wide first centre column until later columns must mount. When a preview window is a strict subset of
+the retained mounted slice, the CSS padding is calculated from that retained slice rather than the
+smaller prospective window; this keeps the imperative preview geometry aligned without publishing
+one React update per pointer move. These are bounded region-shape transitions, not committed layout
+updates. Finishing the gesture cancels any pending frame, clears the preview, and emits one final
+typed command; if the last pointer coordinate has not completed an rAF, the synchronous release
+fallback is measured and kept under the same bounded style-write rule. Cancelling or unmounting
+emits none. Pointer reorder uses the same geometry-owned transform preview rule.
 
 ## Consequences
 

@@ -294,14 +294,19 @@ export class BrunoTableViewportRuntime {
       // the last published state so an oscillating preview publishes both the
       // enter and exit transitions.
       const isSuspended = shouldSuspendPinning(this.layout, element.clientWidth);
-      if (
-        this.previewPublishedSuspended !== isSuspended ||
-        !mountedWindowCoversPreviewWindow(this.snapshot.virtualWindow, previewWindow)
-      ) {
+      const reuseMountedWindow =
+        this.previewPublishedSuspended === isSuspended &&
+        mountedWindowCoversPreviewWindow(this.snapshot.virtualWindow, previewWindow);
+      if (!reuseMountedWindow) {
         this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
         this.previewPublishedSuspended = isSuspended;
       }
-      this.writeColumnPreviewStyles(columnId, previewWindow);
+      this.writeColumnPreviewStyles(
+        columnId,
+        reuseMountedWindow
+          ? mountedWindowPreviewPadding(this.layout, this.snapshot.virtualWindow)
+          : previewWindow,
+      );
       void element.scrollWidth;
       this.setLogicalScrollLeft(element, previewScrollLeft);
       this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
@@ -849,7 +854,7 @@ export class BrunoTableViewportRuntime {
 
   private writeColumnPreviewStyles(
     columnId: string,
-    previewWindow?: BrunoTableVirtualWindow,
+    previewWindow?: Pick<BrunoTableVirtualWindow, "leftPadding" | "rightPadding">,
   ): void {
     const element = this.element;
     if (element === null) return;
@@ -1442,6 +1447,23 @@ function mountedWindowCoversPreviewWindow(
     preview.centerStartIndex >= mounted.centerStartIndex &&
     previewEnd <= mountedEnd
   );
+}
+
+function mountedWindowPreviewPadding(
+  layout: ViewportLayout,
+  mounted: BrunoTableVirtualWindow,
+): Pick<BrunoTableVirtualWindow, "leftPadding" | "rightPadding"> {
+  const centerOffsets = mounted.pinningSuspended
+    ? layout.suspendedCenterOffsets
+    : layout.centerOffsets;
+  const centerWidth = mounted.pinningSuspended ? layout.suspendedCenterWidth : layout.centerWidth;
+  const leftPadding = centerOffsets[mounted.centerStartIndex] ?? 0;
+  const mountedEnd = mounted.centerStartIndex + mounted.center.length;
+  const mountedWidth = (centerOffsets[mountedEnd] ?? centerWidth) - leftPadding;
+  return {
+    leftPadding,
+    rightPadding: Math.max(centerWidth - leftPadding - mountedWidth, 0),
+  };
 }
 
 function shareVirtualWindowColumns(

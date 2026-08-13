@@ -1347,13 +1347,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (columnGestureActor.getSnapshot().value !== "active") return;
     columnGestureActor.send({ type: commit ? "COMMIT" : "CANCEL" });
     if (columnGestureActor.getSnapshot().value !== "idle") return;
-    if (
+    const needsSynchronousFinalPreview =
       commit &&
       (gesture.previewedX !== gesture.currentX ||
-        (gesture.kind === "reorder" && !gesture.reorderPreviewApplied))
-    ) {
+        (gesture.kind === "reorder" && !gesture.reorderPreviewApplied));
+    if (needsSynchronousFinalPreview) {
+      const measureSynchronousWork = hasBrunoTableClientColumnGestureFrameListener(tableId);
+      const startedAt = measureSynchronousWork ? performance.now() : undefined;
       if (gesture.kind === "resize") applyResizePreview(gesture);
       else if (applyReorderPreview(gesture, false)) gesture.previewedX = gesture.currentX;
+      if (startedAt !== undefined) {
+        recordBrunoTableClientColumnGestureFrame(tableId, {
+          phase: "synchronous",
+          kind: gesture.kind,
+          durationMs: performance.now() - startedAt,
+        });
+      }
     }
     if (gesture.frame !== null) {
       const frameId = gesture.frame;

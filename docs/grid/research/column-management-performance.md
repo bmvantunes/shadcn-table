@@ -19,14 +19,15 @@ pointer reorder each:
   mounted-column reorder preview bound; and
 - leave no render/listener work pending after cancellation or unmount.
 
-The suite records each preview duration and prints the observed samples alongside the 8.33 ms
-budget, but it does not fail on a wall-clock threshold. Browser scheduling, CI contention, and
-headless compositor variance make a strict timing assertion unreliable, and Issue #29 owns the
-final production-hardware gate. The per-gesture frame counts, pinned-region assertions, CSS-write
-bound, and fixed render, command, subscription, and lifecycle bounds are the repeatable Issue #10
-CI gate; the printed durations are diagnostic benchmark evidence. CI proves bounded work and
-coalescing for this fixture, while the benchmark reports repeatable timing samples for tracking
-the 8.33 ms reference.
+The suite records each rAF preview duration and any synchronous pointer-release fallback duration,
+then prints the observed samples alongside the 8.33 ms budget. It does not fail on a wall-clock
+threshold. Browser scheduling, CI contention, and headless compositor variance make a strict
+timing assertion unreliable, and Issue #29 owns the final production-hardware gate. The
+per-gesture frame counts, pinned-region assertions, CSS-write bound (including the final
+synchronous fallback), and fixed render, command, subscription, and lifecycle bounds are the
+repeatable Issue #10 CI gate; the printed durations are diagnostic benchmark evidence. CI proves
+bounded work and coalescing for this fixture, while the benchmark reports repeatable timing
+samples for tracking the 8.33 ms reference.
 
 The Browser Mode provider keeps the repository's established Chromium viewport defaults. A global
 viewport override was evaluated but changes the geometry contract exercised by existing browser

@@ -11,13 +11,25 @@ type ColumnGestureListenerEvent = Readonly<{
   readonly event: "pointermove" | "pointerup" | "pointercancel" | "keydown";
 }>;
 type ColumnGestureListener = (event: ColumnGestureListenerEvent) => void;
-type ColumnGestureFrameEvent = Readonly<{
-  readonly tableId: string;
-  readonly phase: "scheduled" | "cancelled" | "ran";
-  readonly kind: "resize" | "reorder";
-  readonly frameId: number;
-  readonly durationMs?: number;
-}>;
+type ColumnGestureFrame =
+  | Readonly<{
+      readonly phase: "scheduled" | "cancelled";
+      readonly kind: "resize" | "reorder";
+      readonly frameId: number;
+    }>
+  | Readonly<{
+      readonly phase: "ran";
+      readonly kind: "resize" | "reorder";
+      readonly frameId: number;
+      readonly durationMs: number;
+    }>
+  | Readonly<{
+      readonly phase: "synchronous";
+      readonly kind: "resize" | "reorder";
+      readonly frameId?: never;
+      readonly durationMs: number;
+    }>;
+type ColumnGestureFrameEvent = Readonly<{ readonly tableId: string }> & ColumnGestureFrame;
 type ColumnGestureFrameListener = (event: ColumnGestureFrameEvent) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
@@ -89,7 +101,7 @@ export function installBrunoTableClientColumnGestureListener(
 
 export function recordBrunoTableClientColumnGestureFrame(
   tableId: string,
-  event: Omit<ColumnGestureFrameEvent, "tableId">,
+  event: ColumnGestureFrame,
 ): void {
   if (clientColumnGestureFrameListenerCount === 0) return;
   const listeners = clientColumnGestureFrameListeners.get(tableId);

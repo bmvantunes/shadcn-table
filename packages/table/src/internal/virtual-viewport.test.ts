@@ -1217,6 +1217,54 @@ describe("BrunoTableViewportRuntime", () => {
     expect(publicationCounts.every((count) => count <= 1)).toBe(true);
   });
 
+  it("keeps preview padding aligned with the retained mounted slice when widening a centre column", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_WIDEN_PREVIEW",
+        field: "name",
+        headerName: "Widen preview",
+        valueType: "text" as const,
+        width: 100,
+      },
+      ...Array.from({ length: 12 }, (_unused, index) => ({
+        columnId: `COL_ID_WIDENED_${String(index)}`,
+        field: "name" as const,
+        headerName: `Widened ${String(index)}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    ]);
+    const setProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    const publications = vi.fn();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    viewport.subscribe(publications);
+
+    const mountedWindow = viewport.getSnapshot().virtualWindow;
+    expect(mountedWindow.center.length).toBeGreaterThan(3);
+    expect(mountedWindow.center[0]?.columnId).toBe("COL_ID_WIDEN_PREVIEW");
+
+    viewport.previewColumnWidth("COL_ID_WIDEN_PREVIEW", 800);
+
+    expect(publications).not.toHaveBeenCalled();
+    const rightPaddingWrites = setProperty.mock.calls
+      .filter(([property]) => property === BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE)
+      .map(([, value]) => value);
+    expect(rightPaddingWrites.at(-1)).toBe("800px");
+  });
+
   it("clears an active width preview before replacing the viewport element", () => {
     const columns = compileColumns([
       {

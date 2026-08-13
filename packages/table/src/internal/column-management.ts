@@ -542,8 +542,9 @@ function visibleColumns(state: BrunoTableColumnLayoutState): readonly CompiledCo
 
 /**
  * Mirrors the controlled TanStack pinning projection: start, centre, then end.
- * The Client Adapter remains the authority for the actual Table projection; this helper keeps
- * loading/layout command snapshots in that same logical shape before the adapter runs.
+ * BrunoTable's layout runtime owns the committed logical order; the private Client Adapter
+ * consumes this projection as controlled TanStack input. This helper keeps loading/layout command
+ * snapshots in that same logical shape before the adapter runs.
  */
 export function getBrunoTableLogicalColumnOrder(
   columns: readonly CompiledColumn[],
