@@ -1135,6 +1135,14 @@ describe("BrunoTableViewportRuntime", () => {
       "300px",
     );
 
+    const publicationsAfterSuspension = publications.mock.calls.length;
+    viewport.previewColumnWidth("COL_ID_PREVIEW_START", 160);
+    expect(publications.mock.calls.length).toBeGreaterThan(publicationsAfterSuspension);
+    expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
+      "COL_ID_PREVIEW_START",
+    );
+    expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
+
     viewport.clearColumnWidthPreview();
     expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
       "COL_ID_PREVIEW_START",

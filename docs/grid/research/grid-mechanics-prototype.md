@@ -38,7 +38,10 @@ This is cell-by-cell reveal, not index alignment or a guessed multi-column jump.
 
 ### Subscription and initialization boundaries
 
-The table owner selects only structural pinning and sizing state. Each mounted row selects the active Column Identity for only that Row Identity from `table.atoms.cellSelection`; focus movement therefore does not subscribe the grid root to Cell Selection.
+The table owner selects only structural pinning/order/visibility state. Committed widths and live
+resize previews belong to BrunoTable's layout runtime. Each mounted row selects the active Column
+Identity for only that Row Identity from `table.atoms.cellSelection`; focus movement therefore does
+not subscribe the grid root to Cell Selection.
 
 The live test also caught a repeating initialization effect: after the first virtual-window scroll render it reset focus to the first cell. Initial Active Cell installation must be guarded as one-shot initialization or installed directly in the owned store, never replayed from changing row/column arrays.
 
@@ -46,6 +49,6 @@ The live test also caught a repeating initialization effect: after the first vir
 
 - Keep TanStack Table and Virtual types out of public BrunoTable APIs.
 - Keep one shared immutable column-window snapshot for header, body, hit testing, and reveal.
-- Cache centre-column geometry when production sizing/order/visibility state changes; do not rebuild it inside every key repeat.
+- Cache centre-column geometry when production layout width/order/visibility state changes; do not rebuild it inside every key repeat.
 - Drive scroll readouts, measurement, and other high-frequency diagnostics outside React state.
 - Treat this as architectural and interaction proof, not proof of the final 120 Hz budget. Add automated browser interaction benchmarks with production cell renderers and representative hardware.

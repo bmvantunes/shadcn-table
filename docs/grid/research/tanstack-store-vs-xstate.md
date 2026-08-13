@@ -16,12 +16,17 @@ TanStack Table is pinned to stable [`9.0.0` at `d4d91a6`](https://github.com/Tan
 
 Use the tools for different jobs rather than choosing one global state system:
 
-| Owner                                       | Responsibility                                                                                                                                                                                            |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TanStack Table and its TanStack Store atoms | Table-owned state: cell selection, sorting, filtering, column order, visibility, sizing, and pinning. Keep these implementation details private behind BrunoTable.                                        |
-| BrunoTable-owned TanStack Store state       | The single React-observable memory seam for sparse drafts, validation, conflicts, bounded Batch History Commands, operation evidence, and compact workflow projections.                                   |
-| XState core                                 | Private decision ownership for editor lifecycle, Immediate or Batch save legality, Promise settlement, live reconciliation, explicit resave, conflict resolution, dialog state, and failure notification. |
-| Imperative geometry engine                  | Scroll, measurement, hit testing, live resize geometry, and pointer/drag previews. These do not belong in either store's React render path.                                                               |
+| Owner                                       | Responsibility                                                                                                                                                                                                                      |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TanStack Table and its TanStack Store atoms | Table-owned structural state: cell selection, sorting, filtering, column order, visibility, and pinning. Keep these implementation details private behind BrunoTable; committed widths remain owned by BrunoTable's layout runtime. |
+| BrunoTable-owned TanStack Store state       | The single React-observable memory seam for sparse drafts, validation, conflicts, bounded Batch History Commands, operation evidence, and compact workflow projections.                                                             |
+| XState core                                 | Private decision ownership for editor lifecycle, Immediate or Batch save legality, Promise settlement, live reconciliation, explicit resave, conflict resolution, dialog state, and failure notification.                           |
+| Imperative geometry engine                  | Scroll, measurement, hit testing, live resize geometry, and pointer/drag previews. These do not belong in either store's React render path.                                                                                         |
+
+Column sizing is intentionally split from this structural ownership: BrunoTable's layout runtime
+owns committed width preferences, while the imperative geometry engine owns pointer previews. A
+private sizing primitive may be used only as a derived compatibility detail, never as a second
+authority.
 
 Use a BrunoTable-owned TanStack Store deliberately rather than exposing TanStack Table's internal atoms as edit memory. It holds explicit sparse command stacks beside observable edit projections. Do not use XState Store as a second observable authority: its history helpers do not solve live-source rebasing, and independently observing it beside XState core would introduce a cross-runtime consistency seam. Full XState remains necessary because XState Store's own documentation directs complex state and orchestration to XState core ([XState Store overview](https://stately.ai/docs/xstate-store)).
 

@@ -2,8 +2,14 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { BrunoTableClient } from "./index";
+import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import type { BrunoTableColumnId } from "./index";
+import type { BrunoTableGridCommand } from "./internal/column-management";
+import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
+import { installBrunoTableColumnCommandSubscriptionListener } from "./internal/grid-subscription-instrumentation";
 import {
+  installBrunoTableClientColumnGestureFrameListener,
+  installBrunoTableClientColumnGestureListener,
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientColumnReorderFrameListener,
@@ -11,8 +17,17 @@ import {
   installBrunoTableClientColumnResizeFrameListener,
   installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientRowOrderPlanningListener,
+  installBrunoTableClientCellRenderListenerForTable,
+  installBrunoTableClientGridSurfaceRenderListenerForTable,
+  installBrunoTableClientRowOrderPlanningListenerForTable,
+  installBrunoTableClientRowRenderListenerForTable,
   installBrunoTableClientViewRenderListener,
+  installBrunoTableClientViewRenderListenerForTable,
 } from "./internal/render-instrumentation";
+import {
+  BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+  BRUNO_TABLE_ROW_HEIGHT,
+} from "./internal/virtual-viewport";
 
 type Row = Readonly<{
   id: string;
@@ -104,11 +119,666 @@ const manyColumns = [
   },
 ] as const;
 
+const revealColumns = [
+  {
+    ...columns[0],
+    columnId: "COL_ID_REVEAL_START",
+    headerName: "Reveal start",
+    pinned: "start" as const,
+    width: 120,
+  },
+  ...manyColumns,
+  {
+    ...columns[2],
+    columnId: "COL_ID_REVEAL_END",
+    headerName: "Reveal end",
+    pinned: "end" as const,
+    width: 120,
+  },
+] as const;
+
 const interleavedColumns = [
   columns[0]!,
   { ...columns[2]!, pinned: "end" as const },
   { ...columns[1]!, pinned: "start" as const },
 ] as const;
+
+const pinnedNameColumns = [
+  { ...columns[0]!, pinned: "start" as const },
+  columns[1]!,
+  columns[2]!,
+] as const;
+
+const pinnedBoundaryColumns = [
+  { ...columns[0]!, pinned: "start" as const },
+  columns[1]!,
+  { ...columns[2]!, pinned: "end" as const },
+] as const;
+
+const narrowAllPinnedColumns = [
+  {
+    ...columns[0],
+    columnId: "COL_ID_NARROW_PIN_START_A",
+    headerName: "Narrow pinned start A",
+    pinned: "start" as const,
+    width: 120,
+  },
+  {
+    ...columns[1],
+    columnId: "COL_ID_NARROW_PIN_START_B",
+    headerName: "Narrow pinned start B",
+    pinned: "start" as const,
+    width: 120,
+  },
+  {
+    ...columns[2],
+    columnId: "COL_ID_NARROW_PIN_END",
+    headerName: "Narrow pinned end",
+    pinned: "end" as const,
+    width: 120,
+  },
+] as const;
+
+const nameFilter = [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }] as const;
+const filteredTableProps = { ...tableProps, initialFilters: nameFilter } as const;
+
+const performanceColumns = [
+  {
+    ...columns[0],
+    columnId: "COL_ID_PERF_PIN_START",
+    headerName: "Pinned start",
+    pinned: "start" as const,
+    width: 96,
+  },
+  ...columns,
+  ...Array.from({ length: 155 }, (_unused, index) => ({
+    columnId: `COL_ID_PERF_${String(index + 1).padStart(3, "0")}` as BrunoTableColumnId,
+    field: "name" as const,
+    headerName: `Perf ${String(index + 1)}`,
+    valueType: "text" as const,
+    width: 120,
+  })),
+  {
+    ...columns[2],
+    columnId: "COL_ID_PERF_PIN_END",
+    headerName: "Pinned end",
+    pinned: "end" as const,
+    width: 96,
+  },
+] as const;
+
+const performanceRows: readonly Row[] = Array.from({ length: 100 }, (_unused, index) => ({
+  id: `performance-${String(index)}`,
+  name: `Row ${String(index)}`,
+  score: index,
+  status: index % 2 === 0 ? "Ready" : "Queued",
+}));
+
+const performanceSource = {
+  rows: performanceRows,
+  totalRows: performanceRows.length,
+  version: 1,
+  status: "ready" as const,
+};
+
+type BrowserScreen = Awaited<ReturnType<typeof render>>;
+type ColumnGestureFrameEvent = Readonly<{
+  readonly tableId: string;
+  readonly phase: "scheduled" | "cancelled" | "ran";
+  readonly kind: "resize" | "reorder";
+  readonly frameId: number;
+  readonly durationMs?: number;
+}>;
+type ColumnGestureListenerEvent = Readonly<{
+  readonly tableId: string;
+  readonly phase: "attach" | "detach";
+  readonly event: "pointermove" | "pointerup" | "pointercancel" | "keydown";
+}>;
+type ColumnCommandSubscriptionEvent = Readonly<{
+  readonly tableId: string;
+  readonly columnId: string;
+  readonly listenerCount: number;
+}>;
+
+function ColumnManagementToolbarProbe({ onRender }: { readonly onRender: () => void }) {
+  onRender();
+  return <button type="button">Toolbar probe</button>;
+}
+
+async function openColumnMenu(screen: BrowserScreen, columnName = "Name") {
+  const grid = screen.getByRole("grid").element();
+  const trigger = screen.getByRole("button", { name: `Column menu for ${columnName}` });
+  const targetColumnId = columnName === "Name" ? "COL_ID_NAME" : "COL_ID_SCORE";
+  grid.focus();
+  await userEvent.keyboard("{Control>}{Home}{/Control}");
+  const targetIndex = columnOrder(grid).indexOf(targetColumnId);
+  if (targetIndex < 0) throw new Error(`Column ${targetColumnId} is not mounted`);
+  for (let index = 0; index < targetIndex; index += 1) {
+    await userEvent.keyboard("{ArrowRight}");
+  }
+  await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+  return trigger;
+}
+
+type MenuItemRole = "menuitem" | "menuitemcheckbox" | "menuitemradio";
+
+async function reachMenuItem(
+  screen: BrowserScreen,
+  role: MenuItemRole,
+  name: string,
+): Promise<void> {
+  const item = screen.getByRole(role, { name, exact: true });
+  for (let step = 0; step < 64; step += 1) {
+    if (document.activeElement === item.element()) return;
+    await userEvent.keyboard("{ArrowDown}");
+  }
+  throw new Error(`Keyboard navigation did not reach ${role} ${name}`);
+}
+
+async function openColumnSubmenu(screen: BrowserScreen, submenuName: string): Promise<void> {
+  await reachMenuItem(screen, "menuitem", submenuName);
+  await userEvent.keyboard("{ArrowRight}");
+}
+
+async function activateMenuItem(screen: BrowserScreen, name: string): Promise<void> {
+  await reachMenuItem(screen, "menuitem", name);
+  await userEvent.keyboard("{Enter}");
+}
+
+async function activateMenuRadio(screen: BrowserScreen, name: string): Promise<void> {
+  await reachMenuItem(screen, "menuitemradio", name);
+  await userEvent.keyboard("{Enter}");
+}
+
+async function activateMenuCheckbox(screen: BrowserScreen, name: string): Promise<void> {
+  await reachMenuItem(screen, "menuitemcheckbox", name);
+  await userEvent.keyboard("{Enter}");
+}
+
+async function waitForAnimationFrames(count = 2): Promise<void> {
+  for (let frame = 0; frame < count; frame += 1) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+}
+
+async function closeColumnMenus(screen: BrowserScreen): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (screen.getByRole("menu").all().length === 0) return;
+    await userEvent.keyboard("{Escape}");
+  }
+}
+
+function columnOrder(grid: Element): readonly string[] {
+  return [...grid.querySelectorAll<HTMLElement>("th[data-bruno-column-id]")].map(
+    (header) => header.dataset["brunoColumnId"] ?? "",
+  );
+}
+
+type MountedColumnExpectation = Readonly<{
+  readonly columnId: string;
+  readonly columnIndex: number;
+  readonly region: "start" | "center" | "end";
+}>;
+
+function mountedColumnExpectationsFromLogicalOrder(
+  logicalColumnIds: readonly string[],
+  pinnedStartIds: readonly string[] = [],
+  pinnedEndIds: readonly string[] = [],
+  mountedColumnIds: readonly string[] = logicalColumnIds,
+): readonly MountedColumnExpectation[] {
+  const pinnedStart = new Set(pinnedStartIds);
+  const pinnedEnd = new Set(pinnedEndIds);
+  return mountedColumnIds.map((columnId) => {
+    const columnIndex = logicalColumnIds.indexOf(columnId);
+    if (columnIndex < 0) throw new Error(`Unexpected mounted column ${columnId}`);
+    return {
+      columnId,
+      columnIndex: columnIndex + 1,
+      region: pinnedStart.has(columnId) ? "start" : pinnedEnd.has(columnId) ? "end" : "center",
+    };
+  });
+}
+
+type BrowserColumnSpec = Readonly<{
+  readonly columnId: string;
+  readonly width: number;
+  readonly pinned?: "start" | "end";
+}>;
+
+const revealBrowserColumns: readonly BrowserColumnSpec[] = revealColumns.map((column) => {
+  const spec = { columnId: column.columnId, width: column.width ?? 160 };
+  return "pinned" in column && column.pinned !== undefined
+    ? { ...spec, pinned: column.pinned }
+    : spec;
+});
+
+function revealBrowserSpecs(
+  logicalColumnIds: readonly string[],
+  pinnedStartIds: readonly string[],
+  pinnedEndIds: readonly string[],
+): readonly BrowserColumnSpec[] {
+  const pinnedStart = new Set(pinnedStartIds);
+  const pinnedEnd = new Set(pinnedEndIds);
+  return logicalColumnIds.map((columnId) => {
+    const source = revealBrowserColumns.find((column) => column.columnId === columnId);
+    if (source === undefined) throw new Error(`Missing reveal column ${columnId}`);
+    if (pinnedStart.has(columnId)) return { ...source, pinned: "start" as const };
+    if (pinnedEnd.has(columnId)) return { ...source, pinned: "end" as const };
+    return { columnId: source.columnId, width: source.width };
+  });
+}
+
+function expectedMountedColumnIdsFromViewport(
+  grid: Element,
+  columns: readonly BrowserColumnSpec[],
+): readonly string[] {
+  const viewportElement = grid as HTMLElement;
+  const pinnedStart = columns.filter((column) => column.pinned === "start");
+  const center = columns.filter((column) => column.pinned === undefined);
+  const pinnedEnd = columns.filter((column) => column.pinned === "end");
+  const pinnedStartWidth = pinnedStart.reduce((sum, column) => sum + column.width, 0);
+  const pinnedEndWidth = pinnedEnd.reduce((sum, column) => sum + column.width, 0);
+  const reservedCenterWidth = Math.min(80, viewportElement.clientWidth);
+  const suspendPinning =
+    pinnedStart.length + pinnedEnd.length > 0 &&
+    (center.length === 0
+      ? pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth
+      : pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth - reservedCenterWidth);
+  const mountedPinnedStart = suspendPinning ? [] : pinnedStart;
+  const mountedCenter = suspendPinning ? [...pinnedStart, ...center, ...pinnedEnd] : center;
+  const mountedPinnedEnd = suspendPinning ? [] : pinnedEnd;
+
+  const centerOffsets = [0];
+  for (const column of mountedCenter) {
+    centerOffsets.push(centerOffsets.at(-1)! + column.width);
+  }
+  const findColumnAtOffset = (offset: number): number => {
+    let low = 0;
+    let high = Math.max(centerOffsets.length - 1, 0);
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if ((centerOffsets[middle] ?? 0) > offset) high = middle;
+      else low = middle + 1;
+    }
+    return Math.max(low - 1, 0);
+  };
+  const centerViewportWidth = Math.max(
+    viewportElement.clientWidth - (suspendPinning ? 0 : pinnedStartWidth + pinnedEndWidth),
+    0,
+  );
+  const firstVisible = findColumnAtOffset(Math.max(viewportElement.scrollLeft - 32, 0));
+  const lastVisible = findColumnAtOffset(viewportElement.scrollLeft + centerViewportWidth + 32);
+  const start = Math.max(firstVisible - 2, 0);
+  const end = Math.min(mountedCenter.length, lastVisible + 3);
+  return [...mountedPinnedStart, ...mountedCenter.slice(start, end), ...mountedPinnedEnd].map(
+    (column) => column.columnId,
+  );
+}
+
+function mountedColumnExpectationsFromViewport(
+  grid: Element,
+  logicalColumnIds: readonly string[],
+  columns: readonly BrowserColumnSpec[],
+): readonly MountedColumnExpectation[] {
+  const viewportElement = grid as HTMLElement;
+  const pinnedStart = columns.filter((column) => column.pinned === "start");
+  const pinnedEnd = columns.filter((column) => column.pinned === "end");
+  const center = columns.filter((column) => column.pinned === undefined);
+  const pinnedStartWidth = pinnedStart.reduce((sum, column) => sum + column.width, 0);
+  const pinnedEndWidth = pinnedEnd.reduce((sum, column) => sum + column.width, 0);
+  const reservedCenterWidth = Math.min(80, viewportElement.clientWidth);
+  const suspendPinning =
+    pinnedStart.length + pinnedEnd.length > 0 &&
+    (center.length === 0
+      ? pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth
+      : pinnedStartWidth + pinnedEndWidth > viewportElement.clientWidth - reservedCenterWidth);
+  return mountedColumnExpectationsFromLogicalOrder(
+    logicalColumnIds,
+    suspendPinning ? [] : pinnedStart.map((column) => column.columnId),
+    suspendPinning ? [] : pinnedEnd.map((column) => column.columnId),
+    expectedMountedColumnIdsFromViewport(grid, columns),
+  );
+}
+
+function expectedMatrixLayout(matrixCase: ColumnManagementMatrixCase): Readonly<{
+  readonly logicalColumnIds: readonly string[];
+  readonly pinnedStartIds: readonly string[];
+  readonly pinnedEndIds: readonly string[];
+}> {
+  const base = ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"] as const;
+  switch (matrixCase.action) {
+    case "pin-start":
+      return { logicalColumnIds: base, pinnedStartIds: ["COL_ID_NAME"], pinnedEndIds: [] };
+    case "pin-end":
+      return {
+        logicalColumnIds: ["COL_ID_SCORE", "COL_ID_STATUS", "COL_ID_NAME"],
+        pinnedStartIds: [],
+        pinnedEndIds: ["COL_ID_NAME"],
+      };
+    case "hide-column":
+      return {
+        logicalColumnIds: ["COL_ID_NAME", "COL_ID_STATUS"],
+        pinnedStartIds: [],
+        pinnedEndIds: [],
+      };
+    case "move-start":
+    case "move-end":
+      return {
+        logicalColumnIds: ["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"],
+        pinnedStartIds: [],
+        pinnedEndIds: [],
+      };
+    case "unpin":
+    case "reset-order":
+    case "reset-widths":
+    case "reset-visibility":
+    case "reset-pinning":
+    case "reset-layout":
+    case "sort":
+    case "filter-clear":
+    case "filter-reset":
+    case "decrease-width":
+    case "increase-width":
+    case "show-column":
+      return { logicalColumnIds: base, pinnedStartIds: [], pinnedEndIds: [] };
+  }
+}
+
+function assertMountedColumnGeometry(
+  grid: Element,
+  expected: readonly MountedColumnExpectation[],
+  mountedColumnIds: readonly string[] = expected.map((column) => column.columnId),
+): void {
+  const expectedById = new Map(expected.map((column) => [column.columnId, column]));
+  const headers = [...grid.querySelectorAll<HTMLElement>("thead th[data-bruno-column-id]")];
+  const headerIds = headers.map((header) => header.dataset["brunoColumnId"] ?? "");
+  expect(new Set(headerIds).size).toBe(headerIds.length);
+  expect(headerIds).toEqual(mountedColumnIds);
+  const headerById = new Map(
+    headers.map((header) => [header.dataset["brunoColumnId"] ?? "", header]),
+  );
+  for (const header of headers) {
+    const columnId = header.dataset["brunoColumnId"] ?? "";
+    const column = expectedById.get(columnId);
+    expect(column).toBeDefined();
+    expect(header).toHaveAttribute("aria-colindex", String(column?.columnIndex));
+    expect(header.dataset["pinnedRegion"] ?? "center").toBe(column?.region);
+    expect(header.getBoundingClientRect().width).toBeGreaterThan(0);
+  }
+  const cells = [
+    ...grid.querySelectorAll<HTMLElement>('td[role="gridcell"][data-bruno-column-id]'),
+  ];
+  const cellIds = [...new Set(cells.map((cell) => cell.dataset["brunoColumnId"] ?? ""))];
+  expect(new Set(cellIds)).toEqual(new Set(headerIds));
+  for (const cell of cells) {
+    const columnId = cell.dataset["brunoColumnId"] ?? "";
+    const column = expectedById.get(columnId);
+    const header = headerById.get(columnId);
+    expect(column).toBeDefined();
+    expect(header).not.toBeUndefined();
+    expect(cell).toHaveAttribute("aria-colindex", String(column?.columnIndex));
+    const bodyRegion =
+      cell.closest<HTMLElement>("[data-bruno-pinned-body-region]")?.dataset[
+        "brunoPinnedBodyRegion"
+      ] ?? "center";
+    expect(bodyRegion).toBe(column?.region);
+    const cellRect = cell.getBoundingClientRect();
+    const headerRect = header?.getBoundingClientRect();
+    expect(cellRect.width).toBeGreaterThan(0);
+    expect(Math.abs(cellRect.width - (headerRect?.width ?? 0))).toBeLessThanOrEqual(1);
+    expect(Math.abs(cellRect.left - (headerRect?.left ?? 0))).toBeLessThanOrEqual(1);
+  }
+}
+
+function assertPinnedBoundaryGeometry(
+  grid: Element,
+  expectedWidths: Readonly<{
+    readonly start: number;
+    readonly center: number;
+    readonly end: number;
+  }>,
+): void {
+  const getColumnElements = (columnId: string): readonly [HTMLElement, HTMLElement] => {
+    const header = grid.querySelector<HTMLElement>(`thead th[data-bruno-column-id="${columnId}"]`);
+    const cell = grid.querySelector<HTMLElement>(
+      `td[role="gridcell"][data-bruno-column-id="${columnId}"]`,
+    );
+    expect(header).not.toBeNull();
+    expect(cell).not.toBeNull();
+    return [header!, cell!];
+  };
+  const [startHeader, startCell] = getColumnElements("COL_ID_NAME");
+  const [centerHeader, centerCell] = getColumnElements("COL_ID_SCORE");
+  const [endHeader, endCell] = getColumnElements("COL_ID_STATUS");
+  const startHeaderRect = startHeader.getBoundingClientRect();
+  const centerHeaderRect = centerHeader.getBoundingClientRect();
+  const endHeaderRect = endHeader.getBoundingClientRect();
+  const gridRect = grid.getBoundingClientRect();
+
+  expect(Math.abs(startHeaderRect.width - expectedWidths.start)).toBeLessThanOrEqual(1);
+  expect(Math.abs(centerHeaderRect.width - expectedWidths.center)).toBeLessThanOrEqual(1);
+  expect(Math.abs(endHeaderRect.width - expectedWidths.end)).toBeLessThanOrEqual(1);
+  expect(Math.abs(startHeaderRect.left - gridRect.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(endHeaderRect.right - gridRect.right)).toBeLessThanOrEqual(1);
+  expect(Math.abs(centerHeaderRect.left - startHeaderRect.right)).toBeLessThanOrEqual(1);
+  expect(endHeaderRect.left).toBeGreaterThanOrEqual(centerHeaderRect.right - 1);
+
+  const bodyRects = [
+    [startCell, startHeaderRect, expectedWidths.start],
+    [centerCell, centerHeaderRect, expectedWidths.center],
+    [endCell, endHeaderRect, expectedWidths.end],
+  ] as const;
+  for (const [cell, headerRect, expectedWidth] of bodyRects) {
+    const cellRect = cell.getBoundingClientRect();
+    expect(Math.abs(cellRect.width - expectedWidth)).toBeLessThanOrEqual(1);
+    expect(Math.abs(cellRect.width - headerRect.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(cellRect.left - headerRect.left)).toBeLessThanOrEqual(1);
+  }
+}
+
+async function expectColumnMenuFocus(screen: BrowserScreen, columnName = "Name"): Promise<void> {
+  const trigger = screen.getByRole("button", { name: `Column menu for ${columnName}` });
+  await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
+}
+
+async function expectAnnouncement(screen: BrowserScreen, message: string): Promise<void> {
+  await vi.waitFor(() => {
+    const announcement = screen
+      .getByRole("grid")
+      .element()
+      .querySelector<HTMLElement>('[aria-live="polite"]');
+    expect(announcement).not.toBeNull();
+    expect(announcement?.textContent).toBe(message);
+  });
+}
+
+function expectTypedCommand(
+  command: BrunoTableGridCommand | undefined,
+  expected: BrunoTableGridCommand,
+): void {
+  expect(command).toBeDefined();
+  expect(command).toEqual(expected);
+  expect(command).not.toHaveProperty("table");
+  expect(command).not.toHaveProperty("column");
+  expect(command).not.toHaveProperty("columnDef");
+}
+
+type ColumnManagementMatrixCase = Readonly<{
+  readonly name: string;
+  readonly action:
+    | "sort"
+    | "filter-clear"
+    | "filter-reset"
+    | "decrease-width"
+    | "increase-width"
+    | "pin-start"
+    | "pin-end"
+    | "unpin"
+    | "move-start"
+    | "move-end"
+    | "hide-column"
+    | "show-column"
+    | "reset-order"
+    | "reset-widths"
+    | "reset-visibility"
+    | "reset-pinning"
+    | "reset-layout";
+  readonly targetColumn: "Name" | "Score";
+  readonly filtered?: boolean;
+  readonly pinnedName?: boolean;
+  readonly setup?:
+    | "clear-filter"
+    | "move-name-end"
+    | "resize-name"
+    | "hide-score"
+    | "pin-name"
+    | "layout";
+  readonly expectedCommand: BrunoTableGridCommand;
+  readonly announcement: string;
+}>;
+
+const columnManagementMatrix: readonly ColumnManagementMatrixCase[] = [
+  {
+    name: "Sort by Name",
+    action: "sort",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.sort.toggle", columnId: "COL_ID_NAME", multi: false },
+    announcement: "Name sorted ascending, priority 1",
+  },
+  {
+    name: "Clear filter",
+    action: "filter-clear",
+    targetColumn: "Name",
+    filtered: true,
+    expectedCommand: { type: "column.filter.clear", columnId: "COL_ID_NAME" },
+    announcement: "Name filter cleared",
+  },
+  {
+    name: "Reset filter",
+    action: "filter-reset",
+    targetColumn: "Name",
+    filtered: true,
+    setup: "clear-filter",
+    expectedCommand: { type: "column.filter.reset", columnId: "COL_ID_NAME" },
+    announcement: "Name filter reset",
+  },
+  {
+    name: "Decrease width",
+    action: "decrease-width",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.resize.commit", columnId: "COL_ID_NAME", width: 150 },
+    announcement: "Name width 150 pixels",
+  },
+  {
+    name: "Increase width",
+    action: "increase-width",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.resize.commit", columnId: "COL_ID_NAME", width: 170 },
+    announcement: "Name width 170 pixels",
+  },
+  {
+    name: "Pin to logical start",
+    action: "pin-start",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.pin.commit", columnId: "COL_ID_NAME", pinned: "start" },
+    announcement: "Name pinned to logical start",
+  },
+  {
+    name: "Pin to logical end",
+    action: "pin-end",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.pin.commit", columnId: "COL_ID_NAME", pinned: "end" },
+    announcement: "Name pinned to logical end",
+  },
+  {
+    name: "Unpin",
+    action: "unpin",
+    targetColumn: "Name",
+    pinnedName: true,
+    expectedCommand: { type: "column.pin.commit", columnId: "COL_ID_NAME", pinned: undefined },
+    announcement: "Name unpinned",
+  },
+  {
+    name: "Move toward logical start",
+    action: "move-start",
+    targetColumn: "Score",
+    expectedCommand: {
+      type: "column.reorder.commit",
+      columnId: "COL_ID_SCORE",
+      targetIndex: 0,
+      pinned: undefined,
+    },
+    announcement: "Score position 1 of 3",
+  },
+  {
+    name: "Move toward logical end",
+    action: "move-end",
+    targetColumn: "Name",
+    expectedCommand: {
+      type: "column.reorder.commit",
+      columnId: "COL_ID_NAME",
+      targetIndex: 1,
+      pinned: undefined,
+    },
+    announcement: "Name position 2 of 3",
+  },
+  {
+    name: "Hide Score",
+    action: "hide-column",
+    targetColumn: "Name",
+    expectedCommand: { type: "column.visibility.commit", columnId: "COL_ID_SCORE", visible: false },
+    announcement: "Score hidden",
+  },
+  {
+    name: "Show Score",
+    action: "show-column",
+    targetColumn: "Name",
+    setup: "hide-score",
+    expectedCommand: { type: "column.visibility.commit", columnId: "COL_ID_SCORE", visible: true },
+    announcement: "Score shown",
+  },
+  {
+    name: "Reset order",
+    action: "reset-order",
+    targetColumn: "Name",
+    setup: "move-name-end",
+    expectedCommand: { type: "column.reset.order" },
+    announcement: "Column order reset",
+  },
+  {
+    name: "Reset widths",
+    action: "reset-widths",
+    targetColumn: "Name",
+    setup: "resize-name",
+    expectedCommand: { type: "column.reset.widths" },
+    announcement: "Column widths reset",
+  },
+  {
+    name: "Reset visibility",
+    action: "reset-visibility",
+    targetColumn: "Name",
+    setup: "hide-score",
+    expectedCommand: { type: "column.reset.visibility" },
+    announcement: "Column visibility reset",
+  },
+  {
+    name: "Reset pinning",
+    action: "reset-pinning",
+    targetColumn: "Name",
+    setup: "pin-name",
+    expectedCommand: { type: "column.reset.pinning" },
+    announcement: "Column pinning reset",
+  },
+  {
+    name: "Reset complete layout",
+    action: "reset-layout",
+    targetColumn: "Name",
+    setup: "layout",
+    expectedCommand: { type: "column.reset.layout" },
+    announcement: "Complete column layout reset",
+  },
+];
 
 afterEach(async () => {
   await cleanup();
@@ -116,6 +786,420 @@ afterEach(async () => {
 });
 
 describe("BrunoTable column management browser surface", () => {
+  test.each(columnManagementMatrix)(
+    "keyboard reaches and dispatches the $name column-menu command",
+    async (matrixCase) => {
+      const tableId = `TABLE_ID_COLUMN_MANAGEMENT_MATRIX_${matrixCase.action}`;
+      const commands: BrunoTableGridCommand[] = [];
+      const viewRenders = vi.fn();
+      const gridSurfaceRenders = vi.fn();
+      const headerRenders = vi.fn();
+      const cellRenders = vi.fn();
+      const rowOrderPlans = vi.fn();
+      const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+        commands.push(command);
+      });
+      const removeView = installBrunoTableClientViewRenderListener(viewRenders);
+      const removeGridSurface =
+        installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
+      const removeHeader = installBrunoTableClientHeaderRenderListener(headerRenders);
+      const removeCells = installBrunoTableClientCellRenderListener(cellRenders);
+      const removeRowOrderPlans = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+
+      try {
+        const screen = await render(
+          <BrunoTableClient<Row, typeof columns>
+            {...(matrixCase.filtered ? filteredTableProps : tableProps)}
+            columns={matrixCase.pinnedName ? pinnedNameColumns : columns}
+            tableId={tableId}
+          />,
+        );
+
+        if (matrixCase.setup === "clear-filter") {
+          await openColumnMenu(screen);
+          await activateMenuItem(screen, "Clear filter");
+          await expect
+            .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+            .toBeInTheDocument();
+        } else if (matrixCase.setup === "move-name-end") {
+          await openColumnMenu(screen);
+          await openColumnSubmenu(screen, "Move");
+          await activateMenuItem(screen, "Move toward logical end");
+          await vi.waitFor(() =>
+            expect(columnOrder(screen.getByRole("grid").element())).toEqual([
+              "COL_ID_SCORE",
+              "COL_ID_NAME",
+              "COL_ID_STATUS",
+            ]),
+          );
+        } else if (matrixCase.setup === "resize-name") {
+          const resizeHandle = screen.getByRole("separator", { name: "Resize Name" });
+          resizeHandle.element().focus();
+          await userEvent.keyboard("{ArrowRight}");
+          await expect.element(resizeHandle).toHaveAttribute("aria-valuenow", "170");
+        } else if (matrixCase.setup === "layout") {
+          const resizeHandle = screen.getByRole("separator", { name: "Resize Name" });
+          resizeHandle.element().focus();
+          await userEvent.keyboard("{ArrowRight}");
+          await expect.element(resizeHandle).toHaveAttribute("aria-valuenow", "170");
+          await openColumnMenu(screen);
+          await activateMenuRadio(screen, "Pin to logical start");
+          await openColumnMenu(screen);
+          await openColumnSubmenu(screen, "Visibility");
+          await activateMenuCheckbox(screen, "Score");
+          await expect.element(screen.getByRole("grid")).toHaveAttribute("aria-colcount", "2");
+          await closeColumnMenus(screen);
+        } else if (matrixCase.setup === "hide-score") {
+          await openColumnMenu(screen);
+          await openColumnSubmenu(screen, "Visibility");
+          await activateMenuCheckbox(screen, "Score");
+          await expect.element(screen.getByRole("grid")).toHaveAttribute("aria-colcount", "2");
+          await closeColumnMenus(screen);
+        } else if (matrixCase.setup === "pin-name") {
+          await openColumnMenu(screen);
+          await activateMenuRadio(screen, "Pin to logical start");
+          await expect
+            .element(screen.getByRole("columnheader", { name: /Name, width 160 pixels/u }))
+            .toHaveAttribute("data-pinned-region", "start");
+        }
+
+        commands.splice(0);
+        viewRenders.mockClear();
+        gridSurfaceRenders.mockClear();
+        headerRenders.mockClear();
+        cellRenders.mockClear();
+        rowOrderPlans.mockClear();
+
+        await openColumnMenu(screen, matrixCase.targetColumn);
+        switch (matrixCase.action) {
+          case "sort":
+            await activateMenuItem(screen, "Sort by Name");
+            break;
+          case "filter-clear":
+          case "filter-reset":
+            await activateMenuItem(
+              screen,
+              matrixCase.action === "filter-clear" ? "Clear filter" : "Reset filter",
+            );
+            break;
+          case "decrease-width":
+            await activateMenuItem(screen, "Decrease width");
+            break;
+          case "increase-width":
+            await activateMenuItem(screen, "Increase width");
+            break;
+          case "pin-start":
+            await activateMenuRadio(screen, "Pin to logical start");
+            break;
+          case "pin-end":
+            await activateMenuRadio(screen, "Pin to logical end");
+            break;
+          case "unpin":
+            await activateMenuRadio(screen, "Unpin");
+            break;
+          case "move-start":
+            await openColumnSubmenu(screen, "Move");
+            await activateMenuItem(screen, "Move toward logical start");
+            break;
+          case "move-end":
+            await openColumnSubmenu(screen, "Move");
+            await activateMenuItem(screen, "Move toward logical end");
+            break;
+          case "hide-column":
+          case "show-column":
+            await openColumnSubmenu(screen, "Visibility");
+            await activateMenuCheckbox(screen, "Score");
+            await closeColumnMenus(screen);
+            break;
+          case "reset-order":
+          case "reset-widths":
+          case "reset-visibility":
+          case "reset-pinning":
+          case "reset-layout":
+            await openColumnSubmenu(screen, "Reset");
+            await activateMenuItem(
+              screen,
+              {
+                "reset-order": "Reset order",
+                "reset-widths": "Reset widths",
+                "reset-visibility": "Reset visibility",
+                "reset-pinning": "Reset pinning",
+                "reset-layout": "Reset complete layout",
+              }[matrixCase.action],
+            );
+            break;
+        }
+
+        await vi.waitFor(() => expect(commands).toHaveLength(1));
+        expectTypedCommand(commands[0], matrixCase.expectedCommand);
+        await expectAnnouncement(screen, matrixCase.announcement);
+        await expectColumnMenuFocus(screen, matrixCase.targetColumn);
+
+        const grid = screen.getByRole("grid").element();
+        switch (matrixCase.action) {
+          case "sort":
+            await expect
+              .element(screen.getByRole("columnheader", { name: /Name/u }))
+              .toHaveAttribute("aria-sort", "ascending");
+            break;
+          case "filter-clear":
+            await expect
+              .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+              .toBeInTheDocument();
+            break;
+          case "filter-reset":
+            await expect
+              .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+              .not.toBeInTheDocument();
+            break;
+          case "decrease-width":
+            await expect
+              .element(screen.getByRole("separator", { name: "Resize Name" }))
+              .toHaveAttribute("aria-valuenow", "150");
+            break;
+          case "increase-width":
+            await expect
+              .element(screen.getByRole("separator", { name: "Resize Name" }))
+              .toHaveAttribute("aria-valuenow", "170");
+            break;
+          case "pin-start":
+          case "pin-end":
+            await expect
+              .element(screen.getByRole("columnheader", { name: /Name, width 160 pixels/u }))
+              .toHaveAttribute(
+                "data-pinned-region",
+                matrixCase.action === "pin-start" ? "start" : "end",
+              );
+            break;
+          case "unpin":
+          case "reset-pinning":
+            await expect
+              .element(screen.getByRole("columnheader", { name: /Name, width 160 pixels/u }))
+              .not.toHaveAttribute("data-pinned-region", "start");
+            break;
+          case "move-start":
+            expect(columnOrder(grid)).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]);
+            break;
+          case "move-end":
+          case "reset-order":
+            expect(columnOrder(grid)).toEqual(
+              matrixCase.action === "move-end"
+                ? ["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]
+                : ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"],
+            );
+            break;
+          case "hide-column":
+            await expect.element(grid).toHaveAttribute("aria-colcount", "2");
+            break;
+          case "show-column":
+          case "reset-visibility":
+            await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+            break;
+          case "reset-widths":
+            await expect
+              .element(screen.getByRole("separator", { name: "Resize Name" }))
+              .toHaveAttribute("aria-valuenow", "160");
+            break;
+          case "reset-layout":
+            expect(columnOrder(grid)).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]);
+            await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+            await expect
+              .element(screen.getByRole("separator", { name: "Resize Name" }))
+              .toHaveAttribute("aria-valuenow", "160");
+            await expect
+              .element(screen.getByRole("columnheader", { name: /Name, width 160 pixels/u }))
+              .not.toHaveAttribute("data-pinned-region", "start");
+            break;
+        }
+        const expectedMatrix = expectedMatrixLayout(matrixCase);
+        assertMountedColumnGeometry(
+          grid,
+          mountedColumnExpectationsFromLogicalOrder(
+            expectedMatrix.logicalColumnIds,
+            expectedMatrix.pinnedStartIds,
+            expectedMatrix.pinnedEndIds,
+          ),
+        );
+
+        if (
+          matrixCase.action === "pin-start" ||
+          matrixCase.action === "pin-end" ||
+          matrixCase.action === "unpin"
+        ) {
+          await openColumnMenu(screen, matrixCase.targetColumn);
+          const radio = screen.getByRole("menuitemradio", {
+            name:
+              matrixCase.action === "pin-start"
+                ? "Pin to logical start"
+                : matrixCase.action === "pin-end"
+                  ? "Pin to logical end"
+                  : "Unpin",
+          });
+          await expect.element(radio).toHaveAttribute("aria-checked", "true");
+          await userEvent.keyboard("{Escape}");
+        }
+        if (matrixCase.action === "hide-column" || matrixCase.action === "show-column") {
+          await openColumnMenu(screen);
+          await openColumnSubmenu(screen, "Visibility");
+          await expect
+            .element(screen.getByRole("menuitemcheckbox", { name: "Score" }))
+            .toHaveAttribute(
+              "aria-checked",
+              matrixCase.action === "hide-column" ? "false" : "true",
+            );
+          await userEvent.keyboard("{Escape}");
+        }
+
+        expect(viewRenders.mock.calls.length).toBeLessThanOrEqual(3);
+        expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(3);
+        expect(headerRenders.mock.calls.length).toBeLessThanOrEqual(4);
+        expect(rowOrderPlans.mock.calls.length).toBeLessThanOrEqual(2);
+        expect(cellRenders.mock.calls.length).toBeLessThanOrEqual(rows.length * columns.length * 2);
+      } finally {
+        removeCommand();
+        removeView();
+        removeGridSurface();
+        removeHeader();
+        removeCells();
+        removeRowOrderPlans();
+      }
+    },
+  );
+
+  test("exposes semantic disabled cues for width and movement boundaries", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+
+    await openColumnMenu(screen);
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Decrease width" }))
+      .not.toHaveAttribute("aria-disabled", "true");
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Increase width" }))
+      .not.toHaveAttribute("aria-disabled", "true");
+    await openColumnSubmenu(screen, "Move");
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Move toward logical start" }))
+      .toHaveAttribute("aria-disabled", "true");
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Move toward logical end" }))
+      .not.toHaveAttribute("aria-disabled", "true");
+    await closeColumnMenus(screen);
+
+    const resizeHandle = screen.getByRole("separator", { name: "Resize Name" });
+    resizeHandle.element().focus();
+    await userEvent.keyboard("{Home}");
+    await openColumnMenu(screen);
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Decrease width" }))
+      .toHaveAttribute("aria-disabled", "true");
+    await expect
+      .element(screen.getByRole("menuitem", { name: "Increase width" }))
+      .not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  test("exposes the current sort direction and priority in the menu", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+
+    await openColumnMenu(screen, "Score");
+    await expect
+      .element(
+        screen.getByRole("menuitem", {
+          name: "Sort by Score, currently ascending, priority 1",
+        }),
+      )
+      .toBeInTheDocument();
+  });
+
+  test("announces direct header sort and filter commands for pointer and keyboard users", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(
+      "TABLE_ID_COLUMN_MANAGEMENT_DIRECT_COMMANDS",
+      (command) => {
+        commands.push(command);
+      },
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<Row, typeof columns>
+          {...filteredTableProps}
+          tableId="TABLE_ID_COLUMN_MANAGEMENT_DIRECT_COMMANDS"
+        />,
+      );
+      const grid = screen.getByRole("grid").element();
+      const sortButton = screen.getByRole("button", { name: "Sort by Name" });
+      await userEvent.click(sortButton);
+      expect(commands[0]).toEqual({
+        type: "column.sort.toggle",
+        columnId: "COL_ID_NAME",
+        multi: false,
+      });
+      await expectAnnouncement(screen, "Name sorted ascending, priority 1");
+      expect(document.activeElement).toBe(grid);
+
+      const filterButton = screen.getByRole("button", { name: "Clear filter for Name" });
+      filterButton.element().focus();
+      await userEvent.keyboard("{Enter}");
+      expect(commands[1]).toEqual({
+        type: "column.filter.clear",
+        columnId: "COL_ID_NAME",
+      });
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expectAnnouncement(screen, "Name filter cleared");
+      expect(document.activeElement).toBe(grid);
+    } finally {
+      removeCommand();
+    }
+  });
+
+  test("preserves the typed multi-sort command payload", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_MULTI_SORT";
+    const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+      commands.push(command);
+    });
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={tableId} />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }), {
+        modifiers: ["Shift"],
+      });
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.sort.toggle",
+        columnId: "COL_ID_NAME",
+        multi: true,
+      });
+    } finally {
+      removeCommand();
+    }
+  });
+
+  test("opens the column menu from the trigger keyboard shortcut", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    const trigger = screen.getByRole("button", { name: "Column menu for Name" });
+    await expect.element(trigger).toHaveAttribute("aria-keyshortcuts", "Shift+F10 ContextMenu");
+    trigger.element().focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
+  });
+
+  test("opens the column menu from the semantic ContextMenu key", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    const trigger = screen.getByRole("button", { name: "Column menu for Name" });
+    trigger.element().focus();
+    await userEvent.keyboard("{ContextMenu}");
+    await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
+  });
+
   test("provides grouped layout menus for pinning, moving, visibility, and reset", async () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const menuTrigger = screen.getByRole("button", { name: "Column menu for Name" });
@@ -541,7 +1625,417 @@ describe("BrunoTable column management browser surface", () => {
       .toBeInTheDocument();
   });
 
+  test("reconciles and reveals a body active cell across keyboard layout commands", async () => {
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_ACTIVE_REVEAL";
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+      commands.push(command);
+    });
+    try {
+      const screen = await render(
+        <BrunoTableClient<Row, typeof revealColumns>
+          tableId={tableId}
+          getRowId={(row: Row) => row.id}
+          columns={revealColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={source}
+        />,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` }).element();
+      grid.focus();
+      for (let index = 0; index < 7; index += 1) {
+        grid.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+      }
+
+      await vi.waitFor(() => {
+        const activeId = grid.getAttribute("aria-activedescendant");
+        const activeCell =
+          activeId === null ? null : document.querySelector<HTMLElement>(`#${activeId}`);
+        expect(activeCell?.getAttribute("data-bruno-column-id")).toBe("COL_ID_EXTRA_4");
+        expect(activeCell).not.toHaveAttribute("data-bruno-active-proxy");
+      });
+      const activeBefore = grid.getAttribute("aria-activedescendant");
+      expect(activeBefore).not.toBeNull();
+      expect(grid.querySelector('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      expect(grid.querySelector('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+      await expect.element(grid).toHaveAttribute("aria-colcount", String(revealColumns.length));
+      await expect
+        .element(screen.getByRole("columnheader", { name: /Reveal end/u }))
+        .toHaveAttribute("aria-colindex", String(revealColumns.length));
+
+      const openMenuByKeyboard = async (columnName: string) => {
+        const trigger = screen.getByRole("button", { name: `Column menu for ${columnName}` });
+        trigger.element().focus();
+        await userEvent.keyboard("{Enter}");
+        await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+        return trigger;
+      };
+      const openNameMenu = async () => {
+        await closeColumnMenus(screen);
+        grid.scrollLeft = 0;
+        grid.dispatchEvent(new Event("scroll", { bubbles: true }));
+        await waitForAnimationFrames(2);
+        await expect
+          .element(screen.getByRole("button", { name: "Column menu for Name" }))
+          .toBeInTheDocument();
+        await vi.waitFor(() => {
+          const header = grid.querySelector<HTMLElement>('th[data-bruno-column-id="COL_ID_NAME"]');
+          expect(header?.querySelector('button[aria-label="Column menu for Name"]')).not.toBeNull();
+        });
+        return openMenuByKeyboard("Name");
+      };
+      const assertActiveCell = async () => {
+        await vi.waitFor(() => {
+          expect(grid.getAttribute("aria-activedescendant")).toBe(activeBefore);
+          const activeId = grid.getAttribute("aria-activedescendant");
+          const activeCells =
+            activeId === null
+              ? []
+              : [...document.querySelectorAll<HTMLElement>('[role="gridcell"]')].filter(
+                  (cell) => cell.id === activeId,
+                );
+          const activeCell = activeCells.find(
+            (cell) => !cell.hasAttribute("data-bruno-active-proxy"),
+          );
+          expect(activeCell).not.toBeUndefined();
+          expect(activeCell?.getAttribute("data-bruno-column-id")).toBe("COL_ID_EXTRA_4");
+          expect(activeCell?.getBoundingClientRect().right).toBeGreaterThan(
+            grid.getBoundingClientRect().left,
+          );
+          expect(activeCell?.getBoundingClientRect().left).toBeLessThan(
+            grid.getBoundingClientRect().right,
+          );
+          expect(grid.scrollLeft).toBeGreaterThan(0);
+        });
+      };
+
+      await openNameMenu();
+      await openColumnSubmenu(screen, "Move");
+      await activateMenuItem(screen, "Move toward logical end");
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.reorder.commit",
+        columnId: "COL_ID_NAME",
+        targetIndex: 2,
+        pinned: undefined,
+      });
+      assertMountedColumnGeometry(
+        grid,
+        mountedColumnExpectationsFromLogicalOrder(
+          [
+            "COL_ID_REVEAL_START",
+            "COL_ID_SCORE",
+            "COL_ID_NAME",
+            "COL_ID_STATUS",
+            "COL_ID_EXTRA_1",
+            "COL_ID_EXTRA_2",
+            "COL_ID_EXTRA_3",
+            "COL_ID_EXTRA_4",
+            "COL_ID_EXTRA_5",
+            "COL_ID_REVEAL_END",
+          ],
+          ["COL_ID_REVEAL_START"],
+          ["COL_ID_REVEAL_END"],
+          expectedMountedColumnIdsFromViewport(
+            grid,
+            revealBrowserSpecs(
+              [
+                "COL_ID_REVEAL_START",
+                "COL_ID_SCORE",
+                "COL_ID_NAME",
+                "COL_ID_STATUS",
+                "COL_ID_EXTRA_1",
+                "COL_ID_EXTRA_2",
+                "COL_ID_EXTRA_3",
+                "COL_ID_EXTRA_4",
+                "COL_ID_EXTRA_5",
+                "COL_ID_REVEAL_END",
+              ],
+              ["COL_ID_REVEAL_START"],
+              ["COL_ID_REVEAL_END"],
+            ),
+          ),
+        ),
+      );
+      await assertActiveCell();
+
+      await openNameMenu();
+      await openColumnSubmenu(screen, "Visibility");
+      await activateMenuCheckbox(screen, "Score");
+      await vi.waitFor(() => expect(commands).toHaveLength(2));
+      expectTypedCommand(commands[1], {
+        type: "column.visibility.commit",
+        columnId: "COL_ID_SCORE",
+        visible: false,
+      });
+      assertMountedColumnGeometry(
+        grid,
+        mountedColumnExpectationsFromLogicalOrder(
+          [
+            "COL_ID_REVEAL_START",
+            "COL_ID_NAME",
+            "COL_ID_STATUS",
+            "COL_ID_EXTRA_1",
+            "COL_ID_EXTRA_2",
+            "COL_ID_EXTRA_3",
+            "COL_ID_EXTRA_4",
+            "COL_ID_EXTRA_5",
+            "COL_ID_REVEAL_END",
+          ],
+          ["COL_ID_REVEAL_START"],
+          ["COL_ID_REVEAL_END"],
+          expectedMountedColumnIdsFromViewport(
+            grid,
+            revealBrowserSpecs(
+              [
+                "COL_ID_REVEAL_START",
+                "COL_ID_NAME",
+                "COL_ID_STATUS",
+                "COL_ID_EXTRA_1",
+                "COL_ID_EXTRA_2",
+                "COL_ID_EXTRA_3",
+                "COL_ID_EXTRA_4",
+                "COL_ID_EXTRA_5",
+                "COL_ID_REVEAL_END",
+              ],
+              ["COL_ID_REVEAL_START"],
+              ["COL_ID_REVEAL_END"],
+            ),
+          ),
+        ),
+      );
+      await assertActiveCell();
+
+      await openNameMenu();
+      await activateMenuRadio(screen, "Pin to logical end");
+      await vi.waitFor(() => expect(commands).toHaveLength(3));
+      expectTypedCommand(commands[2], {
+        type: "column.pin.commit",
+        columnId: "COL_ID_NAME",
+        pinned: "end",
+      });
+      assertMountedColumnGeometry(
+        grid,
+        mountedColumnExpectationsFromViewport(
+          grid,
+          [
+            "COL_ID_REVEAL_START",
+            "COL_ID_STATUS",
+            "COL_ID_EXTRA_1",
+            "COL_ID_EXTRA_2",
+            "COL_ID_EXTRA_3",
+            "COL_ID_EXTRA_4",
+            "COL_ID_EXTRA_5",
+            "COL_ID_NAME",
+            "COL_ID_REVEAL_END",
+          ],
+          revealBrowserSpecs(
+            [
+              "COL_ID_REVEAL_START",
+              "COL_ID_STATUS",
+              "COL_ID_EXTRA_1",
+              "COL_ID_EXTRA_2",
+              "COL_ID_EXTRA_3",
+              "COL_ID_EXTRA_4",
+              "COL_ID_EXTRA_5",
+              "COL_ID_NAME",
+              "COL_ID_REVEAL_END",
+            ],
+            ["COL_ID_REVEAL_START"],
+            ["COL_ID_NAME", "COL_ID_REVEAL_END"],
+          ),
+        ),
+      );
+      await assertActiveCell();
+    } finally {
+      removeCommand();
+    }
+  });
+
+  test("preserves pinning when pointer reorder occurs in narrow centreless overflow", async () => {
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_NARROW_PINNED_REORDER";
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+      commands.push(command);
+    });
+
+    try {
+      const screen = await render(
+        <div style={{ width: 240 }}>
+          <BrunoTableClient<Row, typeof narrowAllPinnedColumns>
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={narrowAllPinnedColumns}
+            initialOrderBy={[{ columnId: "COL_ID_NARROW_PIN_START_A", direction: "asc" }]}
+            clientSource={source}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` }).element();
+      const reorderHandle = screen
+        .getByRole("button", { name: "Reorder Narrow pinned start A" })
+        .element();
+      const secondHeader = screen
+        .getByRole("columnheader", { name: /Narrow pinned start B/u })
+        .element();
+      const secondRect = secondHeader.getBoundingClientRect();
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: reorderHandle.getBoundingClientRect().left + 1,
+          pointerId: 50,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: secondRect.left + secondRect.width - 1,
+          pointerId: 50,
+        }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: secondRect.left + secondRect.width - 1,
+          pointerId: 50,
+        }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.reorder.commit",
+        columnId: "COL_ID_NARROW_PIN_START_A",
+        targetIndex: 2,
+        pinned: "start",
+      });
+      expect(grid.querySelector('[data-bruno-pinned-body-region="start"]')).toBeNull();
+      expect(grid.querySelector('[data-bruno-pinned-body-region="end"]')).toBeNull();
+    } finally {
+      removeCommand();
+    }
+  });
+
+  test("previews and commits resize for both pinned boundary regions", async () => {
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_PINNED_RESIZE";
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+      commands.push(command);
+    });
+
+    try {
+      const screen = await render(
+        <div style={{ width: 1024 }}>
+          <BrunoTableClient<Row, typeof pinnedBoundaryColumns>
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={pinnedBoundaryColumns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={source}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` }).element();
+      const expectedColumns = mountedColumnExpectationsFromLogicalOrder(
+        ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"],
+        ["COL_ID_NAME"],
+        ["COL_ID_STATUS"],
+      );
+      await expect.element(grid).toHaveAttribute("aria-colcount", "3");
+      assertMountedColumnGeometry(grid, expectedColumns);
+      assertPinnedBoundaryGeometry(grid, { start: 160, center: 96, end: 140 });
+
+      const startResize = screen.getByRole("separator", { name: "Resize Name" }).element();
+      const setStartPointerCapture = vi
+        .spyOn(startResize, "setPointerCapture")
+        .mockImplementation(() => undefined);
+      const hasStartPointerCapture = vi
+        .spyOn(startResize, "hasPointerCapture")
+        .mockReturnValue(true);
+      const releaseStartPointerCapture = vi
+        .spyOn(startResize, "releasePointerCapture")
+        .mockImplementation(() => undefined);
+      startResize.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 61,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 140, pointerId: 61 }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(commands).toHaveLength(0);
+      expect(setStartPointerCapture).toHaveBeenCalledWith(61);
+      await expect.element(startResize).toHaveAttribute("aria-valuenow", "200");
+      assertMountedColumnGeometry(grid, expectedColumns);
+      assertPinnedBoundaryGeometry(grid, { start: 200, center: 96, end: 140 });
+
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 140, pointerId: 61 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 200,
+      });
+      expect(hasStartPointerCapture).toHaveBeenCalledWith(61);
+      expect(releaseStartPointerCapture).toHaveBeenCalledWith(61);
+      expect(document.activeElement).toBe(startResize);
+      await expectAnnouncement(screen, "Name width 200 pixels");
+      assertPinnedBoundaryGeometry(grid, { start: 200, center: 96, end: 140 });
+
+      const endResize = screen.getByRole("separator", { name: "Resize Status" }).element();
+      const setEndPointerCapture = vi
+        .spyOn(endResize, "setPointerCapture")
+        .mockImplementation(() => undefined);
+      const hasEndPointerCapture = vi.spyOn(endResize, "hasPointerCapture").mockReturnValue(true);
+      const releaseEndPointerCapture = vi
+        .spyOn(endResize, "releasePointerCapture")
+        .mockImplementation(() => undefined);
+      endResize.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 62,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 130, pointerId: 62 }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(commands).toHaveLength(1);
+      expect(setEndPointerCapture).toHaveBeenCalledWith(62);
+      await expect.element(endResize).toHaveAttribute("aria-valuenow", "170");
+      assertMountedColumnGeometry(grid, expectedColumns);
+      assertPinnedBoundaryGeometry(grid, { start: 200, center: 96, end: 170 });
+
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 130, pointerId: 62 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(2));
+      expectTypedCommand(commands[1], {
+        type: "column.resize.commit",
+        columnId: "COL_ID_STATUS",
+        width: 170,
+      });
+      expect(hasEndPointerCapture).toHaveBeenCalledWith(62);
+      expect(releaseEndPointerCapture).toHaveBeenCalledWith(62);
+      expect(document.activeElement).toBe(endResize);
+      await expectAnnouncement(screen, "Status width 170 pixels");
+      assertMountedColumnGeometry(grid, expectedColumns);
+      assertPinnedBoundaryGeometry(grid, { start: 200, center: 96, end: 170 });
+    } finally {
+      removeCommand();
+    }
+  });
+
   test("commits one pointer resize and one pointer reorder after rAF previews", async () => {
+    const commands: BrunoTableGridCommand[] = [];
     const resizeFrames = vi.fn();
     const reorderFrames = vi.fn();
     const previewStyleWrites = vi.fn();
@@ -550,6 +2044,9 @@ describe("BrunoTable column management browser surface", () => {
     const headerRenders = vi.fn();
     const cellRenders = vi.fn();
     const rowOrderPlans = vi.fn();
+    const removeCommand = installBrunoTableGridCommandListener(tableProps.tableId, (command) => {
+      commands.push(command);
+    });
     const removeResize = installBrunoTableClientColumnResizeFrameListener(resizeFrames);
     const removeReorder = installBrunoTableClientColumnReorderFrameListener(reorderFrames);
     const removePreviewStyleWrites =
@@ -606,6 +2103,12 @@ describe("BrunoTable column management browser surface", () => {
       await expect
         .element(screen.getByRole("separator", { name: "Resize Name" }))
         .toHaveAttribute("aria-valuenow", "200");
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 200,
+      });
       expect(resizeFrames).toHaveBeenCalledTimes(1);
       expect(rowOrderPlans.mock.calls.length).toBe(rowOrderPlansBeforeGesture);
 
@@ -637,7 +2140,15 @@ describe("BrunoTable column management browser surface", () => {
         }),
       );
       await vi.waitFor(() => expect(reorderFrames).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(commands).toHaveLength(2));
+      expectTypedCommand(commands[1], {
+        type: "column.reorder.commit",
+        columnId: "COL_ID_STATUS",
+        targetIndex: 0,
+        pinned: undefined,
+      });
     } finally {
+      removeCommand();
       removeResize();
       removeReorder();
       removePreviewStyleWrites();
@@ -646,6 +2157,273 @@ describe("BrunoTable column management browser surface", () => {
       removeHeader();
       removeRowOrderPlans();
       removeCells();
+    }
+  });
+
+  test("bounds pointer work and reports frame evidence on a realistic many-column grid", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const gestureFrames: ColumnGestureFrameEvent[] = [];
+    const columnCommandNotifications: ColumnCommandSubscriptionEvent[] = [];
+    const viewRenders = vi.fn();
+    const gridSurfaceRenders = vi.fn();
+    const rowOrderPlans = vi.fn();
+    const rowRenders = vi.fn();
+    const toolbarRenders = vi.fn();
+    const cellRenders = vi.fn();
+    let previewStyleWriteCount = 0;
+    const previewStyleWrites = vi.fn((_property: string) => {
+      previewStyleWriteCount += 1;
+    });
+    const removeCommand = installBrunoTableGridCommandListener(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      (command) => {
+        commands.push(command);
+      },
+    );
+    const removeFrames = installBrunoTableClientColumnGestureFrameListener(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      (event) => {
+        gestureFrames.push(event);
+      },
+    );
+    const removeColumnCommandNotifications = installBrunoTableColumnCommandSubscriptionListener(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      (event) => {
+        columnCommandNotifications.push(event);
+      },
+    );
+    const removeView = installBrunoTableClientViewRenderListenerForTable(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      viewRenders,
+    );
+    const removeGridSurface = installBrunoTableClientGridSurfaceRenderListenerForTable(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      gridSurfaceRenders,
+    );
+    const removeRowOrderPlans = installBrunoTableClientRowOrderPlanningListenerForTable(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      rowOrderPlans,
+    );
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      rowRenders,
+    );
+    const removeCells = installBrunoTableClientCellRenderListenerForTable(
+      "TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE",
+      cellRenders,
+    );
+    const removePreviewStyleWrites =
+      installBrunoTableClientColumnPreviewStyleWriteListener(previewStyleWrites);
+
+    try {
+      const screen = await render(
+        <div style={{ width: 1024 }}>
+          <BrunoTableClient<Row, typeof performanceColumns>
+            tableId="TABLE_ID_COLUMN_MANAGEMENT_PERFORMANCE"
+            getRowId={(row: Row) => row.id}
+            columns={performanceColumns}
+            initialOrderBy={tableProps.initialOrderBy}
+            clientSource={performanceSource}
+          >
+            <BrunoTableToolbar>
+              <ColumnManagementToolbarProbe onRender={toolbarRenders} />
+            </BrunoTableToolbar>
+          </BrunoTableClient>
+        </div>,
+      );
+      const grid = screen.getByRole("grid").element();
+      viewRenders.mockClear();
+      gridSurfaceRenders.mockClear();
+      rowOrderPlans.mockClear();
+      rowRenders.mockClear();
+      toolbarRenders.mockClear();
+      cellRenders.mockClear();
+      columnCommandNotifications.splice(0);
+      previewStyleWrites.mockClear();
+
+      const flushGestureFrame = async (
+        maxStyleWrites: number,
+        expectedCommandCount = 0,
+      ): Promise<void> => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        expect(commands).toHaveLength(expectedCommandCount);
+        expect(rowRenders).toHaveLength(0);
+        expect(toolbarRenders).toHaveLength(0);
+        expect(previewStyleWrites.mock.calls.length).toBeGreaterThan(0);
+        expect(previewStyleWrites.mock.calls.length).toBeLessThanOrEqual(maxStyleWrites);
+        previewStyleWrites.mockClear();
+      };
+
+      const resizeHandle = screen.getByRole("separator", { name: "Resize Name" }).element();
+      resizeHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 31,
+        }),
+      );
+      previewStyleWrites.mockClear();
+      for (const clientX of [110, 120, 130, 140]) {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX, pointerId: 31 }),
+        );
+        await flushGestureFrame(6);
+      }
+      expect(commands).toHaveLength(0);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 140, pointerId: 31 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+      expectTypedCommand(commands[0], {
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 200,
+      });
+      await expect
+        .element(screen.getByRole("separator", { name: "Resize Name" }))
+        .toHaveAttribute("aria-valuenow", "200");
+      expect(previewStyleWriteCount).toBeGreaterThan(0);
+      await waitForAnimationFrames();
+      rowRenders.mockClear();
+      toolbarRenders.mockClear();
+
+      previewStyleWrites.mockClear();
+      const reorderHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 32,
+        }),
+      );
+      previewStyleWrites.mockClear();
+      for (const clientX of [105, 110, 115]) {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX, pointerId: 32 }),
+        );
+        await flushGestureFrame(24, 1);
+      }
+      expect(commands).toHaveLength(1);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 100, pointerId: 32 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(2));
+      expectTypedCommand(commands[1], {
+        type: "column.reorder.commit",
+        columnId: "COL_ID_STATUS",
+        targetIndex: 1,
+        pinned: undefined,
+      });
+      await vi.waitFor(() =>
+        expect(columnOrder(grid).slice(0, 3)).toEqual([
+          "COL_ID_PERF_PIN_START",
+          "COL_ID_STATUS",
+          "COL_ID_NAME",
+        ]),
+      );
+      await waitForAnimationFrames();
+
+      const frameDurations = gestureFrames.flatMap((event) =>
+        event.phase === "ran" && event.durationMs !== undefined ? [event.durationMs] : [],
+      );
+      expect(frameDurations.length).toBeGreaterThanOrEqual(7);
+      expect(frameDurations.length).toBeLessThanOrEqual(8);
+      expect(frameDurations.every((duration) => Number.isFinite(duration) && duration >= 0)).toBe(
+        true,
+      );
+      const observedMax = Math.max(...frameDurations);
+      console.info(
+        JSON.stringify({
+          benchmark: "BrunoTable many-column pointer gestures",
+          columns: performanceColumns.length,
+          referenceFrameBudgetMs: 8.33,
+          observedFrameDurationsMs: frameDurations,
+          observedMaxMs: observedMax,
+        }),
+      );
+
+      for (const [kind, expectedFrames] of [
+        ["resize", 4],
+        ["reorder", 3],
+      ] as const) {
+        expect(
+          gestureFrames.filter((event) => event.phase === "scheduled" && event.kind === kind)
+            .length,
+        ).toBe(expectedFrames);
+        expect(
+          gestureFrames.filter((event) => event.phase === "ran" && event.kind === kind).length,
+        ).toBe(expectedFrames);
+      }
+      expect(previewStyleWriteCount).toBeGreaterThan(0);
+      const mountedBodyRowElements = [
+        ...grid.querySelectorAll<HTMLElement>('tbody[role="rowgroup"] > tr[role="row"]'),
+      ];
+      const mountedBodyRows = mountedBodyRowElements.length;
+      const mountedColumnCount = grid.querySelectorAll("thead th[data-bruno-column-id]").length;
+      const expectedMountedRows = Math.min(
+        performanceRows.length,
+        Math.ceil(BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT / BRUNO_TABLE_ROW_HEIGHT) + 4,
+      );
+      const expectedRowIndexes = Array.from({ length: expectedMountedRows }, (_unused, index) =>
+        String(index + 2),
+      );
+      expect(mountedBodyRows).toBe(expectedMountedRows);
+      expect(mountedBodyRowElements.map((row) => row.getAttribute("aria-rowindex"))).toEqual(
+        expectedRowIndexes,
+      );
+      expect(mountedColumnCount).toBeGreaterThanOrEqual(columns.length);
+      expect(mountedColumnCount).toBeLessThanOrEqual(24);
+      expect(grid.querySelector('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+      expect(grid.querySelector('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+      await expect
+        .element(grid)
+        .toHaveAttribute("aria-colcount", String(performanceColumns.length));
+      const expectedPerformanceColumns = [
+        performanceColumns[0]!,
+        performanceColumns[3]!,
+        performanceColumns[1]!,
+        performanceColumns[2]!,
+        ...performanceColumns.slice(4),
+      ];
+      const expectedPerformanceSpecs = expectedPerformanceColumns.map((column) => {
+        const spec = {
+          columnId: column.columnId,
+          width: column.columnId === "COL_ID_NAME" ? 200 : (column.width ?? 160),
+        };
+        return "pinned" in column && column.pinned !== undefined
+          ? { ...spec, pinned: column.pinned }
+          : spec;
+      });
+      assertMountedColumnGeometry(
+        grid,
+        expectedPerformanceColumns.map((column, index) => ({
+          columnId: column.columnId,
+          columnIndex: index + 1,
+          region: "pinned" in column && column.pinned !== undefined ? column.pinned : "center",
+        })),
+        expectedMountedColumnIdsFromViewport(grid, expectedPerformanceSpecs),
+      );
+      expect(columnCommandNotifications).toHaveLength(1);
+      expect(columnCommandNotifications[0]?.columnId).toBe("COL_ID_NAME");
+      expect(columnCommandNotifications.every((event) => event.listenerCount <= 4)).toBe(true);
+      expect(viewRenders.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(rowOrderPlans.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(rowRenders.mock.calls.length).toBeLessThanOrEqual(expectedMountedRows * 4);
+      expect(toolbarRenders).toHaveLength(0);
+      expect(cellRenders.mock.calls.length).toBeLessThanOrEqual(expectedMountedRows * 24 * 8);
+    } finally {
+      removeCommand();
+      removeFrames();
+      removeColumnCommandNotifications();
+      removeView();
+      removeGridSurface();
+      removeRowOrderPlans();
+      removeRows();
+      removeCells();
+      removePreviewStyleWrites();
     }
   });
 
@@ -717,6 +2495,78 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
+  test("detaches global gesture listeners after repeated committed gestures", async () => {
+    const tableId = "TABLE_ID_COLUMN_MANAGEMENT_GESTURE_CYCLES";
+    const commands: BrunoTableGridCommand[] = [];
+    const gestureListeners: ColumnGestureListenerEvent[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableId, (command) => {
+      commands.push(command);
+    });
+    const removeListeners = installBrunoTableClientColumnGestureListener(tableId, (event) => {
+      gestureListeners.push(event);
+    });
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={tableId} />,
+      );
+      const resizeHandle = screen.getByRole("separator", { name: "Resize Name" }).element();
+      resizeHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 120, pointerId: 40 }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 120, pointerId: 40 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(1));
+
+      const reorderHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 41,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 0, pointerId: 41 }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 0, pointerId: 41 }),
+      );
+      await vi.waitFor(() => expect(commands).toHaveLength(2));
+
+      for (const event of ["pointermove", "pointerup", "pointercancel", "keydown"] as const) {
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "attach" && entry.event === event),
+        ).toHaveLength(2);
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "detach" && entry.event === event),
+        ).toHaveLength(2);
+      }
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 300, pointerId: 40 }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 300, pointerId: 41 }),
+      );
+      expect(commands).toHaveLength(2);
+    } finally {
+      removeCommand();
+      removeListeners();
+    }
+  });
+
   test("keeps a column gesture alive across same-shape live row publication", async () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const grid = screen.getByRole("grid").element();
@@ -764,20 +2614,20 @@ describe("BrunoTable column management browser surface", () => {
 
   test("opens the keyboard menu for an active header that scrolled out of the mounted window", async () => {
     const screen = await render(
-      <BrunoTableClient<Row, typeof manyColumns>
-        tableId="TABLE_ID_COLUMN_MANAGEMENT_OFFSCREEN"
-        getRowId={(row: Row) => row.id}
-        columns={manyColumns}
-        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
-        clientSource={source}
-      />,
+      <div style={{ width: 480 }}>
+        <BrunoTableClient<Row, typeof manyColumns>
+          tableId="TABLE_ID_COLUMN_MANAGEMENT_OFFSCREEN"
+          getRowId={(row: Row) => row.id}
+          columns={manyColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={source}
+        />
+      </div>,
     );
     const grid = screen
       .getByRole("grid", { name: "Data for TABLE_ID_COLUMN_MANAGEMENT_OFFSCREEN" })
       .element();
-    const sortButton = grid.querySelector<HTMLButtonElement>('button[aria-label="Sort by Name"]');
-    if (sortButton === null)
-      throw new Error("The offscreen test grid did not mount its Name header.");
+    const sortButton = screen.getByRole("button", { name: "Sort by Name" }).element();
     sortButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() =>
@@ -845,85 +2695,264 @@ describe("BrunoTable column management browser surface", () => {
     expect(grid.contains(document.activeElement)).toBe(true);
   });
 
-  test("cancels reorder on pointercancel and unmount without a late commit", async () => {
-    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
-    const grid = screen.getByRole("grid").element();
-    const columnOrder = () =>
-      [...grid.querySelectorAll<HTMLElement>("th[data-bruno-column-id]")].map(
-        (header) => header.dataset["brunoColumnId"],
+  test("cancels a reorder on pointercancel without committing or leaving a preview", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const gestureFrames: ColumnGestureFrameEvent[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableProps.tableId, (command) => {
+      commands.push(command);
+    });
+    const removeFrames = installBrunoTableClientColumnGestureFrameListener(
+      tableProps.tableId,
+      (event) => {
+        gestureFrames.push(event);
+      },
+    );
+
+    try {
+      const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+      const grid = screen.getByRole("grid").element();
+      const initialOrder = columnOrder(grid);
+      const reorderHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 17,
+        }),
       );
-    const initialOrder = columnOrder();
-    const resizeHandle = screen.getByRole("separator", { name: "Resize Name" }).element();
-    resizeHandle.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 100,
-        pointerId: 18,
-      }),
-    );
-    window.dispatchEvent(
-      new PointerEvent("pointermove", { bubbles: true, clientX: 180, pointerId: 18 }),
-    );
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    window.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 18 }));
-    await vi.waitFor(() =>
-      expect(screen.getByRole("separator", { name: "Resize Name" })).toHaveAttribute(
-        "aria-valuenow",
-        "160",
-      ),
-    );
+      for (const clientX of [80, 40, 0]) {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX, pointerId: 17 }),
+        );
+      }
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(grid.querySelector("[data-bruno-reorder-target]")).not.toBeNull();
 
-    const reorderHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
-    reorderHandle.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 100,
-        pointerId: 20,
-      }),
-    );
-    window.dispatchEvent(
-      new PointerEvent("pointermove", { bubbles: true, clientX: 0, pointerId: 20 }),
-    );
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    window.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 20 }));
-    expect(columnOrder()).toEqual(initialOrder);
-
-    reorderHandle.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 100,
-        pointerId: 21,
-      }),
-    );
-    window.dispatchEvent(
-      new PointerEvent("pointermove", { bubbles: true, clientX: 0, pointerId: 21 }),
-    );
-    await screen.rerender(<></>);
-    expect(document.querySelector('[role="grid"]')).toBeNull();
-    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 21 }));
+      window.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 17 }));
+      await vi.waitFor(() => expect(columnOrder(grid)).toEqual(initialOrder));
+      expect(commands).toHaveLength(0);
+      expect(grid.querySelector("[data-bruno-reorder-target]")).toBeNull();
+      expect(
+        gestureFrames.filter((event) => event.phase === "scheduled" && event.kind === "reorder"),
+      ).toHaveLength(1);
+      expect(
+        gestureFrames.filter((event) => event.phase === "ran" && event.kind === "reorder"),
+      ).toHaveLength(1);
+    } finally {
+      removeCommand();
+      removeFrames();
+    }
   });
 
-  test("cancels an in-flight resize on unmount without a late commit", async () => {
-    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
-    const resizeHandle = screen.getByRole("separator", { name: "Resize Name" }).element();
-    resizeHandle.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 100,
-        pointerId: 19,
-      }),
+  test("proves pointer resize teardown cancels frames, detaches listeners, and commits nothing", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const gestureFrames: ColumnGestureFrameEvent[] = [];
+    const gestureListeners: ColumnGestureListenerEvent[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableProps.tableId, (command) => {
+      commands.push(command);
+    });
+    const removeFrames = installBrunoTableClientColumnGestureFrameListener(
+      tableProps.tableId,
+      (event) => {
+        gestureFrames.push(event);
+      },
     );
-    window.dispatchEvent(
-      new PointerEvent("pointermove", { bubbles: true, clientX: 180, pointerId: 19 }),
+    const removeListeners = installBrunoTableClientColumnGestureListener(
+      tableProps.tableId,
+      (event) => {
+        gestureListeners.push(event);
+      },
     );
-    await screen.rerender(<></>);
-    window.dispatchEvent(
-      new PointerEvent("pointerup", { bubbles: true, clientX: 180, pointerId: 19 }),
+    const pendingFrames = new Set<number>();
+    let nextFrameId = 10_000;
+
+    try {
+      const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+      const addListener = vi.spyOn(window, "addEventListener");
+      const removeListener = vi.spyOn(window, "removeEventListener");
+      const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => {
+        const frameId = nextFrameId++;
+        pendingFrames.add(frameId);
+        return frameId;
+      });
+      const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameId) => {
+        pendingFrames.delete(frameId);
+      });
+      const resizeHandle = screen.getByRole("separator", { name: "Resize Name" }).element();
+      resizeHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 18,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 180, pointerId: 18 }),
+      );
+
+      expect(requestFrame).toHaveBeenCalled();
+      const scheduled = gestureFrames.filter(
+        (event) => event.phase === "scheduled" && event.kind === "resize",
+      );
+      expect(scheduled).toHaveLength(1);
+      expect(pendingFrames).toHaveProperty("size", 1);
+
+      await screen.rerender(<></>);
+      expect(pendingFrames).toHaveProperty("size", 0);
+      expect(
+        gestureFrames.filter((event) => event.phase === "cancelled" && event.kind === "resize"),
+      ).toHaveLength(1);
+      expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
+      expect(cancelFrame).toHaveBeenCalled();
+
+      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const relevantAdds = addListener.mock.calls.filter(
+        ([event, _handler, options]) =>
+          events.includes(event as (typeof events)[number]) && options === true,
+      );
+      expect(relevantAdds).toHaveLength(events.length);
+      const attachedHandlers = new Map(
+        relevantAdds.map(([event, handler]) => [event as string, handler]),
+      );
+      for (const event of events) {
+        expect(relevantAdds.filter(([addedEvent]) => addedEvent === event)).toHaveLength(1);
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "attach" && entry.event === event),
+        ).toHaveLength(1);
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "detach" && entry.event === event),
+        ).toHaveLength(1);
+        const matchingRemovals = removeListener.mock.calls.filter(
+          ([removedEvent, removedHandler, options]) =>
+            removedEvent === event &&
+            removedHandler === attachedHandlers.get(event) &&
+            options === true,
+        );
+        expect(matchingRemovals).toHaveLength(1);
+      }
+      expect(
+        removeListener.mock.calls.filter(
+          ([event, _handler, options]) =>
+            events.includes(event as (typeof events)[number]) && options === true,
+        ),
+      ).toHaveLength(events.length);
+
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 180, pointerId: 18 }),
+      );
+      await Promise.resolve();
+      expect(commands).toHaveLength(0);
+      expect(document.querySelector('[role="grid"]')).toBeNull();
+    } finally {
+      removeCommand();
+      removeFrames();
+      removeListeners();
+    }
+  });
+
+  test("proves pointer reorder teardown cancels frames, detaches listeners, and commits nothing", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const gestureFrames: ColumnGestureFrameEvent[] = [];
+    const gestureListeners: ColumnGestureListenerEvent[] = [];
+    const removeCommand = installBrunoTableGridCommandListener(tableProps.tableId, (command) => {
+      commands.push(command);
+    });
+    const removeFrames = installBrunoTableClientColumnGestureFrameListener(
+      tableProps.tableId,
+      (event) => {
+        gestureFrames.push(event);
+      },
     );
-    expect(document.querySelector('[role="grid"]')).toBeNull();
+    const removeListeners = installBrunoTableClientColumnGestureListener(
+      tableProps.tableId,
+      (event) => {
+        gestureListeners.push(event);
+      },
+    );
+    const pendingFrames = new Set<number>();
+    let nextFrameId = 20_000;
+
+    try {
+      const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+      const addListener = vi.spyOn(window, "addEventListener");
+      const removeListener = vi.spyOn(window, "removeEventListener");
+      const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => {
+        const frameId = nextFrameId++;
+        pendingFrames.add(frameId);
+        return frameId;
+      });
+      const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameId) => {
+        pendingFrames.delete(frameId);
+      });
+      const reorderHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 20,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: 0, pointerId: 20 }),
+      );
+
+      expect(requestFrame).toHaveBeenCalled();
+      expect(
+        gestureFrames.filter((event) => event.phase === "scheduled" && event.kind === "reorder"),
+      ).toHaveLength(1);
+      expect(pendingFrames).toHaveProperty("size", 1);
+
+      await screen.rerender(<></>);
+      expect(pendingFrames).toHaveProperty("size", 0);
+      expect(
+        gestureFrames.filter((event) => event.phase === "cancelled" && event.kind === "reorder"),
+      ).toHaveLength(1);
+      expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
+      expect(cancelFrame).toHaveBeenCalled();
+
+      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const relevantAdds = addListener.mock.calls.filter(
+        ([event, _handler, options]) =>
+          events.includes(event as (typeof events)[number]) && options === true,
+      );
+      expect(relevantAdds).toHaveLength(events.length);
+      const attachedHandlers = new Map(
+        relevantAdds.map(([event, handler]) => [event as string, handler]),
+      );
+      for (const event of events) {
+        expect(relevantAdds.filter(([addedEvent]) => addedEvent === event)).toHaveLength(1);
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "attach" && entry.event === event),
+        ).toHaveLength(1);
+        expect(
+          gestureListeners.filter((entry) => entry.phase === "detach" && entry.event === event),
+        ).toHaveLength(1);
+        const matchingRemovals = removeListener.mock.calls.filter(
+          ([removedEvent, removedHandler, options]) =>
+            removedEvent === event &&
+            removedHandler === attachedHandlers.get(event) &&
+            options === true,
+        );
+        expect(matchingRemovals).toHaveLength(1);
+      }
+      expect(
+        removeListener.mock.calls.filter(
+          ([event, _handler, options]) =>
+            events.includes(event as (typeof events)[number]) && options === true,
+        ),
+      ).toHaveLength(events.length);
+
+      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 20 }));
+      await Promise.resolve();
+      expect(commands).toHaveLength(0);
+      expect(document.querySelector('[role="grid"]')).toBeNull();
+    } finally {
+      removeCommand();
+      removeFrames();
+      removeListeners();
+    }
   });
 });

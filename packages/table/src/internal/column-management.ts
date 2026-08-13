@@ -105,8 +105,9 @@ export function isBrunoTableColumnLayoutCommand(
 
 export type BrunoTableColumnLayoutSnapshot = Readonly<{
   /**
-   * All columns, including hidden columns, in the controlled TanStack input order. The Client
-   * Adapter owns the resulting TanStack-derived projection consumed by rendering and navigation.
+   * All columns, including hidden columns, in BrunoTable's committed logical layout order. The
+   * private Client Adapter may bridge this projection into TanStack inputs, but the runtime owns
+   * the committed order, visibility, pinning, and widths consumed by rendering and navigation.
    */
   readonly allColumns: readonly CompiledColumn[];
   /** The sanitized definition layout used by the individual reset commands. */
@@ -329,8 +330,13 @@ function reorderColumn(
       : state.allColumns.map((candidate) =>
           candidate.columnId === columnId ? withColumnPin(candidate, targetPinned) : candidate,
         );
+  // The committed visible-id tuple is the authority for order within a pinning
+  // region. Rebuilding it from `allColumns` would lose a prior reorder because
+  // `allColumns` is also kept as the controlled TanStack input projection.
   const visibleIds = [
-    ...getLogicalVisibleColumnIdsFromColumns(targetColumns, state.visibleColumnIds),
+    ...(source.pinned === targetPinned
+      ? state.visibleColumnIds
+      : getLogicalVisibleColumnIdsFromColumns(targetColumns, state.visibleColumnIds)),
   ];
   const visibleColumnById = new Map<string, CompiledColumn>(
     getBrunoTableLogicalColumnOrder(targetColumns)

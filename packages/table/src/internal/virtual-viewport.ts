@@ -22,6 +22,7 @@ export type BrunoTableVirtualWindow = Readonly<{
   readonly center: readonly CompiledColumn[];
   readonly pinnedEnd: readonly CompiledColumn[];
   readonly centerStartIndex: number;
+  /** Full logical centre-column count; `center` is only the mounted virtual slice. */
   readonly centerCount: number;
   readonly leftPadding: number;
   readonly rightPadding: number;
@@ -140,6 +141,7 @@ export class BrunoTableViewportRuntime {
   private layout: ViewportLayout;
   private layoutColumns: readonly CompiledColumn[] | undefined;
   private previewLayout: ViewportLayout | undefined;
+  private previewPublishedSuspended: boolean | undefined;
   private previewLogicalScrollLeft: number | undefined;
   private previewHorizontalState: PreviewHorizontalState | undefined;
   private readonly previewStyleProperties = new Set<string>();
@@ -255,6 +257,10 @@ export class BrunoTableViewportRuntime {
     if (columns === undefined) return;
     if (this.previewLayout === undefined) {
       this.previewLayout = this.layout;
+      this.previewPublishedSuspended =
+        this.element === null
+          ? undefined
+          : shouldSuspendPinning(this.layout, this.element.clientWidth);
       this.previewLogicalScrollLeft =
         this.element === null ? 0 : this.readLogicalScrollLeft(this.element);
       this.previewHorizontalState = Object.freeze({
@@ -280,10 +286,17 @@ export class BrunoTableViewportRuntime {
         height: element.clientHeight,
       };
       previewWindow = calculateVirtualWindow(this.layout, previewViewport);
-      if (!sameVirtualWindowStructure(this.snapshot.virtualWindow, previewWindow)) {
+      // Ordinary width previews keep the committed mounted window stable. A
+      // preview may publish one structural viewport snapshot when the current
+      // preview crosses the deterministic narrow-width policy boundary. Track
+      // the last published state so an oscillating preview publishes both the
+      // enter and exit transitions.
+      const isSuspended = shouldSuspendPinning(this.layout, element.clientWidth);
+      if (this.previewPublishedSuspended !== isSuspended) {
         this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
+        this.previewPublishedSuspended = isSuspended;
       }
-      this.writeColumnPreviewStyles(columnId, previewWindow);
+      this.writeColumnPreviewStyles(columnId, this.snapshot.virtualWindow);
       void element.scrollWidth;
       this.setLogicalScrollLeft(element, previewScrollLeft);
       this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
@@ -296,6 +309,7 @@ export class BrunoTableViewportRuntime {
     if (this.previewLayout === undefined) return;
     this.layout = this.previewLayout;
     this.previewLayout = undefined;
+    this.previewPublishedSuspended = undefined;
     const logicalScrollLeft = this.previewLogicalScrollLeft;
     this.previewLogicalScrollLeft = undefined;
     const previewHorizontalState = this.previewHorizontalState;
@@ -1407,21 +1421,6 @@ function sameVirtualWindow(left: BrunoTableVirtualWindow, right: BrunoTableVirtu
   );
 }
 
-function sameVirtualWindowStructure(
-  left: BrunoTableVirtualWindow,
-  right: BrunoTableVirtualWindow,
-): boolean {
-  return (
-    left.rowStart === right.rowStart &&
-    left.rowEnd === right.rowEnd &&
-    left.centerStartIndex === right.centerStartIndex &&
-    left.centerCount === right.centerCount &&
-    sameColumnIdentities(left.pinnedStart, right.pinnedStart) &&
-    sameColumnIdentities(left.center, right.center) &&
-    sameColumnIdentities(left.pinnedEnd, right.pinnedEnd)
-  );
-}
-
 function shareVirtualWindowColumns(
   next: BrunoTableVirtualWindow,
   previous: BrunoTableVirtualWindow,
@@ -1441,16 +1440,6 @@ function shareVirtualWindowColumns(
 
 function sameColumns(left: readonly CompiledColumn[], right: readonly CompiledColumn[]): boolean {
   return left.length === right.length && left.every((column, index) => column === right[index]);
-}
-
-function sameColumnIdentities(
-  left: readonly CompiledColumn[],
-  right: readonly CompiledColumn[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((column, index) => column.columnId === right[index]?.columnId)
-  );
 }
 
 function updateColumnWidthPreviewLayout(

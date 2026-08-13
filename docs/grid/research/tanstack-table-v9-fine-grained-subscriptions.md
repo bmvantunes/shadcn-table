@@ -84,17 +84,22 @@ Sources:
 
 ### `table.store.subscribe(...)` and `table.atoms.<slice>.subscribe(...)`
 
-These are imperative subscriptions, not React render APIs. They receive future source updates and return a subscription object with an `unsubscribe()` method. They are appropriate for side effects outside React, such as reflecting column widths into CSS custom properties:
+These are imperative subscriptions, not React render APIs. They receive future source updates and
+return a subscription object with an `unsubscribe()` method. The TanStack example below is source
+research only; BrunoTable's current width authority is its private layout runtime. Its live resize
+path is imperative rather than subscription-based: `BrunoTableViewportRuntime.previewColumnWidth`
+writes the provisional width CSS variable from the gesture's animation frame. The durable
+`subscribeColumnLayout` path is for committed layout snapshots only:
 
 ```ts
-const writeColumnWidths = () => {
-  // Read current header geometry and write CSS variables.
+const writeCommittedColumnWidths = () => {
+  // Read the committed layout snapshot and write durable CSS variables.
 };
 
-writeColumnWidths();
-const subscription = table.atoms.columnSizing.subscribe(writeColumnWidths);
+writeCommittedColumnWidths();
+const unsubscribe = brunoTableLayoutRuntime.subscribeColumnLayout(writeCommittedColumnWidths);
 
-return () => subscription.unsubscribe();
+return unsubscribe;
 ```
 
 The initial write is explicit because the raw atom subscription does not invoke its observer on registration. Cleanup is mandatory. By contrast, `<Subscribe>` and `useSelector` use `useSyncExternalStoreWithSelector`; React owns their subscription cleanup. TanStack's React adapter tests confirm that isolated subscribers stop observing updates after unmount.
@@ -178,7 +183,7 @@ Sources:
 
 ### Column resizing: keep live widths outside React
 
-The performant resizing example opts the table owner out of resize-state renders, imperatively subscribes to `table.atoms.columnSizing`, writes CSS variables, and gives only each resizer's active boolean a small `<table.Subscribe>` island. This keeps width changes off React's per-frame render path.
+The performant resizing example opts the table owner out of resize-state renders, imperatively subscribes to `table.atoms.columnSizing`, writes CSS variables, and gives only each resizer's active boolean a small `<table.Subscribe>` island. BrunoTable preserves the same no-React-per-frame property, but its layout runtime—not TanStack's `columnSizing` atom—owns committed widths, the imperative rAF preview, and the durable snapshot path.
 
 That pattern aligns directly with BrunoTable's existing rule that geometry, measurement, scrolling, and hit testing stay outside React state. Fine-grained React subscriptions are not a reason to route all high-frequency state through React.
 
@@ -199,7 +204,7 @@ Sources:
 | Sort/filter/pin/visibility affordance                      | Exact header/control                              | Relevant per-slice atom projected by Column Identity                                                                  |
 | Header groups, visible column regions, row-model structure | Small structural owner around affected collection | `table.store` selector containing only the structural slices actually used                                            |
 | Active column resizer styling                              | Exact resizer                                     | Boolean selector comparing the active resize Column Identity                                                          |
-| Live column widths                                         | No React render                                   | Imperative `columnSizing` atom subscription writing CSS variables, with explicit cleanup                              |
+| Live column widths                                         | No React render                                   | Imperative BrunoTable layout-runtime rAF preview writes CSS variables; durable layout snapshots use explicit cleanup  |
 | Scroll, measurement, hit testing, drag preview geometry    | No React render                                   | BrunoTable geometry engine plus `requestAnimationFrame`; publish immutable snapshots only where UI must render state  |
 | Toolbar, status bar, and menus                             | The smallest owning control or panel              | Per-slice atom when one slice is sufficient; store selector for a small multi-slice projection                        |
 

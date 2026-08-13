@@ -1408,6 +1408,7 @@ describe("BrunoTableClient browser surface", () => {
           Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
         ]),
       }),
+      "TABLE_ID_SPARSE",
     );
     const toolbar = new BrunoTableToolbarStore(undefined);
     const renderSparseTable = (adapter: SparseRowPipelineAdapter) => (
@@ -1537,6 +1538,7 @@ describe("BrunoTableClient browser surface", () => {
           Object.freeze({ columnId: "COL_ID_SCORE", direction: "asc" as const }),
         ]),
       }),
+      "TABLE_ID_SPARSE_KEY_NAMESPACE",
     );
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
@@ -2091,6 +2093,7 @@ describe("BrunoTableClient browser surface", () => {
       adapter.getPublication(),
       compiledColumns,
       adapter.getQueryConfiguration(compiledColumns),
+      "TABLE_ID_EMPTY_QUERY_RECOVERY",
     );
     const toolbar = new BrunoTableToolbarStore(undefined);
     const screen = await render(
@@ -2240,6 +2243,7 @@ describe("BrunoTableClient browser surface", () => {
       adapter.getPublication(),
       compiledColumns,
       adapter.getQueryConfiguration(compiledColumns),
+      "TABLE_ID_INITIAL_STALE_RECOVERY",
     );
     const screen = await render(
       <>
@@ -2315,6 +2319,7 @@ describe("BrunoTableClient browser surface", () => {
         adapter.getPublication(),
         compiledColumns,
         adapter.getQueryConfiguration(compiledColumns),
+        "TABLE_ID_EMPTY_STALE_FALLBACK",
       );
       const screen = await render(
         <BrunoTableView
@@ -3406,6 +3411,7 @@ describe("BrunoTableClient browser surface", () => {
       rowPipelineAdapter.getPublication(),
       compiledLazyColumns,
       rowPipelineAdapter.getQueryConfiguration(compiledLazyColumns),
+      "TABLE_ID_LAZY_SECONDARY_SORT",
     );
     const runtimeView = runtime.getView();
     const reconcile = () => {

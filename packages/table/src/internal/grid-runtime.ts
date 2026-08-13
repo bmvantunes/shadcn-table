@@ -23,6 +23,8 @@ import {
   sanitizeBrunoTableFilters,
   sanitizeBrunoTableOrderBy,
 } from "./grid-query";
+import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
+import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
 
 type Listener = () => void;
 export type BrunoTableInvalidSourceSnapshot =
@@ -254,12 +256,15 @@ export class BrunoTableGridRuntime<TRow> {
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnCommands = new Map<string, BrunoTableColumnCommandSnapshot>();
+  private readonly tableId: string;
 
   public constructor(
     publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
+    tableId: string,
   ) {
+    this.tableId = tableId;
     this.columns = columns;
     this.columnsById = indexColumns(columns);
     this.baselineFilters = queryConfiguration.baselineFilters;
@@ -545,6 +550,7 @@ export class BrunoTableGridRuntime<TRow> {
     subscribe(this.columnStructureListeners, listener);
 
   public readonly dispatchGridCommand = (command: BrunoTableGridCommand): void => {
+    recordBrunoTableGridCommand(this.tableId, command);
     if (command.type === "column.sort.toggle") {
       this.toggleColumnSortImpl(command.columnId, command.multi);
       return;
@@ -748,6 +754,11 @@ export class BrunoTableGridRuntime<TRow> {
       ) {
         const listeners = this.columnCommandListeners.get(columnId);
         if (listeners !== undefined) {
+          recordBrunoTableColumnCommandSubscriptionNotification(
+            this.tableId,
+            columnId,
+            listeners.size,
+          );
           firstError = firstListenerError(firstError, notify(listeners));
         }
       }
@@ -768,6 +779,11 @@ export class BrunoTableGridRuntime<TRow> {
       if (!sameColumnCommand(previousCommands.get(columnId), this.columnCommands.get(columnId))) {
         const listeners = this.columnCommandListeners.get(columnId);
         if (listeners !== undefined) {
+          recordBrunoTableColumnCommandSubscriptionNotification(
+            this.tableId,
+            columnId,
+            listeners.size,
+          );
           firstError = firstListenerError(firstError, notify(listeners));
         }
       }

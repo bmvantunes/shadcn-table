@@ -104,6 +104,13 @@ The private TanStack Adapter may implement TanStack-owned parts with `table.Subs
 
 Grid Filter, Quick Filter, Clear, and Reset commands enter the same editor commit gate used by sorting before mutating filter state. Rejection returns focus to the editor and publishes no filter command. Batch acceptance records the local transaction first; Immediate acceptance creates the operation first. The filter command then proceeds without awaiting transport, while sparse drafts and operation notifications remain independent of row visibility.
 
+The compact column-management menu exposes its Filter action only when the column has an
+Initial Grid Filter baseline. It is a reversible Clear/Reset command surface, not a generic
+filter editor: Clear removes the active Grid Filters and Reset returns the column to its declared
+baseline. A filter-capable column with no baseline therefore has no column-specific Clear/Reset
+action to expose; future filter-editor surfaces may add a new typed command without changing this
+ownership rule.
+
 Each typed filter overlay owns an ephemeral raw candidate outside persisted filter state. Exact Value Type parsing precedes Pacer publication. Parse failure updates only that overlay's compact validation snapshot; the last committed filter atom and row pipeline remain untouched. Closing discards the candidate. This validation state never enters table-root React state, query compilation, or `onPersistChange`.
 
 Pacer sits only on continuous text and numeric candidate publication. Discrete checkbox and valid operator commands bypass it. Bulk Set Filter actions calculate one normalized include/exclude result and dispatch one command, so preference encoding and row-pipeline generation happen at most once regardless of facet cardinality.
@@ -362,7 +369,13 @@ The selection-checkbox and range-presentation islands exist only when the Client
 
 TanStack row, cell, column, and header builder methods hide state reads from React Compiler. Any nested compiled component that calls such a method must sit behind an explicit subscription boundary for every state dependency it renders. This is a correctness rule as well as a performance rule.
 
-Some hot presentation state should avoid React reconciliation entirely. During live column resize, subscribe imperatively to the sizing atom, write width CSS variables on the grid root, batch writes per animation frame, and unsubscribe on teardown. React render islands remain appropriate for the small pieces that must change semantically, such as the active resize handle.
+Some hot presentation state should avoid React reconciliation entirely. During live column resize,
+the geometry-owned `BrunoTableViewportRuntime.previewColumnWidth` path writes width CSS variables
+on the grid root from one imperative animation frame; it is not a React or layout-snapshot
+subscription. `subscribeColumnLayout` is reserved for durable committed-layout snapshots, which
+the private Adapter receives after a typed commit. React render islands remain appropriate for the
+small pieces that must change semantically, such as the active resize handle. TanStack sizing state
+is not the authority for these committed widths.
 
 Keep custom-property invalidation scoped to its readers. Column-width variables belong on the grid root because every mounted header and cell consumes them. Scrollbar thumb offsets and track measurements belong on the isolated decorative overlay subtree because they change on ordinary scroll frames; placing those inherited values on the grid root would invalidate unrelated rows and cells. The reviewed ReUI evidence for this distinction is indexed in [ReUI data-grid patterns](research/reui-data-grid-patterns.md).
 
@@ -513,9 +526,12 @@ Use for:
 - column state
 - sorting and filtering configuration
 - visibility
-- sizing
 - order
 - pinning
+
+TanStack sizing state is not authoritative. BrunoTable's layout runtime owns committed widths and
+imperative resize previews; any private sizing primitive used for compatibility must remain
+derived from that runtime and must not become a second state owner.
 
 Do not force the complete logical server dataset into a TanStack Table `data` array.
 
@@ -630,6 +646,26 @@ The logical visible leaf-column order remains one ordered sequence.
 A move right from the final pinned-start column enters the first centre column.
 
 A move right from the final centre column enters the first pinned-end column.
+
+### Column layout ownership
+
+The private Client Adapter bridges committed Logical Column Order, visibility, and pinning into
+controlled TanStack inputs. Committed widths have a different owner: BrunoTable's layout runtime
+stores the Column Identity-keyed width overrides and exposes the immutable command/layout
+snapshots consumed by the renderer. TanStack sizing state is therefore not authoritative and is
+not exposed through the public API. This keeps one owner for width preferences and avoids a second
+mutable width store in the Adapter.
+
+Pointer resize previews write CSS width variables from an imperative, frame-batched geometry path.
+Ordinary preview frames do not publish React state, update the durable layout snapshot, or rebuild
+the row model. The only structural exception is a single viewport publication when a preview
+crosses the deterministic narrow-width pinning-suspension threshold; that publication changes the
+mounted region shape, not the committed column layout, and is bounded to the threshold
+transition. Keyboard resize and the final pointer release dispatch one typed
+`column.resize.commit`; cancellation and unmount clear the preview and detach the gesture's
+global listeners without committing. Pointer reorder follows the same rule with CSS transforms and
+one final `column.reorder.commit`. See
+[ADR 0029](../adr/0029-own-committed-column-widths-in-the-brunotable-layout-runtime.md).
 
 ## Row identity and row position
 

@@ -39,6 +39,7 @@ describe("BrunoTable column management", () => {
       },
       columns,
       { baselineFilters: [], baselineOrderBy: [] },
+      "TABLE_ID_COLUMN_MANAGEMENT_LAYOUT_SUBSCRIBERS",
     );
     const view = runtime.getView();
     const queryListener = vi.fn();
@@ -74,6 +75,7 @@ describe("BrunoTable column management", () => {
       },
       columns,
       { baselineFilters: [], baselineOrderBy: [] },
+      "TABLE_ID_COLUMN_MANAGEMENT_CONTROLLED_LAYOUT",
     );
     const view = runtime.getView();
 
@@ -141,6 +143,7 @@ describe("BrunoTable column management", () => {
       },
       columns,
       { baselineFilters: [], baselineOrderBy: [] },
+      "TABLE_ID_COLUMN_MANAGEMENT_INTERLEAVED",
     );
     const view = runtime.getView();
     const layoutListener = vi.fn();
@@ -283,6 +286,33 @@ describe("BrunoTable column management", () => {
 
     expect(pinned.visibleColumnIds).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]);
     expect(unpinned.visibleColumnIds).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]);
+  });
+
+  it("preserves prior order when moving among multiple pinned columns", () => {
+    const interleaved = compileColumns([
+      { columnId: "COL_ID_CENTER", headerName: "Center", field: "name", valueType: "text" },
+      { columnId: "COL_ID_SECOND", headerName: "Second", field: "score", valueType: "number" },
+      { columnId: "COL_ID_FIRST", headerName: "First", field: "status", valueType: "text" },
+    ]);
+    const firstPinned = applyBrunoTableGridCommand(createBrunoTableColumnLayout(interleaved), {
+      type: "column.pin.commit",
+      columnId: "COL_ID_FIRST",
+      pinned: "start",
+    });
+    const bothPinned = applyBrunoTableGridCommand(firstPinned, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SECOND",
+      pinned: "start",
+    });
+    const moved = applyBrunoTableGridCommand(bothPinned, {
+      type: "column.reorder.commit",
+      columnId: "COL_ID_FIRST",
+      targetIndex: 1,
+      pinned: "start",
+    });
+
+    expect(bothPinned.visibleColumnIds).toEqual(["COL_ID_FIRST", "COL_ID_SECOND", "COL_ID_CENTER"]);
+    expect(moved.visibleColumnIds).toEqual(["COL_ID_SECOND", "COL_ID_FIRST", "COL_ID_CENTER"]);
   });
 
   it("keeps hidden columns hidden when resetting pinning", () => {
