@@ -145,7 +145,9 @@ function createRowOrderChangeDetector(
   filters: readonly unknown[],
   orderBy: ClientResolvedRowOrderProps["orderBy"],
 ): BrunoTableClientRowOrderChangeDetector {
-  recordBrunoTableClientRowOrderPlanning(tableId);
+  if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+    recordBrunoTableClientRowOrderPlanning(tableId);
+  }
   const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
   const orderedColumns = columns.filter((column) => orderedIds.has(column.columnId));
   const filterPredicate = createClientFilterPredicate<BrunoTableClientAdmittedRow>(

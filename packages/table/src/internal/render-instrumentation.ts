@@ -1,4 +1,5 @@
 import { installTableScopedListener } from "./listener-registry";
+import { BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL } from "./test-diagnostic-build-contract";
 
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
@@ -29,7 +30,11 @@ type ColumnGestureFrame =
       readonly frameId?: never;
       readonly durationMs: number;
     }>;
-type ColumnGestureFrameEvent = Readonly<{ readonly tableId: string }> & ColumnGestureFrame;
+type ColumnGestureFrameEvent = Readonly<{
+  readonly tableId: string;
+  readonly diagnosticBuildContract: typeof BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL;
+}> &
+  ColumnGestureFrame;
 type ColumnGestureFrameListener = (event: ColumnGestureFrameEvent) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
@@ -106,7 +111,13 @@ export function recordBrunoTableClientColumnGestureFrame(
   if (clientColumnGestureFrameListenerCount === 0) return;
   const listeners = clientColumnGestureFrameListeners.get(tableId);
   if (listeners === undefined) return;
-  notifySafely(listeners, (listener) => listener({ tableId, ...event }));
+  notifySafely(listeners, (listener) =>
+    listener({
+      tableId,
+      diagnosticBuildContract: BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL,
+      ...event,
+    }),
+  );
 }
 
 export function hasBrunoTableClientColumnGestureFrameListener(tableId: string): boolean {

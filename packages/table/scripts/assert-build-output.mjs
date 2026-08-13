@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { parseAsync } from "@babel/core";
 
 class UninspectableWildcardExportError extends Error {}
 
@@ -56,9 +57,54 @@ const [
 
 const declarations = rootDeclarationSet.declarations;
 const effectDeclarations = effectDeclarationSet.declarations;
+const testDiagnosticSentinels = [
+  "BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_V1",
+  "BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_V1",
+  "BRUNO_TABLE_TEST_LISTENER_DIAGNOSTIC_V1",
+];
 
 if (!compilerOutput.includes("react/compiler-runtime")) {
   throw new Error("React Compiler did not transform the @bruno/table smoke fixture.");
+}
+
+const rootRuntimeAst = await parseAsync(rootRuntime, { sourceType: "module" });
+if (rootRuntimeAst === null) {
+  throw new Error("The production package could not be parsed for build-contract assertions.");
+}
+const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
+const layoutEffectCallbacks =
+  layoutEffectBinding === undefined
+    ? []
+    : collectEffectCallbacks(rootRuntimeAst, layoutEffectBinding);
+
+if (
+  testDiagnosticSentinels.some(
+    (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
+  ) ||
+  /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender)|GridCommand|ColumnCommandSubscription)/u.test(
+    `${rootRuntime}\n${effectRuntime}`,
+  ) ||
+  /installTableScopedListener/u.test(rootRuntime) ||
+  /performance\.now/u.test(rootRuntime)
+) {
+  throw new Error(
+    "The production package contains test-only commit probes, listeners, or gesture timing diagnostics.",
+  );
+}
+
+if (
+  !layoutEffectCallbacks.some((callback) => syntaxTreeContains(callback, isRowAcceptanceCall)) ||
+  !layoutEffectCallbacks.some(
+    (callback) =>
+      syntaxTreeContains(callback, isMutationObserverConstruction) &&
+      syntaxTreeContains(callback, isMutationObserverObserveCall) &&
+      syntaxTreeContains(callback, isInertBoundaryRemovalCall),
+  )
+) {
+  throw new Error(
+    "The production package lost required commit-phase row reconciliation or DOM ownership effects.",
+  );
 }
 
 if (/\bany\b/u.test(declarations)) {
@@ -344,6 +390,154 @@ function hasExactStringRecord(actual, expected) {
   return (
     actualKeys.length === expectedKeys.length &&
     expectedKeys.every((key) => Object.hasOwn(actual, key) && actual[key] === expected[key])
+  );
+}
+
+function findImportedBinding(ast, source, importedName) {
+  for (const statement of ast.program.body) {
+    if (statement.type !== "ImportDeclaration" || statement.source.value !== source) continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type !== "ImportSpecifier") continue;
+      const imported =
+        specifier.imported.type === "Identifier"
+          ? specifier.imported.name
+          : specifier.imported.value;
+      if (imported === importedName) return specifier.local.name;
+    }
+  }
+  return undefined;
+}
+
+function collectEffectCallbacks(ast, layoutEffectBinding) {
+  const callbacks = [];
+  walkSyntaxTree(ast.program, (node, ancestors) => {
+    if (
+      node.type !== "CallExpression" ||
+      node.callee.type !== "Identifier" ||
+      node.callee.name !== layoutEffectBinding
+    ) {
+      return;
+    }
+    const callback = node.arguments[0];
+    if (isFunctionNode(callback)) {
+      callbacks.push(callback);
+      return;
+    }
+    if (callback?.type !== "Identifier") return;
+    const owner = ancestors.findLast((ancestor) => isFunctionNode(ancestor)) ?? ast.program;
+    callbacks.push(...findAssignedFunctions(owner, callback.name));
+  });
+  return callbacks;
+}
+
+function findAssignedFunctions(owner, bindingName) {
+  const functions = [];
+  walkOwnerScope(owner.type === "Program" ? owner : owner.body, (node) => {
+    if (
+      node.type === "AssignmentExpression" &&
+      node.operator === "=" &&
+      node.left.type === "Identifier" &&
+      node.left.name === bindingName &&
+      isFunctionNode(node.right)
+    ) {
+      functions.push(node.right);
+    }
+    if (
+      node.type === "VariableDeclarator" &&
+      node.id.type === "Identifier" &&
+      node.id.name === bindingName &&
+      isFunctionNode(node.init)
+    ) {
+      functions.push(node.init);
+    }
+  });
+  return functions;
+}
+
+function walkOwnerScope(node, visit) {
+  visit(node);
+  for (const child of syntaxChildren(node)) {
+    if (isFunctionNode(child)) continue;
+    walkOwnerScope(child, visit);
+  }
+}
+
+function syntaxTreeContains(node, predicate) {
+  let matched = false;
+  walkSyntaxTree(node, (candidate) => {
+    if (predicate(candidate)) matched = true;
+  });
+  return matched;
+}
+
+function walkSyntaxTree(node, visit, ancestors = []) {
+  if (node === null || typeof node !== "object" || typeof node.type !== "string") return;
+  visit(node, ancestors);
+  const nextAncestors = [...ancestors, node];
+  for (const child of syntaxChildren(node)) walkSyntaxTree(child, visit, nextAncestors);
+}
+
+function syntaxChildren(node) {
+  const children = [];
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (child !== null && typeof child === "object" && typeof child.type === "string") {
+          children.push(child);
+        }
+      }
+    } else if (value !== null && typeof value === "object" && typeof value.type === "string") {
+      children.push(value);
+    }
+  }
+  return children;
+}
+
+function isFunctionNode(node) {
+  return (
+    node?.type === "ArrowFunctionExpression" ||
+    node?.type === "FunctionExpression" ||
+    node?.type === "FunctionDeclaration"
+  );
+}
+
+function memberPropertyName(member) {
+  if (member.property.type === "Identifier" && !member.computed) return member.property.name;
+  if (member.property.type === "StringLiteral") return member.property.value;
+  return undefined;
+}
+
+function isRowAcceptanceCall(node) {
+  return (
+    node.type === "CallExpression" &&
+    node.callee.type === "MemberExpression" &&
+    memberPropertyName(node.callee) === "acceptRows"
+  );
+}
+
+function isMutationObserverConstruction(node) {
+  return (
+    node.type === "NewExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "MutationObserver"
+  );
+}
+
+function isMutationObserverObserveCall(node) {
+  return (
+    node.type === "CallExpression" &&
+    node.callee.type === "MemberExpression" &&
+    memberPropertyName(node.callee) === "observe"
+  );
+}
+
+function isInertBoundaryRemovalCall(node) {
+  return (
+    node.type === "CallExpression" &&
+    node.callee.type === "MemberExpression" &&
+    memberPropertyName(node.callee) === "removeAttribute" &&
+    node.arguments[0]?.type === "StringLiteral" &&
+    node.arguments[0].value === "inert"
   );
 }
 

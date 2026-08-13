@@ -22,6 +22,7 @@ afterEach(async () => {
 });
 
 test("reports incompatible Table Identity reuse from the emitted browser runtime", async () => {
+  const restoreProcess = replaceBrowserProcess({ env: { NODE_ENV: "development" } });
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const firstColumns = [
     {
@@ -39,32 +40,85 @@ test("reports incompatible Table Identity reuse from the emitted browser runtime
       valueType: "number",
     },
   ] as const;
-  const screen = await render(
-    <>
-      <BrunoTableClient
-        tableId="TABLE_ID_EMITTED_CONFLICT"
-        getRowId={(row: Row) => row.id}
-        columns={firstColumns}
-        initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
-        clientSource={source}
-      />
-      <BrunoTableClient
-        tableId="TABLE_ID_EMITTED_CONFLICT"
-        getRowId={(row: Row) => row.id}
-        columns={incompatibleColumns}
-        initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
-        clientSource={source}
-      />
-    </>,
-  );
+  try {
+    const screen = await render(
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_CONFLICT"
+          getRowId={(row: Row) => row.id}
+          columns={firstColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+          clientSource={source}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_CONFLICT"
+          getRowId={(row: Row) => row.id}
+          columns={incompatibleColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+          clientSource={source}
+        />
+      </>,
+    );
 
-  await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
-  expect(consoleError).toHaveBeenCalledWith(
-    expect.stringContaining('simultaneous use of tableId "TABLE_ID_EMITTED_CONFLICT"'),
-  );
-  expect(
-    screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_CONFLICT" }).all(),
-  ).toHaveLength(2);
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('simultaneous use of tableId "TABLE_ID_EMITTED_CONFLICT"'),
+    );
+    expect(
+      screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_CONFLICT" }).all(),
+    ).toHaveLength(2);
+  } finally {
+    restoreProcess();
+  }
+});
+
+test("keeps emitted identity diagnostics disabled without a process environment", async () => {
+  const restoreProcess = replaceBrowserProcess(undefined);
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const firstColumns = [
+    {
+      columnId: "COL_ID_VALUE_WITHOUT_PROCESS",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+    },
+  ] as const;
+  const incompatibleColumns = [
+    {
+      columnId: "COL_ID_VALUE_WITHOUT_PROCESS",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+    },
+  ] as const;
+
+  try {
+    const screen = await render(
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_NO_PROCESS"
+          getRowId={(row: Row) => row.id}
+          columns={firstColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE_WITHOUT_PROCESS", direction: "asc" }]}
+          clientSource={source}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_NO_PROCESS"
+          getRowId={(row: Row) => row.id}
+          columns={incompatibleColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE_WITHOUT_PROCESS", direction: "asc" }]}
+          clientSource={source}
+        />
+      </>,
+    );
+
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_NO_PROCESS" }).all(),
+    ).toHaveLength(2);
+  } finally {
+    restoreProcess();
+  }
 });
 
 test("hydrates emitted custom controls after removing their inert server boundary", async () => {
@@ -282,3 +336,19 @@ test("runs emitted resize, reorder, visibility, and reset commands", async () =>
     .element(screen.getByRole("separator", { name: "Resize Name" }))
     .toHaveAttribute("aria-valuenow", "160");
 });
+
+function replaceBrowserProcess(value: unknown): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "process");
+  Object.defineProperty(globalThis, "process", {
+    configurable: true,
+    value,
+    writable: true,
+  });
+  return () => {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(globalThis, "process");
+    } else {
+      Object.defineProperty(globalThis, "process", descriptor);
+    }
+  };
+}

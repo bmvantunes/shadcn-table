@@ -550,7 +550,9 @@ export class BrunoTableGridRuntime<TRow> {
     subscribe(this.columnStructureListeners, listener);
 
   public readonly dispatchGridCommand = (command: BrunoTableGridCommand): void => {
-    recordBrunoTableGridCommand(this.tableId, command);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableGridCommand(this.tableId, command);
+    }
     if (command.type === "column.sort.toggle") {
       this.toggleColumnSortImpl(command.columnId, command.multi);
       return;
@@ -754,11 +756,13 @@ export class BrunoTableGridRuntime<TRow> {
       ) {
         const listeners = this.columnCommandListeners.get(columnId);
         if (listeners !== undefined) {
-          recordBrunoTableColumnCommandSubscriptionNotification(
-            this.tableId,
-            columnId,
-            listeners.size,
-          );
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+            recordBrunoTableColumnCommandSubscriptionNotification(
+              this.tableId,
+              columnId,
+              listeners.size,
+            );
+          }
           firstError = firstListenerError(firstError, notify(listeners));
         }
       }
@@ -779,11 +783,13 @@ export class BrunoTableGridRuntime<TRow> {
       if (!sameColumnCommand(previousCommands.get(columnId), this.columnCommands.get(columnId))) {
         const listeners = this.columnCommandListeners.get(columnId);
         if (listeners !== undefined) {
-          recordBrunoTableColumnCommandSubscriptionNotification(
-            this.tableId,
-            columnId,
-            listeners.size,
-          );
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+            recordBrunoTableColumnCommandSubscriptionNotification(
+              this.tableId,
+              columnId,
+              listeners.size,
+            );
+          }
           firstError = firstListenerError(firstError, notify(listeners));
         }
       }
