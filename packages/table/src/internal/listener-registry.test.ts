@@ -38,8 +38,15 @@ describe("installTableScopedListener", () => {
     expect(removals).toBe(1);
     expect(listenersByTableId.get("table")?.has(listener)).toBe(true);
 
+    disposeFirst();
+    expect(removals).toBe(1);
+    expect(listenersByTableId.get("table")?.has(listener)).toBe(true);
+
     disposeSecond();
     expect(removals).toBe(2);
     expect(listenersByTableId.has("table")).toBe(false);
+
+    disposeSecond();
+    expect(removals).toBe(2);
   });
 });

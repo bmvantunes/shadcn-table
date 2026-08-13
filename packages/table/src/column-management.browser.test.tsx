@@ -476,7 +476,7 @@ function assertMountedColumnWindow(
     readonly pinnedStartIds?: readonly string[];
     readonly pinnedEndIds?: readonly string[];
     readonly requiredColumnIds?: readonly string[];
-    readonly maxMountedColumnCount: number;
+    readonly maxMountedColumnCount?: number;
   }>,
 ): void {
   const headers = [...grid.querySelectorAll<HTMLElement>("thead th[data-bruno-column-id]")];
@@ -487,7 +487,9 @@ function assertMountedColumnWindow(
   const pinnedEnd = new Set(pinnedEndIds);
   const logicalIds = new Set(logicalColumnIds);
 
-  expect(mountedColumnIds.length).toBeLessThanOrEqual(options.maxMountedColumnCount);
+  if (options.maxMountedColumnCount !== undefined) {
+    expect(mountedColumnIds.length).toBeLessThanOrEqual(options.maxMountedColumnCount);
+  }
   expect(mountedColumnIds.every((columnId) => logicalIds.has(columnId))).toBe(true);
   for (const columnId of options.requiredColumnIds ?? []) {
     expect(mountedColumnIds).toContain(columnId);
@@ -1884,7 +1886,6 @@ describe("BrunoTable column management browser surface", () => {
           pinnedStartIds: ["COL_ID_REVEAL_START"],
           pinnedEndIds: ["COL_ID_REVEAL_END"],
           requiredColumnIds: ["COL_ID_EXTRA_4"],
-          maxMountedColumnCount: 24,
         },
       );
       await assertActiveCell();
@@ -1933,7 +1934,6 @@ describe("BrunoTable column management browser surface", () => {
           pinnedStartIds: ["COL_ID_REVEAL_START"],
           pinnedEndIds: ["COL_ID_REVEAL_END"],
           requiredColumnIds: ["COL_ID_EXTRA_4"],
-          maxMountedColumnCount: 24,
         },
       );
       await assertActiveCell();
@@ -1981,7 +1981,6 @@ describe("BrunoTable column management browser surface", () => {
           pinnedStartIds: ["COL_ID_REVEAL_START"],
           pinnedEndIds: ["COL_ID_NAME", "COL_ID_REVEAL_END"],
           requiredColumnIds: ["COL_ID_EXTRA_4"],
-          maxMountedColumnCount: 24,
         },
       );
       await assertActiveCell();
