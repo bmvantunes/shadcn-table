@@ -289,7 +289,12 @@ Use commands for discrete user intent:
 ```ts
 type GridCommand =
   | { type: "column.resize.commit"; columnId: BrunoTableColumnId; width: number }
-  | { type: "column.move.commit"; columnId: BrunoTableColumnId; targetIndex: number }
+  | {
+      type: "column.reorder.commit";
+      columnId: BrunoTableColumnId;
+      targetIndex: number;
+      pinned: "start" | "end" | undefined;
+    }
   | { type: "selection.extend"; target: BrunoTableCoordinate }
   | { type: "editing.start"; cell: CellCoordinate }
   | { type: "editing.commit"; value: unknown }

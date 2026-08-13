@@ -15,6 +15,8 @@ pointer reorder each:
 - commit exactly once at pointer release through the typed private Grid Command boundary;
 - keep row-order planning and mounted-cell publication within fixed bounds for the fixture's
   mounted row/column window rather than the complete 160-column definition;
+- observe row and cell render counts from commit-phase layout effects, so abandoned React renders
+  do not enter the diagnostics;
 - write no more than six resize preview style properties per frame and no more than the fixed
   mounted-column reorder preview bound; and
 - leave no render/listener work pending after cancellation or unmount.

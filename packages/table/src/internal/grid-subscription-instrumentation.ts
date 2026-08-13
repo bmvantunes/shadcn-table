@@ -1,3 +1,5 @@
+import { installTableScopedListener } from "./listener-registry";
+
 type ColumnCommandSubscriptionListener = (event: {
   readonly tableId: string;
   readonly columnId: string;
@@ -36,24 +38,15 @@ export function installBrunoTableColumnCommandSubscriptionListener(
   tableId: string,
   listener: ColumnCommandSubscriptionListener,
 ): () => void {
-  let listeners = columnCommandSubscriptionListenersByTableId.get(tableId);
-  if (listeners === undefined) {
-    listeners = new Set<ColumnCommandSubscriptionListener>();
-    columnCommandSubscriptionListenersByTableId.set(tableId, listeners);
-  }
-  listeners.add(listener);
-  diagnosticListenerCount += 1;
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    listeners?.delete(listener);
-    if (
-      listeners?.size === 0 &&
-      columnCommandSubscriptionListenersByTableId.get(tableId) === listeners
-    ) {
-      columnCommandSubscriptionListenersByTableId.delete(tableId);
-    }
-    diagnosticListenerCount -= 1;
-  };
+  return installTableScopedListener(
+    columnCommandSubscriptionListenersByTableId,
+    tableId,
+    listener,
+    () => {
+      diagnosticListenerCount += 1;
+    },
+    () => {
+      diagnosticListenerCount -= 1;
+    },
+  );
 }

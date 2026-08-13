@@ -3125,7 +3125,11 @@ const BrunoTableRow = memo(function BrunoTableRow({
   readonly top: number;
   readonly width: number;
 }) {
-  recordBrunoTableClientRowRender(tableId, rowId);
+  // Render-count diagnostics must observe committed rows, never execute external listeners during
+  // React render, because a concurrent render can be abandoned before it reaches the DOM.
+  useLayoutEffect(() => {
+    recordBrunoTableClientRowRender(tableId, rowId);
+  });
   const ownedCells = useMemo(
     () =>
       [...pinnedStart, ...center, ...pinnedEnd]
@@ -3396,7 +3400,9 @@ const BrunoTableCell = memo(function BrunoTableCell({
   const value = rowAware
     ? runtime.getCellValueSnapshot(rowId, column.columnId)
     : cellSnapshot?.value;
-  recordBrunoTableClientCellRender(rowId, column.columnId, tableId);
+  useLayoutEffect(() => {
+    recordBrunoTableClientCellRender(rowId, column.columnId, tableId);
+  });
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
   const className = invalid || rowMissing ? undefined : resolveCellClassName(column, row, value);
   const content = rowMissing ? null : invalid ? (

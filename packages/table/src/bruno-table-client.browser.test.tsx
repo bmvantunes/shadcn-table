@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
-import { act, useEffect } from "react";
+import { act, Suspense, useEffect } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
@@ -14,9 +14,11 @@ import {
 } from "./internal/virtual-viewport";
 import {
   installBrunoTableClientCellRenderListener,
+  installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientRowOrderPlanningListener,
+  installBrunoTableClientRowRenderListenerForTable,
   installBrunoTableClientViewRenderListener,
 } from "./internal/render-instrumentation";
 import {
@@ -6013,6 +6015,48 @@ describe("BrunoTableClient browser surface", () => {
     } finally {
       removeGridListener();
       removeViewListener();
+    }
+  });
+
+  test("reports row and cell renders only after a suspended tree commits", async () => {
+    let releaseSuspension!: () => void;
+    let suspended = true;
+    const suspension = new Promise<void>((resolve) => {
+      releaseSuspension = resolve;
+    });
+    function SuspendAfterTable() {
+      if (suspended) throw suspension;
+      return null;
+    }
+
+    const rowRenders = vi.fn();
+    const cellRenders = vi.fn();
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(props.tableId, rowRenders);
+    const removeCells = installBrunoTableClientCellRenderListenerForTable(
+      props.tableId,
+      cellRenders,
+    );
+    try {
+      const screen = await render(
+        <Suspense fallback={<div role="status">Waiting to commit</div>}>
+          <BrunoTableClient {...props} clientSource={readySource()} />
+          <SuspendAfterTable />
+        </Suspense>,
+      );
+      await expect.element(screen.getByRole("status")).toBeInTheDocument();
+      expect(rowRenders).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+
+      suspended = false;
+      releaseSuspension();
+      await expect
+        .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
+        .toBeInTheDocument();
+      expect(rowRenders).toHaveBeenCalled();
+      expect(cellRenders).toHaveBeenCalled();
+    } finally {
+      removeCells();
+      removeRows();
     }
   });
 });
