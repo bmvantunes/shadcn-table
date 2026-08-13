@@ -1,15 +1,39 @@
 import { transformAsync, types as babelTypes } from "@babel/core";
 
-function removeBrunoTableTestDiagnostics() {
+function replaceBrunoTableProductionDefines(replaceDevelopment) {
   const diagnosticFalseNodes = new WeakSet();
   return {
-    name: "remove-bruno-table-test-diagnostics",
+    name: "replace-bruno-table-production-defines",
     visitor: {
       ReferencedIdentifier(path) {
-        if (path.node.name !== "__BRUNO_TABLE_TEST_DIAGNOSTICS__") return;
-        const replacement = babelTypes.booleanLiteral(false);
-        diagnosticFalseNodes.add(replacement);
-        path.replaceWith(replacement);
+        if (path.node.name === "__BRUNO_TABLE_TEST_DIAGNOSTICS__") {
+          const replacement = babelTypes.booleanLiteral(false);
+          diagnosticFalseNodes.add(replacement);
+          path.replaceWith(replacement);
+          return;
+        }
+        if (!replaceDevelopment || path.node.name !== "__BRUNO_TABLE_DEVELOPMENT__") return;
+        const processEnvironment = babelTypes.optionalMemberExpression(
+          babelTypes.optionalMemberExpression(
+            babelTypes.memberExpression(
+              babelTypes.identifier("globalThis"),
+              babelTypes.identifier("process"),
+            ),
+            babelTypes.identifier("env"),
+            false,
+            true,
+          ),
+          babelTypes.identifier("NODE_ENV"),
+          false,
+          true,
+        );
+        path.replaceWith(
+          babelTypes.binaryExpression(
+            "!==",
+            processEnvironment,
+            babelTypes.stringLiteral("production"),
+          ),
+        );
       },
       ConditionalExpression: {
         exit(path) {
@@ -36,36 +60,31 @@ function removeBrunoTableTestDiagnostics() {
   };
 }
 
-export function brunoTableProductionDefines() {
+export function BrunoTableProductionDefines() {
   return {
     name: "bruno-table-production-defines",
     enforce: "pre",
     async transform(code, id) {
       if (!id.includes("/src/")) return;
-      let productionCode = code;
-      let map;
-      if (productionCode.includes("__BRUNO_TABLE_TEST_DIAGNOSTICS__")) {
-        const result = await transformAsync(productionCode, {
-          babelrc: false,
-          configFile: false,
-          filename: id,
-          parserOpts: {
-            plugins: id.endsWith("x") ? ["typescript", "jsx"] : ["typescript"],
-            sourceType: "module",
-          },
-          plugins: [removeBrunoTableTestDiagnostics],
-          sourceMaps: true,
-        });
-        productionCode = result?.code ?? productionCode;
-        map = result?.map;
+      const replaceDevelopment = id.endsWith("/src/bruno-table-client.tsx");
+      if (
+        !code.includes("__BRUNO_TABLE_TEST_DIAGNOSTICS__") &&
+        !(replaceDevelopment && code.includes("__BRUNO_TABLE_DEVELOPMENT__"))
+      ) {
+        return;
       }
-      const transformedCode = id.endsWith("/src/bruno-table-client.tsx")
-        ? productionCode.replaceAll(
-            "__BRUNO_TABLE_DEVELOPMENT__",
-            'globalThis.process?.env?.NODE_ENV !== "production"',
-          )
-        : productionCode;
-      return { code: transformedCode, map };
+      const result = await transformAsync(code, {
+        babelrc: false,
+        configFile: false,
+        filename: id,
+        parserOpts: {
+          plugins: id.endsWith("x") ? ["typescript", "jsx"] : ["typescript"],
+          sourceType: "module",
+        },
+        plugins: [replaceBrunoTableProductionDefines(replaceDevelopment)],
+        sourceMaps: true,
+      });
+      return { code: result?.code ?? code, map: result?.map };
     },
   };
 }

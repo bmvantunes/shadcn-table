@@ -2,7 +2,7 @@ import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "vite-plus";
 
-import { brunoTableProductionDefines } from "./config/production-defines.js";
+import { BrunoTableProductionDefines } from "./config/production-defines.js";
 
 const reactCompilerOptions = {
   compilationMode: "infer",
@@ -63,7 +63,7 @@ const config: UserConfig = defineConfig({
         };
       },
     },
-    plugins: [brunoTableProductionDefines(), reactCompilerForLibrary],
+    plugins: [BrunoTableProductionDefines(), reactCompilerForLibrary],
   },
   lint: {
     ignorePatterns: ["tests/emitted-consumer/**"],
