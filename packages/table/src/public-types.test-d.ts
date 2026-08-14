@@ -216,6 +216,57 @@ void BrunoTableClient({
   clientSource: directViewServerResult,
 });
 
+const sortingTypeTestViewportSource = {
+  viewport: {},
+  totalRows: 0,
+  version: 1,
+  status: "ready",
+} as const;
+
+const invalidServerUnknownSort = {
+  tableId: "invalid-server-unknown-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Server props preserve exact Column Identity inference.
+    { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+  ],
+  viewportSource: sortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidServerUnknownSort;
+
+const invalidServerMisspelledSort = {
+  tableId: "invalid-server-misspelled-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Server props reject misspelled Column Identities.
+    { columnId: "COL_ID_SYMBOOL", direction: "asc" },
+  ],
+  viewportSource: sortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidServerMisspelledSort;
+
+const invalidServerComputedSort = {
+  tableId: "invalid-server-computed-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error Computed columns have no automatic Server sort mapping.
+    { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
+  ],
+  viewportSource: sortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidServerComputedSort;
+
+const invalidServerNonsortableSort = {
+  tableId: "invalid-server-nonsortable-sort",
+  columns: capabilityColumns,
+  initialOrderBy: [
+    // @ts-expect-error Server props exclude explicitly nonsortable identities.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  viewportSource: sortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, CapabilityColumns>;
+void invalidServerNonsortableSort;
+
 const noSortingColumns = [
   {
     columnId: "COL_ID_SYMBOL",

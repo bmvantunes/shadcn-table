@@ -280,7 +280,7 @@ Success criteria:
 
 Build:
 
-- `<BrunoTableServer tableId columns viewportSource />`
+- `<BrunoTableServer tableId columns initialOrderBy viewportSource />`
 - `viewportSource` support compatible with effect-view-server's Live Query Viewport
 - conditional exact `routeBy` values inferred from the Viewport Source: required for leased topics and forbidden otherwise
 - source-owned Route Field tuples with no duplicated `routeByFields` table configuration

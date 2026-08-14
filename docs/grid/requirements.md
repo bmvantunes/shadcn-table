@@ -161,6 +161,7 @@ const viewportSource = useLiveQueryViewport("regionalOrders");
 <BrunoTableServer
   tableId="TABLE_ID_REGIONAL_ORDERS"
   columns={columns}
+  initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
   viewportSource={viewportSource}
   routeBy={{ region: selectedRegion, desk: selectedDesk }}
 />;
