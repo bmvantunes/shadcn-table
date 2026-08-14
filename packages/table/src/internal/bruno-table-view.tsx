@@ -199,6 +199,12 @@ function totalColumnWidth(columns: readonly CompiledColumn[]): number {
   return columns.reduce((total, column) => total + column.semantics.width, 0);
 }
 
+function columnLayoutSignature(columns: readonly CompiledColumn[]): string {
+  return JSON.stringify(
+    columns.map((column) => [column.columnId, column.pinned ?? null, column.semantics.width]),
+  );
+}
+
 function columnHeaderName(columns: readonly CompiledColumn[], columnId: string): string {
   return columns.find((column) => column.columnId === columnId)?.headerName ?? columnId;
 }
@@ -1079,13 +1085,17 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       stableColumns.current = next;
       return next;
     }, [columns, layoutColumnsById, visibleColumnIds]);
+    const logicalColumnLayoutSignature = useMemo(
+      () => columnLayoutSignature(logicalColumns),
+      [logicalColumns],
+    );
     const [viewport] = useState(() => {
       const next = new BrunoTableViewportRuntime();
       next.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
       return next;
     });
     const queryGenerationRef = useRef(queryGeneration);
-    const appliedColumnsRef = useRef<readonly CompiledColumn[] | undefined>(undefined);
+    const appliedColumnLayoutSignatureRef = useRef<string | undefined>(undefined);
     const publishedRangeRef = useRef<
       | {
           readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -1117,7 +1127,8 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       navigation.setShape(rowSpace, logicalColumns);
     }, [logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
     useLayoutEffect(() => {
-      const columnsChanged = appliedColumnsRef.current !== logicalColumns;
+      const columnsChanged =
+        appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;
       viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
       navigation.setShape(rowSpace, logicalColumns);
       if (columnsChanged) {
@@ -1131,8 +1142,8 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
           );
         }
       }
-      appliedColumnsRef.current = logicalColumns;
-    }, [logicalColumns, navigation, rowSpace, viewport]);
+      appliedColumnLayoutSignatureRef.current = logicalColumnLayoutSignature;
+    }, [logicalColumnLayoutSignature, logicalColumns, navigation, rowSpace, viewport]);
     useLayoutEffect(() => {
       if (viewportSnapshot !== viewport.getSnapshot()) return;
       const start = viewportSnapshot.virtualWindow.rowStart;

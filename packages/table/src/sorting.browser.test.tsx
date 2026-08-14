@@ -418,13 +418,16 @@ describe("BrunoTableClient sorting", () => {
     expect(publishedRows).toHaveLength(101);
 
     await screen.rerender(<BrunoTableClient {...props} clientSource={source(publishedRows, 2)} />);
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
+    const movedProxy = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    await vi.waitFor(() => {
+      expect(grid.element().getAttribute("aria-rowcount")).toBe("102");
+      expect(grid.element().scrollTop).toBe(scrollBefore);
+      expect(movedProxy.element().id).toBe(activeIdentity);
+      expect(movedProxy.element().hasAttribute("data-bruno-active-proxy")).toBe(true);
+    });
 
     expect(document.activeElement).toBe(grid.element());
     expect(grid.element().scrollTop).toBe(scrollBefore);
-    const movedProxy = screen.getByRole("gridcell", { name: "Row 12", exact: true });
     await expect.element(movedProxy).toHaveAttribute("data-bruno-active-proxy", "");
     expect(movedProxy.element().id).toBe(activeIdentity);
     expect(movedProxy.element().parentElement?.getAttribute("aria-rowindex")).toBe("102");
