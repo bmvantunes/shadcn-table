@@ -16,13 +16,18 @@ type BrunoTableColumnGestureContext = Readonly<{
   readonly kind: BrunoTableColumnGestureKind | undefined;
 }>;
 
+interface BrunoTableColumnGestureMachineTypes {
+  context: BrunoTableColumnGestureContext;
+  events: BrunoTableColumnGestureEvent;
+}
+
 const brunoTableColumnGestureMachine = createMachine({
   id: "brunoTableColumnGesture",
   initial: "idle",
-  types: {} as {
-    context: BrunoTableColumnGestureContext;
-    events: BrunoTableColumnGestureEvent;
-  },
+  types:
+    // SAFETY: XState consumes this empty runtime object only as a compile-time machine contract;
+    // the named context and event types above are the complete owner contract.
+    {} as BrunoTableColumnGestureMachineTypes,
   context: { kind: undefined },
   states: {
     idle: {

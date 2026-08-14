@@ -1,4 +1,7 @@
+import type { ReactNode } from "react";
+
 import type { BrunoTableAggFunc, BrunoTableColumnId } from "../public-types";
+import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
 import {
   compileColumnValueSemantics,
   ValueSemanticsConfigurationError,
@@ -9,20 +12,54 @@ const columnIdPrefix = "COL_ID_";
 const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS";
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
 const columnIdWhitespacePattern = /\s/u;
-type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
-type RuntimeCallback = (...parameters: never[]) => unknown;
+type RuntimeColumnDefinition = BrunoTableRuntimeRecord;
+/** Erased presentation callbacks intentionally receive the raw row and canonical value. */
+export interface BrunoTableRuntimeCallbackParameters {
+  readonly row: BrunoTableRuntimeValue;
+  readonly value: BrunoTableRuntimeValue;
+}
+
+type RuntimeCallback = (parameters: BrunoTableRuntimeCallbackParameters) => BrunoTableRuntimeValue;
+type RuntimeCellRenderer = (parameters: BrunoTableRuntimeCallbackParameters) => ReactNode;
+
+export interface BrunoTableRuntimeComputedGetterParameters {
+  readonly row: BrunoTableRuntimeRecord;
+}
+
+type RuntimeComputedGetter = (
+  parameters: BrunoTableRuntimeComputedGetterParameters,
+) => BrunoTableRuntimeValue;
+
+type PresentationCallbacks = {
+  valueFormatter?: RuntimeCallback;
+  cellClassName?: string | RuntimeCallback;
+  cellRenderer?: RuntimeCellRenderer;
+};
+
+type CompiledPresentationCallbacks = Readonly<{
+  readonly hasPresentation: boolean;
+  readonly compiled: PresentationCallbacks;
+}>;
+
+type MutableCompiledFieldColumn = {
+  -readonly [Key in keyof CompiledFieldColumn]: CompiledFieldColumn[Key];
+};
+
+type MutableCompiledComputedColumn = {
+  -readonly [Key in keyof CompiledComputedColumn]: CompiledComputedColumn[Key];
+};
 
 type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
   readonly pinned?: "start" | "end";
-  readonly valueType: unknown;
+  readonly valueType: BrunoTableRuntimeValue;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
   readonly cellClassName?: string | RuntimeCallback;
-  readonly cellRenderer?: RuntimeCallback;
+  readonly cellRenderer?: RuntimeCellRenderer;
 };
 
 export type CompiledFieldColumn = CompiledColumnBase & {
@@ -33,30 +70,34 @@ export type CompiledFieldColumn = CompiledColumnBase & {
   readonly isEditable?: boolean | RuntimeCallback;
   readonly groupKeyValueFormatter?: RuntimeCallback;
   readonly groupKeyCellClassName?: string | RuntimeCallback;
-  readonly groupKeyCellRenderer?: RuntimeCallback;
+  readonly groupKeyCellRenderer?: RuntimeCellRenderer;
   readonly aggregateValueFormatter?: RuntimeCallback;
   readonly aggregateCellClassName?: string | RuntimeCallback;
-  readonly aggregateCellRenderer?: RuntimeCallback;
+  readonly aggregateCellRenderer?: RuntimeCellRenderer;
 };
 
 export type CompiledComputedColumn = CompiledColumnBase & {
   readonly kind: "computed";
   readonly fields: readonly [string, ...string[]];
-  readonly valueGetter: RuntimeCallback;
+  readonly valueGetter: RuntimeComputedGetter;
 };
 
 export type CompiledColumn = CompiledFieldColumn | CompiledComputedColumn;
 
 export class ColumnConfigurationError extends TypeError {}
 
-export function compileColumns(columns: readonly unknown[]): readonly CompiledColumn[] {
+export function compileColumns<TColumn>(columns: readonly TColumn[]): readonly CompiledColumn[] {
   const seen = new Set<string>();
   const compiled = Array.from(columns, (column, index) => compileColumn(column, index, seen));
 
   return Object.freeze(compiled);
 }
 
-function compileColumn(candidate: unknown, index: number, seen: Set<string>): CompiledColumn {
+function compileColumn<TCandidate>(
+  candidate: TCandidate,
+  index: number,
+  seen: Set<string>,
+): CompiledColumn {
   if (!isRuntimeColumnDefinition(candidate)) {
     throw new ColumnConfigurationError(`BrunoTable column at index ${index} must be an object.`);
   }
@@ -214,33 +255,46 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
 
-    return Object.freeze({
+    const compiled: MutableCompiledFieldColumn = {
       kind: "field",
       columnId,
       headerName,
-      ...(pinned === undefined ? {} : { pinned }),
       valueType,
       semantics,
       field,
       groupBy,
       enableFilter,
       enableSorting,
-      ...(typeof isEditable === "boolean" || typeof isEditable === "function"
-        ? { isEditable: isEditable as boolean | RuntimeCallback }
-        : {}),
-      ...(aggFunc === undefined ? {} : { aggFunc }),
-      ...groupPresentation.compiled,
-      ...aggregatePresentation.compiled,
-      ...(typeof valueFormatter === "function"
-        ? { valueFormatter: valueFormatter as RuntimeCallback }
-        : {}),
-      ...(typeof cellClassName === "string" || typeof cellClassName === "function"
-        ? { cellClassName: cellClassName as string | RuntimeCallback }
-        : {}),
-      ...(typeof cellRenderer === "function"
-        ? { cellRenderer: cellRenderer as RuntimeCallback }
-        : {}),
-    });
+    };
+    if (pinned !== undefined) compiled.pinned = pinned;
+    if (isEditable === true || isEditable === false || isRuntimeCallback(isEditable)) {
+      compiled.isEditable = isEditable;
+    }
+    if (aggFunc !== undefined) compiled.aggFunc = aggFunc;
+    if (groupPresentation.compiled.valueFormatter !== undefined) {
+      compiled.groupKeyValueFormatter = groupPresentation.compiled.valueFormatter;
+    }
+    if (groupPresentation.compiled.cellClassName !== undefined) {
+      compiled.groupKeyCellClassName = groupPresentation.compiled.cellClassName;
+    }
+    if (groupPresentation.compiled.cellRenderer !== undefined) {
+      compiled.groupKeyCellRenderer = groupPresentation.compiled.cellRenderer;
+    }
+    if (aggregatePresentation.compiled.valueFormatter !== undefined) {
+      compiled.aggregateValueFormatter = aggregatePresentation.compiled.valueFormatter;
+    }
+    if (aggregatePresentation.compiled.cellClassName !== undefined) {
+      compiled.aggregateCellClassName = aggregatePresentation.compiled.cellClassName;
+    }
+    if (aggregatePresentation.compiled.cellRenderer !== undefined) {
+      compiled.aggregateCellRenderer = aggregatePresentation.compiled.cellRenderer;
+    }
+    if (isRuntimeCallback(valueFormatter)) compiled.valueFormatter = valueFormatter;
+    if (typeof cellClassName === "string" || isRuntimeCallback(cellClassName)) {
+      compiled.cellClassName = cellClassName;
+    }
+    if (isRuntimeCellRenderer(cellRenderer)) compiled.cellRenderer = cellRenderer;
+    return Object.freeze(compiled);
   }
 
   if (!hasFields || !hasValueGetter) {
@@ -256,18 +310,23 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
-  const candidateFields = Array.from(fieldsCandidate);
-  if (
-    candidateFields.length === 0 ||
-    !candidateFields.every((field) => typeof field === "string" && field.trim().length > 0)
-  ) {
+  const candidateFields: string[] = [];
+  for (const field of fieldsCandidate) {
+    if (typeof field !== "string" || field.trim().length === 0) {
+      throw new ColumnConfigurationError(
+        `BrunoTable computed fields must be a non-empty tuple of field names: ${columnId}`,
+      );
+    }
+    candidateFields.push(field);
+  }
+  if (candidateFields.length === 0) {
     throw new ColumnConfigurationError(
       `BrunoTable computed fields must be a non-empty tuple of field names: ${columnId}`,
     );
   }
 
   const valueGetter = candidate["valueGetter"];
-  if (typeof valueGetter !== "function") {
+  if (!isRuntimeComputedGetter(valueGetter)) {
     throw new ColumnConfigurationError(
       `BrunoTable computed valueGetter must be a function: ${columnId}`,
     );
@@ -296,29 +355,34 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     );
   }
 
-  const fields = Object.freeze(candidateFields) as readonly [string, ...string[]];
-
-  return Object.freeze({
+  const firstField = candidateFields[0];
+  if (firstField === undefined) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed fields must be a non-empty tuple of field names: ${columnId}`,
+    );
+  }
+  const fields: readonly [string, ...string[]] = Object.freeze([
+    firstField,
+    ...candidateFields.slice(1),
+  ]);
+  const compiled: MutableCompiledComputedColumn = {
     kind: "computed",
     columnId,
     headerName,
-    ...(pinned === undefined ? {} : { pinned }),
     valueType,
     semantics,
     enableFilter: false,
     enableSorting: false,
     fields,
-    valueGetter: valueGetter as RuntimeCallback,
-    ...(typeof valueFormatter === "function"
-      ? { valueFormatter: valueFormatter as RuntimeCallback }
-      : {}),
-    ...(typeof cellClassName === "string" || typeof cellClassName === "function"
-      ? { cellClassName: cellClassName as string | RuntimeCallback }
-      : {}),
-    ...(typeof cellRenderer === "function"
-      ? { cellRenderer: cellRenderer as RuntimeCallback }
-      : {}),
-  });
+    valueGetter,
+  };
+  if (pinned !== undefined) compiled.pinned = pinned;
+  if (isRuntimeCallback(valueFormatter)) compiled.valueFormatter = valueFormatter;
+  if (typeof cellClassName === "string" || isRuntimeCallback(cellClassName)) {
+    compiled.cellClassName = cellClassName;
+  }
+  if (isRuntimeCellRenderer(cellRenderer)) compiled.cellRenderer = cellRenderer;
+  return Object.freeze(compiled);
 }
 
 function nullableSafeSemantics(
@@ -348,12 +412,9 @@ function isRuntimeColumnDefinition(value: unknown): value is RuntimeColumnDefini
 
 function compilePresentationCallbacks(
   candidate: RuntimeColumnDefinition,
-  columnId: unknown,
+  columnId: BrunoTableRuntimeValue,
   family: "groupKey" | "aggregate",
-): {
-  readonly hasPresentation: boolean;
-  readonly compiled: Readonly<Record<string, string | RuntimeCallback>>;
-} {
+): CompiledPresentationCallbacks {
   const valueFormatterKey = `${family}ValueFormatter`;
   const cellClassNameKey = `${family}CellClassName`;
   const cellRendererKey = `${family}CellRenderer`;
@@ -364,40 +425,51 @@ function compilePresentationCallbacks(
   const cellClassName = candidate[cellClassNameKey];
   const cellRenderer = candidate[cellRendererKey];
 
-  if (hasValueFormatter && typeof valueFormatter !== "function") {
+  if (hasValueFormatter && !isRuntimeCallback(valueFormatter)) {
     throw new ColumnConfigurationError(
-      `BrunoTable ${valueFormatterKey} must be a function when provided: ${String(columnId)}`,
+      `BrunoTable ${valueFormatterKey} must be a function when provided: ${describeRuntimeColumnId(columnId)}`,
     );
   }
-  if (
-    hasCellClassName &&
-    typeof cellClassName !== "string" &&
-    typeof cellClassName !== "function"
-  ) {
+  if (hasCellClassName && typeof cellClassName !== "string" && !isRuntimeCallback(cellClassName)) {
     throw new ColumnConfigurationError(
-      `BrunoTable ${cellClassNameKey} must be a string or function when provided: ${String(columnId)}`,
+      `BrunoTable ${cellClassNameKey} must be a string or function when provided: ${describeRuntimeColumnId(columnId)}`,
     );
   }
-  if (hasCellRenderer && typeof cellRenderer !== "function") {
+  if (hasCellRenderer && !isRuntimeCellRenderer(cellRenderer)) {
     throw new ColumnConfigurationError(
-      `BrunoTable ${cellRendererKey} must be a function when provided: ${String(columnId)}`,
+      `BrunoTable ${cellRendererKey} must be a function when provided: ${describeRuntimeColumnId(columnId)}`,
     );
   }
 
+  const compiled: PresentationCallbacks = {};
+  if (isRuntimeCallback(valueFormatter)) compiled.valueFormatter = valueFormatter;
+  if (typeof cellClassName === "string" || isRuntimeCallback(cellClassName)) {
+    compiled.cellClassName = cellClassName;
+  }
+  if (isRuntimeCellRenderer(cellRenderer)) compiled.cellRenderer = cellRenderer;
   return {
-    hasPresentation: hasValueFormatter || hasCellClassName || hasCellRenderer,
-    compiled: {
-      ...(typeof valueFormatter === "function"
-        ? { [valueFormatterKey]: valueFormatter as RuntimeCallback }
-        : {}),
-      ...(typeof cellClassName === "string" || typeof cellClassName === "function"
-        ? { [cellClassNameKey]: cellClassName as string | RuntimeCallback }
-        : {}),
-      ...(typeof cellRenderer === "function"
-        ? { [cellRendererKey]: cellRenderer as RuntimeCallback }
-        : {}),
-    },
+    hasPresentation: Object.keys(compiled).length > 0,
+    compiled,
   };
+}
+
+function isRuntimeCallback(value: BrunoTableRuntimeValue): value is RuntimeCallback {
+  return typeof value === "function";
+}
+
+function isRuntimeCellRenderer(value: BrunoTableRuntimeValue): value is RuntimeCellRenderer {
+  return typeof value === "function";
+}
+
+function isRuntimeComputedGetter(value: BrunoTableRuntimeValue): value is RuntimeComputedGetter {
+  return typeof value === "function";
+}
+
+function describeRuntimeColumnId(value: BrunoTableRuntimeValue): string {
+  if (typeof value === "object" && value !== null) {
+    return Object.prototype.toString.call(value);
+  }
+  return String(value);
 }
 
 function isAggFunc(value: unknown): value is BrunoTableAggFunc {

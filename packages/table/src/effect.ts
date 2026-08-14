@@ -9,8 +9,6 @@ import * as Option from "effect/Option";
 
 import type { ReactNode } from "react";
 
-import { BrunoTableComputedColumn } from "./public-types";
-
 import type {
   BrunoTableAggregateCellParams,
   BrunoTableAggregateResults,
@@ -31,6 +29,8 @@ import type {
   BrunoTableOrdering,
   BrunoTableValueType,
 } from "./public-types";
+import type { BrunoTableRuntimeRecord } from "./internal/runtime-value";
+import { brunoTableComputedColumnMarker } from "./internal/computed-column-marker";
 
 const codecId = "@bruno/table/effect/bigdecimal";
 const persistedType = "effect-bigdecimal";
@@ -82,7 +82,10 @@ function admitBigDecimalParts(
   });
 }
 
-function decodeRuntimeBigDecimal(input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> {
+function decodeRuntimeBigDecimal(
+  this: void,
+  input: unknown,
+): BrunoTableDecodeResult<BigDecimal.BigDecimal> {
   if (typeof input === "object" && input !== null) {
     const admitted = admittedWireSafeValues.get(input);
     if (admitted !== undefined) return success(admitted.value);
@@ -100,7 +103,7 @@ function decodeRuntimeBigDecimal(input: unknown): BrunoTableDecodeResult<BigDeci
   return success(admitted.value);
 }
 
-function requireAdmittedBigDecimal(input: unknown): AdmittedBigDecimal {
+function requireAdmittedBigDecimal(input: BigDecimal.BigDecimal): AdmittedBigDecimal {
   const decoded = decodeRuntimeBigDecimal(input);
   if (decoded._tag === "Failure") {
     throw new TypeError("BrunoTable BigDecimal Value Type received an invalid value.");
@@ -153,39 +156,6 @@ function parseBigDecimalText(text: string): BrunoTableDecodeResult<BigDecimal.Bi
     : failure("The BigDecimal value is not safe for View Server transport.");
 }
 
-function decodePersistedText(input: unknown): BrunoTableDecodeResult<string> {
-  try {
-    if (typeof input !== "object" || input === null || Array.isArray(input)) {
-      return failure("Persisted Effect BigDecimal value has an invalid tag.");
-    }
-    const keys = Reflect.ownKeys(input);
-    if (
-      keys.length !== 3 ||
-      !keys.includes("$brunoTableValue") ||
-      !keys.includes("version") ||
-      !keys.includes("value")
-    ) {
-      return failure("Persisted Effect BigDecimal value has an invalid tag.");
-    }
-    const values = new Map<PropertyKey, unknown>();
-    for (const key of keys) {
-      const descriptor = Object.getOwnPropertyDescriptor(input, key);
-      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-        return failure("Persisted Effect BigDecimal value has an invalid tag.");
-      }
-      values.set(key, descriptor.value);
-    }
-    const value = values.get("value");
-    return values.get("$brunoTableValue") === persistedType &&
-      values.get("version") === codecVersion &&
-      typeof value === "string"
-      ? success(value)
-      : failure("Persisted Effect BigDecimal value has an invalid tag.");
-  } catch {
-    return failure("Persisted Effect BigDecimal value has an invalid tag.");
-  }
-}
-
 /** Exact Effect BigDecimal semantics compatible with effect-view-server's admitted wire domain. */
 export const BrunoTableBigDecimalValueType: BrunoTableValueType<
   BigDecimal.BigDecimal,
@@ -221,9 +191,43 @@ export const BrunoTableBigDecimalValueType: BrunoTableValueType<
     version: codecVersion,
     value: requireAdmittedBigDecimal(value).canonicalText,
   }),
-  decodePersisted: (input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> => {
-    const decoded = decodePersistedText(input);
-    return decoded._tag === "Success" ? parseBigDecimalText(decoded.value) : decoded;
+  decodePersisted: function (
+    this: void,
+    input: unknown,
+  ): BrunoTableDecodeResult<BigDecimal.BigDecimal> {
+    try {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        return failure("Persisted Effect BigDecimal value has an invalid tag.");
+      }
+      const keys = Reflect.ownKeys(input);
+      if (
+        keys.length !== 3 ||
+        !keys.includes("$brunoTableValue") ||
+        !keys.includes("version") ||
+        !keys.includes("value")
+      ) {
+        return failure("Persisted Effect BigDecimal value has an invalid tag.");
+      }
+      const values = new Map<PropertyKey, unknown>();
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key);
+        if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+          return failure("Persisted Effect BigDecimal value has an invalid tag.");
+        }
+        values.set(key, descriptor.value);
+      }
+      const value = values.get("value");
+      if (
+        values.get("$brunoTableValue") !== persistedType ||
+        values.get("version") !== codecVersion ||
+        typeof value !== "string"
+      ) {
+        return failure("Persisted Effect BigDecimal value has an invalid tag.");
+      }
+      return parseBigDecimalText(value);
+    } catch {
+      return failure("Persisted Effect BigDecimal value has an invalid tag.");
+    }
   },
 });
 
@@ -617,7 +621,11 @@ type BrunoTableBigDecimalColumnHelper = {
   ) => BrunoTableBigDecimalColumnPreset<TDefaults>;
 };
 
-type RuntimeColumnOptions = Readonly<Record<PropertyKey, unknown>>;
+type RuntimeColumnOptions = BrunoTableRuntimeRecord;
+
+interface MutableRuntimeColumnOptions {
+  [key: PropertyKey]: BrunoTableRuntimeRecord[PropertyKey];
+}
 
 const builtInDefaults: BigDecimalBuiltInDefaults = {
   valueType: BrunoTableBigDecimalValueType,
@@ -793,15 +801,14 @@ function mergeColumnOptions(
   };
   validateCapabilityCombination(merged);
   if (!isComputed) return merged;
-
-  const computed: unknown = Reflect.apply(BrunoTableComputedColumn, undefined, [merged]);
-  if (!isRecord(computed)) {
-    throw new TypeError("BrunoTable BigDecimal computed-column construction failed.");
-  }
-  return computed;
+  const marked: MutableRuntimeColumnOptions = { ...merged };
+  marked[brunoTableComputedColumnMarker] = true;
+  return marked;
 }
 
-function snapshotPresetDefaults(input: unknown): RuntimeColumnOptions {
+function snapshotPresetDefaults<TDefaults extends BrunoTableBigDecimalColumnPresetDefaults>(
+  input: TDefaults,
+): RuntimeColumnOptions {
   if (!isRecord(input)) {
     throw new TypeError("BrunoTable BigDecimal Column preset defaults must be an object.");
   }
@@ -810,7 +817,9 @@ function snapshotPresetDefaults(input: unknown): RuntimeColumnOptions {
       throw new TypeError(`BrunoTable BigDecimal Column preset does not accept ${String(key)}.`);
     }
   }
-  const snapshot = { ...input };
+  const record: BrunoTableRuntimeRecord = input;
+  const snapshot: MutableRuntimeColumnOptions = {};
+  for (const key of Reflect.ownKeys(record)) snapshot[key] = record[key];
   validateCapabilityCombination(snapshot);
   return Object.freeze(snapshot);
 }

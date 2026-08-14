@@ -7,6 +7,10 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "../../dist/index.mjs";
 
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+
 type Row = Readonly<{ id: string; name: string; score: number }>;
 
 const source = Object.freeze({
@@ -174,11 +178,8 @@ test("keeps emitted identity diagnostics disabled in production", async () => {
 });
 
 test("hydrates emitted custom controls after removing their inert server boundary", async () => {
-  const actEnvironment = globalThis as typeof globalThis & {
-    IS_REACT_ACT_ENVIRONMENT?: boolean;
-  };
-  const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
-  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   const activate = vi.fn();
   const recoverableErrors: unknown[] = [];
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -270,7 +271,11 @@ test("hydrates emitted custom controls after removing their inert server boundar
     observer.disconnect();
     await act(async () => root?.unmount());
     container.remove();
-    actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+    if (previousActEnvironment === undefined) {
+      Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+    } else {
+      globalThis.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+    }
   }
 });
 

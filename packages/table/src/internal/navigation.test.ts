@@ -15,7 +15,7 @@ describe("BrunoTableNavigationRuntime", () => {
     ]);
     const navigation = new BrunoTableNavigationRuntime();
 
-    navigation.setShape(["first"], columns);
+    navigation.setLayout(["first"], columns);
 
     expect(navigation.getSnapshot()).toMatchObject({
       region: "body",
@@ -39,11 +39,11 @@ describe("BrunoTableNavigationRuntime", () => {
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape(["first", "second", "third"], columns);
+    navigation.setLayout(["first", "second", "third"], columns);
     navigation.move("down");
     navigation.move("down");
 
-    navigation.setShape(["first", "second", "replacement"], columns);
+    navigation.setLayout(["first", "second", "replacement"], columns);
 
     expect(navigation.getSnapshot()).toMatchObject({
       region: "body",
@@ -70,7 +70,7 @@ describe("BrunoTableNavigationRuntime", () => {
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape(["first", "second"], columns);
+    navigation.setLayout(["first", "second"], columns);
     expect(navigation.getSnapshot()?.columnId).toBe("COL_ID_SCORE");
 
     navigation.move("up");
@@ -87,7 +87,7 @@ describe("BrunoTableNavigationRuntime", () => {
       columnId: "COL_ID_NAME",
     });
 
-    navigation.setShape(["second", "first"], columns);
+    navigation.setLayout(["second", "first"], columns);
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
   });
 
@@ -114,14 +114,14 @@ describe("BrunoTableNavigationRuntime", () => {
     ]);
     const reorderedColumns = [firstColumns[2]!, firstColumns[0]!, firstColumns[1]!];
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape(["first"], firstColumns);
+    navigation.setLayout(["first"], firstColumns);
     navigation.move("right");
 
-    navigation.setShape(["first"], reorderedColumns);
+    navigation.setLayout(["first"], reorderedColumns);
     expect(navigation.getSnapshot()).toMatchObject({ columnId: "COL_ID_SCORE" });
 
     const hiddenActiveColumns = [firstColumns[2]!, firstColumns[0]!];
-    navigation.setShape(["first"], hiddenActiveColumns);
+    navigation.setLayout(["first"], hiddenActiveColumns);
     expect(navigation.getSnapshot()).toMatchObject({ columnId: "COL_ID_NAME" });
   });
 
@@ -141,7 +141,7 @@ describe("BrunoTableNavigationRuntime", () => {
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape([], columns);
+    navigation.setLayout([], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
 
     navigation.activateForFocus();
@@ -159,11 +159,11 @@ describe("BrunoTableNavigationRuntime", () => {
       columnId: "COL_ID_SCORE",
     });
 
-    navigation.setShape(["first"], columns);
+    navigation.setLayout(["first"], columns);
     navigation.move("down");
-    navigation.setShape([], columns);
+    navigation.setLayout([], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
-    navigation.setShape(["replacement"], columns);
+    navigation.setLayout(["replacement"], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
     navigation.activateForFocus();
     expect(navigation.getSnapshot()).toMatchObject({
@@ -174,7 +174,7 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowId: "replacement" });
 
     navigation.clearForQuery();
-    navigation.setShape(["first"], columns);
+    navigation.setLayout(["first"], columns);
     expect(navigation.getSnapshot()).toBeUndefined();
   });
 
@@ -189,7 +189,7 @@ describe("BrunoTableNavigationRuntime", () => {
     ]);
     const navigation = new BrunoTableNavigationRuntime();
 
-    navigation.setShape([undefined, "second", undefined, "fourth"], columns);
+    navigation.setLayout([undefined, "second", undefined, "fourth"], columns);
     expect(navigation.getSnapshot()).toMatchObject({ region: "body", rowIndex: 0 });
     expect(navigation.getSnapshot()?.rowId).toBeUndefined();
 
@@ -226,7 +226,7 @@ describe("BrunoTableNavigationRuntime", () => {
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape(["first", "second", "third"], columns);
+    navigation.setLayout(["first", "second", "third"], columns);
 
     navigation.moveToRowEdge("end");
     expect(navigation.getSnapshot()).toMatchObject({
@@ -280,7 +280,7 @@ describe("BrunoTableNavigationRuntime", () => {
       },
     ]);
     const navigation = new BrunoTableNavigationRuntime();
-    navigation.setShape(["first", "second", "third", "fourth"], columns);
+    navigation.setLayout(["first", "second", "third", "fourth"], columns);
 
     const commands: readonly BrunoTableNavigationCommand[] = [
       { type: "step", direction: "right" },
@@ -320,7 +320,7 @@ describe("BrunoTableNavigationRuntime", () => {
       const active = navigation.getSnapshot();
       notifications.push(`${active?.region}:${String(active?.rowIndex)}`);
     });
-    navigation.setShape(
+    navigation.setLayout(
       Array.from({ length: 64 }, (_, index) => `row-${String(index)}`),
       columns,
     );

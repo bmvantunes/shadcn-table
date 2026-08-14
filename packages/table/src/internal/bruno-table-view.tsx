@@ -58,7 +58,7 @@ import type {
   RefCallback,
 } from "react";
 
-import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableRuntimeCallbackParameters, CompiledColumn } from "./compile-columns";
 import {
   BrunoTableCellCommitDiagnosticProbe,
   BrunoTableGridSurfaceCommitDiagnosticProbe,
@@ -100,11 +100,21 @@ import type {
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import {
+  isBrunoTableRuntimeRecord,
+  type BrunoTableRuntimeRecord,
+  type BrunoTableRuntimeValue,
+} from "./runtime-value";
+import {
+  recordBrunoTableClientCellRender,
   recordBrunoTableClientColumnPreviewStyleWrite,
   recordBrunoTableClientColumnReorderFrame,
   recordBrunoTableClientColumnResizeFrame,
   recordBrunoTableClientColumnGestureFrame,
   recordBrunoTableClientColumnGestureListener,
+  recordBrunoTableClientGridSurfaceRender,
+  recordBrunoTableClientHeaderRender,
+  recordBrunoTableClientRowRender,
+  recordBrunoTableClientViewRender,
   hasBrunoTableClientColumnGestureFrameListener,
 } from "./render-instrumentation";
 import {
@@ -431,6 +441,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   );
 }
 
+// SAFETY: React's memo wrapper preserves the implementation's generic props contract at this module boundary.
 const MemoizedBrunoTableView = memo(
   BrunoTableViewImplementation,
 ) as typeof BrunoTableViewImplementation;
@@ -604,7 +615,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   );
   useLayoutEffect(() => {
     if (body.kind !== "rows" && body.kind !== "loading") {
-      navigation.setShape([], compiledColumns);
+      navigation.setLayout([], compiledColumns);
       focusHandoff.clear();
     }
   }, [body.kind, compiledColumns, focusHandoff, navigation]);
@@ -841,7 +852,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       return next;
     });
     const queryGenerationRef = useRef(queryGeneration);
-    const appliedShapeRef = useRef<
+    const appliedLayoutRef = useRef<
       | {
           readonly columns: readonly CompiledColumn[];
           readonly totalRows: number;
@@ -876,16 +887,16 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         end: resetWindow.rowEnd,
       });
       if (navigation.getSnapshot()?.region !== "header") navigation.clearForQuery();
-      navigation.setShape(rowSpace, logicalColumns);
+      navigation.setLayout(rowSpace, logicalColumns);
     }, [logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
     useLayoutEffect(() => {
-      const previousShape = appliedShapeRef.current;
-      const shapeChanged =
-        previousShape?.columns !== logicalColumns ||
-        previousShape?.totalRows !== rowSpace.totalRows;
+      const previousLayout = appliedLayoutRef.current;
+      const layoutChanged =
+        previousLayout?.columns !== logicalColumns ||
+        previousLayout?.totalRows !== rowSpace.totalRows;
       viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-      navigation.setShape(rowSpace, logicalColumns);
-      if (shapeChanged) {
+      navigation.setLayout(rowSpace, logicalColumns);
+      if (layoutChanged) {
         const activeCell = navigation.getSnapshot();
         if (activeCell !== undefined) {
           viewport.revealCell(
@@ -896,7 +907,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
           );
         }
       }
-      appliedShapeRef.current = Object.freeze({
+      appliedLayoutRef.current = Object.freeze({
         columns: logicalColumns,
         totalRows: rowSpace.totalRows,
       });
@@ -1660,7 +1671,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       }),
     [runtime],
   );
-  const gestureShapeRef = useRef<
+  const gestureLayoutRef = useRef<
     | {
         readonly columns: readonly CompiledColumn[];
         readonly layoutVersion: number;
@@ -1670,7 +1681,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     | undefined
   >(undefined);
   useEffect(() => {
-    const previous = gestureShapeRef.current;
+    const previous = gestureLayoutRef.current;
     const next = Object.freeze({
       columns: logicalColumns,
       layoutVersion: columnLayout.version,
@@ -1686,7 +1697,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     ) {
       gestureCancel.current();
     }
-    gestureShapeRef.current = next;
+    gestureLayoutRef.current = next;
   }, [columnLayout.version, logicalColumns, queryGeneration, rowSpace.totalRows]);
   const onColumnPointerDown = useMemo<BrunoTableColumnPointerDownHandler>(
     () => (event, column, kind) => columnPointerDownHandler.current(event, column, kind),
@@ -1822,6 +1833,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             return;
           }
           if (event.target !== event.currentTarget) {
+            // SAFETY: React keyboard events use a DOM EventTarget; currentTarget.contains accepts its Node target.
             if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) {
               event.preventDefault();
               gestureCancel.current();
@@ -1829,6 +1841,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             } else if (
               event.key === "Tab" &&
               event.shiftKey &&
+              // SAFETY: React keyboard events use a DOM EventTarget; currentTarget.contains accepts its Node target.
               event.currentTarget.contains(event.target as Node)
             ) {
               yieldGridTabStopForNativeTraversal(event.currentTarget);
@@ -3047,6 +3060,7 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // SAFETY: The rowAware discriminator selects the cell snapshot branch returned by the matching runtime getter.
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot | undefined);
   const row = rowAware ? snapshot : undefined;
   const rowPresent = rowAware ? row !== undefined : (cellSnapshot?.rowPresent ?? false);
@@ -3428,6 +3442,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // SAFETY: The rowAware discriminator selects the cell snapshot branch returned by the matching runtime getter.
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
   const row = rowAware ? snapshot : undefined;
   const rowMissing = rowAware && row === undefined;
@@ -3613,25 +3628,28 @@ function NonTabbableCellContent({ children }: { readonly children: ReactNode }) 
 function headerSortPresentation(
   headerName: string,
   command: BrunoTableColumnCommandSnapshot,
-): Readonly<{
-  readonly ariaSort?: "ascending" | "descending";
-  readonly direction?: "ascending" | "descending";
-  readonly label: string;
-}> {
+): HeaderSortPresentation {
   const direction =
     command.sortDirection === "asc"
       ? "ascending"
       : command.sortDirection === "desc"
         ? "descending"
         : undefined;
-  return Object.freeze({
-    ...(command.sortPriority === 1 && direction !== undefined ? { ariaSort: direction } : {}),
-    ...(direction === undefined ? {} : { direction }),
+  const presentation: HeaderSortPresentation = {
     label:
       direction === undefined
         ? headerName
         : `${headerName}, sorted ${direction}${sortPriorityLabel(command.sortPriority)}`,
-  });
+  };
+  if (command.sortPriority === 1 && direction !== undefined) presentation.ariaSort = direction;
+  if (direction !== undefined) presentation.direction = direction;
+  return Object.freeze(presentation);
+}
+
+interface HeaderSortPresentation {
+  ariaSort?: "ascending" | "descending";
+  direction?: "ascending" | "descending";
+  label: string;
 }
 
 function sortPriorityLabel(priority: number | undefined): string {
@@ -3684,39 +3702,32 @@ function pinnedCellStyle(
       offset += columns[cursor]?.semantics.width ?? 0;
     }
   }
-  return {
+  const style: CSSProperties = {
     background: "Canvas",
-    minWidth:
-      column === undefined
-        ? undefined
-        : `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
+    minWidth: undefined,
     padding: 0,
     position: "sticky",
-    transform:
-      column === undefined
-        ? undefined
-        : `var(${brunoTableColumnCssVariable("transform", column.columnId)}, none)`,
-    width:
-      column === undefined
-        ? undefined
-        : `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
+    transform: undefined,
+    width: undefined,
     zIndex: 3,
-    ...(column === undefined
-      ? {}
-      : side === "start"
-        ? {
-            insetInlineStart: `var(${brunoTableColumnCssVariable("pinned-start-offset", column.columnId)}, ${String(offset)}px)`,
-          }
-        : {
-            insetInlineEnd: `var(${brunoTableColumnCssVariable("pinned-end-offset", column.columnId)}, ${String(offset)}px)`,
-          }),
   };
+  if (column === undefined) return style;
+  style.minWidth = `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`;
+  style.transform = `var(${brunoTableColumnCssVariable("transform", column.columnId)}, none)`;
+  style.width = `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`;
+  if (side === "start") {
+    style.insetInlineStart = `var(${brunoTableColumnCssVariable("pinned-start-offset", column.columnId)}, ${String(offset)}px)`;
+  } else {
+    style.insetInlineEnd = `var(${brunoTableColumnCssVariable("pinned-end-offset", column.columnId)}, ${String(offset)}px)`;
+  }
+  return style;
 }
 
 function hasRenderableChildren(children: ReactNode): boolean {
   return Children.toArray(children).some((child) => {
     if (!isValidElement(child)) return true;
     if (child.type !== Fragment && child.type !== BrunoTableToolbar) return true;
+    // SAFETY: isValidElement plus the children-bearing branch establishes the ReactElement props contract here.
     return hasRenderableChildren(
       (child as ReactElement<{ readonly children?: ReactNode }>).props.children,
     );
@@ -3735,29 +3746,45 @@ function proxyPresentationUsesRawRow(column: CompiledColumn): boolean {
   return column.valueFormatter !== undefined;
 }
 
-function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): string {
+function resolveCellText(
+  column: CompiledColumn,
+  row: BrunoTableRuntimeCallbackParameters["row"],
+  value: BrunoTableRuntimeCallbackParameters["value"],
+): string {
   if (column.valueFormatter !== undefined) {
-    const formatted = Reflect.apply(column.valueFormatter, undefined, [{ row, value }]);
+    const valueFormatter = column.valueFormatter;
+    const formatted = valueFormatter({ row, value });
     if (typeof formatted === "string") return formatted;
   }
   if (value === null || value === undefined) return "";
   return column.semantics.formatDisplay(value);
 }
 
-function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
+function resolveCellContent(
+  column: CompiledColumn,
+  row: BrunoTableRuntimeCallbackParameters["row"],
+  value: BrunoTableRuntimeCallbackParameters["value"],
+): ReactNode {
   if (column.cellRenderer !== undefined) return resolveCellRenderer(column, row, value);
   const booleanContent = resolveBooleanCellContent(column, value);
   if (booleanContent !== undefined) return booleanContent;
   return resolveCellText(column, row, value);
 }
 
-function resolveProxyCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
+function resolveProxyCellContent(
+  column: CompiledColumn,
+  row: BrunoTableRuntimeCallbackParameters["row"],
+  value: BrunoTableRuntimeCallbackParameters["value"],
+): ReactNode {
   const booleanContent = resolveBooleanCellContent(column, value);
   if (booleanContent !== undefined) return booleanContent;
   return resolveCellText(column, row, value);
 }
 
-function resolveBooleanCellContent(column: CompiledColumn, value: unknown): ReactNode | undefined {
+function resolveBooleanCellContent(
+  column: CompiledColumn,
+  value: BrunoTableRuntimeCallbackParameters["value"],
+): ReactNode | undefined {
   if (
     column.valueFormatter === undefined &&
     column.valueType === "boolean" &&
@@ -3770,22 +3797,24 @@ function resolveBooleanCellContent(column: CompiledColumn, value: unknown): Reac
 
 function resolveCellClassName(
   column: CompiledColumn,
-  row: unknown,
-  value: unknown,
+  row: BrunoTableRuntimeCallbackParameters["row"],
+  value: BrunoTableRuntimeCallbackParameters["value"],
 ): string | undefined {
   if (typeof column.cellClassName === "string") return column.cellClassName;
   if (column.cellClassName === undefined) return undefined;
-  const className = Reflect.apply(column.cellClassName, undefined, [{ row, value }]);
+  const cellClassName = column.cellClassName;
+  const className = cellClassName({ row, value });
   return typeof className === "string" ? className : undefined;
 }
 
 function resolveCellRenderer(
   column: CompiledColumn,
-  row: unknown,
-  value: unknown,
+  row: BrunoTableRuntimeCallbackParameters["row"],
+  value: BrunoTableRuntimeCallbackParameters["value"],
 ): ReactNode | undefined {
   if (column.cellRenderer === undefined) return undefined;
-  return Reflect.apply(column.cellRenderer, undefined, [{ row, value }]) as ReactNode | undefined;
+  const cellRenderer = column.cellRenderer;
+  return cellRenderer({ row, value });
 }
 
 const DEFAULT_LOADING_ROW_COUNT = 5;
@@ -4217,14 +4246,16 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
   return Object.freeze({ children, hasToolbar: hasRenderableChildren(children) });
 }
 
-function sameToolbarNode(previous: ReactNode, next: ReactNode): boolean {
+type BrunoTableToolbarNode = ReactNode | BrunoTableRuntimeValue;
+
+function sameToolbarNode(previous: BrunoTableToolbarNode, next: BrunoTableToolbarNode): boolean {
   if (Object.is(previous, next)) return true;
   if (isValidElement(previous) && isValidElement(next)) {
     if (previous.type !== next.type || previous.key !== next.key) return false;
-    return sameToolbarProps(
-      previous as ReactElement<Readonly<Record<string, unknown>>>,
-      next as ReactElement<Readonly<Record<string, unknown>>>,
-    );
+    if (!isBrunoTableRuntimeRecord(previous.props) || !isBrunoTableRuntimeRecord(next.props)) {
+      return false;
+    }
+    return sameToolbarProps(previous.props, next.props);
   }
   if (Array.isArray(previous) && Array.isArray(next)) {
     return (
@@ -4236,17 +4267,17 @@ function sameToolbarNode(previous: ReactNode, next: ReactNode): boolean {
 }
 
 function sameToolbarProps(
-  previous: ReactElement<Readonly<Record<string, unknown>>>,
-  next: ReactElement<Readonly<Record<string, unknown>>>,
+  previous: BrunoTableRuntimeRecord,
+  next: BrunoTableRuntimeRecord,
 ): boolean {
-  const previousKeys = Object.keys(previous.props);
-  const nextKeys = Object.keys(next.props);
+  const previousKeys = Object.keys(previous);
+  const nextKeys = Object.keys(next);
   if (previousKeys.length !== nextKeys.length) return false;
   return previousKeys.every((key) => {
-    if (!Object.hasOwn(next.props, key)) return false;
+    if (!Object.hasOwn(next, key)) return false;
     return key === "children"
-      ? sameToolbarNode(previous.props[key] as ReactNode, next.props[key] as ReactNode)
-      : Object.is(previous.props[key], next.props[key]);
+      ? sameToolbarNode(previous[key], next[key])
+      : Object.is(previous[key], next[key]);
   });
 }
 

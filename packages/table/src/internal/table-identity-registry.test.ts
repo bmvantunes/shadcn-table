@@ -5,6 +5,7 @@ import type { BrunoTableColumns } from "../public-types";
 
 import { compileColumns } from "./compile-columns";
 import { registerBrunoTableIdentity } from "./table-identity-registry";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
 
 const columns = compileColumns([
   {
@@ -113,20 +114,22 @@ describe("BrunoTable Table Identity registry", () => {
       cellAlign: "start" as const,
       editorLayout: "inline" as const,
       defaultWidth: 120,
-      decodeRuntime: (input: unknown) =>
-        typeof input === "string"
+      decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+        return typeof input === "string"
           ? ({ _tag: "Success", value: input } as const)
-          : ({ _tag: "Failure", message: "Expected text." } as const),
+          : ({ _tag: "Failure", message: "Expected text." } as const);
+      },
       equivalent: (left: string, right: string) => left === right,
       compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
       formatCanonicalText: (value: string) => value,
       parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
       formatDisplay: (value: string) => value,
       encodePersisted: (value: string) => value,
-      decodePersisted: (input: unknown) =>
-        typeof input === "string"
+      decodePersisted: function (this: void, input: BrunoTableRuntimeValue) {
+        return typeof input === "string"
           ? ({ _tag: "Success", value: input } as const)
-          : ({ _tag: "Failure", message: "Expected text." } as const),
+          : ({ _tag: "Failure", message: "Expected text." } as const);
+      },
     };
     const compile = (selection: typeof valueType) =>
       compileColumns([

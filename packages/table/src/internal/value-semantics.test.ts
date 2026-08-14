@@ -7,8 +7,9 @@ import {
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
 } from "../column-helpers";
-import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
+import type { BrunoTableColumns, BrunoTableJsonValue, BrunoTableValueType } from "../public-types";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
+import { brunoTableComputedColumnMarker } from "./computed-column-marker";
 
 type SemanticRow = {
   readonly symbol: string;
@@ -20,6 +21,17 @@ type SemanticRow = {
 };
 
 describe("compiled Column Value Semantics", () => {
+  it("retains the private marker on helper-created computed columns", () => {
+    const column = BrunoTableNumberColumn({
+      columnId: "COL_ID_COMPUTED_MARKER",
+      fields: ["price"],
+      headerName: "Computed Price",
+      valueGetter: ({ row }: { readonly row: Pick<SemanticRow, "price"> }) => row.price * 2,
+    });
+
+    expect(Object.getOwnPropertySymbols(column)).toContain(brunoTableComputedColumnMarker);
+  });
+
   it("compiles one immutable direct plan per normalized column", () => {
     const columns = [
       BrunoTableTextColumn({
@@ -125,7 +137,8 @@ describe("compiled Column Value Semantics", () => {
     expect(number.formatCanonicalText(1.25)).toBe("1.25");
     expect(number.parseCanonicalText("1.25e2")).toEqual({ _tag: "Success", value: 125 });
     expect(number.parseCanonicalText("Infinity")._tag).toBe("Failure");
-    expect(Reflect.apply(number.parseCanonicalText, undefined, [125])).toEqual({
+    // @ts-expect-error Runtime validation intentionally supplies a non-text parser input.
+    expect(number.parseCanonicalText(125)).toEqual({
       _tag: "Failure",
       message: "Expected canonical text input.",
     });
@@ -236,16 +249,21 @@ describe("compiled Column Value Semantics", () => {
       enableSorting: true,
       isEditable: true,
     });
-    const fieldColumn = Reflect.apply(preset, undefined, [
-      { columnId: "COL_ID_PRICE", field: "price" },
-    ]) as Readonly<Record<string, unknown>>;
-    const computedColumn = Reflect.apply(preset, undefined, [
-      {
-        columnId: "COL_ID_NOTIONAL",
-        fields: ["price", "quantity"],
-        valueGetter: ({ row }: { readonly row: SemanticRow }) => row.price * Number(row.quantity),
-      },
-    ]) as Readonly<Record<string, unknown>>;
+    const fieldColumn = preset<
+      SemanticRow,
+      "price",
+      "COL_ID_PRICE",
+      { readonly columnId: "COL_ID_PRICE"; readonly field: "price" }
+    >({ columnId: "COL_ID_PRICE", field: "price" });
+    const computedColumn = preset<
+      SemanticRow,
+      ["price", "quantity"],
+      { readonly columnId: "COL_ID_NOTIONAL" }
+    >({
+      columnId: "COL_ID_NOTIONAL",
+      fields: ["price", "quantity"],
+      valueGetter: ({ row }) => row.price * Number(row.quantity),
+    });
 
     expect(fieldColumn).toMatchObject({
       enableFilter: true,
@@ -255,7 +273,7 @@ describe("compiled Column Value Semantics", () => {
     expect(computedColumn).not.toHaveProperty("enableFilter");
     expect(computedColumn).not.toHaveProperty("enableSorting");
     expect(computedColumn).not.toHaveProperty("isEditable");
-    expect(() => compileColumns([computedColumn as never])).not.toThrow();
+    expect(() => compileColumns([computedColumn])).not.toThrow();
   });
 
   it("snapshots custom Value Type methods and validates their boundary results", () => {
@@ -364,9 +382,9 @@ describe("compiled Column Value Semantics", () => {
     const sparseCustom = {
       ...custom,
       encodePersisted: () => {
-        const sparse: unknown[] = [];
+        const sparse: BrunoTableJsonValue[] = [];
         sparse.length = 1;
-        return sparse as never;
+        return sparse;
       },
     };
     const [sparseCompiled] = compileColumns([
@@ -408,10 +426,10 @@ describe("compiled Column Value Semantics", () => {
       },
       equivalent: () => "false",
       compare: () => 0,
-      formatCanonicalText: (value: unknown) => String(value),
+      formatCanonicalText: () => "invalid",
       parseCanonicalText: () => ({ unexpected: true }),
-      formatDisplay: (value: unknown) => String(value),
-      encodePersisted: (value: unknown) => ({ value: String(value) }),
+      formatDisplay: () => "invalid",
+      encodePersisted: () => ({ value: "invalid" }),
       decodePersisted: () => {
         throw new Error("hostile persistence decoder");
       },
@@ -442,117 +460,122 @@ describe("compiled Column Value Semantics", () => {
   });
 
   it("rejects malformed helper and presentation configuration", () => {
-    const callSelectAtRuntime = BrunoTableSelectColumn as unknown as (
-      options: Readonly<Record<string, unknown>>,
-    ) => unknown;
-    expect(() =>
-      callSelectAtRuntime({
-        columnId: "COL_ID_STATUS",
-        field: "status",
-        headerName: "Status",
-        options: [],
-      }),
-    ).toThrow("options must be a non-empty array");
-    expect(() =>
-      callSelectAtRuntime({
-        columnId: "COL_ID_STATUS",
-        field: "status",
-        headerName: "Status",
-        options: ["open", 1],
-      }),
-    ).toThrow("one homogeneous");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
-        { headerName: "Price", columnId: "COL_ID_PRICE" },
-      ]),
-    ).toThrow("preset does not accept columnId");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn, undefined, [
-        {
-          columnId: "COL_ID_PRICE",
-          field: "price",
-          headerName: "Price",
-          valueType: "text",
-        },
-      ]),
-    ).toThrow("do not accept a valueType override");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn, undefined, [
-        {
-          columnId: "COL_ID_PRICE",
-          field: "price",
-          headerName: "Price",
-          format: "invalid",
-        },
-      ]),
-    ).toThrow("format must be an object");
-    expect(() =>
-      compileColumns([
-        Reflect.apply(BrunoTableNumberColumn, undefined, [
-          {
-            columnId: "COL_ID_PRICE",
-            field: "price",
-            headerName: "Price",
-            format: { maximumFractionDigit: 2 },
-          },
-        ]) as never,
-      ]),
-    ).toThrow("does not accept maximumFractionDigit");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
-        { headerName: "Price", format: "invalid" },
-      ]),
-    ).toThrow("format must be an object");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn, undefined, [
-        {
-          columnId: "COL_ID_PRICE",
-          field: "price",
-          headerName: "Price",
-          mysteryOption: true,
-        },
-      ]),
-    ).toThrow("does not accept mysteryOption");
-    expect(() =>
-      Reflect.apply(BrunoTableSelectColumn, undefined, [
-        {
-          columnId: "COL_ID_STATUS",
-          field: "status",
-          headerName: "Status",
-          options: ["open", "closed"],
-          mysteryOption: true,
-        },
-      ]),
-    ).toThrow("does not accept mysteryOption");
+    const emptySelectColumn = {
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: [],
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally receives an empty select domain.
+      BrunoTableSelectColumn(emptySelectColumn);
+    }).toThrow("options must be a non-empty array");
+
+    const mixedSelectColumn = {
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", 1],
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally receives mixed select values.
+      BrunoTableSelectColumn(mixedSelectColumn);
+    }).toThrow("one homogeneous");
+
+    const invalidPresetDefaults = { headerName: "Price", columnId: "COL_ID_PRICE" } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies a forbidden preset key.
+      BrunoTableNumberColumn.withDefaults(invalidPresetDefaults);
+    }).toThrow("preset does not accept columnId");
+
+    const invalidValueTypeColumn = {
+      columnId: "COL_ID_PRICE",
+      field: "price",
+      headerName: "Price",
+      valueType: "text",
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies a forbidden valueType key.
+      BrunoTableNumberColumn(invalidValueTypeColumn);
+    }).toThrow("do not accept a valueType override");
+
+    const invalidFormatColumn = {
+      columnId: "COL_ID_PRICE",
+      field: "price",
+      headerName: "Price",
+      format: "invalid",
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies a malformed format value.
+      BrunoTableNumberColumn(invalidFormatColumn);
+    }).toThrow("format must be an object");
+
+    const invalidFormatKeyColumn = {
+      columnId: "COL_ID_PRICE",
+      field: "price",
+      headerName: "Price",
+      format: { maximumFractionDigit: 2 },
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies an unknown format key.
+      BrunoTableNumberColumn(invalidFormatKeyColumn);
+    }).toThrow("does not accept maximumFractionDigit");
+
+    const invalidPresetFormat = { headerName: "Price", format: "invalid" } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies a malformed preset format.
+      BrunoTableNumberColumn.withDefaults(invalidPresetFormat);
+    }).toThrow("format must be an object");
+
+    const unknownNumberColumnKey = {
+      columnId: "COL_ID_PRICE",
+      field: "price",
+      headerName: "Price",
+      mysteryOption: true,
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies an unknown helper key.
+      BrunoTableNumberColumn(unknownNumberColumnKey);
+    }).toThrow("does not accept mysteryOption");
+
+    const unknownSelectColumnKey = {
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", "closed"],
+      mysteryOption: true,
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally supplies an unknown helper key.
+      BrunoTableSelectColumn(unknownSelectColumnKey);
+    }).toThrow("does not accept mysteryOption");
     const statusPreset = BrunoTableSelectColumn.withDefaults({
       headerName: "Status",
       options: ["open", "closed"],
     });
-    expect(() =>
-      Reflect.apply(statusPreset, undefined, [
-        {
-          columnId: "COL_ID_STATUS",
-          field: "status",
-          options: ["open"],
-        },
-      ]),
-    ).toThrow("preset options cannot be overridden");
+    const overriddenPresetOptions = {
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      options: ["open"],
+    } as const;
+    expect(() => {
+      // @ts-expect-error Runtime validation intentionally overrides preset options.
+      statusPreset(overriddenPresetOptions);
+    }).toThrow("preset options cannot be overridden");
     for (const [key, message] of [
       ["cellAlign", "cellAlign must be"],
       ["editorLayout", "editorLayout must be"],
       ["width", "width must be"],
     ] as const) {
       expect(() =>
-        Reflect.apply(compileColumns, undefined, [
-          [
-            {
-              columnId: "COL_ID_SYMBOL",
-              field: "symbol",
-              headerName: "Symbol",
-              valueType: "text",
-              [key]: null,
-            },
-          ],
+        compileColumns([
+          {
+            columnId: "COL_ID_SYMBOL",
+            field: "symbol",
+            headerName: "Symbol",
+            valueType: "text",
+            [key]: null,
+          },
         ]),
       ).toThrow(message);
     }
@@ -586,17 +609,21 @@ describe("compiled Column Value Semantics", () => {
       width: 112,
       format: { minimumFractionDigits: 2 },
     };
-    const numberPreset = Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
-      numberDefaults,
-    ]);
+    const numberPreset = BrunoTableNumberColumn.withDefaults(numberDefaults);
     numberDefaults.headerName = "Mutated";
     numberDefaults.width = 999;
     numberDefaults.format.minimumFractionDigits = 9;
     Object.assign(numberDefaults, { columnId: "COL_ID_HIDDEN", field: "price" });
 
-    const numberColumn = Reflect.apply(numberPreset, undefined, [
-      { columnId: "COL_ID_PRICE", field: "price" },
-    ]);
+    const numberColumn = numberPreset<
+      SemanticRow,
+      "price",
+      "COL_ID_PRICE",
+      { readonly columnId: "COL_ID_PRICE"; readonly field: "price" }
+    >({
+      columnId: "COL_ID_PRICE",
+      field: "price",
+    });
     expect(numberColumn).toMatchObject({
       columnId: "COL_ID_PRICE",
       field: "price",
@@ -604,22 +631,28 @@ describe("compiled Column Value Semantics", () => {
       width: 112,
       format: { minimumFractionDigits: 2 },
     });
-    const numberColumnWithoutIdentity = Reflect.apply(numberPreset, undefined, [
-      { field: "price" },
-    ]);
+    const numberColumnWithoutIdentity = (() => {
+      const missingIdentity = { field: "price" } as const;
+      // @ts-expect-error This runtime test deliberately omits the required public identity.
+      return numberPreset(missingIdentity);
+    })();
     expect(numberColumnWithoutIdentity).not.toHaveProperty("columnId");
 
     const selectOptions: ["open", "closed"] = ["open", "closed"];
     const selectDefaults = { headerName: "Status", options: selectOptions };
-    const selectPreset = Reflect.apply(BrunoTableSelectColumn.withDefaults, undefined, [
-      selectDefaults,
-    ]);
+    const selectPreset = BrunoTableSelectColumn.withDefaults(selectDefaults);
     selectOptions.reverse();
     Object.assign(selectDefaults, { valueType: "text" });
 
-    const selectColumn = Reflect.apply(selectPreset, undefined, [
-      { columnId: "COL_ID_STATUS", field: "status" },
-    ]);
+    const selectColumn = selectPreset<
+      SemanticRow,
+      "status",
+      "COL_ID_STATUS",
+      { readonly columnId: "COL_ID_STATUS"; readonly field: "status" }
+    >({
+      columnId: "COL_ID_STATUS",
+      field: "status",
+    });
     expect(selectColumn).toMatchObject({
       columnId: "COL_ID_STATUS",
       field: "status",

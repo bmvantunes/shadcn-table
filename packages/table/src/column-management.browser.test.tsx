@@ -210,6 +210,7 @@ const performanceColumns = [
   },
   ...columns,
   ...Array.from({ length: 155 }, (_unused, index) => ({
+    // SAFETY: The generated identity is always COL_ID_PERF_ followed by a zero-padded decimal suffix.
     columnId: `COL_ID_PERF_${String(index + 1).padStart(3, "0")}` as BrunoTableColumnId,
     field: "name" as const,
     headerName: `Perf ${String(index + 1)}`,
@@ -247,6 +248,7 @@ const wideFirstPreviewColumns = [
     width: 800,
   },
   ...Array.from({ length: 20 }, (_unused, index) => ({
+    // SAFETY: The generated identity is always COL_ID_WIDE_EXPOSED_ followed by a decimal suffix.
     columnId: `COL_ID_WIDE_EXPOSED_${String(index)}` as BrunoTableColumnId,
     field: "name" as const,
     headerName: `Wide exposed ${String(index)}`,
@@ -263,6 +265,7 @@ const retainedFirstPreviewColumns = [
     width: 100,
   },
   ...Array.from({ length: 20 }, (_unused, index) => ({
+    // SAFETY: The generated identity is always COL_ID_RETAINED_EXPOSED_ followed by a decimal suffix.
     columnId: `COL_ID_RETAINED_EXPOSED_${String(index)}` as BrunoTableColumnId,
     field: "name" as const,
     headerName: `Retained exposed ${String(index)}`,
@@ -404,11 +407,13 @@ function mountedColumnExpectationsFromLogicalOrder(
   });
 }
 
-function expectedMatrixLayout(matrixCase: ColumnManagementMatrixCase): Readonly<{
+interface ExpectedMatrixLayout {
   readonly logicalColumnIds: readonly string[];
   readonly pinnedStartIds: readonly string[];
   readonly pinnedEndIds: readonly string[];
-}> {
+}
+
+function expectedMatrixLayout(matrixCase: ColumnManagementMatrixCase): ExpectedMatrixLayout {
   const base = ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"] as const;
   switch (matrixCase.action) {
     case "pin-start":
@@ -3064,12 +3069,9 @@ describe("BrunoTable column management browser surface", () => {
       const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
-          events.includes(event as (typeof events)[number]) && options === true,
+          events.some((candidate) => candidate === event) && options === true,
       );
       expect(relevantAdds).toHaveLength(events.length);
-      const attachedHandlers = new Map(
-        relevantAdds.map(([event, handler]) => [event as string, handler]),
-      );
       for (const event of events) {
         expect(relevantAdds.filter(([addedEvent]) => addedEvent === event)).toHaveLength(1);
         expect(
@@ -3081,7 +3083,7 @@ describe("BrunoTable column management browser surface", () => {
         const matchingRemovals = removeListener.mock.calls.filter(
           ([removedEvent, removedHandler, options]) =>
             removedEvent === event &&
-            removedHandler === attachedHandlers.get(event) &&
+            removedHandler === relevantAdds.find(([addedEvent]) => addedEvent === event)?.[1] &&
             options === true,
         );
         expect(matchingRemovals).toHaveLength(1);
@@ -3089,7 +3091,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(
         removeListener.mock.calls.filter(
           ([event, _handler, options]) =>
-            events.includes(event as (typeof events)[number]) && options === true,
+            events.some((candidate) => candidate === event) && options === true,
         ),
       ).toHaveLength(events.length);
 
@@ -3170,12 +3172,9 @@ describe("BrunoTable column management browser surface", () => {
       const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
-          events.includes(event as (typeof events)[number]) && options === true,
+          events.some((candidate) => candidate === event) && options === true,
       );
       expect(relevantAdds).toHaveLength(events.length);
-      const attachedHandlers = new Map(
-        relevantAdds.map(([event, handler]) => [event as string, handler]),
-      );
       for (const event of events) {
         expect(relevantAdds.filter(([addedEvent]) => addedEvent === event)).toHaveLength(1);
         expect(
@@ -3187,7 +3186,7 @@ describe("BrunoTable column management browser surface", () => {
         const matchingRemovals = removeListener.mock.calls.filter(
           ([removedEvent, removedHandler, options]) =>
             removedEvent === event &&
-            removedHandler === attachedHandlers.get(event) &&
+            removedHandler === relevantAdds.find(([addedEvent]) => addedEvent === event)?.[1] &&
             options === true,
         );
         expect(matchingRemovals).toHaveLength(1);
@@ -3195,7 +3194,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(
         removeListener.mock.calls.filter(
           ([event, _handler, options]) =>
-            events.includes(event as (typeof events)[number]) && options === true,
+            events.some((candidate) => candidate === event) && options === true,
         ),
       ).toHaveLength(events.length);
 

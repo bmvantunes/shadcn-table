@@ -4,14 +4,17 @@
   "type": "module",
   "scripts": {
     "test": "vp test",
+    "test:anti-slop": "node tools/oxlint/anti-slop/tests/run-all.mjs",
     "test:browser": "vp test --project browser --project table-browser --run",
-    "check": "vp check",
+    "check": "vp check && vp run test:anti-slop",
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@tanstack/intent": "^0.3.6",
     "@types/node": "^26.1.1",
     "bumpp": "^11.1.0",
+    "oxlint": "1.78.0",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"

@@ -1,17 +1,27 @@
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
 
-export function readCompiledColumnValue(column: CompiledColumn, row: unknown): unknown {
+interface RuntimeRowObject {
+  readonly [key: string]: BrunoTableRuntimeValue;
+}
+
+export function readCompiledColumnValue<TRow>(
+  column: CompiledColumn,
+  row: TRow,
+): BrunoTableRuntimeValue {
   if (column.kind === "field") return readField(row, column.field);
 
   const dependencies = Object.fromEntries(
     column.fields.map((field) => [field, readField(row, field)] as const),
   );
-  return Reflect.apply(column.valueGetter, undefined, [{ row: dependencies }]);
+  const valueGetter = column.valueGetter;
+  return valueGetter({ row: dependencies });
 }
 
-function readField(row: unknown, field: string): unknown {
+function readField<TRow>(row: TRow, field: string): BrunoTableRuntimeValue {
   if (row === null || row === undefined) {
     throw new TypeError("BrunoTable cannot read a column field from a nullish row.");
   }
-  return Reflect.get(Object(row), field);
+  const objectRow: RuntimeRowObject = Object(row);
+  return objectRow[field];
 }

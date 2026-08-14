@@ -21,6 +21,7 @@ describe("BrunoTableClient server rendering", () => {
       expect(() =>
         renderToStaticMarkup(
           <BrunoTableClient
+            // SAFETY: This test intentionally crosses the public string boundary with malformed runtime identities.
             tableId={tableId as string}
             getRowId={(row) => row.id}
             columns={columns}
@@ -52,6 +53,7 @@ describe("BrunoTableClient server rendering", () => {
           getRowId={(row) => row.id}
           columns={columns}
           clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+          // SAFETY: This fixture deliberately bypasses the compile-time filter budget to exercise runtime rejection.
           initialFilters={initialFilters as never}
           initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
         />,
@@ -80,6 +82,7 @@ describe("BrunoTableClient server rendering", () => {
           columns={columns}
           clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
           initialFilters={
+            // SAFETY: This fixture deliberately bypasses the compile-time operand budget to exercise runtime rejection.
             [
               {
                 columnId: "COL_ID_SCORE",

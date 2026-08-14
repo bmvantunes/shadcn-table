@@ -46,6 +46,8 @@ type Order = {
   readonly revision: bigint;
 };
 
+const emptyOrderRows: readonly Order[] = [];
+
 const columns = [
   {
     columnId: "COL_ID_SYMBOL",
@@ -73,7 +75,7 @@ const columns = [
 
 type Columns = typeof columns;
 
-const directViewServerResult = null as unknown as LiveQueryResult<Order>;
+declare const directViewServerResult: LiveQueryResult<Order>;
 const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
 const directViewServerClient = BrunoTableClient({
   tableId: "view-server-orders",
@@ -314,7 +316,7 @@ describe("BrunoTable public types", () => {
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       getRowId: (row: Order) => row.id,
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -333,7 +335,7 @@ describe("BrunoTable public types", () => {
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       getRowId: (row: Order) => row.id,
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -348,7 +350,7 @@ describe("BrunoTable public types", () => {
       columns,
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }] as const,
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -364,7 +366,7 @@ describe("BrunoTable public types", () => {
       columns,
       getRowId: (row: Order) => row.id,
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -418,7 +420,7 @@ describe("BrunoTable public types", () => {
       columns: noSortingColumns,
       getRowId: (row: Order) => row.id,
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -530,7 +532,7 @@ describe("BrunoTable public types", () => {
       getRowId: (row: Order) => row.id,
       children: "Page-specific toolbar content",
       clientSource: {
-        rows: [] as readonly Order[],
+        rows: emptyOrderRows,
         totalRows: 0,
         version: 1,
         status: "ready",
@@ -903,7 +905,7 @@ const invalidEmptyComputedDependencies = [
     headerName: "Double quantity",
     // @ts-expect-error no Value Type overload accepts an empty dependency tuple.
     valueType: "bigint",
-    // @ts-expect-error no getter overload accepts an empty dependency tuple.
+    // A zero-parameter getter remains assignable; the empty dependency tuple is rejected above.
     valueGetter: () => 0n,
   }),
 ] satisfies BrunoTableColumns<Order>;
@@ -989,7 +991,7 @@ const invalidPaginatedClient = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1017,7 +1019,7 @@ const clientWithoutRowId = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1063,7 +1065,7 @@ const editableClientWithoutSave = {
   editable: true,
   getRowVersion: (row: Order) => row.revision,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1083,7 +1085,7 @@ const readOnlyClientWithSave = {
   getRowVersion: (row: Order) => row.revision,
   onSaveEdits: () => Promise.resolve(),
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1111,7 +1113,7 @@ const invalidClientWithoutEditableColumns = {
   getRowVersion: (row: Order) => row.revision,
   onSaveEdits: () => Promise.resolve(),
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1136,7 +1138,7 @@ const editableClientWithGrouping = {
   onSaveEdits: () => Promise.resolve(),
   groupRowsColumn: { headerName: "Rows" },
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1185,7 +1187,7 @@ const clientWithoutInitialOrderBy = {
   columns,
   getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",
@@ -1203,7 +1205,7 @@ const invalidInitialOrderByWithoutSortingCapability = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: emptyOrderRows,
     totalRows: 0,
     version: 1,
     status: "ready",

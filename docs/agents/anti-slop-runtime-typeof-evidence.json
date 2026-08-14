@@ -1,0 +1,889 @@
+{
+  "capture": "intermediate anti-before-rule-approval",
+  "code": "anti-slop(no-runtime-typeof)",
+  "count": 147,
+  "evidence": [
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 399,
+      "column": 35,
+      "source": "if (hasAggregatePresentation && typeof options[\"aggFunc\"] !== \"string\") {"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 405,
+      "column": 7,
+      "source": "if (typeof aggFunc !== \"string\") {"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1121,
+      "column": 36,
+      "source": "selectOptions.some((option) => typeof option !== \"number\" || !Number.isFinite(option))"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1228,
+      "column": 27,
+      "source": "if (!isRecord(input) || typeof input[\"type\"] !== \"string\") {"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1235,
+      "column": 14,
+      "source": "return typeof value === \"string\" ? value : undefined;"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1237,
+      "column": 11,
+      "source": "if (typeof value !== \"string\" || value.trim().length === 0) return undefined;"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1242,
+      "column": 14,
+      "source": "return typeof value === \"string\" && /^-?\\d+$/u.test(value) ? BigInt(value) : undefined;"
+    },
+    {
+      "file": "packages/table/src/column-helpers.ts",
+      "line": 1244,
+      "column": 14,
+      "source": "return typeof value === \"boolean\" ? value : undefined;"
+    },
+    {
+      "file": "packages/table/src/public-types.test-d.ts",
+      "line": 758,
+      "column": 5,
+      "source": "typeof input === \"object\" &&"
+    },
+    {
+      "file": "packages/table/src/public-types.test-d.ts",
+      "line": 761,
+      "column": 5,
+      "source": "typeof input.minor === \"bigint\""
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 42,
+      "column": 7,
+      "source": "if (typeof toolName === \"string\" && EDIT_TOOLS.has(toolName) && !hasLoad(stateFile)) {"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 60,
+      "column": 10,
+      "source": "return typeof event?.cwd === \"string\" ? event.cwd : process.cwd();"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 119,
+      "column": 10,
+      "source": "return typeof description === \"string\" ? description.replace(/\\s+/g, \" \").trim() : \"\";"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 151,
+      "column": 21,
+      "source": "const sessionId = typeof event?.session_id === \"string\" ? event.session_id : \"unknown\";"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 152,
+      "column": 15,
+      "source": "const cwd = typeof event?.cwd === \"string\" ? event.cwd : process.cwd();"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 160,
+      "column": 17,
+      "source": "if (!event || typeof event !== \"object\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 165,
+      "column": 5,
+      "source": "typeof toolInput === \"string\" ? safeCommandFromString(toolInput) : commandFromObject(toolInput);"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 167,
+      "column": 18,
+      "source": "if (!parsed || typeof command !== \"string\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 172,
+      "column": 7,
+      "source": "if (typeof command !== \"string\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 183,
+      "column": 19,
+      "source": "return value && typeof value === \"object\" ? value.command : undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-codex-gate.mjs",
+      "line": 189,
+      "column": 12,
+      "source": "return typeof command === \"string\" ? command : value;"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.test.ts",
+      "line": 289,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.test.ts",
+      "line": 299,
+      "column": 9,
+      "source": "typeof input === \"object\" && input !== null && \"value\" in input"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 42,
+      "column": 7,
+      "source": "if (typeof toolName === \"string\" && EDIT_TOOLS.has(toolName) && !hasLoad(stateFile)) {"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 60,
+      "column": 10,
+      "source": "return typeof event?.cwd === \"string\" ? event.cwd : process.cwd();"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 119,
+      "column": 10,
+      "source": "return typeof description === \"string\" ? description.replace(/\\s+/g, \" \").trim() : \"\";"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 151,
+      "column": 21,
+      "source": "const sessionId = typeof event?.session_id === \"string\" ? event.session_id : \"unknown\";"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 152,
+      "column": 15,
+      "source": "const cwd = typeof event?.cwd === \"string\" ? event.cwd : process.cwd();"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 160,
+      "column": 17,
+      "source": "if (!event || typeof event !== \"object\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 165,
+      "column": 5,
+      "source": "typeof toolInput === \"string\" ? safeCommandFromString(toolInput) : commandFromObject(toolInput);"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 167,
+      "column": 18,
+      "source": "if (!parsed || typeof command !== \"string\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 172,
+      "column": 7,
+      "source": "if (typeof command !== \"string\") return undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 183,
+      "column": 19,
+      "source": "return value && typeof value === \"object\" ? value.command : undefined;"
+    },
+    {
+      "file": ".intent/hooks/intent-claude-gate.mjs",
+      "line": 189,
+      "column": 12,
+      "source": "return typeof command === \"string\" ? command : value;"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 140,
+      "column": 7,
+      "source": "throw new ColumnConfigurationError(`BrunoTable columnId must be unique: ${columnId}`);"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 167,
+      "column": 28,
+      "source": "throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 176,
+      "column": 5,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 177,
+      "column": 5,
+      "source": ""
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 185,
+      "column": 26,
+      "source": "`BrunoTable cellClassName must be a string or function when provided: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 199,
+      "column": 9,
+      "source": "`BrunoTable column cannot combine field with fields or valueGetter: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 206,
+      "column": 26,
+      "source": "`BrunoTable field must be a non-empty string for column: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 206,
+      "column": 61,
+      "source": "`BrunoTable field must be a non-empty string for column: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 213,
+      "column": 9,
+      "source": "`BrunoTable isEditable must be a boolean or function when provided: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 220,
+      "column": 9,
+      "source": "`BrunoTable enableFilter must be a boolean when provided: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 227,
+      "column": 9,
+      "source": "`BrunoTable enableSorting must be a boolean when provided: ${columnId}`,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 290,
+      "column": 9,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 312,
+      "column": 9,
+      "source": ");"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 378,
+      "column": 7,
+      "source": "fields,"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 430,
+      "column": 27,
+      "source": "if (hasValueFormatter && !isRuntimeCallback(valueFormatter)) {"
+    },
+    {
+      "file": "packages/table/src/internal/compile-columns.ts",
+      "line": 443,
+      "column": 7,
+      "source": ");"
+    },
+    {
+      "file": "packages/table/src/effect.ts",
+      "line": 137,
+      "column": 7,
+      "source": "if (typeof text !== \"string\") {"
+    },
+    {
+      "file": "packages/table/src/effect.ts",
+      "line": 223,
+      "column": 9,
+      "source": "typeof value !== \"string\""
+    },
+    {
+      "file": "packages/table/src/effect.ts",
+      "line": 756,
+      "column": 35,
+      "source": "if (hasAggregatePresentation && typeof options[\"aggFunc\"] !== \"string\") {"
+    },
+    {
+      "file": "packages/table/src/internal/table-identity-registry.ts",
+      "line": 100,
+      "column": 7,
+      "source": "typeof candidate === \"function\" ? valueSemanticsFunctionIdentity(candidate) : \"missing\","
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 201,
+      "column": 7,
+      "source": "const format = overrides.format;"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 255,
+      "column": 7,
+      "source": "});"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 281,
+      "column": 7,
+      "source": "throw new ValueSemanticsConfigurationError("
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 286,
+      "column": 7,
+      "source": "throw new ValueSemanticsConfigurationError(\"BrunoTable Value Type filterFamily is invalid.\");"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 303,
+      "column": 7,
+      "source": "if (!hasRuntimeValueTypeCallbacks(selection)) {"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 356,
+      "column": 45,
+      "source": "if (descriptor === undefined || !(\"value\" in descriptor) || !descriptor.enumerable) {"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 389,
+      "column": 7,
+      "source": "encodePersisted: (value) => persisted(\"text\", assertString(value)),"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 398,
+      "column": 9,
+      "source": "function createNumberValueType(): RuntimeValueTypeDescriptor {"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 415,
+      "column": 7,
+      "source": "parseCanonicalText: parseNumberText,"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 426,
+      "column": 9,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 445,
+      "column": 7,
+      "source": "encodePersisted: (value) => persisted(\"bigint\", assertBigInt(value).toString(10)),"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 454,
+      "column": 9,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 473,
+      "column": 7,
+      "source": "},"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 491,
+      "column": 9,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 605,
+      "column": 9,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 668,
+      "column": 27,
+      "source": "return ("
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 721,
+      "column": 5,
+      "source": "typeof value[\"encodePersisted\"] === \"function\" &&"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 722,
+      "column": 5,
+      "source": "typeof value[\"decodePersisted\"] === \"function\""
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 723,
+      "column": 5,
+      "source": ");"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 724,
+      "column": 5,
+      "source": "}"
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 725,
+      "column": 5,
+      "source": ""
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 726,
+      "column": 5,
+      "source": ""
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 727,
+      "column": 5,
+      "source": ""
+    },
+    {
+      "file": "packages/table/src/internal/value-semantics.ts",
+      "line": 728,
+      "column": 5,
+      "source": ""
+    },
+    {
+      "file": "packages/table/src/internal/client-row-model.test.ts",
+      "line": 358,
+      "column": 7,
+      "source": "typeof input.address === \"string\";"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 771,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 781,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 851,
+      "column": 7,
+      "source": "typeof input.address === \"string\";"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 875,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 996,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1010,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1109,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1119,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1492,
+      "column": 55,
+      "source": "setRequiredRange.mock.calls.some(([start]) => typeof start === \"number\" && start > 0),"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1507,
+      "column": 62,
+      "source": "replacementRequiredRange.mock.calls.every(([, end]) => typeof end === \"number\" && end <= 2),"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 1787,
+      "column": 15,
+      "source": "if (typeof property === \"string\" && /^\\d+$/.test(property)) sourceIndexRead(property);"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 2093,
+      "column": 15,
+      "source": "if (typeof property === \"string\" && /^\\d+$/.test(property)) sourceIndexRead(property);"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 2233,
+      "column": 15,
+      "source": "if (typeof property === \"string\" && /^\\d+$/.test(property)) sourceIndexRead(property);"
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 3401,
+      "column": 9,
+      "source": "typeof input === \"string\""
+    },
+    {
+      "file": "packages/table/src/bruno-table-client.browser.test.tsx",
+      "line": 5427,
+      "column": 13,
+      "source": "if (typeof property === \"string\" && /^\\d+$/.test(property)) sourceIndexRead(property);"
+    },
+    {
+      "file": "packages/table/vite.config.ts",
+      "line": 50,
+      "column": 13,
+      "source": "if (typeof rootExport !== \"string\" || !rootExport.endsWith(\".mjs\")) {"
+    },
+    {
+      "file": "packages/table/vite.config.ts",
+      "line": 53,
+      "column": 13,
+      "source": "if (typeof effectExport !== \"string\" || !effectExport.endsWith(\".mjs\")) {"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 96,
+      "column": 11,
+      "source": "if (typeof columnId !== \"string\" || !sortable.has(columnId) || seen.has(columnId)) continue;"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 192,
+      "column": 7,
+      "source": "if (typeof filter[\"columnId\"] === \"string\") target.add(filter[\"columnId\"]);"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 405,
+      "column": 7,
+      "source": "if (typeof columnId !== \"string\") return undefined;"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 497,
+      "column": 25,
+      "source": "const textOperand = typeof operand === \"string\" ? operand : undefined;"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 605,
+      "column": 18,
+      "source": "const column = typeof columnId === \"string\" ? columnsById.get(columnId) : undefined;"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 648,
+      "column": 7,
+      "source": "if (typeof operand !== \"string\") return filter[\"type\"] === \"notContains\";"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 668,
+      "column": 9,
+      "source": "if (typeof candidate !== \"object\" || candidate === null) continue;"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 711,
+      "column": 59,
+      "source": "(key) => !Object.hasOwn(filter, key) || (supported && typeof filter[key] === \"boolean\"),"
+    },
+    {
+      "file": "packages/table/src/internal/grid-query.ts",
+      "line": 762,
+      "column": 11,
+      "source": "if (typeof key !== \"string\" || key === \"length\") continue;"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 55,
+      "column": 12,
+      "source": "get: typeof value === \"function\" ? value : () => value,"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 66,
+      "column": 9,
+      "source": "typeof options.scrollWidth === \"function\" ? options.scrollWidth : () => options.scrollWidth,"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 75,
+      "column": 9,
+      "source": "if (typeof options.scrollLeft === \"number\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 105,
+      "column": 11,
+      "source": "if (typeof listener === \"function\") addEventListener(type, listener);"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 111,
+      "column": 11,
+      "source": "if (typeof listener === \"function\") removeEventListener(type, listener);"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.test.ts",
+      "line": 129,
+      "column": 9,
+      "source": "if (typeof optionsOrX === \"number\") {"
+    },
+    {
+      "file": "packages/table/scripts/assert-build-output.mjs",
+      "line": 321,
+      "column": 7,
+      "source": "if (typeof value === \"string\") {"
+    },
+    {
+      "file": "packages/table/scripts/assert-build-output.mjs",
+      "line": 329,
+      "column": 7,
+      "source": "if (typeof value === \"object\" && value !== null) {"
+    },
+    {
+      "file": "packages/table/scripts/assert-build-output.mjs",
+      "line": 337,
+      "column": 7,
+      "source": "if (typeof actual !== \"object\" || actual === null || Array.isArray(actual)) {"
+    },
+    {
+      "file": "packages/shadcn/src/components/sidebar.tsx",
+      "line": 68,
+      "column": 25,
+      "source": "const openState = typeof value === \"function\" ? value(open) : value;"
+    },
+    {
+      "file": "packages/shadcn/src/components/sidebar.tsx",
+      "line": 530,
+      "column": 7,
+      "source": "if (typeof tooltip === \"string\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 430,
+      "column": 9,
+      "source": "if (typeof deferredLogicalScrollLeft === \"number\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 546,
+      "column": 34,
+      "source": "if (this.element !== null && typeof ResizeObserver !== \"undefined\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 550,
+      "column": 34,
+      "source": "if (this.element !== null && typeof MutationObserver !== \"undefined\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 581,
+      "column": 11,
+      "source": "if (typeof ResizeObserver !== \"undefined\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 806,
+      "column": 7,
+      "source": "typeof reconciliation === \"number\" ? reconciliation : undefined;"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 1738,
+      "column": 7,
+      "source": "if (typeof element.scrollTo === \"function\") {"
+    },
+    {
+      "file": "packages/table/src/internal/virtual-viewport.ts",
+      "line": 1746,
+      "column": 7,
+      "source": "if (typeof element.scrollTo === \"function\") {"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 216,
+      "column": 7,
+      "source": "if (typeof document === \"undefined\") return \"ltr\";"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 3696,
+      "column": 5,
+      "source": "typeof column.cellClassName === \"function\" ||"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 3712,
+      "column": 9,
+      "source": "const formatted = valueFormatter({ row, value });"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 3746,
+      "column": 5,
+      "source": "column.valueType === \"boolean\" &&"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 3758,
+      "column": 7,
+      "source": "): string | undefined {"
+    },
+    {
+      "file": "packages/table/src/internal/bruno-table-view.tsx",
+      "line": 3761,
+      "column": 10,
+      "source": "const cellClassName = column.cellClassName;"
+    },
+    {
+      "file": "packages/shadcn/src/components/combobox.tsx",
+      "line": 321,
+      "column": 7,
+      "source": "if (typeof node === \"string\" || typeof node === \"number\") {"
+    },
+    {
+      "file": "packages/shadcn/src/components/combobox.tsx",
+      "line": 321,
+      "column": 35,
+      "source": "if (typeof node === \"string\" || typeof node === \"number\") {"
+    },
+    {
+      "file": "packages/table/src/internal/grid-runtime.test.ts",
+      "line": 20,
+      "column": 71,
+      "source": "typeof value === \"object\" && value !== null && \"text\" in value && typeof value.text === \"string\""
+    },
+    {
+      "file": "packages/shadcn/vite.config.ts",
+      "line": 54,
+      "column": 19,
+      "source": "if (typeof target !== \"string\" || !target.endsWith(\".mjs\")) {"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 730,
+      "column": 7,
+      "source": "if (typeof property !== \"string\" || !/^(0|[1-9]\\d*)$/u.test(property)) return undefined;"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 930,
+      "column": 9,
+      "source": "if (typeof rowId !== \"string\" || rowId.length === 0) {"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 998,
+      "column": 9,
+      "source": "if (typeof rowId !== \"string\" || rowId.length === 0) {"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 1409,
+      "column": 7,
+      "source": "if (typeof totalRows !== \"number\" || !Number.isSafeInteger(totalRows) || totalRows < 0) {"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 1418,
+      "column": 7,
+      "source": "if (typeof version !== \"number\" || !Number.isFinite(version)) {"
+    },
+    {
+      "file": "packages/table/src/internal/client-source-adapter.ts",
+      "line": 1483,
+      "column": 41,
+      "source": "return isBrunoTableRetryRun(run) && typeof pending === \"boolean\""
+    },
+    {
+      "file": "packages/shadcn/scripts/assert-build-output.mjs",
+      "line": 82,
+      "column": 3,
+      "source": "typeof publicModule.Button !== \"function\" ||"
+    },
+    {
+      "file": "packages/shadcn/scripts/assert-build-output.mjs",
+      "line": 83,
+      "column": 3,
+      "source": "typeof publicModule.buttonVariants !== \"function\""
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 241,
+      "column": 9,
+      "source": ": (label ?? itemConfig?.label)"
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 333,
+      "column": 28,
+      "source": ": String(item.value)}"
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 427,
+      "column": 7,
+      "source": "}"
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 429,
+      "column": 14,
+      "source": "return configLabelKey in config ? config[configLabelKey] : config[key];"
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 443,
+      "column": 10,
+      "source": ".replaceAll(\"\\r\", \"\\\\d \")"
+    },
+    {
+      "file": "packages/shadcn/src/components/chart.tsx",
+      "line": 443,
+      "column": 39,
+      "source": ".replaceAll(\"\\r\", \"\\\\d \")"
+    }
+  ]
+}

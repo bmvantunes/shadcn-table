@@ -9,6 +9,8 @@ type Row = {
   readonly revision: bigint;
 };
 
+const emptyRows: readonly Row[] = [];
+
 const columns = [
   {
     columnId: "COL_ID_NAME",
@@ -53,7 +55,7 @@ const sortFreeColumns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const clientSource = {
-  rows: [] as readonly Row[],
+  rows: emptyRows,
   totalRows: 0,
   version: 1,
   status: "ready" as const,

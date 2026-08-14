@@ -4,6 +4,7 @@ import * as React from "react";
 import * as RechartsPrimitive from "recharts";
 import type { TooltipValueType } from "recharts";
 
+import { isChartPayload, readChartPayloadProperty } from "#lib/chart-payload";
 import { cn } from "#lib/utils";
 
 // Format: { THEME_NAME: CSS_SELECTOR }
@@ -90,10 +91,18 @@ const SAFE_DIV_PROPS = new Set([
   "vocab",
 ]);
 type TooltipNameType = number | string;
+interface ChartTooltipNameResolverInput {
+  readonly [key: string]: React.ReactNode;
+}
+type ChartTooltipNameResolver = (obj: ChartTooltipNameResolverInput) => React.ReactNode;
 type ChartContentDomProps = Omit<
   React.ComponentProps<"div">,
   "children" | "dangerouslySetInnerHTML"
 >;
+
+interface ChartSafeDivProps extends ChartContentDomProps {
+  [key: string]: ChartContentDomProps[keyof ChartContentDomProps];
+}
 
 export type ChartConfig = Record<
   string,
@@ -173,6 +182,7 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 ${prefix} [data-chart="${escapeCssString(id)}"] {
 ${colorConfig
   .map(([key, itemConfig]) => {
+    // SAFETY: Object.entries(THEMES) supplies the exact keys declared by every chart theme entry.
     const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ?? itemConfig.color;
     return isSafeCssCustomPropertySuffix(key) && isSafeCssColor(color)
       ? `  --color-${key}: ${color.trim()};`
@@ -295,6 +305,7 @@ function ChartTooltipContent({
                             },
                           )}
                           style={
+                            // SAFETY: React CSS custom properties are represented by CSSProperties at this style boundary.
                             {
                               "--color-bg": indicatorColor,
                               "--color-border": indicatorColor,
@@ -392,32 +403,35 @@ function ChartLegendContent({
   );
 }
 
-function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key: string) {
-  if (typeof payload !== "object" || payload === null) {
+function getPayloadConfigFromPayload<TPayload>(
+  config: ChartConfig,
+  payload: TPayload | null | undefined,
+  key: string,
+) {
+  if (!isChartPayload(payload)) {
     return undefined;
   }
 
-  const payloadPayload =
-    "payload" in payload && typeof payload.payload === "object" && payload.payload !== null
-      ? payload.payload
-      : undefined;
+  const payloadValue = readChartPayloadProperty(payload, "payload");
+  const payloadPayload = isChartPayload(payloadValue) ? payloadValue : undefined;
 
   let configLabelKey: string = key;
 
-  if (key in payload && typeof payload[key as keyof typeof payload] === "string") {
-    configLabelKey = payload[key as keyof typeof payload] as string;
-  } else if (
-    payloadPayload &&
-    key in payloadPayload &&
-    typeof payloadPayload[key as keyof typeof payloadPayload] === "string"
-  ) {
-    configLabelKey = payloadPayload[key as keyof typeof payloadPayload] as string;
+  const payloadKeyValue = readChartPayloadProperty(payload, key);
+  const nestedPayloadKeyValue =
+    payloadPayload === undefined ? undefined : readChartPayloadProperty(payloadPayload, key);
+  if (typeof payloadKeyValue === "string") {
+    configLabelKey = payloadKeyValue;
+  } else if (typeof nestedPayloadKeyValue === "string") {
+    configLabelKey = nestedPayloadKeyValue;
   }
 
   return configLabelKey in config ? config[configLabelKey] : config[key];
 }
 
-function getPayloadKey(value: unknown): string {
+function getPayloadKey(
+  value: TooltipNameType | ChartTooltipNameResolver | null | undefined,
+): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "value";
 }
 
@@ -492,8 +506,11 @@ function hasBalancedParentheses(value: string): boolean {
   return depth === 0;
 }
 
-function getSafeDivProps(props: object, allowDomEvents: boolean): ChartContentDomProps {
-  const safeProps: Record<string, unknown> = {};
+function getSafeDivProps(
+  props: ChartContentDomProps,
+  allowDomEvents: boolean,
+): ChartContentDomProps {
+  const safeProps: ChartSafeDivProps = {};
 
   for (const [key, value] of Object.entries(props)) {
     // Recharts Legend `on*` callbacks receive (entry, index, event), so they
@@ -507,7 +524,7 @@ function getSafeDivProps(props: object, allowDomEvents: boolean): ChartContentDo
     }
   }
 
-  return safeProps as ChartContentDomProps;
+  return safeProps;
 }
 
 export {

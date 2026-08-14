@@ -53,7 +53,7 @@ const sortFreeColumns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const clientSource = {
-  rows: [] as readonly Row[],
+  rows: [] satisfies readonly Row[],
   totalRows: 0,
   version: 1,
   status: "ready" as const,
@@ -69,7 +69,7 @@ const whitespaceIdentityColumns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const invalidWhitespaceIdentityClient = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof whitespaceIdentityColumns>
     tableId="TABLE_ID_EMITTED_JSX_INVALID_WHITESPACE_IDENTITY"
     getRowId={(row) => row.id}
     // @ts-expect-error Emitted Client declarations validate raw identities after tuple inference.
@@ -81,7 +81,7 @@ const invalidWhitespaceIdentityClient = (
 void invalidWhitespaceIdentityClient;
 
 const validClient = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_VALID"
     getRowId={(row) => row.id}
     columns={columns}
@@ -93,7 +93,7 @@ void validClient;
 
 const missingOrder = (
   // @ts-expect-error Emitted JSX Client usage requires initialOrderBy.
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_MISSING_ORDER"
     getRowId={(row) => row.id}
     columns={columns}
@@ -103,7 +103,7 @@ const missingOrder = (
 void missingOrder;
 
 const emptyOrder = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_EMPTY_ORDER"
     getRowId={(row) => row.id}
     columns={columns}
@@ -115,7 +115,7 @@ const emptyOrder = (
 void emptyOrder;
 
 const unknownOrder = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_UNKNOWN_ORDER"
     getRowId={(row) => row.id}
     columns={columns}
@@ -129,7 +129,7 @@ const unknownOrder = (
 void unknownOrder;
 
 const misspelledOrder = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_MISSPELLED_ORDER"
     getRowId={(row) => row.id}
     columns={columns}
@@ -143,7 +143,7 @@ const misspelledOrder = (
 void misspelledOrder;
 
 const computedOrder = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_COMPUTED_ORDER"
     getRowId={(row) => row.id}
     columns={columns}
@@ -157,7 +157,7 @@ const computedOrder = (
 void computedOrder;
 
 const nonsortableOrder = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof nonsortableColumns>
     tableId="TABLE_ID_EMITTED_JSX_NONSORTABLE_ORDER"
     getRowId={(row) => row.id}
     columns={nonsortableColumns}
@@ -171,7 +171,7 @@ const nonsortableOrder = (
 void nonsortableOrder;
 
 const sortFreeClient = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof sortFreeColumns>
     tableId="TABLE_ID_EMITTED_JSX_SORT_FREE"
     getRowId={(row) => row.id}
     columns={sortFreeColumns}
@@ -183,7 +183,7 @@ const sortFreeClient = (
 void sortFreeClient;
 
 const readOnlyWithEditOperations = (
-  <BrunoTableClient
+  <BrunoTableClient<Row, typeof columns>
     tableId="TABLE_ID_EMITTED_JSX_READ_ONLY"
     getRowId={(row) => row.id}
     columns={columns}

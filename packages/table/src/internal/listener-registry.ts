@@ -15,9 +15,11 @@ export function installTableScopedListener<T>(
     listenersByTableId.set(tableId, listeners);
   }
   listeners.add(listener);
+  // SAFETY: The WeakMap is keyed only by Set identity; listener element types remain owned by listenersByTableId.
   let registrations = registrationCounts.get(listeners as Set<unknown>);
   if (registrations === undefined) {
     registrations = new Map<unknown, number>();
+    // SAFETY: The WeakMap is keyed only by Set identity; listener element types remain owned by listenersByTableId.
     registrationCounts.set(listeners as Set<unknown>, registrations);
   }
   registrations.set(listener, (registrations.get(listener) ?? 0) + 1);
@@ -34,6 +36,7 @@ export function installTableScopedListener<T>(
       registrations?.set(listener, registrationCount - 1);
     }
     if (registrations?.size === 0) {
+      // SAFETY: The WeakMap is keyed only by Set identity; listener element types remain owned by listenersByTableId.
       registrationCounts.delete(listeners as Set<unknown>);
     }
     if (listeners?.size === 0 && listenersByTableId.get(tableId) === listeners) {

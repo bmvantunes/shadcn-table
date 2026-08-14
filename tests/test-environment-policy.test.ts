@@ -46,6 +46,7 @@ describe("test environment policy", () => {
 
     const violations: string[] = [];
     for (const manifestPath of manifests) {
+      // SAFETY: The repository manifest paths are known package.json files; malformed JSON fails at this boundary.
       const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
         string,
         Record<string, string> | undefined

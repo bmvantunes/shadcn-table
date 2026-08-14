@@ -10,5 +10,6 @@
     },
     "types": ["node", "react"]
   },
+  "exclude": ["tests/emitted-consumer", "tests/emitted-effect-consumer"],
   "include": ["src", "vite.config.ts"]
 }

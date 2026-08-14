@@ -118,6 +118,7 @@ function SidebarProvider({
       <div
         data-slot="sidebar-wrapper"
         style={
+          // SAFETY: React CSS custom properties are represented by CSSProperties at this style boundary.
           {
             "--sidebar-width": SIDEBAR_WIDTH,
             "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
@@ -180,6 +181,7 @@ function Sidebar({
             className,
           )}
           style={
+            // SAFETY: React CSS custom properties are represented by CSSProperties at this style boundary.
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
             } as React.CSSProperties
@@ -608,6 +610,7 @@ function SidebarMenuSkeleton({
         className="h-4 max-w-(--skeleton-width) flex-1"
         data-sidebar="menu-skeleton-text"
         style={
+          // SAFETY: React CSS custom properties are represented by CSSProperties at this style boundary.
           {
             "--skeleton-width": "70%",
           } as React.CSSProperties

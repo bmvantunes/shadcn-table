@@ -382,12 +382,13 @@ export class BrunoTableViewportRuntime {
     rowId?: string,
   ): void => {
     if (this.element === null) return;
-    this.pendingReveal = Object.freeze({
+    const pendingReveal: PendingReveal = {
       rowIndex,
       columnId,
       region,
-      ...(rowId === undefined ? {} : { rowId }),
-    });
+    };
+    if (rowId !== undefined) pendingReveal.rowId = rowId;
+    this.pendingReveal = Object.freeze(pendingReveal);
     this.schedulePublish();
   };
 
@@ -1328,6 +1329,13 @@ export class BrunoTableViewportRuntime {
   }
 }
 
+interface PendingReveal {
+  rowIndex: number;
+  columnId: string;
+  region: "header" | "body";
+  rowId?: string;
+}
+
 function finiteDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
@@ -1674,15 +1682,14 @@ function physicalScrollMaximum(layout: ViewportLayout, viewportHeight: number): 
   return Math.max(layout.physicalRowHeight + layout.headerHeight - viewportHeight, 0);
 }
 
-function horizontalMetrics(
-  layout: ViewportLayout,
-  viewportWidth: number,
-): Readonly<{
+interface HorizontalMetrics {
   suspendPinning: boolean;
   contentWidth: number;
   viewportWidth: number;
   maximum: number;
-}> {
+}
+
+function horizontalMetrics(layout: ViewportLayout, viewportWidth: number): HorizontalMetrics {
   const suspendPinning = shouldSuspendPinning(layout, viewportWidth);
   const contentWidth = suspendPinning ? layout.suspendedCenterWidth : layout.centerWidth;
   const viewport = suspendPinning

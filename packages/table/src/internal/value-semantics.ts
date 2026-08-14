@@ -10,13 +10,43 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
+import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
 
 type SemanticsOverrides = {
-  readonly cellAlign?: unknown;
-  readonly editorLayout?: unknown;
-  readonly width?: unknown;
-  readonly format?: unknown;
+  readonly cellAlign?: BrunoTableRuntimeValue;
+  readonly editorLayout?: BrunoTableRuntimeValue;
+  readonly width?: BrunoTableRuntimeValue;
+  readonly format?: BrunoTableRuntimeValue;
 };
+
+/**
+ * The erased callback contract at the custom Value Type boundary.
+ *
+ * Custom descriptors are validated before these callbacks are owned by the compiled semantics
+ * plan. Their outputs remain in the complete runtime value domain until the corresponding result
+ * validator narrows them to the public contract.
+ */
+interface RuntimeValueTypeCallbacks {
+  readonly decodeRuntime: (this: void, input: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+  readonly equivalent: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => BrunoTableRuntimeValue;
+  readonly compare: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => BrunoTableRuntimeValue;
+  readonly formatCanonicalText: (
+    this: void,
+    value: BrunoTableRuntimeValue,
+  ) => BrunoTableRuntimeValue;
+  readonly parseCanonicalText: (this: void, text: string) => BrunoTableRuntimeValue;
+  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+  readonly decodePersisted: (this: void, input: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+}
 
 type RuntimeValueTypeDescriptor = {
   readonly codecId: string;
@@ -27,14 +57,31 @@ type RuntimeValueTypeDescriptor = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
   readonly aggregateResults: BrunoTableAggregateResults;
-  readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
-  readonly equivalent: (left: unknown, right: unknown) => boolean;
-  readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
-  readonly formatCanonicalText: (value: unknown) => string;
-  readonly parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>;
-  readonly formatDisplay: (value: unknown) => string;
-  readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
-  readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly decodeRuntime: (
+    this: void,
+    input: BrunoTableRuntimeValue,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+  readonly equivalent: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => boolean;
+  readonly compare: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => BrunoTableOrdering;
+  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly parseCanonicalText: (
+    this: void,
+    text: string,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableJsonValue;
+  readonly decodePersisted: (
+    this: void,
+    input: BrunoTableRuntimeValue,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
 };
 
 export type CompiledColumnValueSemantics = {
@@ -46,14 +93,31 @@ export type CompiledColumnValueSemantics = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
-  readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
-  readonly equivalent: (left: unknown, right: unknown) => boolean;
-  readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
-  readonly formatCanonicalText: (value: unknown) => string;
-  readonly parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>;
-  readonly formatDisplay: (value: unknown) => string;
-  readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
-  readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly decodeRuntime: (
+    this: void,
+    input: BrunoTableRuntimeValue,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+  readonly equivalent: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => boolean;
+  readonly compare: (
+    this: void,
+    left: BrunoTableRuntimeValue,
+    right: BrunoTableRuntimeValue,
+  ) => BrunoTableOrdering;
+  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly parseCanonicalText: (
+    this: void,
+    text: string,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableJsonValue;
+  readonly decodePersisted: (
+    this: void,
+    input: BrunoTableRuntimeValue,
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
 };
 
 export class ValueSemanticsConfigurationError extends TypeError {}
@@ -103,7 +167,7 @@ const builtInValueTypes: Readonly<Record<BrunoTableBuiltInValueType, RuntimeValu
   });
 
 export function compileColumnValueSemantics(
-  selection: unknown,
+  selection: BrunoTableRuntimeValue,
   overrides: SemanticsOverrides,
 ): CompiledColumnValueSemantics {
   const builtInSelection = isBuiltInValueType(selection) ? selection : undefined;
@@ -141,7 +205,7 @@ export function compileColumnValueSemantics(
     );
   }
 
-  let formatDisplay = (value: unknown) => descriptor.formatDisplay(value);
+  let formatDisplay = (value: BrunoTableRuntimeValue) => descriptor.formatDisplay(value);
   if (format !== undefined) {
     if (!isRecord(format)) {
       throw new ValueSemanticsConfigurationError(
@@ -155,14 +219,15 @@ export function compileColumnValueSemantics(
         );
       }
     }
+    // SAFETY: Own-key validation above limits this snapshot to Intl.NumberFormat option names;
+    // Intl.NumberFormat validates each option value at the boundary immediately below.
     const formatSnapshot = Object.freeze({ ...format }) as BrunoTableNumberFormat;
     let formatter: Intl.NumberFormat;
     try {
       formatter = new Intl.NumberFormat(BRUNO_TABLE_NUMBER_DISPLAY_LOCALE, formatSnapshot);
     } catch (error) {
-      throw new ValueSemanticsConfigurationError(
-        `BrunoTable number format is invalid: ${safeErrorMessage(error)}`,
-      );
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new ValueSemanticsConfigurationError(`BrunoTable number format is invalid: ${message}`);
     }
     formatDisplay = (value) => formatter.format(assertFiniteNumber(value));
   }
@@ -192,7 +257,7 @@ export function compileColumnValueSemantics(
 
 const BRUNO_TABLE_NUMBER_DISPLAY_LOCALE = "en-US";
 
-function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor {
+function snapshotCustomValueType(selection: BrunoTableRuntimeValue): RuntimeValueTypeDescriptor {
   if (!isRecord(selection)) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable valueType must be text, number, bigint, boolean, or a Value Type descriptor.",
@@ -207,15 +272,6 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const editorLayout = selection["editorLayout"];
   const defaultWidth = selection["defaultWidth"];
   const aggregateResults = snapshotAggregateResults(selection["aggregateResults"]);
-  const decodeRuntime = selection["decodeRuntime"];
-  const equivalent = selection["equivalent"];
-  const compare = selection["compare"];
-  const formatCanonicalText = selection["formatCanonicalText"];
-  const parseCanonicalText = selection["parseCanonicalText"];
-  const formatDisplay = selection["formatDisplay"];
-  const encodePersisted = selection["encodePersisted"];
-  const decodePersisted = selection["decodePersisted"];
-
   if (typeof codecId !== "string" || codecId.trim().length === 0) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable Value Type codecId must be a non-empty string.",
@@ -244,14 +300,21 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     );
   }
 
-  const decodeRuntimeFunction = requireFunction(decodeRuntime, "decodeRuntime");
-  const equivalentFunction = requireFunction(equivalent, "equivalent");
-  const compareFunction = requireFunction(compare, "compare");
-  const formatCanonicalTextFunction = requireFunction(formatCanonicalText, "formatCanonicalText");
-  const parseCanonicalTextFunction = requireFunction(parseCanonicalText, "parseCanonicalText");
-  const formatDisplayFunction = requireFunction(formatDisplay, "formatDisplay");
-  const encodePersistedFunction = requireFunction(encodePersisted, "encodePersisted");
-  const decodePersistedFunction = requireFunction(decodePersisted, "decodePersisted");
+  if (!hasRuntimeValueTypeCallbacks(selection)) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable Value Type callbacks must all be functions.",
+    );
+  }
+  const {
+    decodeRuntime,
+    equivalent,
+    compare,
+    formatCanonicalText,
+    parseCanonicalText,
+    formatDisplay,
+    encodePersisted,
+    decodePersisted,
+  } = selection;
 
   const descriptor: RuntimeValueTypeDescriptor = {
     codecId,
@@ -262,25 +325,19 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     editorLayout,
     defaultWidth,
     aggregateResults,
-    decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
-    equivalent: (left, right) =>
-      validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
-    compare: (left, right) =>
-      validateOrdering(Reflect.apply(compareFunction, undefined, [left, right])),
-    formatCanonicalText: (value) =>
-      validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value])),
-    parseCanonicalText: (text) =>
-      safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText"),
-    formatDisplay: (value) =>
-      validateText(Reflect.apply(formatDisplayFunction, undefined, [value])),
-    encodePersisted: (value) =>
-      validateJsonValue(Reflect.apply(encodePersistedFunction, undefined, [value])),
-    decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
+    decodeRuntime: (input) => safeDecode(decodeRuntime, input, "decodeRuntime"),
+    equivalent: (left, right) => validateBoolean(equivalent(left, right)),
+    compare: (left, right) => validateOrdering(compare(left, right)),
+    formatCanonicalText: (value) => validateText(formatCanonicalText(value)),
+    parseCanonicalText: (text) => safeParseCanonicalText(parseCanonicalText, text),
+    formatDisplay: (value) => validateText(formatDisplay(value)),
+    encodePersisted: (value) => validateJsonValue(encodePersisted(value)),
+    decodePersisted: (input) => safeDecode(decodePersisted, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
 }
 
-function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
+function snapshotAggregateResults(input: BrunoTableRuntimeValue): BrunoTableAggregateResults {
   if (input === undefined) return Object.freeze({});
   if (!isRecord(input)) {
     throw new ValueSemanticsConfigurationError(
@@ -450,9 +507,9 @@ function persisted(type: string, value: BrunoTableJsonValue): BrunoTableJsonValu
 }
 
 function decodePersistedTag<TValue>(
-  input: unknown,
+  input: BrunoTableRuntimeValue,
   type: string,
-  decode: (value: unknown) => BrunoTableDecodeResult<TValue>,
+  decode: (this: void, value: BrunoTableRuntimeValue) => BrunoTableDecodeResult<TValue>,
 ): BrunoTableDecodeResult<TValue> {
   return isRecord(input) && input["$brunoTableValue"] === type && input["version"] === 1
     ? decode(input["value"])
@@ -474,28 +531,28 @@ function failure(message: string): BrunoTableDecodeResult<never> {
   return { _tag: "Failure", message };
 }
 
-function assertFiniteNumber(value: unknown): number {
+function assertFiniteNumber(value: BrunoTableRuntimeValue): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError("BrunoTable Number Value Type received a non-finite value.");
   }
   return value;
 }
 
-function assertString(value: unknown): string {
+function assertString(value: BrunoTableRuntimeValue): string {
   if (typeof value !== "string") {
     throw new TypeError("BrunoTable Text Value Type received a non-string value.");
   }
   return value;
 }
 
-function assertBigInt(value: unknown): bigint {
+function assertBigInt(value: BrunoTableRuntimeValue): bigint {
   if (typeof value !== "bigint") {
     throw new TypeError("BrunoTable BigInt Value Type received a non-bigint value.");
   }
   return value;
 }
 
-function assertBoolean(value: unknown): boolean {
+function assertBoolean(value: BrunoTableRuntimeValue): boolean {
   if (typeof value !== "boolean") {
     throw new TypeError("BrunoTable Boolean Value Type received a non-boolean value.");
   }
@@ -503,25 +560,38 @@ function assertBoolean(value: unknown): boolean {
 }
 
 function safeDecode(
-  decoder: Function,
-  input: unknown,
-  operation: "decodePersisted" | "decodeRuntime" | "parseCanonicalText",
-): BrunoTableDecodeResult<unknown> {
+  decoder: RuntimeValueTypeCallbacks["decodeRuntime"],
+  input: BrunoTableRuntimeValue,
+  operation: "decodePersisted" | "decodeRuntime",
+): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
   try {
-    return validateDecodeResult(Reflect.apply(decoder, undefined, [input]));
+    return validateDecodeResult(decoder(input));
   } catch {
     return failure(`BrunoTable Value Type ${operation} failed.`);
   }
 }
 
-function validateBoolean(value: unknown): boolean {
+function safeParseCanonicalText(
+  decoder: RuntimeValueTypeCallbacks["parseCanonicalText"],
+  text: string,
+): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
+  try {
+    return validateDecodeResult(decoder(text));
+  } catch {
+    return failure("BrunoTable Value Type parseCanonicalText failed.");
+  }
+}
+
+function validateBoolean(value: BrunoTableRuntimeValue): boolean {
   if (typeof value !== "boolean") {
     throw new TypeError("BrunoTable Value Type equivalent must return a boolean.");
   }
   return value;
 }
 
-function validateDecodeResult(value: unknown): BrunoTableDecodeResult<unknown> {
+function validateDecodeResult(
+  value: BrunoTableRuntimeValue,
+): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
   if (!isRecord(value) || (value["_tag"] !== "Success" && value["_tag"] !== "Failure")) {
     throw new TypeError("BrunoTable Value Type returned an invalid decode result.");
   }
@@ -534,28 +604,31 @@ function validateDecodeResult(value: unknown): BrunoTableDecodeResult<unknown> {
   return { _tag: "Success", value: value["value"] };
 }
 
-function validateOrdering(value: unknown): BrunoTableOrdering {
+function validateOrdering(value: BrunoTableRuntimeValue): BrunoTableOrdering {
   if (value !== -1 && value !== 0 && value !== 1) {
     throw new TypeError("BrunoTable Value Type compare must return -1, 0, or 1.");
   }
   return value;
 }
 
-function validateText(value: unknown): string {
+function validateText(value: BrunoTableRuntimeValue): string {
   if (typeof value !== "string") {
     throw new TypeError("BrunoTable Value Type formatter must return a string.");
   }
   return value;
 }
 
-function validateJsonValue(value: unknown): BrunoTableJsonValue {
+function validateJsonValue(value: BrunoTableRuntimeValue): BrunoTableJsonValue {
   if (!isJsonValue(value, new Set())) {
     throw new TypeError("BrunoTable Value Type persisted output must be JSON-safe.");
   }
   return value;
 }
 
-function isJsonValue(value: unknown, ancestors: Set<object>): value is BrunoTableJsonValue {
+function isJsonValue(
+  value: BrunoTableRuntimeValue,
+  ancestors: Set<object>,
+): value is BrunoTableJsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (typeof value !== "object") return false;
@@ -564,12 +637,15 @@ function isJsonValue(value: unknown, ancestors: Set<object>): value is BrunoTabl
   ancestors.add(value);
   const valid = Array.isArray(value)
     ? isDenseJsonArray(value, ancestors)
-    : isJsonObject(value, ancestors);
+    : isRecord(value) && isJsonObject(value, ancestors);
   ancestors.delete(value);
   return valid;
 }
 
-function isDenseJsonArray(value: readonly unknown[], ancestors: Set<object>): boolean {
+function isDenseJsonArray(
+  value: readonly BrunoTableRuntimeValue[],
+  ancestors: Set<object>,
+): boolean {
   const ownKeys = Reflect.ownKeys(value);
   if (ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) return false;
 
@@ -579,7 +655,7 @@ function isDenseJsonArray(value: readonly unknown[], ancestors: Set<object>): bo
   return true;
 }
 
-function isJsonObject(value: object, ancestors: Set<object>): boolean {
+function isJsonObject(value: BrunoTableRuntimeRecord, ancestors: Set<object>): boolean {
   if (Object.getPrototypeOf(value) !== Object.prototype) return false;
   const ownKeys = Reflect.ownKeys(value);
   if (
@@ -587,14 +663,19 @@ function isJsonObject(value: object, ancestors: Set<object>): boolean {
   ) {
     return false;
   }
-  return ownKeys.every((key) => isJsonValue(Reflect.get(value, key), ancestors));
+  return ownKeys.every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return (
+      descriptor !== undefined && "value" in descriptor && isJsonValue(descriptor.value, ancestors)
+    );
+  });
 }
 
-function isBuiltInValueType(value: unknown): value is BrunoTableBuiltInValueType {
+function isBuiltInValueType(value: BrunoTableRuntimeValue): value is BrunoTableBuiltInValueType {
   return value === "text" || value === "number" || value === "bigint" || value === "boolean";
 }
 
-function isFilterFamily(value: unknown): value is BrunoTableFilterFamily {
+function isFilterFamily(value: BrunoTableRuntimeValue): value is BrunoTableFilterFamily {
   return (
     value === "boolean" ||
     value === "equality" ||
@@ -604,7 +685,7 @@ function isFilterFamily(value: unknown): value is BrunoTableFilterFamily {
   );
 }
 
-function isEditorFamily(value: unknown): value is BrunoTableEditorFamily {
+function isEditorFamily(value: BrunoTableRuntimeValue): value is BrunoTableEditorFamily {
   return (
     value === "bigdecimal" ||
     value === "bigint" ||
@@ -615,25 +696,29 @@ function isEditorFamily(value: unknown): value is BrunoTableEditorFamily {
   );
 }
 
-function isCellAlign(value: unknown): value is BrunoTableCellAlign {
+function isCellAlign(value: BrunoTableRuntimeValue): value is BrunoTableCellAlign {
   return value === "start" || value === "center" || value === "end";
 }
 
-function isEditorLayout(value: unknown): value is BrunoTableEditorLayout {
+function isEditorLayout(value: BrunoTableRuntimeValue): value is BrunoTableEditorLayout {
   return value === "inline" || value === "center" || value === "fullWidth";
 }
 
-function isRecord(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
+function isRecord(value: BrunoTableRuntimeValue): value is BrunoTableRuntimeRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireFunction(value: unknown, name: string): Function {
-  if (typeof value !== "function") {
-    throw new ValueSemanticsConfigurationError(`BrunoTable Value Type ${name} must be a function.`);
-  }
-  return value;
-}
-
-function safeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function hasRuntimeValueTypeCallbacks(
+  value: BrunoTableRuntimeRecord,
+): value is BrunoTableRuntimeRecord & RuntimeValueTypeCallbacks {
+  return (
+    typeof value["decodeRuntime"] === "function" &&
+    typeof value["equivalent"] === "function" &&
+    typeof value["compare"] === "function" &&
+    typeof value["formatCanonicalText"] === "function" &&
+    typeof value["parseCanonicalText"] === "function" &&
+    typeof value["formatDisplay"] === "function" &&
+    typeof value["encodePersisted"] === "function" &&
+    typeof value["decodePersisted"] === "function"
+  );
 }

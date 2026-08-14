@@ -23,10 +23,31 @@ import {
   sanitizeBrunoTableFilters,
   sanitizeBrunoTableOrderBy,
 } from "./grid-query";
+import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeValue } from "./runtime-value";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
 import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
 
 type Listener = () => void;
+interface MutableChromeSnapshot {
+  status: BrunoTableSourceStatus;
+  statusCode?: string;
+  message?: string;
+  retry?: BrunoTableSourceRetry;
+  hasCoherentRows: boolean;
+  invalid?: BrunoTableInvalidSourceSnapshot;
+}
+interface MutableColumnCommandSnapshot {
+  sortable: boolean;
+  sortDirection?: "asc" | "desc";
+  sortPriority?: number;
+  filterActive: boolean;
+  filterBaselineAvailable: boolean;
+  visible: boolean;
+  pinned?: "start" | "end";
+  width: number;
+  minWidth: number;
+  maxWidth: number;
+}
 export type BrunoTableInvalidSourceSnapshot =
   | Readonly<{
       readonly kind: "row-count-mismatch";
@@ -101,18 +122,24 @@ export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
   readonly loadedRows: number;
   readonly getRowId: (index: number) => BrunoTableRowId | undefined;
   readonly getRow: (rowId: BrunoTableRowId) => TRow | undefined;
-  readonly getCellValue: (rowId: BrunoTableRowId, columnId: string) => unknown;
+  readonly getCellValue: (rowId: BrunoTableRowId, columnId: string) => BrunoTableRuntimeValue;
 }>;
 
-export type BrunoTableRuntimeView = {
+export type BrunoTableRuntimeView<TRow extends BrunoTableRuntimeValue = BrunoTableRuntimeValue> = {
   readonly getChromeSnapshot: () => BrunoTableChromeSnapshot;
   readonly getSourceSnapshot: () => BrunoTableSourceSnapshot;
   readonly getSourceVersionSnapshot: () => BrunoTableSourceVersionSnapshot;
   readonly getBodySnapshot: () => BrunoTableBodySnapshot;
-  readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
-  readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
-  readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
-  readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
+  readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<TRow> | undefined;
+  readonly getRowSnapshot: (rowId: BrunoTableRowId) => TRow | undefined;
+  readonly getCellSnapshot: (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableCellSnapshot<TRow>;
+  readonly getCellValueSnapshot: (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableRuntimeValue;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
   /** Controlled Client column input; width-only commits do not publish it. */
@@ -138,10 +165,12 @@ export type BrunoTableRuntimeView = {
   readonly retry: () => void;
 };
 
-export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
+export type BrunoTableRowPipelineRuntimeView<
+  TRow extends BrunoTableRuntimeValue = BrunoTableRuntimeValue,
+> = BrunoTableRuntimeView<TRow> & {
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
   readonly subscribeQuery: (listener: Listener) => () => void;
-  readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
+  readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<TRow>) => void;
 };
 
 export type BrunoTableQuerySnapshot = Readonly<{
@@ -202,11 +231,11 @@ type RuntimeState<TRow> = Readonly<{
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
 }>;
 
-export type BrunoTableCellSnapshot = Readonly<{
+export type BrunoTableCellSnapshot<TRow = BrunoTableRuntimeValue> = Readonly<{
   readonly column: CompiledColumn | undefined;
-  readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+  readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
   readonly rowPresent: boolean;
-  readonly value: unknown;
+  readonly value: BrunoTableRuntimeValue;
 }>;
 
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
@@ -226,7 +255,7 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
-export class BrunoTableGridRuntime<TRow> {
+export class BrunoTableGridRuntime<TRow extends BrunoTableRuntimeValue> {
   private readonly chromeListeners = new Set<Listener>();
   private readonly sourceListeners = new Set<Listener>();
   private readonly sourceVersionListeners = new Set<Listener>();
@@ -234,7 +263,10 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly rowSpaceListeners = new Set<Listener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
   private readonly cellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
-  private readonly cellSnapshots = new Map<BrunoTableRowId, Map<string, BrunoTableCellSnapshot>>();
+  private readonly cellSnapshots = new Map<
+    BrunoTableRowId,
+    Map<string, BrunoTableCellSnapshot<TRow>>
+  >();
   private readonly pendingCellTokensByRow = new Map<BrunoTableRowId, Map<string, object>>();
   private readonly pendingCellLru = new Map<
     object,
@@ -244,7 +276,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
-  private view: BrunoTableRowPipelineRuntimeView | undefined;
+  private view: BrunoTableRowPipelineRuntimeView<TRow> | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private columns: readonly CompiledColumn[];
@@ -289,7 +321,7 @@ export class BrunoTableGridRuntime<TRow> {
     this.state = this.createState(publication);
   }
 
-  public readonly getView = (): BrunoTableRowPipelineRuntimeView => {
+  public readonly getView = (): BrunoTableRowPipelineRuntimeView<TRow> => {
     if (this.view === undefined) {
       this.view = Object.freeze({
         getChromeSnapshot: this.getChromeSnapshot,
@@ -331,9 +363,9 @@ export class BrunoTableGridRuntime<TRow> {
   };
 
   private readonly publishRowPipeline = (
-    publication: BrunoTableRowPipelinePublication<unknown>,
+    publication: BrunoTableRowPipelinePublication<TRow>,
   ): void => {
-    this.publish(publication as BrunoTableRowPipelinePublication<TRow>);
+    this.publish(publication);
   };
 
   public readonly reconcile = (
@@ -431,7 +463,7 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getCellSnapshot = (
     rowId: BrunoTableRowId,
     columnId: string,
-  ): BrunoTableCellSnapshot => {
+  ): BrunoTableCellSnapshot<TRow> => {
     const snapshot = this.currentCellSnapshot(rowId, columnId);
     if (!this.cellListeners.get(rowId)?.has(columnId)) {
       this.installCellSnapshot(rowId, columnId, snapshot);
@@ -440,8 +472,10 @@ export class BrunoTableGridRuntime<TRow> {
     return snapshot;
   };
 
-  public readonly getCellValueSnapshot = (rowId: BrunoTableRowId, columnId: string): unknown =>
-    this.currentCellSnapshot(rowId, columnId).value;
+  public readonly getCellValueSnapshot = (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ): BrunoTableRuntimeValue => this.currentCellSnapshot(rowId, columnId).value;
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 
@@ -615,7 +649,8 @@ export class BrunoTableGridRuntime<TRow> {
 
   private readonly clearColumnFiltersImpl = (columnId: string): void => {
     const next = this.query.filters.filter(
-      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
+      (filter) =>
+        !isBrunoTableRuntimeRecord(filter) || !brunoTableFilterReferencesColumn(filter, columnId),
     );
     if (next.length === this.query.filters.length) return;
     this.publishQuery(Object.freeze(next), this.query.orderBy);
@@ -627,10 +662,12 @@ export class BrunoTableGridRuntime<TRow> {
 
   private readonly resetColumnFiltersImpl = (columnId: string): void => {
     const withoutColumn = this.query.filters.filter(
-      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
+      (filter) =>
+        !isBrunoTableRuntimeRecord(filter) || !brunoTableFilterReferencesColumn(filter, columnId),
     );
-    const baseline = this.baselineFilters.filter((filter) =>
-      brunoTableFilterReferencesColumn(filter, columnId),
+    const baseline = this.baselineFilters.filter(
+      (filter) =>
+        isBrunoTableRuntimeRecord(filter) && brunoTableFilterReferencesColumn(filter, columnId),
     );
     this.publishQuery(Object.freeze([...withoutColumn, ...baseline]), this.query.orderBy);
   };
@@ -645,14 +682,14 @@ export class BrunoTableGridRuntime<TRow> {
 
   private createState(publication: BrunoTableRowPipelinePublication<TRow>): RuntimeState<TRow> {
     const rowSpace = publication.rowSpace;
-    const chrome = Object.freeze({
+    const chrome: MutableChromeSnapshot = {
       status: publication.status,
-      ...(publication.statusCode === undefined ? {} : { statusCode: publication.statusCode }),
-      ...(publication.message === undefined ? {} : { message: publication.message }),
-      ...(publication.retry === undefined ? {} : { retry: publication.retry }),
       hasCoherentRows: publication.hasCoherentRows,
-      ...(publication.invalid === undefined ? {} : { invalid: publication.invalid }),
-    });
+    };
+    if (publication.statusCode !== undefined) chrome.statusCode = publication.statusCode;
+    if (publication.message !== undefined) chrome.message = publication.message;
+    if (publication.retry !== undefined) chrome.retry = publication.retry;
+    if (publication.invalid !== undefined) chrome.invalid = publication.invalid;
     const source = Object.freeze({
       totalRows: publication.totalRows,
       loadedRows: rowSpace?.loadedRows ?? 0,
@@ -834,7 +871,10 @@ export class BrunoTableGridRuntime<TRow> {
     return firstError;
   }
 
-  private currentCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
+  private currentCellSnapshot(
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ): BrunoTableCellSnapshot<TRow> {
     const column = this.columnsById.get(columnId);
     const current = this.cellSnapshots.get(rowId)?.get(columnId);
     const subscribed = this.cellListeners.get(rowId)?.has(columnId) ?? false;
@@ -852,14 +892,14 @@ export class BrunoTableGridRuntime<TRow> {
     return next;
   }
 
-  private readCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
+  private readCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot<TRow> {
     return readCellSnapshot(this.state.rowSpace, this.columnsById, rowId, columnId);
   }
 
   private installCellSnapshot(
     rowId: BrunoTableRowId,
     columnId: string,
-    snapshot: BrunoTableCellSnapshot,
+    snapshot: BrunoTableCellSnapshot<TRow>,
   ): void {
     let rowSnapshots = this.cellSnapshots.get(rowId);
     if (rowSnapshots === undefined) {
@@ -909,7 +949,7 @@ function readCellSnapshot<TRow>(
   columnsById: ReadonlyMap<string, CompiledColumn>,
   rowId: BrunoTableRowId,
   columnId: string,
-): BrunoTableCellSnapshot {
+): BrunoTableCellSnapshot<TRow> {
   const column = columnsById.get(columnId);
   const rowPresent = rowSpace?.getRow(rowId) !== undefined;
   return Object.freeze({
@@ -924,7 +964,10 @@ function indexColumns(columns: readonly CompiledColumn[]): ReadonlyMap<string, C
   return new Map(columns.map((column) => [column.columnId, column]));
 }
 
-function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
+function sameCellSnapshot<TRow>(
+  previous: BrunoTableCellSnapshot<TRow>,
+  next: BrunoTableCellSnapshot<TRow>,
+): boolean {
   if (previous.column !== next.column || previous.rowPresent !== next.rowPresent) return false;
   if (Object.is(previous.value, next.value)) return true;
   if (isBrunoTableInvalidCellValue(previous.value) || isBrunoTableInvalidCellValue(next.value)) {
@@ -1071,27 +1114,35 @@ function createColumnCommandSnapshots(
       widthColumn,
       baselineById.get(column.columnId)?.semantics.width ?? widthColumn.semantics.width,
     );
-    const next = Object.freeze({
+    const next: MutableColumnCommandSnapshot = {
       sortable: column.enableSorting !== false,
-      ...(sort === undefined ? {} : { sortDirection: sort.direction, sortPriority: sortIndex + 1 }),
-      filterActive: query.filters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
+      filterActive: query.filters.some(
+        (filter) =>
+          isBrunoTableRuntimeRecord(filter) &&
+          brunoTableFilterReferencesColumn(filter, column.columnId),
       ),
-      filterBaselineAvailable: baselineFilters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
+      filterBaselineAvailable: baselineFilters.some(
+        (filter) =>
+          isBrunoTableRuntimeRecord(filter) &&
+          brunoTableFilterReferencesColumn(filter, column.columnId),
       ),
       visible: visibleIds.has(column.columnId),
-      ...(layoutColumn?.pinned === undefined ? {} : { pinned: layoutColumn.pinned }),
       width: layoutColumn?.semantics.width ?? column.semantics.width,
       minWidth: widthBounds.min,
       maxWidth: widthBounds.max,
-    });
+    };
+    if (sort !== undefined) {
+      next.sortDirection = sort.direction;
+      next.sortPriority = sortIndex + 1;
+    }
+    if (layoutColumn?.pinned !== undefined) next.pinned = layoutColumn.pinned;
+    const frozenNext = Object.freeze(next);
     const previousSnapshot = previous?.get(column.columnId);
     snapshots.set(
       column.columnId,
-      sameColumnCommand(previousSnapshot, next) && previousSnapshot !== undefined
+      sameColumnCommand(previousSnapshot, frozenNext) && previousSnapshot !== undefined
         ? previousSnapshot
-        : next,
+        : frozenNext,
     );
   }
   return snapshots;
@@ -1153,7 +1204,9 @@ function activeQuerySemanticsChanged(
 ): boolean {
   const activeColumnIds = new Set(query.orderBy.map((sort) => sort.columnId));
   for (const filter of query.filters) {
-    collectClientFilterColumnIds(filter, activeColumnIds);
+    if (isBrunoTableRuntimeRecord(filter)) {
+      collectClientFilterColumnIds(filter, activeColumnIds);
+    }
   }
   for (const columnId of activeColumnIds) {
     const previous = previousColumns.find((column) => column.columnId === columnId);

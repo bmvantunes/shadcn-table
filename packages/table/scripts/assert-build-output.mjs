@@ -802,27 +802,27 @@ if (admitted._tag === "Success") {
 
 async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffect) {
   const consumerRoot = await mkdtemp(join(tmpdir(), prefix));
+  const dependencies = {
+    "@bruno/table": `file:${tarball}`,
+    "@bruno/shadcn": `file:${shadcnTarball}`,
+    "@types/react": "19.2.18",
+    react: "19.2.8",
+    "react-dom": "19.2.8",
+  };
+  if (includeEffect) {
+    dependencies.effect = "4.0.0-beta.100";
+  } else {
+    dependencies["@tailwindcss/vite"] = "4.3.3";
+    dependencies.tailwindcss = "4.3.3";
+    dependencies.vite = "npm:@voidzero-dev/vite-plus-core@0.2.7";
+    dependencies["vite-plus"] = "0.2.7";
+  }
   await writeFile(
     join(consumerRoot, "package.json"),
     JSON.stringify({
       private: true,
       type: "module",
-      dependencies: {
-        "@bruno/table": `file:${tarball}`,
-        "@bruno/shadcn": `file:${shadcnTarball}`,
-        "@types/react": "19.2.18",
-        ...(includeEffect
-          ? {}
-          : {
-              "@tailwindcss/vite": "4.3.3",
-              tailwindcss: "4.3.3",
-              vite: "npm:@voidzero-dev/vite-plus-core@0.2.7",
-              "vite-plus": "0.2.7",
-            }),
-        ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
-        react: "19.2.8",
-        "react-dom": "19.2.8",
-      },
+      dependencies,
     }),
   );
   await writeFile(

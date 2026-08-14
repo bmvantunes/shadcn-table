@@ -107,7 +107,7 @@ const emittedClientProps = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 1,
     status: "ready" as const,
@@ -118,12 +118,12 @@ const emittedCallableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[
 const emittedNamedProps: BrunoTableClientProps<Order, Columns> = emittedCallableProps;
 void BrunoTableClient(emittedNamedProps);
 
-const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
-const emittedViewServerClient = BrunoTableClient({
+declare const emittedViewServerResult: LiveQueryResult<Order>;
+const emittedViewServerClient = BrunoTableClient<Order, Columns>({
   tableId: "view-server-orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: emittedViewServerResult,
 });
 void emittedViewServerClient;
@@ -314,46 +314,50 @@ const capabilityColumns = [
 
 type CapabilityColumns = typeof capabilityColumns;
 
-void BrunoTableClient({
+const invalidUnknownSortProps = {
   tableId: "invalid-unknown-sort",
   columns,
   initialOrderBy: [
     // @ts-expect-error emitted Client component preserves exact Column Identity inference.
     { columnId: "COL_ID_UNKNOWN", direction: "asc" },
   ],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: emittedViewServerResult,
-});
-void BrunoTableClient({
+} satisfies BrunoTableClientProps<Order, Columns>;
+void invalidUnknownSortProps;
+const invalidMisspelledSortProps = {
   tableId: "invalid-misspelled-sort",
   columns,
   initialOrderBy: [
     // @ts-expect-error emitted Client component rejects misspelled Column Identities.
     { columnId: "COL_ID_SYMBOOL", direction: "asc" },
   ],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: emittedViewServerResult,
-});
-void BrunoTableClient({
+} satisfies BrunoTableClientProps<Order, Columns>;
+void invalidMisspelledSortProps;
+const invalidComputedSortProps = {
   tableId: "invalid-computed-sort",
   columns,
   initialOrderBy: [
     // @ts-expect-error emitted computed columns have no automatic Client sort mapping.
     { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
   ],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: emittedViewServerResult,
-});
-void BrunoTableClient({
+} satisfies BrunoTableClientProps<Order, Columns>;
+void invalidComputedSortProps;
+const invalidNonsortableSortProps = {
   tableId: "invalid-nonsortable-sort",
   columns: capabilityColumns,
   initialOrderBy: [
     // @ts-expect-error emitted Client component excludes explicitly nonsortable identities.
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: emittedViewServerResult,
-});
+} satisfies BrunoTableClientProps<Order, CapabilityColumns>;
+void invalidNonsortableSortProps;
 
 const noSortingColumns = [
   {
@@ -427,13 +431,13 @@ const props = {
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
-const emittedClient = BrunoTableClient({
+const emittedClient = BrunoTableClient<Order, Columns>({
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  getRowId: (row) => row.id,
+  getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 0,
     status: "ready",
@@ -441,68 +445,76 @@ const emittedClient = BrunoTableClient({
 });
 void emittedClient;
 
-void BrunoTableClient({
+const invalidPrivateRuntimeProps = {
   tableId: "private-runtime",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
   // @ts-expect-error emitted Client API exposes no table controller.
   table: {},
-});
-void BrunoTableClient({
+} satisfies BrunoTableClientProps<Order, Columns>;
+void invalidPrivateRuntimeProps;
+const invalidPrivateRowModelProps = {
   tableId: "private-row-model",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
   // @ts-expect-error emitted Client API exposes no TanStack row-model factory.
   getCoreRowModel: () => ({}),
-});
+} satisfies BrunoTableClientProps<Order, Columns>;
+void invalidPrivateRowModelProps;
 
-// @ts-expect-error emitted Client component requires tableId.
-void BrunoTableClient({
+const missingTableIdProps = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
-});
-// @ts-expect-error emitted Client component requires columns.
-void BrunoTableClient({
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client component requires tableId.
+} satisfies BrunoTableClientProps<Order, Columns>;
+void missingTableIdProps;
+const missingColumnsProps = {
   tableId: "orders",
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
-});
-// @ts-expect-error emitted Client component requires getRowId.
-void BrunoTableClient({
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client component requires columns.
+} satisfies BrunoTableClientProps<Order, Columns>;
+void missingColumnsProps;
+const missingGetRowIdProps = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
-});
-// @ts-expect-error emitted Client component requires clientSource.
-void BrunoTableClient({
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client component requires getRowId.
+} satisfies BrunoTableClientProps<Order, Columns>;
+void missingGetRowIdProps;
+const missingClientSourceProps = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
-});
-// @ts-expect-error emitted Client component requires initialOrderBy.
-void BrunoTableClient({
+  // @ts-expect-error emitted Client component requires clientSource.
+} satisfies BrunoTableClientProps<Order, Columns>;
+void missingClientSourceProps;
+const missingInitialOrderByProps = {
   tableId: "orders",
   columns,
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
-});
-void BrunoTableClient({
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client component requires initialOrderBy.
+} satisfies BrunoTableClientProps<Order, Columns>;
+void missingInitialOrderByProps;
+const emptyInitialOrderByProps = {
   tableId: "orders",
   columns,
   // @ts-expect-error emitted Client component rejects an empty initialOrderBy.
   initialOrderBy: [],
   getRowId: (row: Order) => row.id,
-  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
-});
+  clientSource: { rows: [] satisfies readonly Order[], totalRows: 0, version: 0, status: "ready" },
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emptyInitialOrderByProps;
 const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
 void emittedToolbar;
 
@@ -528,7 +540,7 @@ const editableProps = {
     return Promise.resolve();
   },
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 0,
     status: "ready",
@@ -540,7 +552,7 @@ const noSortingProps = {
   columns: noSortingColumns,
   getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 0,
     status: "ready",
@@ -564,7 +576,7 @@ const widenedEditableProps = {
     return Promise.resolve();
   },
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 0,
     status: "ready",
@@ -726,7 +738,7 @@ const invalidInitialOrderByWithoutSortingCapability = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
-    rows: [] as readonly Order[],
+    rows: [] satisfies readonly Order[],
     totalRows: 0,
     version: 0,
     status: "ready",
@@ -875,23 +887,40 @@ const invalidCustomNumericOperand = [
 
 const builtInValueType: BrunoTableBuiltInValueType = "bigint";
 
-void (0 as unknown as Price);
-void (0 as unknown as DoubleQuantity);
-void (0 as unknown as Filterable);
-void (0 as unknown as OptedFilterable);
-void (0 as unknown as OptedSortable);
-void (0 as unknown as NoSortable);
-void (0 as unknown as MixedCaseColumnIdRejected);
-void (0 as unknown as PriceField);
-void (0 as unknown as CorrelatedSaves);
-void (0 as unknown as HelperPrice);
-void (0 as unknown as HelperQuantity);
-void (0 as unknown as HelperStatus);
-void (0 as unknown as HelperWeightedPrice);
-void (0 as unknown as ExactComputedAmount);
-void (0 as unknown as ComputedPresetOmitsFiltering);
-void (0 as unknown as ComputedPresetOmitsSorting);
-void (0 as unknown as ComputedPresetOmitsEditing);
+declare const emittedPriceType: Price;
+declare const emittedDoubleQuantityType: DoubleQuantity;
+declare const emittedFilterableType: Filterable;
+declare const emittedOptedFilterableType: OptedFilterable;
+declare const emittedOptedSortableType: OptedSortable;
+declare const emittedNoSortableType: NoSortable;
+declare const emittedMixedCaseColumnIdRejectedType: MixedCaseColumnIdRejected;
+declare const emittedPriceFieldType: PriceField;
+declare const emittedCorrelatedSavesType: CorrelatedSaves;
+declare const emittedHelperPriceType: HelperPrice;
+declare const emittedHelperQuantityType: HelperQuantity;
+declare const emittedHelperStatusType: HelperStatus;
+declare const emittedHelperWeightedPriceType: HelperWeightedPrice;
+declare const emittedExactComputedAmountType: ExactComputedAmount;
+declare const emittedComputedPresetOmitsFilteringType: ComputedPresetOmitsFiltering;
+declare const emittedComputedPresetOmitsSortingType: ComputedPresetOmitsSorting;
+declare const emittedComputedPresetOmitsEditingType: ComputedPresetOmitsEditing;
+void emittedPriceType;
+void emittedDoubleQuantityType;
+void emittedFilterableType;
+void emittedOptedFilterableType;
+void emittedOptedSortableType;
+void emittedNoSortableType;
+void emittedMixedCaseColumnIdRejectedType;
+void emittedPriceFieldType;
+void emittedCorrelatedSavesType;
+void emittedHelperPriceType;
+void emittedHelperQuantityType;
+void emittedHelperStatusType;
+void emittedHelperWeightedPriceType;
+void emittedExactComputedAmountType;
+void emittedComputedPresetOmitsFilteringType;
+void emittedComputedPresetOmitsSortingType;
+void emittedComputedPresetOmitsEditingType;
 void filters;
 void props;
 void editableProps;

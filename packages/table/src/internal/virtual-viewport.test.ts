@@ -9,42 +9,241 @@ import { BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT, BrunoTableViewportRuntime } from "
 
 type TestRtlScrollType = "negative" | "default" | "reverse";
 
-function createRtlOwnerDocument(
-  type: TestRtlScrollType,
-  readDirection: () => "ltr" | "rtl" = () => "rtl",
-): Document {
-  let elementIndex = 0;
-  const createElement = vi.fn(() => {
-    const element = {
-      appendChild: vi.fn(),
-      dir: "",
-      style: { cssText: "" },
-    } as unknown as HTMLElement;
-    if (elementIndex === 0) {
-      let scrollLeft = type === "reverse" ? 1 : 0;
+type ViewportStyleHooks = Readonly<{
+  readonly setProperty?: (property: string, value: string) => void;
+  readonly removeProperty?: (property: string) => void;
+}>;
+
+type ViewportElementOptions = Readonly<{
+  readonly addEventListener?: (type: string, listener: EventListener) => void;
+  readonly removeEventListener?: (type: string, listener: EventListener) => void;
+  readonly clientHeight?: number | (() => number);
+  readonly clientWidth?: number | (() => number);
+  readonly offsetHeight?: number | (() => number);
+  readonly offsetWidth?: number | (() => number);
+  readonly scrollLeft?:
+    | number
+    | Readonly<{
+        readonly get: () => number;
+        readonly set: (value: number) => void;
+      }>;
+  readonly scrollTop?: number;
+  readonly scrollWidth?: number | (() => number);
+  readonly style?: ViewportStyleHooks;
+  readonly ownerDocument?: Document | undefined;
+}>;
+
+const viewportFrames = new Map<TestRtlScrollType, HTMLIFrameElement>();
+const rtlCreateElementDocuments = new WeakSet<Document>();
+const rtlStyleHarnesses = new WeakMap<
+  Window,
+  {
+    readDirection: () => "ltr" | "rtl";
+    readonly nativeGetComputedStyle: Window["getComputedStyle"];
+  }
+>();
+
+function createViewportElement(options: ViewportElementOptions = {}): HTMLElement {
+  const element = (options.ownerDocument ?? document).createElement("div");
+  const defineDimension = (
+    name: "clientHeight" | "clientWidth" | "offsetHeight" | "offsetWidth",
+  ): void => {
+    const value = options[name];
+    if (value === undefined) return;
+    Object.defineProperty(element, name, {
+      configurable: true,
+      get: typeof value === "function" ? value : () => value,
+    });
+  };
+  defineDimension("clientHeight");
+  defineDimension("clientWidth");
+  defineDimension("offsetHeight");
+  defineDimension("offsetWidth");
+  if (options.scrollWidth !== undefined) {
+    Object.defineProperty(element, "scrollWidth", {
+      configurable: true,
+      get:
+        typeof options.scrollWidth === "function" ? options.scrollWidth : () => options.scrollWidth,
+    });
+  } else {
+    Object.defineProperty(element, "scrollWidth", {
+      configurable: true,
+      get: () => Number.NaN,
+    });
+  }
+  if (options.scrollLeft !== undefined) {
+    if (typeof options.scrollLeft === "number") {
+      let scrollLeft = options.scrollLeft;
       Object.defineProperty(element, "scrollLeft", {
         configurable: true,
         get: () => scrollLeft,
         set: (value: number) => {
-          scrollLeft = type === "negative" && value > 0 ? 0 : value;
+          scrollLeft = value;
         },
       });
+    } else {
+      Object.defineProperty(element, "scrollLeft", {
+        configurable: true,
+        get: options.scrollLeft.get,
+        set: options.scrollLeft.set,
+      });
     }
-    elementIndex += 1;
-    return element;
-  });
-  return {
-    body: { appendChild: vi.fn() },
-    createElement,
-    defaultView: {
-      getComputedStyle: vi.fn(() => ({ direction: readDirection() })),
-    },
-    documentElement: { appendChild: vi.fn() },
-    head: {
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    },
-  } as unknown as Document;
+  }
+  if (options.scrollTop !== undefined) {
+    let scrollTop = options.scrollTop;
+    Object.defineProperty(element, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+  }
+  if (options.addEventListener !== undefined) {
+    const addEventListener = options.addEventListener;
+    vi.spyOn(element, "addEventListener").mockImplementation((type, listener) => {
+      if (typeof listener === "function") addEventListener(type, listener);
+    });
+  }
+  if (options.removeEventListener !== undefined) {
+    const removeEventListener = options.removeEventListener;
+    vi.spyOn(element, "removeEventListener").mockImplementation((type, listener) => {
+      if (typeof listener === "function") removeEventListener(type, listener);
+    });
+  }
+  if (options.style?.setProperty !== undefined) {
+    const setProperty = options.style.setProperty;
+    vi.spyOn(element.style, "setProperty").mockImplementation((property, value) => {
+      if (value !== null) setProperty(property, value);
+    });
+  }
+  if (options.style?.removeProperty !== undefined) {
+    const removeProperty = options.style.removeProperty;
+    vi.spyOn(element.style, "removeProperty").mockImplementation((property) => {
+      removeProperty(property);
+      return "";
+    });
+  }
+  function scrollTo(optionsOrX?: ScrollToOptions | number, y?: number): void;
+  function scrollTo(optionsOrX: ScrollToOptions | number = {}, y?: number): void {
+    if (typeof optionsOrX === "number") {
+      element.scrollLeft = optionsOrX;
+      element.scrollTop = y ?? 0;
+      return;
+    }
+    if (optionsOrX.left !== undefined) element.scrollLeft = optionsOrX.left;
+    if (optionsOrX.top !== undefined) element.scrollTop = optionsOrX.top;
+  }
+  element.scrollTo = scrollTo;
+  return element;
+}
+
+class TestResizeObserver implements ResizeObserver {
+  protected readonly callback: ResizeObserverCallback;
+  protected readonly targets = new Set<Element>();
+
+  public constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  public observe(target: Element): void {
+    this.targets.add(target);
+  }
+
+  public unobserve(target: Element): void {
+    this.targets.delete(target);
+  }
+
+  public disconnect(): void {
+    this.targets.clear();
+  }
+
+  public takeRecords(): ResizeObserverEntry[] {
+    return [];
+  }
+
+  public trigger(): void {
+    this.callback([], this);
+  }
+}
+
+class TestMutationObserver implements MutationObserver {
+  protected readonly callback: MutationCallback;
+  protected readonly targets = new Set<Node>();
+
+  public constructor(callback: MutationCallback) {
+    this.callback = callback;
+  }
+
+  public observe(target: Node, _options?: MutationObserverInit): void {
+    this.targets.add(target);
+  }
+
+  public disconnect(): void {
+    this.targets.clear();
+  }
+
+  public takeRecords(): MutationRecord[] {
+    return [];
+  }
+
+  public trigger(): void {
+    this.callback([], this);
+  }
+}
+
+function createRtlOwnerDocument(
+  type: TestRtlScrollType,
+  readDirection: () => "ltr" | "rtl" = () => "rtl",
+): Document {
+  let frame = viewportFrames.get(type);
+  if (frame === undefined) {
+    frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    viewportFrames.set(type, frame);
+  }
+  const ownerDocument = frame.contentDocument;
+  const ownerWindow = frame.contentWindow;
+  if (ownerDocument === null || ownerWindow === null) {
+    throw new Error("The viewport browser harness requires an iframe document.");
+  }
+  if (!rtlCreateElementDocuments.has(ownerDocument)) {
+    const nativeCreateElement = ownerDocument.createElement.bind(ownerDocument);
+    Object.defineProperty(ownerDocument, "createElement", {
+      configurable: true,
+      value: (tagName: string, options?: ElementCreationOptions): HTMLElement => {
+        const element = nativeCreateElement(tagName, options);
+        let scrollLeft = type === "reverse" ? 1 : 0;
+        Object.defineProperty(element, "scrollLeft", {
+          configurable: true,
+          get: () => scrollLeft,
+          set: (value: number) => {
+            scrollLeft = type === "negative" && value > 0 ? 0 : value;
+          },
+        });
+        return element;
+      },
+    });
+    rtlCreateElementDocuments.add(ownerDocument);
+  }
+  const existingStyleHarness = rtlStyleHarnesses.get(ownerWindow);
+  if (existingStyleHarness === undefined) {
+    const nativeGetComputedStyle = ownerWindow.getComputedStyle.bind(ownerWindow);
+    const styleHarness = { readDirection, nativeGetComputedStyle };
+    rtlStyleHarnesses.set(ownerWindow, styleHarness);
+    Object.defineProperty(ownerWindow, "getComputedStyle", {
+      configurable: true,
+      value: (element: HTMLElement, pseudoElement?: string | null): CSSStyleDeclaration => {
+        const direction = styleHarness.readDirection();
+        element.style.direction = direction;
+        element.setAttribute("dir", direction);
+        return nativeGetComputedStyle(element, pseudoElement);
+      },
+    });
+  } else {
+    existingStyleHarness.readDirection = readDirection;
+  }
+  return ownerDocument;
 }
 
 function createDeferredReverseRtlHarness(clientWidth = 200): Readonly<{
@@ -60,26 +259,21 @@ function createDeferredReverseRtlHarness(clientWidth = 200): Readonly<{
     return callbacks.length;
   });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
-  const element = {
-    addEventListener: vi.fn(),
+  const element = createViewportElement({
+    addEventListener: () => undefined,
     clientHeight: 480,
     clientWidth,
     ownerDocument: createRtlOwnerDocument("reverse"),
-    parentElement: null,
-    removeEventListener: vi.fn(),
-    get scrollLeft() {
-      return nativeScrollLeft;
-    },
-    set scrollLeft(value: number) {
-      const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
-      nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
-    },
-    get scrollWidth() {
-      return committedScrollWidth;
+    scrollLeft: {
+      get: () => nativeScrollLeft,
+      set: (value) => {
+        const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
+        nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+      },
     },
     scrollTop: 0,
-    style: { setProperty: vi.fn() },
-  } as unknown as HTMLElement;
+    scrollWidth: () => committedScrollWidth,
+  });
   return Object.freeze({
     callbacks,
     commitScrollWidth: (width: number) => {
@@ -93,26 +287,25 @@ function observeResizeTargets(): (target: Element) => void {
   const callbacks = new Map<Element, ResizeObserverCallback>();
   vi.stubGlobal(
     "ResizeObserver",
-    class {
-      readonly #callback: ResizeObserverCallback;
-      readonly #targets = new Set<Element>();
-
+    class extends TestResizeObserver {
       public constructor(callback: ResizeObserverCallback) {
-        this.#callback = callback;
+        super(callback);
       }
-      public observe(target: Element) {
-        this.#targets.add(target);
-        callbacks.set(target, this.#callback);
+
+      public override observe(target: Element) {
+        super.observe(target);
+        callbacks.set(target, this.callback);
       }
-      public disconnect() {
-        for (const target of this.#targets) {
-          if (callbacks.get(target) === this.#callback) callbacks.delete(target);
+      public override disconnect() {
+        for (const target of this.targets) {
+          if (callbacks.get(target) === this.callback) callbacks.delete(target);
         }
-        this.#targets.clear();
+        super.disconnect();
       }
     },
   );
-  return (target) => callbacks.get(target)?.([], {} as ResizeObserver);
+  const observer = new ResizeObserver(() => undefined);
+  return (target) => callbacks.get(target)?.([], observer);
 }
 
 function installViewportObserverHarness(): Readonly<{
@@ -130,51 +323,45 @@ function installViewportObserverHarness(): Readonly<{
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   vi.stubGlobal(
     "ResizeObserver",
-    class {
-      readonly #callback: ResizeObserverCallback;
-      readonly #targets = new Set<Element>();
-
+    class extends TestResizeObserver {
       public constructor(callback: ResizeObserverCallback) {
-        this.#callback = callback;
+        super(callback);
       }
-      public observe(target: Element) {
-        this.#targets.add(target);
+      public override observe(target: Element) {
+        super.observe(target);
         const observers = resizeCallbacks.get(target) ?? new Map();
-        observers.set(this as unknown as ResizeObserver, this.#callback);
+        observers.set(this, this.callback);
         resizeCallbacks.set(target, observers);
       }
-      public disconnect() {
-        for (const target of this.#targets) {
+      public override disconnect() {
+        for (const target of this.targets) {
           const observers = resizeCallbacks.get(target);
-          observers?.delete(this as unknown as ResizeObserver);
+          observers?.delete(this);
           if (observers?.size === 0) resizeCallbacks.delete(target);
         }
-        this.#targets.clear();
+        super.disconnect();
       }
     },
   );
   vi.stubGlobal(
     "MutationObserver",
-    class {
-      readonly #callback: MutationCallback;
-      readonly #targets = new Set<Node>();
-
+    class extends TestMutationObserver {
       public constructor(callback: MutationCallback) {
-        this.#callback = callback;
+        super(callback);
       }
-      public observe(target: Node) {
-        this.#targets.add(target);
+      public override observe(target: Node) {
+        super.observe(target);
         const observers = mutationCallbacks.get(target) ?? new Map();
-        observers.set(this as unknown as MutationObserver, this.#callback);
+        observers.set(this, this.callback);
         mutationCallbacks.set(target, observers);
       }
-      public disconnect() {
-        for (const target of this.#targets) {
+      public override disconnect() {
+        for (const target of this.targets) {
           const observers = mutationCallbacks.get(target);
-          observers?.delete(this as unknown as MutationObserver);
+          observers?.delete(this);
           if (observers?.size === 0) mutationCallbacks.delete(target);
         }
-        this.#targets.clear();
+        super.disconnect();
       }
     },
   );
@@ -195,6 +382,7 @@ function installViewportObserverHarness(): Readonly<{
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("BrunoTableViewportRuntime", () => {
@@ -202,7 +390,7 @@ describe("BrunoTableViewportRuntime", () => {
     const triggerResize = observeResizeTargets();
     const callback = vi.fn<ResizeObserverCallback>();
     const observer = new ResizeObserver(callback);
-    const target = {} as Element;
+    const target = document.createElement("div");
 
     observer.observe(target);
     triggerResize(target);
@@ -262,17 +450,16 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const setProperty = vi.fn();
     let scrollListener: EventListener | undefined;
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
@@ -334,37 +521,32 @@ describe("BrunoTableViewportRuntime", () => {
     const overlaySetProperty = vi.fn((_property: string, _value: string) =>
       geometryOrder.push("write-overlay"),
     );
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      get offsetHeight() {
+      offsetHeight: () => {
         geometryOrder.push("read-offset-height");
         return 495;
       },
-      get offsetWidth() {
+      offsetWidth: () => {
         geometryOrder.push("read-offset-width");
         return 815;
       },
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: gridSetProperty },
-    } as unknown as HTMLElement;
-    const overlay = {
-      style: { setProperty: overlaySetProperty },
-    } as unknown as HTMLElement;
+    });
+    const overlay = createViewportElement({ style: { setProperty: overlaySetProperty } });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
-    viewport.attachRowLayer({
-      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
-    } as unknown as HTMLElement);
-    viewport.attachBodyLayer({
-      style: { setProperty: bodyLayerSetProperty },
-    } as unknown as HTMLElement);
+    viewport.attachRowLayer(createViewportElement({ style: { setProperty: vi.fn() } }));
+    viewport.attachBodyLayer(
+      createViewportElement({ style: { setProperty: bodyLayerSetProperty } }),
+    );
     viewport.attachScrollbarOverlay(overlay);
 
     const initialProperties = new Map(
@@ -449,37 +631,32 @@ describe("BrunoTableViewportRuntime", () => {
       return callbacks.length;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000, columns);
     viewport.attach(element);
 
     const detachedWrite = vi.fn();
     for (let index = 0; index < 100; index += 1) {
-      const cleanup = viewport.attachBodyLayer({
-        isConnected: true,
-        style: { setProperty: detachedWrite },
-      } as unknown as HTMLElement);
+      const cleanup = viewport.attachBodyLayer(
+        createViewportElement({ style: { setProperty: detachedWrite } }),
+      );
       expect(cleanup).toBeTypeOf("function");
       cleanup!();
     }
     detachedWrite.mockClear();
     const mountedWrites = [vi.fn(), vi.fn(), vi.fn()];
     for (const setProperty of mountedWrites) {
-      viewport.attachBodyLayer({
-        isConnected: true,
-        style: { setProperty },
-      } as unknown as HTMLElement);
+      viewport.attachBodyLayer(createViewportElement({ style: { setProperty } }));
       setProperty.mockClear();
     }
 
@@ -521,23 +698,21 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const overlaySetProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
       offsetHeight: 480,
       offsetWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, suspendedColumns);
     viewport.attach(element);
-    viewport.attachScrollbarOverlay({
-      style: { setProperty: overlaySetProperty },
-    } as unknown as HTMLElement);
+    viewport.attachScrollbarOverlay(
+      createViewportElement({ style: { setProperty: overlaySetProperty } }),
+    );
 
     const properties = new Map(
       overlaySetProperty.mock.calls.map(
@@ -644,26 +819,21 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "ResizeObserver",
-      class {
+      class extends TestResizeObserver {
         public constructor(callback: ResizeObserverCallback) {
-          resize = () => callback([], this as unknown as ResizeObserver);
+          super(callback);
+          resize = () => this.trigger();
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
     let width = 300;
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
-      get clientWidth() {
-        return width;
-      },
-      removeEventListener: vi.fn(),
+      clientWidth: () => width,
       scrollLeft: 320,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
@@ -720,28 +890,21 @@ describe("BrunoTableViewportRuntime", () => {
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       vi.stubGlobal(
         "ResizeObserver",
-        class {
+        class extends TestResizeObserver {
           public constructor(callback: ResizeObserverCallback) {
-            resize = () => callback([], this as unknown as ResizeObserver);
+            super(callback);
+            resize = () => this.trigger();
           }
-          public observe() {}
-          public disconnect() {}
         },
       );
-      const element = {
-        addEventListener: vi.fn(),
+      const element = createViewportElement({
         clientHeight: 480,
-        get clientWidth() {
-          return width;
-        },
-        ...(direction === "reverse-rtl"
-          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
-          : {}),
-        removeEventListener: vi.fn(),
+        clientWidth: () => width,
+        ownerDocument: direction === "reverse-rtl" ? createRtlOwnerDocument("reverse") : undefined,
         scrollLeft: direction === "reverse-rtl" ? 0 : 940,
         scrollTop: 0,
         style: { setProperty: vi.fn() },
-      } as unknown as HTMLElement;
+      });
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
@@ -778,17 +941,14 @@ describe("BrunoTableViewportRuntime", () => {
       });
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       const maximum = 800;
-      const element = {
-        addEventListener: vi.fn(),
+      const element = createViewportElement({
         clientHeight: 480,
         clientWidth: 200,
         ownerDocument: createRtlOwnerDocument(rtlType),
-        parentElement: null,
-        removeEventListener: vi.fn(),
         scrollLeft: rtlType === "reverse" ? maximum : 0,
         scrollTop: 0,
         style: { setProperty: vi.fn() },
-      } as unknown as HTMLElement;
+      });
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
@@ -831,41 +991,36 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "MutationObserver",
-      class {
+      class extends TestMutationObserver {
         public constructor(callback: MutationCallback) {
+          super(callback);
           mutation = callback;
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
     const ownerDocument = createRtlOwnerDocument("negative", () => direction);
-    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
-      typeof vi.fn
-    >;
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const readComputedStyle = vi.spyOn(ownerDocument.defaultView!, "getComputedStyle");
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
-      get clientWidth() {
+      clientWidth: () => {
         clientWidthReads += 1;
         return directionFrameWidth;
       },
       ownerDocument,
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 320,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
     expect(readComputedStyle).toHaveBeenCalledTimes(2);
 
     direction = "rtl";
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     directionFrameWidth = 240;
     element.scrollLeft = 0;
     scrollListener!(new Event("scroll"));
@@ -876,7 +1031,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollLeft).toBe(-320);
 
     direction = "ltr";
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     element.scrollLeft = 0;
     scrollListener!(new Event("scroll"));
     element.scrollLeft = 480;
@@ -888,7 +1043,7 @@ describe("BrunoTableViewportRuntime", () => {
     element.scrollLeft = 600;
     scrollListener!(new Event("scroll"));
     direction = "rtl";
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     callbacks.shift()!(0);
     expect(element.scrollLeft).toBe(-600);
 
@@ -927,36 +1082,30 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "ResizeObserver",
-      class {
+      class extends TestResizeObserver {
         public constructor(callback: ResizeObserverCallback) {
-          resize = () => callback([], this as unknown as ResizeObserver);
+          super(callback);
+          resize = () => this.trigger();
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
     const ownerDocument = createRtlOwnerDocument("negative", () => direction);
-    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
-      typeof vi.fn
-    >;
+    const readComputedStyle = vi.spyOn(ownerDocument.defaultView!, "getComputedStyle");
     const overlaySetProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 200,
       ownerDocument,
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 600,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
-    viewport.attachScrollbarOverlay({
-      style: { setProperty: overlaySetProperty },
-    } as unknown as HTMLElement);
+    viewport.attachScrollbarOverlay(
+      createViewportElement({ style: { setProperty: overlaySetProperty } }),
+    );
     const initialCenterStart = viewport.getSnapshot().virtualWindow.centerStartIndex;
     expect(readComputedStyle).toHaveBeenCalledTimes(3);
 
@@ -986,22 +1135,20 @@ describe("BrunoTableViewportRuntime", () => {
     let clientWidthReads = 0;
     let scrollListener: EventListener | undefined;
     let width = 200;
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
-      get clientWidth() {
+      clientWidth: () => {
         clientWidthReads += 1;
         return width;
       },
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 500,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1038,25 +1185,21 @@ describe("BrunoTableViewportRuntime", () => {
     let width = 200;
     let scrollListener: EventListener | undefined;
     const ownerDocument = createRtlOwnerDocument("reverse", () => direction);
-    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
-      typeof vi.fn
-    >;
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const readComputedStyle = vi.spyOn(ownerDocument.defaultView!, "getComputedStyle");
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
-      get clientWidth() {
+      clientWidth: () => {
         clientWidthReads += 1;
         return width;
       },
       ownerDocument,
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 500,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1110,17 +1253,14 @@ describe("BrunoTableViewportRuntime", () => {
     ]);
     const removeProperty = vi.fn();
     const setProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 500,
       ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { removeProperty, setProperty },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     const publications = vi.fn();
     viewport.setLayout(2, columns);
@@ -1172,17 +1312,14 @@ describe("BrunoTableViewportRuntime", () => {
       })),
     ]);
     const setProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 240,
       ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { removeProperty: vi.fn(), setProperty },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     const publications = vi.fn();
     viewport.setLayout(2, columns);
@@ -1235,17 +1372,14 @@ describe("BrunoTableViewportRuntime", () => {
       })),
     ]);
     const setProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 240,
       ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { removeProperty: vi.fn(), setProperty },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     const publications = vi.fn();
     viewport.setLayout(2, columns);
@@ -1276,28 +1410,22 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const oldRemoveProperty = vi.fn();
-    const oldElement = {
-      addEventListener: vi.fn(),
+    const oldElement = createViewportElement({
       clientHeight: 480,
       clientWidth: 500,
       ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { removeProperty: oldRemoveProperty, setProperty: vi.fn() },
-    } as unknown as HTMLElement;
-    const newElement = {
-      addEventListener: vi.fn(),
+    });
+    const newElement = createViewportElement({
       clientHeight: 480,
       clientWidth: 500,
       ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { removeProperty: vi.fn(), setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(oldElement);
@@ -1328,20 +1456,15 @@ describe("BrunoTableViewportRuntime", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const ownerDocument = createRtlOwnerDocument("negative", () => direction);
-    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
-      typeof vi.fn
-    >;
-    const element = {
-      addEventListener: vi.fn(),
+    const readComputedStyle = vi.spyOn(ownerDocument.defaultView!, "getComputedStyle");
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 200,
       ownerDocument,
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 320,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1384,19 +1507,17 @@ describe("BrunoTableViewportRuntime", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const ownerDocument = createRtlOwnerDocument("negative", () => direction);
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 200,
       ownerDocument,
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 320,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1438,36 +1559,23 @@ describe("BrunoTableViewportRuntime", () => {
       },
     );
     const ownerDocument = createRtlOwnerDocument("negative", () => "ltr");
-    const documentElement = ownerDocument.documentElement as HTMLElement & {
-      parentElement: HTMLElement | null;
-    };
-    const body = ownerDocument.body as HTMLElement & { parentElement: HTMLElement | null };
-    const explicitDirectionOwner = {
-      hasAttribute: (name: string) => name === "dir",
-      parentElement: body,
-    } as unknown as HTMLElement;
-    const intermediateOwner = {
-      hasAttribute: () => false,
-      parentElement: explicitDirectionOwner,
-    } as unknown as HTMLElement;
-    const directParent = {
-      hasAttribute: () => false,
-      parentElement: intermediateOwner,
-    } as unknown as HTMLElement;
-    body.parentElement = documentElement;
-    documentElement.parentElement = null;
-    const element = {
-      addEventListener: vi.fn(),
+    const documentElement = ownerDocument.documentElement;
+    const body = ownerDocument.body;
+    const explicitDirectionOwner = ownerDocument.createElement("div");
+    const intermediateOwner = ownerDocument.createElement("div");
+    const directParent = ownerDocument.createElement("div");
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 200,
-      hasAttribute: () => false,
       ownerDocument,
-      parentElement: directParent,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
+    body.appendChild(explicitDirectionOwner);
+    explicitDirectionOwner.appendChild(intermediateOwner);
+    intermediateOwner.appendChild(directParent);
+    directParent.appendChild(element);
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1537,30 +1645,24 @@ describe("BrunoTableViewportRuntime", () => {
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       vi.stubGlobal(
         "ResizeObserver",
-        class {
+        class extends TestResizeObserver {
           public constructor(callback: ResizeObserverCallback) {
-            resize = () => callback([], this as unknown as ResizeObserver);
+            super(callback);
+            resize = () => this.trigger();
           }
-          public observe() {}
-          public disconnect() {}
         },
       );
-      const element = {
-        addEventListener: vi.fn((name: string, listener: EventListener) => {
+      const element = createViewportElement({
+        addEventListener: (name, listener) => {
           if (name === "scroll") scrollListener = listener;
-        }),
-        clientHeight: 480,
-        get clientWidth() {
-          return width;
         },
-        ...(direction === "reverse-rtl"
-          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
-          : {}),
-        removeEventListener: vi.fn(),
+        clientHeight: 480,
+        clientWidth: () => width,
+        ownerDocument: direction === "reverse-rtl" ? createRtlOwnerDocument("reverse") : undefined,
         scrollLeft: direction === "reverse-rtl" ? 900 : 0,
         scrollTop: 0,
         style: { setProperty: vi.fn() },
-      } as unknown as HTMLElement;
+      });
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
@@ -1596,27 +1698,21 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "ResizeObserver",
-      class {
+      class extends TestResizeObserver {
         public constructor(callback: ResizeObserverCallback) {
-          resize = () => callback([], this as unknown as ResizeObserver);
+          super(callback);
+          resize = () => this.trigger();
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
-      get clientWidth() {
-        return width;
-      },
+      clientWidth: () => width,
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 500,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1647,19 +1743,14 @@ describe("BrunoTableViewportRuntime", () => {
       })),
     );
     let width = 200;
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
-      get clientWidth() {
-        return width;
-      },
+      clientWidth: () => width,
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
       scrollLeft: 500,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -1710,26 +1801,20 @@ describe("BrunoTableViewportRuntime", () => {
       return callbacks.length;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth,
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
-      get scrollLeft() {
-        return nativeScrollLeft;
-      },
-      set scrollLeft(value: number) {
-        const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
-        nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
-      },
-      get scrollWidth() {
-        return committedScrollWidth;
+      scrollLeft: {
+        get: () => nativeScrollLeft,
+        set: (value) => {
+          const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
+          nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+        },
       },
       scrollTop: 0,
-      style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+      scrollWidth: () => committedScrollWidth,
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
@@ -1782,9 +1867,9 @@ describe("BrunoTableViewportRuntime", () => {
     );
     const triggerResize = observeResizeTargets();
     const { callbacks, commitScrollWidth, element } = createDeferredReverseRtlHarness();
-    const rowLayer = {
+    const rowLayer = createViewportElement({
       style: { removeProperty: vi.fn(), setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
@@ -1832,9 +1917,9 @@ describe("BrunoTableViewportRuntime", () => {
     );
     const triggerResize = observeResizeTargets();
     const { callbacks, commitScrollWidth, element } = createDeferredReverseRtlHarness();
-    const rowLayer = {
+    const rowLayer = createViewportElement({
       style: { removeProperty: vi.fn(), setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
@@ -1893,40 +1978,33 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "MutationObserver",
-      class {
+      class extends TestMutationObserver {
         public constructor(callback: MutationCallback) {
+          super(callback);
           mutation = callback;
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth,
       ownerDocument: createRtlOwnerDocument("reverse", () => direction),
-      parentElement: null,
-      removeEventListener: vi.fn(),
-      get scrollLeft() {
-        return nativeScrollLeft;
-      },
-      set scrollLeft(value: number) {
-        const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
-        nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
-      },
-      get scrollWidth() {
-        return committedScrollWidth;
+      scrollLeft: {
+        get: () => nativeScrollLeft,
+        set: (value) => {
+          const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
+          nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+        },
       },
       scrollTop: 0,
-      style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+      scrollWidth: () => committedScrollWidth,
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
 
     direction = "rtl";
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     viewport.setLayout(2, widerColumns);
 
     expect(element.scrollLeft).toBe(0);
@@ -1971,36 +2049,30 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "MutationObserver",
-      class {
+      class extends TestMutationObserver {
         public constructor(callback: MutationCallback) {
+          super(callback);
           mutation = callback;
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth,
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
-      get scrollLeft() {
-        return nativeScrollLeft;
-      },
-      set scrollLeft(value: number) {
-        const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
-        nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
-      },
-      get scrollWidth() {
-        return committedScrollWidth;
+      scrollLeft: {
+        get: () => nativeScrollLeft,
+        set: (value) => {
+          const committedMaximum = Math.max(committedScrollWidth - clientWidth, 0);
+          nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+        },
       },
       scrollTop: 0,
-      style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+      scrollWidth: () => committedScrollWidth,
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
@@ -2009,9 +2081,9 @@ describe("BrunoTableViewportRuntime", () => {
     committedScrollWidth = 1_000;
     element.scrollLeft = 600;
     scrollListener!(new Event("scroll"));
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     element.scrollLeft = 500;
-    mutation!([], {} as MutationObserver);
+    mutation!([], new TestMutationObserver(() => undefined));
     viewport.resetVertical();
 
     expect(element.scrollLeft).toBe(500);
@@ -2086,36 +2158,27 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal(
       "ResizeObserver",
-      class {
+      class extends TestResizeObserver {
         public constructor(callback: ResizeObserverCallback) {
-          resize = () => callback([], this as unknown as ResizeObserver);
+          super(callback);
+          resize = () => this.trigger();
         }
-        public observe() {}
-        public disconnect() {}
       },
     );
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
-      get clientWidth() {
-        return width;
-      },
+      clientWidth: () => width,
       ownerDocument: createRtlOwnerDocument("reverse"),
-      parentElement: null,
-      removeEventListener: vi.fn(),
-      get scrollLeft() {
-        return nativeScrollLeft;
-      },
-      set scrollLeft(value: number) {
-        const committedMaximum = Math.max(committedScrollWidth - width, 0);
-        nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
-      },
-      get scrollWidth() {
-        return committedScrollWidth;
+      scrollLeft: {
+        get: () => nativeScrollLeft,
+        set: (value) => {
+          const committedMaximum = Math.max(committedScrollWidth - width, 0);
+          nativeScrollLeft = Math.min(Math.max(value, 0), committedMaximum);
+        },
       },
       scrollTop: 0,
-      style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+      scrollWidth: () => committedScrollWidth,
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, initialColumns);
     viewport.attach(element);
@@ -2165,22 +2228,17 @@ describe("BrunoTableViewportRuntime", () => {
       );
       let width = 200;
       let scrollListener: EventListener | undefined;
-      const element = {
-        addEventListener: vi.fn((name: string, listener: EventListener) => {
+      const element = createViewportElement({
+        addEventListener: (name, listener) => {
           if (name === "scroll") scrollListener = listener;
-        }),
-        clientHeight: 480,
-        get clientWidth() {
-          return width;
         },
-        ...(direction === "reverse-rtl"
-          ? { ownerDocument: createRtlOwnerDocument("reverse"), parentElement: null }
-          : {}),
-        removeEventListener: vi.fn(),
+        clientHeight: 480,
+        clientWidth: () => width,
+        ownerDocument: direction === "reverse-rtl" ? createRtlOwnerDocument("reverse") : undefined,
         scrollLeft: direction === "reverse-rtl" ? 480 : 320,
         scrollTop: 0,
         style: { setProperty: vi.fn() },
-      } as unknown as HTMLElement;
+      });
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
@@ -2222,15 +2280,13 @@ describe("BrunoTableViewportRuntime", () => {
         width: column.semantics.width,
       })),
     );
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 100,
-      removeEventListener: vi.fn(),
       scrollLeft: 420,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, pinnedColumns);
     viewport.attach(element);
@@ -2256,15 +2312,13 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
@@ -2292,15 +2346,13 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
@@ -2329,17 +2381,16 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -2378,15 +2429,13 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const replacementColumns = Object.freeze([...columns.slice(0, 8), ...replacementTail]);
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 240,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
     viewport.attach(element);
@@ -2438,15 +2487,13 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 240,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
 
@@ -2509,15 +2556,15 @@ describe("BrunoTableViewportRuntime", () => {
     const snapshotAtWidth = (clientWidth: number) => {
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
-      viewport.attach({
-        addEventListener: vi.fn(),
-        clientHeight: 480,
-        clientWidth,
-        removeEventListener: vi.fn(),
-        scrollLeft: 0,
-        scrollTop: 0,
-        style: { setProperty: vi.fn() },
-      } as unknown as HTMLElement);
+      viewport.attach(
+        createViewportElement({
+          clientHeight: 480,
+          clientWidth,
+          scrollLeft: 0,
+          scrollTop: 0,
+          style: { setProperty: vi.fn() },
+        }),
+      );
       return viewport.getSnapshot().virtualWindow;
     };
 
@@ -2559,17 +2606,13 @@ describe("BrunoTableViewportRuntime", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     let clientWidth = 240;
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
-      get clientWidth() {
-        return clientWidth;
-      },
-      removeEventListener: vi.fn(),
+      clientWidth: () => clientWidth,
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(2, columns);
 
@@ -2611,18 +2654,14 @@ describe("BrunoTableViewportRuntime", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const setProperty = vi.fn();
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
-    const bodyLayer = {
-      style: { setProperty },
-    } as unknown as HTMLElement;
+    });
+    const bodyLayer = createViewportElement({ style: { setProperty } });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
@@ -2664,17 +2703,16 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
@@ -2711,15 +2749,13 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 720,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
@@ -2746,17 +2782,16 @@ describe("BrunoTableViewportRuntime", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
+    const element = createViewportElement({
+      addEventListener: (name, listener) => {
         if (name === "scroll") scrollListener = listener;
-      }),
+      },
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 0,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);
@@ -2779,15 +2814,13 @@ describe("BrunoTableViewportRuntime", () => {
         valueType: "text",
       },
     ]);
-    const element = {
-      addEventListener: vi.fn(),
+    const element = createViewportElement({
       clientHeight: 480,
       clientWidth: 800,
-      removeEventListener: vi.fn(),
       scrollLeft: 0,
       scrollTop: 3_000,
       style: { setProperty: vi.fn() },
-    } as unknown as HTMLElement;
+    });
     const viewport = new BrunoTableViewportRuntime();
     viewport.setLayout(100, columns);
     viewport.attach(element);

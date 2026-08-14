@@ -98,7 +98,7 @@ export class BrunoTableNavigationRuntime {
     this.setActive({ region: "header", rowIndex: 0, columnId });
   };
 
-  public readonly setShape = (
+  public readonly setLayout = (
     rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
     columns: readonly CompiledColumn[],
   ): void => {

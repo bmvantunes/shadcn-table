@@ -60,6 +60,7 @@ function ToastViewport({ className, onBlur, onFocus, ...props }: ToastPrimitive.
 
   const handleBlur = (event: ToastViewportBlurEvent) => {
     onBlur?.(event);
+    // SAFETY: FocusEvent.relatedTarget is a DOM EventTarget and contains accepts the nullable Node boundary.
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
       setIsViewportFocused(false);
     }

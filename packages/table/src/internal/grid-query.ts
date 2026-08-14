@@ -1,5 +1,10 @@
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
+import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
+
+interface MutableRuntimeRecord {
+  [key: PropertyKey]: BrunoTableRuntimeValue;
+}
 
 export type ClientOrderBy = readonly {
   readonly columnId: string;
@@ -30,7 +35,10 @@ export function sanitizeBrunoTableFilters(
   return sanitizeClientInitialFilters(filters, columns);
 }
 
-export function brunoTableFilterReferencesColumn(candidate: unknown, columnId: string): boolean {
+export function brunoTableFilterReferencesColumn(
+  candidate: BrunoTableRuntimeRecord,
+  columnId: string,
+): boolean {
   return filterReferencesColumn(candidate, columnId);
 }
 
@@ -81,7 +89,7 @@ export function sanitizeClientOrderBy(
   const sanitized: { readonly columnId: string; readonly direction: "asc" | "desc" }[] = [];
   for (const candidate of candidates) {
     try {
-      const sort = asRecord(candidate);
+      const sort = isRuntimeRecord(candidate) ? candidate : {};
       const direction = sort["direction"];
       const columnId = sort["columnId"];
       if (direction !== "asc" && direction !== "desc") continue;
@@ -103,9 +111,9 @@ export function sanitizeClientInitialFilters(
   const candidates = snapshotRootEntries(filters);
   if (candidates === undefined) return EMPTY_FILTERS;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
+  const captured = new WeakMap<object, BrunoTableRuntimeRecord | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
-  const sanitized: Readonly<Record<string, unknown>>[] = [];
+  const sanitized: BrunoTableRuntimeRecord[] = [];
   for (const filter of candidates) {
     const context: FilterSanitizationContext = {
       captured,
@@ -115,7 +123,9 @@ export function sanitizeClientInitialFilters(
       overBudget: false,
       remainingNodes: CLIENT_FILTER_MAX_NODES,
     };
-    const next = sanitizeFilter(filter, columnsById, context, 0);
+    const next = isRuntimeRecord(filter)
+      ? sanitizeFilter(filter, columnsById, context, 0)
+      : undefined;
     if (context.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
         `BrunoTable initialFilters expressions may contain at most ${CLIENT_FILTER_MAX_NODES} nodes, nesting depth ${CLIENT_FILTER_MAX_DEPTH}, and ${CLIENT_FILTER_MAX_OPERANDS} values per in operand.`,
@@ -138,50 +148,60 @@ export function filterClientRows<TRow>(
 export function createClientFilterPredicate<TRow>(
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
-  readValue: (column: CompiledColumn, row: TRow) => unknown = readCompiledColumnValue,
+  readValue: (
+    column: CompiledColumn,
+    row: TRow,
+  ) => BrunoTableRuntimeValue = readCompiledColumnValue,
 ): ((row: TRow) => boolean) | undefined {
   if (filters === undefined || filters.length === 0) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
   const hasSharedNodes = containsSharedFilterNodes(filters);
   return (row) => {
     const completed = hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
-    return filters.every((filter) =>
-      evaluateFilter(filter, row, columnsById, readUnknown, completed),
+    return filters.every(
+      (filter) =>
+        isRuntimeRecord(filter) && evaluateFilter(filter, row, columnsById, readValue, completed),
     );
   };
 }
 
-export function filterReferencesColumn(candidate: unknown, columnId: string): boolean {
+export function filterReferencesColumn(
+  candidate: BrunoTableRuntimeRecord,
+  columnId: string,
+): boolean {
   const columnIds = new Set<string>();
   collectClientFilterColumnIds(candidate, columnIds);
   return columnIds.has(columnId);
 }
 
-export function collectClientFilterColumnIds(candidate: unknown, target: Set<string>): void {
+export function collectClientFilterColumnIds(
+  candidate: BrunoTableRuntimeRecord,
+  target: Set<string>,
+): void {
   collectFilterColumnIds(candidate, target, new WeakSet<object>());
 }
 
 function collectFilterColumnIds(
-  candidate: unknown,
+  candidate: BrunoTableRuntimeRecord,
   target: Set<string>,
   visited: WeakSet<object>,
 ): void {
-  if (typeof candidate !== "object" || candidate === null || visited.has(candidate)) return;
+  if (visited.has(candidate)) return;
   visited.add(candidate);
-  const filter = asRecord(candidate);
+  const filter = candidate;
   if (typeof filter["columnId"] === "string") target.add(filter["columnId"]);
   if (Array.isArray(filter["conditions"])) {
-    for (const condition of filter["conditions"])
-      collectFilterColumnIds(condition, target, visited);
+    for (const condition of filter["conditions"]) {
+      if (isRuntimeRecord(condition)) collectFilterColumnIds(condition, target, visited);
+    }
   }
-  if (filter["condition"] !== undefined) {
+  if (isRuntimeRecord(filter["condition"])) {
     collectFilterColumnIds(filter["condition"], target, visited);
   }
 }
 
 function sanitizeFilter(
-  candidate: unknown,
+  candidate: BrunoTableRuntimeRecord,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   context: FilterSanitizationContext,
   depth: number,
@@ -191,7 +211,7 @@ function sanitizeFilter(
     context.overBudget = true;
     return undefined;
   }
-  if (typeof candidate !== "object" || candidate === null || context.visited.has(candidate)) {
+  if (context.visited.has(candidate)) {
     return undefined;
   }
   if (!precharged) {
@@ -204,11 +224,11 @@ function sanitizeFilter(
   const completedAtDepth = context.completed.get(candidate);
   if (completedAtDepth?.has(depth) === true) return completedAtDepth.get(depth);
   context.visited.add(candidate);
-  let captured: Readonly<Record<string, unknown>> | undefined;
+  let captured: BrunoTableRuntimeRecord | undefined;
   try {
     captured = context.captured.get(candidate);
     if (!context.captured.has(candidate)) {
-      captured = captureFilterRecord(asRecord(candidate));
+      captured = captureFilterRecord(candidate);
       context.captured.set(candidate, captured);
     }
   } catch {
@@ -228,15 +248,13 @@ function sanitizeFilter(
   return memoizeSanitizedFilter(candidate, depth, sanitized, context, completedAtDepth);
 }
 
-function captureFilterRecord(
-  filter: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> | undefined {
+function captureFilterRecord(filter: BrunoTableRuntimeRecord): BrunoTableRuntimeRecord | undefined {
   if (SANITIZED_FILTER_SNAPSHOTS.has(filter)) return filter;
   if (!Object.hasOwn(filter, "type")) return undefined;
   const type = filter["type"];
   const keys = filterCaptureKeys(type);
   if (keys === undefined) return undefined;
-  const captured: Record<string, unknown> = { type };
+  const captured: MutableRuntimeRecord = { type };
   for (const key of keys) {
     if (!Object.hasOwn(filter, key)) continue;
     captured[key] = filter[key];
@@ -245,10 +263,10 @@ function captureFilterRecord(
 }
 
 function captureDenseFilterArray(
-  value: unknown,
+  value: BrunoTableRuntimeValue,
   context: FilterSanitizationContext,
   reserveConditions: boolean,
-): readonly unknown[] | undefined {
+): readonly BrunoTableRuntimeValue[] | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) {
     return admitFilterArrayLength(value.length, context, reserveConditions) ? value : undefined;
@@ -280,7 +298,7 @@ function admitFilterArrayLength(
   return false;
 }
 
-function captureFilterArrayLength(value: object): CapturedFilterArray | undefined {
+function captureFilterArrayLength(value: BrunoTableRuntimeValue): CapturedFilterArray | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
     const length = value.length;
@@ -302,7 +320,7 @@ function reserveConditionEntries(length: number, context: FilterSanitizationCont
 }
 
 function memoizeSanitizedFilter(
-  candidate: object,
+  candidate: BrunoTableRuntimeRecord,
   depth: number,
   sanitized: SanitizedFilterNode | undefined,
   context: FilterSanitizationContext,
@@ -314,7 +332,7 @@ function memoizeSanitizedFilter(
   return sanitized;
 }
 
-function filterCaptureKeys(type: unknown): readonly string[] | undefined {
+function filterCaptureKeys(type: BrunoTableRuntimeValue): readonly string[] | undefined {
   if (type === "AND" || type === "OR") return ["conditions"];
   if (type === "NOT") return ["condition"];
   if (type === "blank" || type === "notBlank") return ["columnId"];
@@ -342,7 +360,7 @@ function filterCaptureKeys(type: unknown): readonly string[] | undefined {
 }
 
 function sanitizeFilterRecord(
-  filter: Readonly<Record<string, unknown>>,
+  filter: BrunoTableRuntimeRecord,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   context: FilterSanitizationContext,
   depth: number,
@@ -351,10 +369,12 @@ function sanitizeFilterRecord(
   if (type === "AND" || type === "OR") {
     const candidates = captureDenseFilterArray(filter["conditions"], context, true);
     if (candidates === undefined || candidates.length === 0) return undefined;
-    const conditions: Readonly<Record<string, unknown>>[] = [];
+    const conditions: BrunoTableRuntimeRecord[] = [];
     const columnIds = new Set<string>();
     for (const candidate of candidates) {
-      const condition = sanitizeFilter(candidate, columnsById, context, depth + 1, true);
+      const condition = isRuntimeRecord(candidate)
+        ? sanitizeFilter(candidate, columnsById, context, depth + 1, true)
+        : undefined;
       if (condition === undefined) return undefined;
       conditions.push(condition.filter);
       for (const columnId of condition.columnIds) columnIds.add(columnId);
@@ -369,7 +389,9 @@ function sanitizeFilterRecord(
     };
   }
   if (type === "NOT") {
-    const condition = sanitizeFilter(filter["condition"], columnsById, context, depth + 1);
+    const condition = isRuntimeRecord(filter["condition"])
+      ? sanitizeFilter(filter["condition"], columnsById, context, depth + 1)
+      : undefined;
     return condition === undefined
       ? undefined
       : {
@@ -385,12 +407,12 @@ function sanitizeFilterRecord(
   if (column === undefined || column.enableFilter === false || column.kind !== "field") {
     return undefined;
   }
-  const node = (sanitizedFilter: Readonly<Record<string, unknown>>): SanitizedFilterNode => ({
+  const node = (sanitizedFilter: BrunoTableRuntimeRecord): SanitizedFilterNode => ({
     columnIds: new Set([columnId]),
     filter: sanitizedFilter,
   });
   const operand = filter["filter"];
-  const decode = (value: unknown) => column.semantics.decodeRuntime(value);
+  const decode = (value: BrunoTableRuntimeValue) => column.semantics.decodeRuntime(value);
   if (type === "blank" || type === "notBlank") {
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
@@ -487,11 +509,11 @@ function sanitizeFilterRecord(
 }
 
 function snapshotFilter(
-  filter: Readonly<Record<string, unknown>>,
+  filter: BrunoTableRuntimeRecord,
   keys: readonly string[],
-  replacements: Readonly<Record<string, unknown>> = {},
-): Readonly<Record<string, unknown>> {
-  const snapshot: Record<string, unknown> = {};
+  replacements: BrunoTableRuntimeRecord = {},
+): BrunoTableRuntimeRecord {
+  const snapshot: MutableRuntimeRecord = {};
   for (const key of keys) {
     if (Object.hasOwn(replacements, key)) snapshot[key] = replacements[key];
     else if (Object.hasOwn(filter, key)) snapshot[key] = filter[key];
@@ -499,9 +521,7 @@ function snapshotFilter(
   if (
     SANITIZED_FILTER_SNAPSHOTS.has(filter) &&
     Reflect.ownKeys(filter).length === Reflect.ownKeys(snapshot).length &&
-    Reflect.ownKeys(snapshot).every((key) =>
-      Object.is(filter[key as string], snapshot[key as string]),
-    )
+    Reflect.ownKeys(snapshot).every((key) => Object.is(filter[key], snapshot[key]))
   ) {
     return filter;
   }
@@ -510,7 +530,10 @@ function snapshotFilter(
   return frozen;
 }
 
-function snapshotSanitizedFilterArray<T>(input: unknown, values: readonly T[]): readonly T[] {
+function snapshotSanitizedFilterArray<T>(
+  input: BrunoTableRuntimeValue,
+  values: readonly T[],
+): readonly T[] {
   if (
     typeof input === "object" &&
     input !== null &&
@@ -518,6 +541,8 @@ function snapshotSanitizedFilterArray<T>(input: unknown, values: readonly T[]): 
     Array.isArray(input) &&
     sameReferences(input, values)
   ) {
+    // SAFETY: The identity and every element reference were checked against `values` above;
+    // returning the same array therefore preserves the caller's element type exactly.
     return input as readonly T[];
   }
   const snapshot = Object.freeze(Array.from(values));
@@ -529,47 +554,52 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }
 
-function evaluateFilter(
-  candidate: unknown,
-  row: unknown,
+function evaluateFilter<TRow>(
+  candidate: BrunoTableRuntimeRecord,
+  row: TRow,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  readValue: (column: CompiledColumn, row: unknown) => unknown,
+  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeValue,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   if (completed === undefined) {
     return evaluateFilterRecord(candidate, row, columnsById, readValue, undefined);
   }
-  const candidateObject =
-    typeof candidate === "object" && candidate !== null ? candidate : undefined;
-  if (candidateObject !== undefined && completed.has(candidateObject)) {
-    return completed.get(candidateObject) ?? false;
+  if (completed.has(candidate)) {
+    return completed.get(candidate) ?? false;
   }
   const result = evaluateFilterRecord(candidate, row, columnsById, readValue, completed);
-  if (candidateObject !== undefined) completed.set(candidateObject, result);
+  completed.set(candidate, result);
   return result;
 }
 
-function evaluateFilterRecord(
-  candidate: unknown,
-  row: unknown,
+function evaluateFilterRecord<TRow>(
+  candidate: BrunoTableRuntimeRecord,
+  row: TRow,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  readValue: (column: CompiledColumn, row: unknown) => unknown,
+  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeValue,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
-  const filter = asRecord(candidate);
+  const filter = candidate;
   const type = filter["type"];
   if (type === "AND" || type === "OR") {
     const conditions = Array.isArray(filter["conditions"]) ? filter["conditions"] : [];
     return type === "AND"
-      ? conditions.every((condition) =>
-          evaluateFilter(condition, row, columnsById, readValue, completed),
+      ? conditions.every(
+          (condition) =>
+            isRuntimeRecord(condition) &&
+            evaluateFilter(condition, row, columnsById, readValue, completed),
         )
-      : conditions.some((condition) =>
-          evaluateFilter(condition, row, columnsById, readValue, completed),
+      : conditions.some(
+          (condition) =>
+            isRuntimeRecord(condition) &&
+            evaluateFilter(condition, row, columnsById, readValue, completed),
         );
   }
   if (type === "NOT") {
-    return !evaluateFilter(filter["condition"], row, columnsById, readValue, completed);
+    return !(
+      isRuntimeRecord(filter["condition"]) &&
+      evaluateFilter(filter["condition"], row, columnsById, readValue, completed)
+    );
   }
   const columnId = filter["columnId"];
   const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
@@ -638,7 +668,7 @@ function containsSharedFilterNodes(filters: readonly unknown[]): boolean {
     if (typeof candidate !== "object" || candidate === null) continue;
     if (visited.has(candidate)) return true;
     visited.add(candidate);
-    const filter = asRecord(candidate);
+    const filter = isRuntimeRecord(candidate) ? candidate : {};
     const conditions = filter["conditions"];
     if (Array.isArray(conditions)) {
       for (let index = 0; index < conditions.length; index += 1) {
@@ -652,8 +682,8 @@ function containsSharedFilterNodes(filters: readonly unknown[]): boolean {
 
 function compareEquality(
   column: CompiledColumn,
-  value: unknown,
-  operand: unknown,
+  value: BrunoTableRuntimeValue,
+  operand: BrunoTableRuntimeValue,
   caseSensitive: boolean,
   accentSensitive: boolean,
 ): boolean {
@@ -676,19 +706,19 @@ function normalizeText(value: string, caseSensitive: boolean, accentSensitive: b
   return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
 }
 
-function hasValidTextSensitivity(
-  filter: Readonly<Record<string, unknown>>,
-  supported: boolean,
-): boolean {
+function hasValidTextSensitivity(filter: BrunoTableRuntimeRecord, supported: boolean): boolean {
   return ["caseSensitive", "accentSensitive"].every(
     (key) => !Object.hasOwn(filter, key) || (supported && typeof filter[key] === "boolean"),
   );
 }
 
-function snapshotDenseArray(values: unknown, length: number): readonly unknown[] | undefined {
+function snapshotDenseArray(
+  values: BrunoTableRuntimeValue,
+  length: number,
+): readonly BrunoTableRuntimeValue[] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
-    const snapshot: unknown[] = [];
+    const snapshot: BrunoTableRuntimeValue[] = [];
     for (let index = 0; index < length; index += 1) {
       if (!Object.hasOwn(values, index)) return undefined;
       snapshot.push(values[index]);
@@ -699,14 +729,16 @@ function snapshotDenseArray(values: unknown, length: number): readonly unknown[]
   }
 }
 
-function snapshotRootEntries(values: unknown): readonly unknown[] | undefined {
+function snapshotRootEntries(
+  values: BrunoTableRuntimeValue | undefined,
+): readonly BrunoTableRuntimeValue[] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
     const length = values.length;
     if (!Number.isSafeInteger(length) || length < 0) return undefined;
     const indexes = readOwnArrayIndexes(values, length);
     if (indexes === undefined) return undefined;
-    const snapshot: unknown[] = [];
+    const snapshot: BrunoTableRuntimeValue[] = [];
     for (const index of indexes) {
       try {
         snapshot.push(values[index]);
@@ -740,7 +772,7 @@ function readOwnArrayIndexes(
   }
 }
 
-function isReadableEmptyArray(value: unknown): boolean {
+function isReadableEmptyArray(value: BrunoTableRuntimeValue): boolean {
   try {
     return Array.isArray(value) && value.length === 0;
   } catch {
@@ -752,9 +784,8 @@ function hasSortableColumns(columns: readonly CompiledColumn[]): boolean {
   return columns.some((column) => column.enableSorting !== false);
 }
 
-function asRecord(value: unknown): Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  return value as Readonly<Record<string, unknown>>;
+function isRuntimeRecord(value: unknown): value is BrunoTableRuntimeRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
@@ -765,7 +796,7 @@ const CLIENT_FILTER_MAX_OPERANDS = 4_096;
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {
-  readonly captured: WeakMap<object, Readonly<Record<string, unknown>> | undefined>;
+  readonly captured: WeakMap<object, BrunoTableRuntimeRecord | undefined>;
   readonly capturedArrays: WeakMap<object, CapturedFilterArray | undefined>;
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
@@ -776,10 +807,10 @@ type FilterSanitizationContext = {
 type CapturedFilterArray = {
   attempted: boolean;
   readonly length: number;
-  snapshot: readonly unknown[] | undefined;
+  snapshot: readonly BrunoTableRuntimeValue[] | undefined;
 };
 
 type SanitizedFilterNode = {
   readonly columnIds: ReadonlySet<string>;
-  readonly filter: Readonly<Record<string, unknown>>;
+  readonly filter: BrunoTableRuntimeRecord;
 };

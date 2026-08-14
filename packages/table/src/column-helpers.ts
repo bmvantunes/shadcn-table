@@ -1,5 +1,3 @@
-import { BrunoTableComputedColumn } from "./public-types";
-
 import type {
   BrunoTableBuiltInValueType,
   BrunoTableCellAlign,
@@ -8,6 +6,7 @@ import type {
   BrunoTableComputedColumnDependencies,
   BrunoTableComputedColumnDefinition,
   BrunoTableComputedColumnInput,
+  BrunoTableDecodeResult,
   BrunoTableEditorLayout,
   BrunoTableFieldColumnDefinition,
   BrunoTableFieldColumnInput,
@@ -19,13 +18,16 @@ import type {
   BrunoTableOrdering,
   BrunoTableValueType,
 } from "./public-types";
+import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./internal/runtime-value";
+import { brunoTableComputedColumnMarker } from "./internal/computed-column-marker";
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
 const selectValueTypeFingerprints = new WeakMap<object, readonly string[]>();
 
 export function getBrunoTableSelectValueTypeFingerprint(
-  valueType: unknown,
+  this: void,
+  valueType: BrunoTableRuntimeValue,
 ): readonly string[] | undefined {
   return typeof valueType === "object" && valueType !== null
     ? selectValueTypeFingerprints.get(valueType)
@@ -244,7 +246,11 @@ type BuiltInColumnHelper<
   ) => BuiltInColumnPreset<TValue, TValueType, TBuiltIn, TDefaults>;
 };
 
-type RuntimeColumnOptions = Readonly<Record<PropertyKey, unknown>>;
+type RuntimeColumnOptions = BrunoTableRuntimeRecord;
+
+interface MutableRuntimeColumnOptions {
+  [key: PropertyKey]: BrunoTableRuntimeValue;
+}
 
 const presetDefaultKeys = new Set<PropertyKey>([
   "headerName",
@@ -257,6 +263,29 @@ const presetDefaultKeys = new Set<PropertyKey>([
   "cellClassName",
 ]);
 const numberPresetDefaultKeys = new Set<PropertyKey>([...presetDefaultKeys, "format"]);
+const numberFormatOptionKeys = new Set<PropertyKey>([
+  "compactDisplay",
+  "currency",
+  "currencyDisplay",
+  "currencySign",
+  "localeMatcher",
+  "maximumFractionDigits",
+  "maximumSignificantDigits",
+  "minimumFractionDigits",
+  "minimumIntegerDigits",
+  "minimumSignificantDigits",
+  "notation",
+  "numberingSystem",
+  "roundingIncrement",
+  "roundingMode",
+  "roundingPriority",
+  "signDisplay",
+  "style",
+  "trailingZeroDisplay",
+  "unit",
+  "unitDisplay",
+  "useGrouping",
+]);
 const selectPresetDefaultKeys = new Set<PropertyKey>([...presetDefaultKeys, "options"]);
 const commonColumnOptionKeys = new Set<PropertyKey>([
   "columnId",
@@ -333,27 +362,26 @@ function mergeRuntimeColumn(
   const optionFormatRecord = validateRuntimeFormat(optionFormat);
   const hasFormat =
     builtInFormat !== undefined || defaultFormat !== undefined || optionFormat !== undefined;
-  const merged = {
+  const merged: MutableRuntimeColumnOptions = {
     ...builtIn,
     ...effectiveDefaults,
     ...options,
-    ...(hasFormat
-      ? {
-          format: {
-            ...builtInFormatRecord,
-            ...defaultFormatRecord,
-            ...optionFormatRecord,
-          },
-        }
-      : {}),
   };
+  if (hasFormat) {
+    merged["format"] = Object.freeze({
+      ...builtInFormatRecord,
+      ...defaultFormatRecord,
+      ...optionFormatRecord,
+    });
+  }
   if (!isComputed) {
     validateRuntimeFieldCapabilities(merged);
   }
 
-  return isComputed
-    ? (BrunoTableComputedColumn(merged as never) as unknown as RuntimeColumnOptions)
-    : merged;
+  if (!isComputed) return merged;
+  const marked: MutableRuntimeColumnOptions = { ...merged };
+  marked[brunoTableComputedColumnMarker] = true;
+  return marked;
 }
 
 function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
@@ -384,7 +412,9 @@ function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
       ? new Set(["countDistinct", "sum", "min", "max"])
       : new Set(["countDistinct", "min", "max"]);
   if (!supported.has(aggFunc)) {
-    throw new TypeError(`BrunoTable ${String(valueType)} Column received an unsupported aggFunc.`);
+    throw new TypeError(
+      `BrunoTable ${describeRuntimeValue(valueType)} Column received an unsupported aggFunc.`,
+    );
   }
 }
 
@@ -413,7 +443,7 @@ function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeCol
   );
 }
 
-function isRecord(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
+function isRecord(value: unknown): value is BrunoTableRuntimeRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -1021,19 +1051,32 @@ function snapshotPresetDefaults(
   const format = defaults["format"];
   const options = defaults["options"];
   validateRuntimeFormat(format);
-  return Object.freeze({
+  const snapshot: MutableRuntimeColumnOptions = {
     ...defaults,
-    ...(isRecord(format) ? { format: Object.freeze({ ...format }) } : {}),
-    ...(Array.isArray(options) ? { options: Object.freeze(Array.from(options)) } : {}),
-  });
+  };
+  if (isRecord(format)) snapshot["format"] = Object.freeze({ ...format });
+  if (Array.isArray(options)) snapshot["options"] = Object.freeze(Array.from(options));
+  return Object.freeze(snapshot);
 }
 
-function validateRuntimeFormat(value: unknown): Readonly<Record<PropertyKey, unknown>> {
+function validateRuntimeFormat(value: BrunoTableRuntimeValue): BrunoTableRuntimeRecord {
   if (value === undefined) return {};
   if (!isRecord(value)) {
     throw new TypeError("BrunoTable Number Column format must be an object when provided.");
   }
+  for (const key of Reflect.ownKeys(value)) {
+    if (!numberFormatOptionKeys.has(key)) {
+      throw new TypeError(`BrunoTable number format does not accept ${String(key)}.`);
+    }
+  }
   return value;
+}
+
+function describeRuntimeValue(value: BrunoTableRuntimeValue): string {
+  if (typeof value === "object" && value !== null) {
+    return Object.prototype.toString.call(value);
+  }
+  return String(value);
 }
 
 function validateRuntimeColumnOptions(
@@ -1041,7 +1084,7 @@ function validateRuntimeColumnOptions(
   options: RuntimeColumnOptions,
 ): void {
   const isComputed = isComputedColumnOptions(options);
-  const shapeKeys = isComputed ? computedColumnOptionKeys : fieldColumnOptionKeys;
+  const allowedColumnKeys = isComputed ? computedColumnOptionKeys : fieldColumnOptionKeys;
   const valueType = builtIn["valueType"];
   const acceptsFormat = valueType === "number";
   const acceptsSelectOptions = isRecord(valueType) && valueType["filterFamily"] === "select";
@@ -1049,7 +1092,7 @@ function validateRuntimeColumnOptions(
   for (const key of Reflect.ownKeys(options)) {
     if (
       !commonColumnOptionKeys.has(key) &&
-      !shapeKeys.has(key) &&
+      !allowedColumnKeys.has(key) &&
       !(key === "format" && acceptsFormat) &&
       !(key === "options" && acceptsSelectOptions)
     ) {
@@ -1059,10 +1102,16 @@ function validateRuntimeColumnOptions(
 }
 
 function createSelectValueType(
-  options: readonly unknown[],
-): BrunoTableValueType<unknown, "select", "select"> {
-  const kind = typeof options[0];
-  if (!isSelectPrimitiveKind(kind) || options.some((option) => typeof option !== kind)) {
+  options: readonly BrunoTableRuntimeValue[],
+): BrunoTableValueType<BrunoTableSelectValue, "select", "select"> {
+  const selectOptions = options.map((option) => {
+    if (!isSelectValue(option)) {
+      throw new TypeError("BrunoTable Select Column options must be primitive values.");
+    }
+    return option;
+  });
+  const kind = selectPrimitiveKind(selectOptions[0]);
+  if (kind === undefined || selectOptions.some((option) => selectPrimitiveKind(option) !== kind)) {
     throw new TypeError(
       "BrunoTable Select Column options must use one homogeneous string, number, bigint, or boolean domain.",
     );
@@ -1070,26 +1119,34 @@ function createSelectValueType(
 
   if (
     kind === "number" &&
-    options.some((option) => typeof option !== "number" || !Number.isFinite(option))
+    selectOptions.some((option) => typeof option !== "number" || !Number.isFinite(option))
   ) {
     throw new TypeError("BrunoTable Select Column number options must be finite.");
   }
 
-  const canonicalOptions = options.map(formatSelectCanonicalText);
+  const canonicalOptions = selectOptions.map(formatSelectCanonicalText);
   if (new Set(canonicalOptions).size !== canonicalOptions.length) {
     throw new TypeError("BrunoTable Select Column options must be semantically unique.");
   }
 
-  const findOption = (input: unknown) => options.find((option) => option === input);
-  const requireOption = (input: unknown): unknown => {
+  const findOption = function (this: void, input: BrunoTableRuntimeValue) {
+    return selectOptions.find((option) => option === input);
+  };
+  const requireOption = function (
+    this: void,
+    input: BrunoTableRuntimeValue,
+  ): BrunoTableSelectValue {
     const option = findOption(input);
-    if (option === undefined) {
+    if (option === undefined || !isSelectValue(option)) {
       throw new TypeError("Value is not one of the configured Select options.");
     }
     return option;
   };
-  const decodeOption = (input: unknown) => {
-    const option = findOption(input);
+  const decodeOption = function (
+    this: void,
+    input: unknown,
+  ): BrunoTableDecodeResult<BrunoTableSelectValue> {
+    const option = selectOptions.find((candidate) => candidate === input);
     return option === undefined
       ? ({
           _tag: "Failure",
@@ -1098,7 +1155,7 @@ function createSelectValueType(
       : ({ _tag: "Success", value: option } as const);
   };
 
-  const descriptor: BrunoTableValueType<unknown, "select", "select"> = {
+  const descriptor: BrunoTableValueType<BrunoTableSelectValue, "select", "select"> = {
     codecId: "@bruno/table/select",
     codecVersion: 1,
     filterFamily: "select",
@@ -1113,9 +1170,13 @@ function createSelectValueType(
     formatCanonicalText: (value) => formatSelectCanonicalText(requireOption(value)),
     parseCanonicalText: (text) => {
       const index = canonicalOptions.indexOf(text);
-      return index === -1
+      if (index === -1) {
+        return { _tag: "Failure", message: "Text is not one of the configured Select options." };
+      }
+      const option = selectOptions[index];
+      return option === undefined
         ? { _tag: "Failure", message: "Text is not one of the configured Select options." }
-        : { _tag: "Success", value: options[index] };
+        : { _tag: "Success", value: option };
     },
     formatDisplay: (value) => formatSelectCanonicalText(requireOption(value)),
     encodePersisted: (value) => ({
@@ -1134,34 +1195,40 @@ function createSelectValueType(
   return Object.freeze(descriptor);
 }
 
-function isSelectPrimitiveKind(kind: string): kind is "string" | "number" | "bigint" | "boolean" {
-  return kind === "string" || kind === "number" || kind === "bigint" || kind === "boolean";
+function selectPrimitiveKind(
+  this: void,
+  value: BrunoTableRuntimeValue,
+): "string" | "number" | "bigint" | "boolean" | undefined {
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "bigint") return "bigint";
+  if (typeof value === "boolean") return "boolean";
+  return undefined;
 }
 
-function formatSelectCanonicalText(value: unknown): string {
-  return typeof value === "bigint" ? value.toString(10) : String(value);
+function formatSelectCanonicalText(this: void, value: BrunoTableRuntimeValue): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "bigint") return value.toString(10);
+  return value ? "true" : "false";
 }
 
 function compareIndexes(left: number, right: number): BrunoTableOrdering {
   return left === right ? 0 : left < right ? -1 : 1;
 }
 
-function encodeSelectPrimitive(value: unknown): BrunoTableJsonValue {
-  switch (typeof value) {
-    case "string":
-      return { type: "string", value };
-    case "number":
-      return { type: "number", value: String(value) };
-    case "bigint":
-      return { type: "bigint", value: value.toString(10) };
-    case "boolean":
-      return { type: "boolean", value };
-    default:
-      throw new TypeError("BrunoTable Select Column cannot encode an unsupported value.");
-  }
+function encodeSelectPrimitive(this: void, value: BrunoTableRuntimeValue): BrunoTableJsonValue {
+  if (typeof value === "string") return { type: "string", value };
+  if (typeof value === "number") return { type: "number", value: String(value) };
+  if (typeof value === "bigint") return { type: "bigint", value: value.toString(10) };
+  if (typeof value === "boolean") return { type: "boolean", value };
+  throw new TypeError("BrunoTable Select Column cannot encode an unsupported value.");
 }
 
-function decodeSelectPrimitive(input: unknown): unknown {
+function decodeSelectPrimitive(
+  this: void,
+  input: BrunoTableRuntimeValue,
+): BrunoTableSelectValue | undefined {
   if (!isRecord(input) || typeof input["type"] !== "string") {
     return undefined;
   }
@@ -1182,4 +1249,13 @@ function decodeSelectPrimitive(input: unknown): unknown {
     default:
       return undefined;
   }
+}
+
+function isSelectValue(value: BrunoTableRuntimeValue): value is BrunoTableSelectValue {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean"
+  );
 }

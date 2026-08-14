@@ -9,6 +9,7 @@ function AspectRatio({
     <div
       data-slot="aspect-ratio"
       style={
+        // SAFETY: React CSS custom properties are represented by CSSProperties at this style boundary.
         {
           "--ratio": ratio,
         } as React.CSSProperties

@@ -29,7 +29,7 @@ export default defineConfig({
   },
   test: {
     name: "table-browser",
-    include: ["src/**/*.browser.test.tsx"],
+    include: ["src/**/*.browser.test.tsx", "src/internal/virtual-viewport.test.ts"],
     setupFiles: ["./src/vitest.browser.setup.ts"],
     browser: {
       enabled: true,

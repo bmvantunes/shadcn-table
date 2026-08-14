@@ -2,6 +2,13 @@ import { bench, describe } from "vite-plus/test";
 
 import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
+
+type DiagnosticSamples = {
+  resize: number[];
+  reorder: number[];
+  reset: number[];
+};
 
 const columnCount = 240;
 const referenceFrameBudgetMs = 8.33;
@@ -22,7 +29,7 @@ const benchmarkPublication = {
 };
 const benchmarkOrder = [{ columnId: benchmarkColumns[0]!.columnId, direction: "asc" as const }];
 
-function createRuntime(tableId: string): BrunoTableGridRuntime<unknown> {
+function createRuntime(tableId: string): BrunoTableGridRuntime<BrunoTableRuntimeValue> {
   return new BrunoTableGridRuntime(
     benchmarkPublication,
     benchmarkColumns,
@@ -34,7 +41,7 @@ function createRuntime(tableId: string): BrunoTableGridRuntime<unknown> {
   );
 }
 
-function createDirtyResetRuntime(index: number): BrunoTableGridRuntime<unknown> {
+function createDirtyResetRuntime(index: number): BrunoTableGridRuntime<BrunoTableRuntimeValue> {
   const runtime = createRuntime(`TABLE_ID_BENCH_RESET_${String(index)}`);
   runtime.dispatchGridCommand({
     type: "column.resize.commit",
@@ -118,10 +125,10 @@ describe("BrunoTable column management runtime benchmark (8.33 ms/120 Hz referen
   const diagnosticResetRuntimes = Array.from({ length: 256 }, (_unused, index) =>
     createDirtyResetRuntime(10_000 + index),
   );
-  const diagnosticSamples = {
-    resize: [] as number[],
-    reorder: [] as number[],
-    reset: [] as number[],
+  const diagnosticSamples: DiagnosticSamples = {
+    resize: [],
+    reorder: [],
+    reset: [],
   };
   let diagnosticIteration = 0;
   let diagnosticPrinted = false;

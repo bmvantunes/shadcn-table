@@ -78,6 +78,7 @@ describe("Effect BigDecimal Value Type", () => {
     });
     expect(() =>
       BrunoTableBigDecimalValueType.compare(
+        // SAFETY: This malformed wire-shaped value intentionally crosses the decoder boundary to test rejection.
         { value: 15n, scale: 1 } as BigDecimal.BigDecimal,
         decimal("1.5"),
       ),
@@ -294,6 +295,7 @@ describe("BrunoTableBigDecimalColumn", () => {
 
   it("rejects grouped presentation without its capability at runtime", () => {
     expect(() =>
+      // SAFETY: These fixtures intentionally bypass capability typing to verify runtime diagnostics.
       BrunoTableBigDecimalColumn({
         columnId: "COL_ID_PRICE",
         field: "price",
@@ -302,6 +304,7 @@ describe("BrunoTableBigDecimalColumn", () => {
       } as never),
     ).toThrow("requires aggFunc");
     expect(() =>
+      // SAFETY: These fixtures intentionally bypass capability typing to verify runtime diagnostics.
       BrunoTableBigDecimalColumn({
         columnId: "COL_ID_PRICE",
         field: "price",

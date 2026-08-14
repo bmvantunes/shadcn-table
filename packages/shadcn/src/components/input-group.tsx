@@ -53,6 +53,7 @@ function InputGroupAddon({
       className={cn(inputGroupAddonVariants({ align }), className)}
       onClick={(event) => {
         onClick?.(event);
+        // SAFETY: React DOM click targets are Nodes; this handler only reads HTMLElement.closest at the DOM boundary.
         if (event.defaultPrevented || (event.target as HTMLElement).closest("button")) {
           return;
         }

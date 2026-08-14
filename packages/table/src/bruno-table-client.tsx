@@ -8,7 +8,7 @@ import {
   BrunoTableToolbarStore,
   BrunoTableView,
 } from "./internal/bruno-table-view";
-import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import { createBrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
@@ -16,9 +16,10 @@ import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 
 export { BrunoTableToolbar };
 
-export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
-  props: BrunoTableClientProps<TRow, TColumns>,
-): ReactNode {
+export function BrunoTableClient<
+  TRow extends object | string | number | bigint | boolean | symbol | null | undefined,
+  const TColumns extends BrunoTableColumns<TRow>,
+>(props: BrunoTableClientProps<TRow, TColumns>): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const [rowPipelineAdapter] = useState(
@@ -31,6 +32,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
         props.initialOrderBy,
       ),
   );
+  const [rowPipeline] = useState(() => createBrunoTableClientRowPipeline<TRow>());
   const [runtime] = useState(
     () =>
       new BrunoTableGridRuntime(
@@ -71,13 +73,13 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
       tableId={tableId}
       compiledColumns={compiledColumns}
       toolbar={toolbar}
-      rowPipeline={BrunoTableClientRowPipeline}
+      rowPipeline={rowPipeline}
       rowPipelineAdapter={rowPipelineAdapter}
     />
   );
 }
 
-function requireBrunoTableId(tableId: unknown): string {
+function requireBrunoTableId(tableId: string): string {
   if (typeof tableId !== "string" || tableId.trim().length === 0) {
     throw new TypeError("BrunoTable tableId must be a non-empty string.");
   }

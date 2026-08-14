@@ -1,4 +1,18 @@
 import type { ReactNode } from "react";
+import { brunoTableComputedColumnMarker } from "./internal/computed-column-marker";
+import type { BrunoTableRuntimeRecord } from "./internal/runtime-value";
+
+type BrunoTableComputedColumnImplementationOptions = BrunoTableRuntimeRecord;
+type BrunoTableErasedValue =
+  | object
+  | string
+  | number
+  | bigint
+  | boolean
+  | symbol
+  | null
+  | undefined;
+type BrunoTableErasedDecodeResult = object;
 
 type ColumnIdFirstCharacter =
   | "_"
@@ -157,7 +171,9 @@ export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
   readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<infer TValue>;
 }
   ? TValue
-  : never;
+  : TValueType extends ErasedValueType
+    ? BrunoTableErasedValue
+    : never;
 
 export type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -453,8 +469,6 @@ type FieldColumns<TRow> = {
             | RawCustomAggregatedFieldColumn<TRow, TField>);
 }[FieldKey<TRow>];
 
-const computedColumnMarker: unique symbol = Symbol("BrunoTableComputedColumn");
-
 type ComputedColumn<
   TRow,
   TFields extends NonEmptyFields<TRow>,
@@ -462,7 +476,7 @@ type ComputedColumn<
   TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = ColumnPresentation<TRow, TValue> &
   ColumnLayout & {
-    readonly [computedColumnMarker]: true;
+    readonly [brunoTableComputedColumnMarker]: true;
     readonly columnId: BrunoTableColumnId;
     readonly headerName: string;
     readonly fields: TFields;
@@ -484,23 +498,23 @@ type ErasedValueType = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
   readonly aggregateResults?: BrunoTableAggregateResults;
-  readonly decodeRuntime: (input: unknown) => unknown;
-  readonly equivalent: (...parameters: never[]) => unknown;
-  readonly compare: (...parameters: never[]) => unknown;
-  readonly formatCanonicalText: (...parameters: never[]) => unknown;
-  readonly parseCanonicalText: (text: string) => unknown;
-  readonly formatDisplay: (...parameters: never[]) => unknown;
-  readonly encodePersisted: (...parameters: never[]) => unknown;
-  readonly decodePersisted: (input: unknown) => unknown;
+  readonly decodeRuntime: (this: void, input: unknown) => BrunoTableErasedDecodeResult;
+  readonly equivalent: (this: void, ...parameters: never[]) => boolean;
+  readonly compare: (this: void, ...parameters: never[]) => BrunoTableOrdering;
+  readonly formatCanonicalText: (this: void, ...parameters: never[]) => string;
+  readonly parseCanonicalText: (this: void, text: string) => BrunoTableErasedDecodeResult;
+  readonly formatDisplay: (this: void, ...parameters: never[]) => string;
+  readonly encodePersisted: (this: void, ...parameters: never[]) => BrunoTableJsonValue;
+  readonly decodePersisted: (this: void, input: unknown) => BrunoTableErasedDecodeResult;
 };
 
 type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
   ColumnLayout & {
-    readonly [computedColumnMarker]: true;
+    readonly [brunoTableComputedColumnMarker]: true;
     readonly columnId: BrunoTableColumnId;
     readonly headerName: string;
     readonly fields: NonEmptyFields<TRow>;
-    readonly valueGetter: (...parameters: never[]) => unknown;
+    readonly valueGetter: (this: void, ...parameters: never[]) => BrunoTableErasedValue;
     readonly valueType: ErasedValueType;
     readonly field?: never;
     readonly enableFilter?: never;
@@ -532,7 +546,7 @@ type ComputedColumnOptions<
   TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
 > = Omit<
   ComputedColumn<TRow, TFields, TValue, TValueType>,
-  typeof computedColumnMarker | "fields" | "valueGetter"
+  typeof brunoTableComputedColumnMarker | "fields" | "valueGetter"
 >;
 
 /** A string key of the consumer's Row type. */
@@ -665,8 +679,8 @@ export function BrunoTableComputedColumn<
 ): TOptions &
   ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>> &
   ComputedColumn<TRow, TFields, BrunoTableValueTypeValue<TValueType>, TValueType>;
-export function BrunoTableComputedColumn(options: Readonly<Record<string, unknown>>) {
-  return { ...options, [computedColumnMarker]: true };
+export function BrunoTableComputedColumn(options: BrunoTableComputedColumnImplementationOptions) {
+  return { ...options, [brunoTableComputedColumnMarker]: true };
 }
 
 type GroupedPresentationCallbackKey =

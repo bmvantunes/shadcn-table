@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
 
 describe("compileColumns", () => {
   it("compiles immutable field and computed representations once", () => {
@@ -57,7 +58,11 @@ describe("compileColumns", () => {
     const reads = new Map<string, number>();
     const valueGetter = () => 42;
     const valueFormatter = () => "42";
-    const property = (name: string, firstValue: unknown, laterValue: unknown) => ({
+    const property = (
+      name: string,
+      firstValue: BrunoTableRuntimeValue,
+      laterValue: BrunoTableRuntimeValue,
+    ) => ({
       enumerable: true,
       get() {
         const count = (reads.get(name) ?? 0) + 1;

@@ -326,11 +326,12 @@
   },
   "scripts": {
     "build": "vp pack",
-    "check": "vp check",
+    "check": "vp check && vp run test:anti-slop",
     "check:build": "node scripts/assert-build-output.mjs",
     "dev": "vp pack --watch",
     "test": "vp test",
     "test:browser": "vp test --project browser --run",
+    "test:anti-slop": "node ../../tools/oxlint/anti-slop/tests/run-all.mjs",
     "prepublishOnly": "vp run check && vp run test && vp run test:browser && vp run build && vp run check:build"
   },
   "dependencies": {

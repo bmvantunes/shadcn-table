@@ -1,0 +1,58 @@
+{
+  "mergeBase": "4249e9296bb92878aebed2cca6a81c4f63a96186",
+  "toolVersions": {
+    "oxlint": "1.78.0",
+    "@oxlint/plugins": "1.78.0"
+  },
+  "captureCommand": "vp lint --format json",
+  "initial": {
+    "total": 321,
+    "byCategory": {
+      "require-safety-comment-for-type-assertion": 249,
+      "no-chained-type-assertions": 66,
+      "typescript(TS2578)": 3,
+      "typescript(TS2322)": 2,
+      "typescript(TS2307)": 1
+    }
+  },
+  "intermediate": {
+    "total": 147,
+    "byCode": {
+      "anti-slop(no-runtime-typeof)": 147
+    },
+    "classification": {
+      "directRuntimeTypeGuards": 125,
+      "hookAndTestEnvironmentChecks": 22
+    },
+    "byFile": {
+      ".intent/hooks/intent-claude-gate.mjs": 11,
+      ".intent/hooks/intent-codex-gate.mjs": 11,
+      "packages/shadcn/scripts/assert-build-output.mjs": 2,
+      "packages/shadcn/src/components/chart.tsx": 6,
+      "packages/shadcn/src/components/combobox.tsx": 2,
+      "packages/shadcn/src/components/sidebar.tsx": 2,
+      "packages/shadcn/vite.config.ts": 1,
+      "packages/table/scripts/assert-build-output.mjs": 3,
+      "packages/table/src/bruno-table-client.browser.test.tsx": 15,
+      "packages/table/src/column-helpers.ts": 8,
+      "packages/table/src/effect.ts": 3,
+      "packages/table/src/internal/bruno-table-view.tsx": 6,
+      "packages/table/src/internal/client-row-model.test.ts": 1,
+      "packages/table/src/internal/client-source-adapter.ts": 6,
+      "packages/table/src/internal/compile-columns.ts": 16,
+      "packages/table/src/internal/grid-query.ts": 9,
+      "packages/table/src/internal/grid-runtime.test.ts": 1,
+      "packages/table/src/internal/table-identity-registry.ts": 1,
+      "packages/table/src/internal/value-semantics.test.ts": 2,
+      "packages/table/src/internal/value-semantics.ts": 24,
+      "packages/table/src/internal/virtual-viewport.test.ts": 6,
+      "packages/table/src/internal/virtual-viewport.ts": 7,
+      "packages/table/src/public-types.test-d.ts": 2,
+      "packages/table/vite.config.ts": 1
+    }
+  },
+  "final": {
+    "total": 0,
+    "byCode": {}
+  }
+}

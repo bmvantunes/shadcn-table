@@ -18,24 +18,24 @@ import type {
 import { useClientRowIds } from "./client-adapter";
 import { createClientFilterPredicate } from "./client-row-model";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
 
-export type BrunoTableClientRowPipelineAdapterView = Readonly<{
-  readonly resolveRowId: (row: unknown) => string;
+export type BrunoTableClientRowPipelineAdapterView<TRow extends BrunoTableRuntimeValue> = Readonly<{
   readonly createRowsStore: (
-    runtime: BrunoTableRowPipelineRuntimeView,
-    createDetector: () => BrunoTableClientRowOrderChangeDetector,
-  ) => BrunoTableClientRowsStore;
-  readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
+    runtime: BrunoTableRowPipelineRuntimeView<TRow>,
+    createDetector: () => BrunoTableClientRowOrderChangeDetector<TRow>,
+  ) => BrunoTableClientRowsStore<TRow>;
+  readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow<TRow>[]) => void;
   readonly rejectQueryRows: (
-    rows: readonly BrunoTableClientAdmittedRow[],
+    rows: readonly BrunoTableClientAdmittedRow<TRow>[],
     invalid: BrunoTableInvalidCellValue["invalid"],
-  ) => BrunoTableRowPipelinePublication<unknown> | undefined;
-  readonly retryQueryRows: () => BrunoTableRowPipelinePublication<unknown> | undefined;
+  ) => BrunoTableRowPipelinePublication<TRow> | undefined;
+  readonly retryQueryRows: () => BrunoTableRowPipelinePublication<TRow> | undefined;
 }>;
 
-type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
-  BrunoTableRowPipelineRuntimeView,
-  BrunoTableClientRowPipelineAdapterView
+type ClientResolvedRowOrderProps<TRow extends BrunoTableRuntimeValue> = BrunoTableRowPipelineProps<
+  BrunoTableRowPipelineRuntimeView<TRow>,
+  BrunoTableClientRowPipelineAdapterView<TRow>
 > & {
   readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly filters: readonly unknown[];
@@ -46,111 +46,122 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
   }[];
 };
 
+export function createBrunoTableClientRowPipeline<
+  TRow extends BrunoTableRuntimeValue,
+>(): NamedExoticComponent<
+  BrunoTableRowPipelineProps<
+    BrunoTableRowPipelineRuntimeView<TRow>,
+    BrunoTableClientRowPipelineAdapterView<TRow>
+  >
+> {
+  const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
+    runtime,
+    tableId,
+    columns,
+    rowPipelineAdapter,
+    children,
+    filters,
+    orderBy,
+    queryGeneration,
+    columnLayout,
+  }: ClientResolvedRowOrderProps<TRow>) {
+    const rowsStore = useMemo(
+      () =>
+        rowPipelineAdapter.createRowsStore(runtime, () =>
+          createRowOrderChangeDetector(tableId, columns, filters, orderBy),
+        ),
+      [columns, filters, orderBy, rowPipelineAdapter, runtime, tableId],
+    );
+    const rows = useSyncExternalStore(
+      rowsStore.subscribe,
+      rowsStore.getSnapshot,
+      rowsStore.getSnapshot,
+    );
+    const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId, columnLayout);
+    const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
+    const nextRowIds =
+      invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
+    const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
+    useLayoutEffect(() => {
+      const candidate = rowPipelineAdapter.retryQueryRows();
+      if (candidate !== undefined) runtime.publishRowPipeline(candidate);
+    }, [queryGeneration, rowPipelineAdapter, runtime]);
+    useLayoutEffect(() => {
+      if (invalid === undefined) {
+        rowPipelineAdapter.acceptRows(rows);
+        return;
+      }
+      const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
+      if (fallback !== undefined) runtime.publishRowPipeline(fallback);
+    }, [invalid, rowPipelineAdapter, rows, runtime]);
+    useLayoutEffect(() => {
+      orderStore.publish(nextRowIds, queryGeneration);
+    }, [nextRowIds, orderStore, queryGeneration]);
+    const orderSnapshot = useSyncExternalStore(
+      orderStore.subscribe,
+      orderStore.getSnapshot,
+      orderStore.getSnapshot,
+    );
+
+    return children(
+      invalid !== undefined
+        ? Object.freeze({ kind: "invalid" as const, columns: rowModel.columns, invalid })
+        : Object.freeze({
+            kind: "rows" as const,
+            ...orderSnapshot,
+            columns: rowModel.columns,
+          }),
+    );
+  });
+
+  return memo(function BrunoTableClientRowPipeline(
+    props: BrunoTableRowPipelineProps<
+      BrunoTableRowPipelineRuntimeView<TRow>,
+      BrunoTableClientRowPipelineAdapterView<TRow>
+    >,
+  ): ReactElement {
+    const query = useSyncExternalStore(
+      props.runtime.subscribeQuery,
+      props.runtime.getQuerySnapshot,
+      props.runtime.getQuerySnapshot,
+    );
+    const columnLayout = useSyncExternalStore(
+      props.runtime.subscribeColumnStructure,
+      props.runtime.getColumnStructureSnapshot,
+      props.runtime.getColumnStructureSnapshot,
+    );
+    return (
+      <ClientResolvedRowOrder
+        {...props}
+        columnLayout={columnLayout}
+        columns={query.columns}
+        filters={query.filters}
+        orderBy={query.orderBy}
+        queryGeneration={query.generation}
+      />
+    );
+  });
+}
+
 export const BrunoTableClientRowPipeline: NamedExoticComponent<
   BrunoTableRowPipelineProps<
-    BrunoTableRowPipelineRuntimeView,
-    BrunoTableClientRowPipelineAdapterView
+    BrunoTableRowPipelineRuntimeView<BrunoTableRuntimeValue>,
+    BrunoTableClientRowPipelineAdapterView<BrunoTableRuntimeValue>
   >
-> = memo(function BrunoTableClientRowPipeline(
-  props: BrunoTableRowPipelineProps<
-    BrunoTableRowPipelineRuntimeView,
-    BrunoTableClientRowPipelineAdapterView
-  >,
-): ReactElement {
-  const query = useSyncExternalStore(
-    props.runtime.subscribeQuery,
-    props.runtime.getQuerySnapshot,
-    props.runtime.getQuerySnapshot,
-  );
-  const columnLayout = useSyncExternalStore(
-    props.runtime.subscribeColumnStructure,
-    props.runtime.getColumnStructureSnapshot,
-    props.runtime.getColumnStructureSnapshot,
-  );
-  return (
-    <ClientResolvedRowOrder
-      {...props}
-      columnLayout={columnLayout}
-      columns={query.columns}
-      filters={query.filters}
-      orderBy={query.orderBy}
-      queryGeneration={query.generation}
-    />
-  );
-});
+> = createBrunoTableClientRowPipeline<BrunoTableRuntimeValue>();
 
-const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
-  runtime,
-  tableId,
-  columns,
-  rowPipelineAdapter,
-  children,
-  filters,
-  orderBy,
-  queryGeneration,
-  columnLayout,
-}: ClientResolvedRowOrderProps) {
-  const rowsStore = useMemo(
-    () =>
-      rowPipelineAdapter.createRowsStore(runtime, () =>
-        createRowOrderChangeDetector(tableId, columns, filters, orderBy),
-      ),
-    [columns, filters, orderBy, rowPipelineAdapter, runtime, tableId],
-  );
-  const rows = useSyncExternalStore(
-    rowsStore.subscribe,
-    rowsStore.getSnapshot,
-    rowsStore.getSnapshot,
-  );
-  const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId, columnLayout);
-  const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
-  const nextRowIds =
-    invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
-  const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
-  useLayoutEffect(() => {
-    const candidate = rowPipelineAdapter.retryQueryRows();
-    if (candidate !== undefined) runtime.publishRowPipeline(candidate);
-  }, [queryGeneration, rowPipelineAdapter, runtime]);
-  useLayoutEffect(() => {
-    if (invalid === undefined) {
-      rowPipelineAdapter.acceptRows(rows);
-      return;
-    }
-    const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
-    if (fallback !== undefined) runtime.publishRowPipeline(fallback);
-  }, [invalid, rowPipelineAdapter, rows, runtime]);
-  useLayoutEffect(() => {
-    orderStore.publish(nextRowIds, queryGeneration);
-  }, [nextRowIds, orderStore, queryGeneration]);
-  const orderSnapshot = useSyncExternalStore(
-    orderStore.subscribe,
-    orderStore.getSnapshot,
-    orderStore.getSnapshot,
-  );
-
-  return children(
-    invalid !== undefined
-      ? Object.freeze({ kind: "invalid" as const, columns: rowModel.columns, invalid })
-      : Object.freeze({
-          kind: "rows" as const,
-          ...orderSnapshot,
-          columns: rowModel.columns,
-        }),
-  );
-});
-
-function createRowOrderChangeDetector(
+function createRowOrderChangeDetector<TRow extends BrunoTableRuntimeValue>(
   tableId: string,
   columns: readonly CompiledColumn[],
   filters: readonly unknown[],
-  orderBy: ClientResolvedRowOrderProps["orderBy"],
-): BrunoTableClientRowOrderChangeDetector {
+  orderBy: ClientResolvedRowOrderProps<TRow>["orderBy"],
+): BrunoTableClientRowOrderChangeDetector<TRow> {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
     recordBrunoTableClientRowOrderPlanning(tableId);
   }
   const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
   const orderedColumns = columns.filter((column) => orderedIds.has(column.columnId));
-  const filterPredicate = createClientFilterPredicate<BrunoTableClientAdmittedRow>(
+  const filterPredicate = createClientFilterPredicate<BrunoTableClientAdmittedRow<TRow>>(
     columns,
     filters,
     (column, row) => {
@@ -163,15 +174,15 @@ function createRowOrderChangeDetector(
     rowOrderChanged(previousRows, nextRows, change, orderedColumns, filterPredicate);
 }
 
-function rowOrderChanged(
-  previousRows: readonly BrunoTableClientAdmittedRow[],
-  nextRows: readonly BrunoTableClientAdmittedRow[],
+function rowOrderChanged<TRow>(
+  previousRows: readonly BrunoTableClientAdmittedRow<TRow>[],
+  nextRows: readonly BrunoTableClientAdmittedRow<TRow>[],
   change: Readonly<{
     readonly rowIdsChanged: boolean;
     readonly changedIndexes: readonly number[];
   }>,
   orderedColumns: readonly CompiledColumn[],
-  filterPredicate: ((row: BrunoTableClientAdmittedRow) => boolean) | undefined,
+  filterPredicate: ((row: BrunoTableClientAdmittedRow<TRow>) => boolean) | undefined,
 ): boolean {
   if (change.rowIdsChanged) return true;
   if (orderedColumns.length === 0 && filterPredicate === undefined) return false;
@@ -214,8 +225,8 @@ const FILTER_VALUE_INVALID = Object.freeze({});
 
 function equivalentOrderedValue(
   column: CompiledColumn,
-  previousValue: unknown,
-  nextValue: unknown,
+  previousValue: BrunoTableRuntimeValue,
+  nextValue: BrunoTableRuntimeValue,
 ): boolean {
   if (
     previousValue === null ||

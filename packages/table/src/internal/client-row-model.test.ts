@@ -9,10 +9,28 @@ import {
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
 } from "./client-row-model";
+import {
+  isBrunoTableRuntimeRecord,
+  type BrunoTableRuntimeRecord,
+  type BrunoTableRuntimeValue,
+} from "./runtime-value";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+interface TestNotFilterNode {
+  type: "NOT";
+  condition?: TestFilterNode;
+}
+
+interface TestLeafFilterNode {
+  columnId: string;
+  type: "equals";
+  filter: string;
+}
+
+type TestFilterNode = TestNotFilterNode | TestLeafFilterNode;
 
 describe("Client row model", () => {
   it("uses locale-independent case normalization", () => {
@@ -74,23 +92,17 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialOrderBy([{ columnId: "COL_ID_MISSING", direction: "asc" }], columns),
     ).toThrow(/no valid sortable column/u);
-    expect(() =>
-      sanitizeClientInitialOrderBy(
-        null as unknown as Parameters<typeof sanitizeClientInitialOrderBy>[0],
-        columns,
-      ),
-    ).toThrow(/no valid sortable column/u);
-    expect(() =>
-      sanitizeClientInitialOrderBy(
-        [null] as unknown as Parameters<typeof sanitizeClientInitialOrderBy>[0],
-        columns,
-      ),
-    ).toThrow(/no valid sortable column/u);
+    expect(() => {
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a non-array value.
+      sanitizeClientInitialOrderBy(null, columns);
+    }).toThrow(/no valid sortable column/u);
+    expect(() => {
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a malformed entry.
+      sanitizeClientInitialOrderBy([null], columns);
+    }).toThrow(/no valid sortable column/u);
     expect(
-      sanitizeClientInitialFilters(
-        null as unknown as Parameters<typeof sanitizeClientInitialFilters>[0],
-        columns,
-      ),
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a non-array value.
+      sanitizeClientInitialFilters(null, columns),
     ).toEqual([]);
     expect(
       sanitizeClientOrderBy(
@@ -339,6 +351,11 @@ describe("Client row model", () => {
 
   it("applies text-family operators to custom canonical text domains", () => {
     type Email = Readonly<{ readonly address: string }>;
+    const isEmail = (input: unknown): input is Email =>
+      typeof input === "object" &&
+      input !== null &&
+      "address" in input &&
+      typeof input.address === "string";
     const emailValueType = {
       codecId: "test/email",
       codecVersion: 1,
@@ -347,12 +364,11 @@ describe("Client row model", () => {
       cellAlign: "start",
       editorLayout: "inline",
       defaultWidth: 180,
-      decodeRuntime: (input: unknown) =>
-        typeof input === "object" &&
-        input !== null &&
-        typeof Reflect.get(input, "address") === "string"
-          ? ({ _tag: "Success", value: input as Email } as const)
-          : ({ _tag: "Failure", message: "Expected email." } as const),
+      decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+        return isEmail(input)
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected email." } as const);
+      },
       equivalent: (left: Email, right: Email) => left.address === right.address,
       compare: (left: Email, right: Email) =>
         left.address === right.address ? 0 : left.address < right.address ? -1 : 1,
@@ -361,10 +377,11 @@ describe("Client row model", () => {
         ({ _tag: "Success", value: Object.freeze({ address: text }) }) as const,
       formatDisplay: (value: Email) => value.address,
       encodePersisted: (value: Email) => value.address,
-      decodePersisted: (input: unknown) =>
-        typeof input === "string"
+      decodePersisted: function (this: void, input: BrunoTableRuntimeValue) {
+        return typeof input === "string"
           ? ({ _tag: "Success", value: Object.freeze({ address: input }) } as const)
-          : ({ _tag: "Failure", message: "Expected persisted email." } as const),
+          : ({ _tag: "Failure", message: "Expected persisted email." } as const);
+      },
     } as const;
     const columns = compileColumns([
       {
@@ -461,6 +478,7 @@ describe("Client row model", () => {
     const [sanitized] = sanitizeClientInitialFilters([filter], columns);
 
     expect(sanitized).toEqual(filter);
+    if (!isBrunoTableRuntimeRecord(sanitized)) throw new Error("sanitized filter must be a record");
     expect(filterReferencesColumn(sanitized, "COL_ID_NAME")).toBe(true);
     expect(filterReferencesColumn(sanitized, "COL_ID_MISSING")).toBe(false);
   });
@@ -494,6 +512,7 @@ describe("Client row model", () => {
       columns,
     );
     expect(sanitized).toEqual({ columnId: "COL_ID_NAME", type: "blank" });
+    if (!isBrunoTableRuntimeRecord(sanitized)) throw new Error("sanitized filter must be a record");
     expect(filterReferencesColumn(sanitized, "COL_ID_NAME")).toBe(true);
     expect(filterReferencesColumn(sanitized, "COL_ID_SCORE")).toBe(false);
   });
@@ -528,9 +547,9 @@ describe("Client row model", () => {
         valueType: "text",
       },
     ]);
-    const cyclic: { type: "NOT"; condition?: unknown } = { type: "NOT" };
+    const cyclic: TestNotFilterNode = { type: "NOT" };
     cyclic.condition = cyclic;
-    let deep: unknown = { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" };
+    let deep: TestFilterNode = { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" };
     for (let depth = 0; depth < 1_000; depth += 1) deep = { type: "NOT", condition: deep };
 
     expect(() => sanitizeClientInitialFilters([cyclic, deep], columns)).not.toThrow();
@@ -573,15 +592,15 @@ describe("Client row model", () => {
       },
     ]);
     let sourceReads = 0;
-    const counted = <T extends Readonly<Record<string, unknown>>>(record: T): T =>
+    const counted = <T extends BrunoTableRuntimeRecord>(record: T): T =>
       new Proxy(Object.freeze(record), {
-        get: (target, property, receiver) => {
+        get: (target, property) => {
           sourceReads += 1;
           if (sourceReads > 500) throw new Error("Shared filter DAG expanded exponentially.");
-          return Reflect.get(target, property, receiver) as unknown;
+          return target[property];
         },
       });
-    let shared: Readonly<Record<string, unknown>> = counted({
+    let shared: BrunoTableRuntimeRecord = counted({
       columnId: "COL_ID_NAME",
       filter: "Ada",
       type: "equals",
@@ -595,13 +614,26 @@ describe("Client row model", () => {
 
     expect(sanitized).toHaveLength(1);
     expect(sourceReads).toBeLessThan(500);
-    let sanitizedNode = sanitized[0] as Readonly<Record<string, unknown>>;
+    const firstSanitizedNode = sanitized[0];
+    if (!isBrunoTableRuntimeRecord(firstSanitizedNode)) {
+      throw new Error("Expected the shared filter node to remain a runtime record.");
+    }
+    let sanitizedNode = firstSanitizedNode;
     for (let index = 0; index < depth; index += 1) {
-      const conditions = sanitizedNode["conditions"] as readonly Readonly<
-        Record<string, unknown>
-      >[];
-      expect(conditions[0]).toBe(conditions[1]);
-      sanitizedNode = conditions[0]!;
+      const conditions = sanitizedNode["conditions"];
+      if (!Array.isArray(conditions)) {
+        throw new Error("Expected the shared filter node to retain its conditions.");
+      }
+      const firstCondition = conditions[0];
+      const secondCondition = conditions[1];
+      if (
+        !isBrunoTableRuntimeRecord(firstCondition) ||
+        !isBrunoTableRuntimeRecord(secondCondition)
+      ) {
+        throw new Error("Expected each shared condition to remain a runtime record.");
+      }
+      expect(firstCondition).toBe(secondCondition);
+      sanitizedNode = firstCondition;
     }
 
     let valueReads = 0;
@@ -636,6 +668,7 @@ describe("Client row model", () => {
           indexedReads += 1;
           if (indexedReads > 1) throw new Error("Nested source array was read twice.");
         }
+        // SAFETY: This proxy forwards the source array's runtime property value without widening the hostile-input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
@@ -718,6 +751,7 @@ describe("Client row model", () => {
           indexedReads += 1;
           if (indexedReads > 1) throw new Error("Cross-role array entry was read twice.");
         }
+        // SAFETY: This proxy forwards the source array's runtime property value without widening the hostile-input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
@@ -771,11 +805,12 @@ describe("Client row model", () => {
         valueType: "text",
       },
     ]);
-    const unreadable = new Proxy<Record<string, unknown>>(
+    const unreadable = new Proxy<BrunoTableRuntimeRecord>(
       {},
       {
         get: (target, property, receiver) => {
           if (property === "type") throw new Error("Unreadable filter type.");
+          // SAFETY: This proxy forwards the source record's runtime property value without widening the hostile-input boundary.
           return Reflect.get(target, property, receiver) as unknown;
         },
       },
@@ -803,7 +838,7 @@ describe("Client row model", () => {
       filter: 0,
       type: 0,
     };
-    const stateful = Object.defineProperties<Record<string, unknown>>(
+    const stateful = Object.defineProperties<BrunoTableRuntimeRecord>(
       {},
       {
         accentSensitive: {
@@ -880,11 +915,12 @@ describe("Client row model", () => {
     const operands = new Proxy(Object.freeze(["Ada"]), {
       get: (target, property, receiver) => {
         if (denyFurtherReads && property === "0") throw new Error("Operand read escaped.");
+        // SAFETY: This proxy forwards the operand array's runtime property value without widening the hostile-input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
     const leaf = Object.freeze(
-      Object.defineProperties<Record<string, unknown>>(
+      Object.defineProperties<BrunoTableRuntimeRecord>(
         {},
         {
           columnId: {
@@ -914,6 +950,7 @@ describe("Client row model", () => {
     const conditions = new Proxy(Object.freeze([leaf]), {
       get: (target, property, receiver) => {
         if (denyFurtherReads && property === "0") throw new Error("Condition read escaped.");
+        // SAFETY: This proxy forwards the condition array's runtime property value without widening the hostile-input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
@@ -955,6 +992,7 @@ describe("Client row model", () => {
       get: (target, property, receiver) => {
         countIndexedProbe(property);
         if (property === "1") throw new Error("Unreadable root entry.");
+        // SAFETY: This proxy forwards the hostile root's runtime property value without widening the input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
       getOwnPropertyDescriptor: (target, property) => {
@@ -1004,6 +1042,7 @@ describe("Client row model", () => {
       get: (target, property, receiver) => {
         countIndexedProbe(property);
         if (property === "0") throw new Error("Unreadable root entry.");
+        // SAFETY: This proxy forwards the hostile order root's runtime property value without widening the input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
       getOwnPropertyDescriptor: (target, property) => {
@@ -1020,6 +1059,7 @@ describe("Client row model", () => {
       },
     });
 
+    // SAFETY: This proxy intentionally supplies a hostile runtime array outside the static order-by boundary.
     expect(sanitizeClientOrderBy(hostileRoot as never, columns)).toEqual([
       { columnId: "COL_ID_NAME", direction: "asc" },
     ]);
@@ -1029,12 +1069,14 @@ describe("Client row model", () => {
     const unreadableLength = new Proxy([], {
       get: (target, property, receiver) => {
         if (property === "length") throw new Error("Unreadable root length.");
+        // SAFETY: This proxy forwards the unreadable-length array's runtime property value without widening the input boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
-    expect(() => sanitizeClientInitialOrderBy(unreadableLength as never, columns)).toThrow(
-      /no valid sortable column/u,
-    );
+    expect(() => {
+      // SAFETY: This proxy intentionally supplies a hostile runtime array outside the static order-by boundary.
+      return sanitizeClientInitialOrderBy(unreadableLength as never, columns);
+    }).toThrow(/no valid sortable column/u);
   });
 
   it("preserves public query collections larger than the hostile-input recursion depth", () => {
@@ -1070,6 +1112,7 @@ describe("Client row model", () => {
       ],
       columns,
     );
+    // SAFETY: The preceding sanitizer call admits only an in-filter record whose filter is the tested value array.
     expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
   });
 
@@ -1093,6 +1136,7 @@ describe("Client row model", () => {
       columns,
     );
     expect(
+      // SAFETY: The sanitizer preserves the admitted in-filter shape for the bounded operand fixture.
       (atLimit[0] as { readonly filter: readonly unknown[] } | undefined)?.filter,
     ).toHaveLength(4_096);
 
@@ -1126,7 +1170,7 @@ describe("Client row model", () => {
         valueType: "number",
       },
     ]);
-    const values = [1] as number[] & { noise?: string };
+    const values: number[] & { noise?: string } = [1];
     values.noise = "unrelated";
     const ownKeys = vi.fn((): never => {
       throw new Error("Dense operand own keys must not be enumerated.");
@@ -1138,6 +1182,7 @@ describe("Client row model", () => {
       columns,
     );
 
+    // SAFETY: The preceding sanitizer call admits this fixture as an in-filter with a readonly value array.
     expect((sanitized[0] as { readonly filter: readonly unknown[] }).filter).toEqual([1]);
     expect(ownKeys).not.toHaveBeenCalled();
   });

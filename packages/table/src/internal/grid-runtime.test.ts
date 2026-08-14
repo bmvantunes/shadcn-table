@@ -10,8 +10,26 @@ import {
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
+import type { BrunoTableRuntimeValue } from "./runtime-value";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
+type TextValue = Readonly<{ readonly text: string }>;
+
+function isTextValue(value: unknown): value is TextValue {
+  return (
+    typeof value === "object" && value !== null && "text" in value && typeof value.text === "string"
+  );
+}
+
+type TestSource = {
+  rows: readonly Row[];
+  totalRows: number;
+  version: number;
+  status: "loading" | "ready" | "stale" | "closed" | "error";
+  statusCode?: string;
+  message?: string;
+  retry?: { readonly run: () => void; readonly pending: boolean };
+};
 
 const source = (
   rows: readonly Row[],
@@ -22,15 +40,18 @@ const source = (
     readonly message: string;
     readonly retry: { readonly run: () => void; readonly pending: boolean };
   }> = {},
-) => ({
-  rows,
-  totalRows: extra.totalRows ?? rows.length,
-  version: 1,
-  status,
-  ...(extra.statusCode === undefined ? {} : { statusCode: extra.statusCode }),
-  ...(extra.message === undefined ? {} : { message: extra.message }),
-  ...(extra.retry === undefined ? {} : { retry: extra.retry }),
-});
+) => {
+  const result: TestSource = {
+    rows,
+    totalRows: extra.totalRows ?? rows.length,
+    version: 1,
+    status,
+  };
+  if (extra.statusCode !== undefined) result.statusCode = extra.statusCode;
+  if (extra.message !== undefined) result.message = extra.message;
+  if (extra.retry !== undefined) result.retry = extra.retry;
+  return Object.freeze(result);
+};
 
 const runtimeColumns = compileColumns([
   {
@@ -41,7 +62,11 @@ const runtimeColumns = compileColumns([
   },
 ]);
 
-const rawRows = (admitted: readonly BrunoTableClientAdmittedRow[]): readonly unknown[] =>
+function cloneCompiledColumns(columns: readonly CompiledColumn[]): readonly CompiledColumn[] {
+  return Object.freeze(columns.map((column): CompiledColumn => Object.freeze({ ...column })));
+}
+
+const rawRows = <TRow>(admitted: readonly BrunoTableClientAdmittedRow<TRow>[]): readonly TRow[] =>
   admitted.map((row) => row.raw);
 
 const createRuntime = (
@@ -82,7 +107,7 @@ function createClientRuntime(
     ...view,
     getView: runtime.getView,
     resolveRowId: adapter.resolveRowId,
-    createRowsStore: (detector: BrunoTableClientRowOrderChangeDetector) =>
+    createRowsStore: (detector: BrunoTableClientRowOrderChangeDetector<Row>) =>
       adapter.createRowsStore(view, () => detector),
     publish: (nextSource: ReturnType<typeof source>) => {
       runtime.publish(adapter.publish(nextSource));
@@ -129,7 +154,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.getQueryConfiguration(runtimeColumns),
       "TABLE_ID_GRID_RUNTIME_DETECTOR",
     );
-    const detector = vi.fn<BrunoTableClientRowOrderChangeDetector>(() => true);
+    const detector = vi.fn<BrunoTableClientRowOrderChangeDetector<Row>>(() => true);
     const createDetector = vi.fn(() => detector);
     const rowsStore = adapter.createRowsStore(runtime.getView(), createDetector);
 
@@ -354,18 +379,32 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         ...baseColumn!,
         semantics: Object.freeze({
           ...baseColumn!.semantics,
-          decodeRuntime: (input: unknown) =>
-            typeof input === "string"
+          decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+            return typeof input === "string"
               ? ({ _tag: "Success", value: Object.freeze({ text: input }) } as const)
-              : ({ _tag: "Failure", message: "Expected text." } as const),
-          equivalent: (left: unknown, right: unknown) =>
-            (left as { readonly text: string }).text === (right as { readonly text: string }).text,
-          compare: (left: unknown, right: unknown) => {
-            const leftText = (left as { readonly text: string }).text;
-            const rightText = (right as { readonly text: string }).text;
+              : ({ _tag: "Failure", message: "Expected text." } as const);
+          },
+          equivalent: function (
+            this: void,
+            left: BrunoTableRuntimeValue,
+            right: BrunoTableRuntimeValue,
+          ) {
+            if (!isTextValue(left) || !isTextValue(right)) return false;
+            return left.text === right.text;
+          },
+          compare: function (
+            this: void,
+            left: BrunoTableRuntimeValue,
+            right: BrunoTableRuntimeValue,
+          ) {
+            if (!isTextValue(left) || !isTextValue(right)) return 0;
+            const leftText = left.text;
+            const rightText = right.text;
             return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
           },
-          formatDisplay: (value: unknown) => (value as { readonly text: string }).text,
+          formatDisplay: function (this: void, value: BrunoTableRuntimeValue) {
+            return isTextValue(value) ? value.text : "";
+          },
         }),
       }),
     ] satisfies readonly CompiledColumn[]);
@@ -402,8 +441,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         valueType: "text",
       },
     ]);
-    const nullNote = { id: "first", name: "Ada", note: null } as unknown as Row;
+    const nullNote = { id: "first", name: "Ada", note: null };
     const runtime = createClientRuntime(
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a nullish field.
       source([nullNote]),
       (row) => row.id,
       cellColumns,
@@ -481,11 +521,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const rowsStore = runtime.createRowsStore((previousRows, nextRows, change) => {
       changes.push(change);
       if (change.rowIdsChanged) return true;
-      return change.changedIndexes.some(
-        (index) =>
+      return change.changedIndexes.some((index) => {
+        // SAFETY: These snapshots were produced from the Row fixture used by this test; raw rows retain that exact shape.
+        return (
           (previousRows[index]?.raw as Row | undefined)?.name !==
-          (nextRows[index]?.raw as Row | undefined)?.name,
-      );
+          (nextRows[index]?.raw as Row | undefined)?.name
+        );
+      });
     });
     const listener = vi.fn();
     rowsStore.subscribe(listener);
@@ -1017,7 +1059,10 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(decodeRuntime).toHaveBeenCalledTimes(3);
 
     const replacementColumns = Object.freeze(Array.from(instrumentedColumns));
-    adapter.configure((row) => (row as Row).id, replacementColumns);
+    adapter.configure((row) => {
+      // SAFETY: The adapter is configured with the Row fixture declared by this test.
+      return (row as Row).id;
+    }, replacementColumns);
     rowSpace = adapter.getPublication().rowSpace!;
     rowSpace.getCellValue("first", "COL_ID_NAME");
     rowSpace.getCellValue("second", "COL_ID_NAME");
@@ -1090,9 +1135,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       adapter.publish(source([first, { ...second, note: "Changed" }]));
       expect(prunes).not.toHaveBeenCalled();
 
-      const replacementColumns = Object.freeze(
-        runtimeColumns.map((column) => Object.freeze({ ...column })),
-      );
+      const replacementColumns = cloneCompiledColumns(runtimeColumns);
       adapter.configure((row) => row.id, replacementColumns);
       expect(prunes).toHaveBeenCalledOnce();
       expect(prunes).toHaveBeenCalledWith(2);
@@ -1102,7 +1145,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   });
 
   it("decodes query columns columnarly and presentation cells on demand", () => {
-    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const decodeRuntime = vi.fn(
+      (input: BrunoTableRuntimeValue) =>
+        ({
+          _tag: "Success",
+          value: input,
+        }) as const,
+    );
     const wideColumns = Object.freeze(
       compileColumns(
         Array.from({ length: 1_000 }, (_, index) => ({
@@ -1111,11 +1160,12 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           headerName: `Lazy ${String(index)}`,
           valueType: "text",
         })),
-      ).map((column) =>
-        Object.freeze({
-          ...column,
-          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
-        }),
+      ).map(
+        (column): CompiledColumn =>
+          Object.freeze({
+            ...column,
+            semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+          }),
       ),
     );
     const first = { id: "first", name: "Ada" } satisfies Row;
@@ -1144,7 +1194,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   });
 
   it("enforces one table-wide bound for primitive-row canonical values", () => {
-    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const decodeRuntime = vi.fn(
+      (input: BrunoTableRuntimeValue) =>
+        ({
+          _tag: "Success",
+          value: input,
+        }) as const,
+    );
     const primitiveColumns = Object.freeze(
       compileColumns([
         {
@@ -1159,11 +1215,12 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           headerName: "Secondary length",
           valueType: "number",
         },
-      ]).map((column) =>
-        Object.freeze({
-          ...column,
-          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
-        }),
+      ]).map(
+        (column): CompiledColumn =>
+          Object.freeze({
+            ...column,
+            semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+          }),
       ),
     );
     const primitiveRows = Array.from({ length: 9_000 }, (_, index) => `row-${String(index)}`);
@@ -1195,7 +1252,13 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   });
 
   it("enforces the same table-wide bound for retained object rows", () => {
-    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success", value: input }) as const);
+    const decodeRuntime = vi.fn(
+      (input: BrunoTableRuntimeValue) =>
+        ({
+          _tag: "Success",
+          value: input,
+        }) as const,
+    );
     const objectColumns = Object.freeze(
       compileColumns([
         {
@@ -1210,11 +1273,12 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           headerName: "Secondary name",
           valueType: "text",
         },
-      ]).map((column) =>
-        Object.freeze({
-          ...column,
-          semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
-        }),
+      ]).map(
+        (column): CompiledColumn =>
+          Object.freeze({
+            ...column,
+            semantics: Object.freeze({ ...column.semantics, decodeRuntime }),
+          }),
       ),
     );
     const objectRows = Array.from({ length: 9_000 }, (_, index) => ({
@@ -1255,10 +1319,11 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         ...baseColumn!,
         semantics: Object.freeze({
           ...baseColumn!.semantics,
-          decodeRuntime: (input: unknown) =>
-            typeof input === "string"
+          decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+            return typeof input === "string"
               ? ({ _tag: "Success", value: input.toUpperCase() } as const)
-              : ({ _tag: "Failure", message: "Expected text." } as const),
+              : ({ _tag: "Failure", message: "Expected text." } as const);
+          },
         }),
       }),
     ] satisfies readonly CompiledColumn[]);
@@ -1373,7 +1438,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       totalRows: 1,
       version: 1,
       status: "offline",
-    } as unknown as ReturnType<typeof source>;
+    };
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies an unsupported status.
     const runtime = createRuntime(malformed);
 
     expect(runtime.getChromeSnapshot()).toEqual({
@@ -1393,8 +1459,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       totalRows: 1,
       version: 2,
       status: "offline",
-    } as unknown as ReturnType<typeof source>;
+    };
 
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies an unsupported status.
     runtime.publish(malformed);
 
     expect(runtime.getChromeSnapshot()).toEqual({
@@ -1409,20 +1476,21 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("does not read rows from unsupported-status publications", () => {
     const rowsRead = vi.fn();
-    const malformed = (version: number) =>
-      ({
-        get rows(): readonly Row[] {
-          rowsRead();
-          throw new Error("Unsupported-status rows must stay unread.");
-        },
-        totalRows: 1,
-        version,
-        status: "offline",
-      }) as unknown as ReturnType<typeof source>;
+    const malformed = (version: number) => ({
+      get rows(): readonly Row[] {
+        rowsRead();
+        throw new Error("Unsupported-status rows must stay unread.");
+      },
+      totalRows: 1,
+      version,
+      status: "offline",
+    });
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies an unsupported status.
     const initialRuntime = createRuntime(malformed(1));
     const accepted = { id: "accepted", name: "Ada" } satisfies Row;
     const updatedRuntime = createRuntime(source([accepted]));
 
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies an unsupported status.
     updatedRuntime.publish(malformed(2));
 
     expect(initialRuntime.getChromeSnapshot()).toEqual({
@@ -1454,6 +1522,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
             throw new Error(`Unreadable ${property}.`);
           },
         });
+        // SAFETY: The fixture deliberately installs a throwing getter on an otherwise complete TestSource envelope.
         return candidate as ReturnType<typeof source>;
       };
       const getRowId = vi.fn((row: Row) => row.id);
@@ -1502,9 +1571,11 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       version: 1,
       status: "ready",
       [property]: value,
-    } as unknown as ReturnType<typeof source>;
+    };
 
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies malformed lifecycle data.
     expect(() => createRuntime(malformed)).not.toThrow();
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies malformed lifecycle data.
     const runtime = createRuntime(malformed);
     expect(runtime.getChromeSnapshot()).toEqual({
       status: "error",
@@ -1518,7 +1589,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     "omits an unreadable optional Client Source %s getter while admitting ready rows",
     (property) => {
       const candidate = { id: "candidate", name: "Trusted" } satisfies Row;
-      const ready = source([candidate]);
+      const ready = { ...source([candidate]) };
       Object.defineProperty(ready, property, {
         get: () => {
           throw new Error(`Unreadable ${property}.`);
@@ -1536,7 +1607,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   it.each(["statusCode", "message", "retry"] as const)(
     "preserves loading skeletons when the optional Client Source %s getter is unreadable",
     (property) => {
-      const loading = source([], "loading", { totalRows: 2 });
+      const loading = { ...source([], "loading", { totalRows: 2 }) };
       Object.defineProperty(loading, property, {
         get: () => {
           throw new Error(`Unreadable ${property}.`);
@@ -1556,7 +1627,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       totalRows: 1,
       version: 1,
       status: "ready",
-    } as unknown as ReturnType<typeof source>;
+    };
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies a malformed row collection.
     const runtime = createRuntime(malformed);
 
     expect(runtime.getChromeSnapshot()).toEqual({
@@ -1601,6 +1673,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           entryReads.set(property, reads);
           if (reads > 1) throw new Error(`Client Source row ${property} was reread.`);
         }
+        // SAFETY: This proxy forwards the published array's runtime property value without widening the test's source boundary.
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
@@ -1626,6 +1699,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("contains a cyclic Client Source rows prototype chain", () => {
     let cyclicRows: Row[];
+    // SAFETY: The proxy target is intentionally a Row array whose prototype trap points back to the same array.
     cyclicRows = new Proxy([] as Row[], {
       getPrototypeOf: () => cyclicRows,
     });
@@ -1652,11 +1726,12 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const runtime = createRuntime(source([accepted]));
 
     runtime.publish({
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a malformed row collection.
       rows: null,
       totalRows: 1,
       version: 2,
       status: "ready",
-    } as unknown as ReturnType<typeof source>);
+    });
 
     expect(runtime.getChromeSnapshot()).toEqual({
       status: "error",
@@ -1699,8 +1774,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       totalRows: 1,
       version: 2,
       status: nextStatus,
-    } as unknown as ReturnType<typeof source>;
+    };
 
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies malformed source data.
     runtime.publish(malformed);
 
     expect(runtime.getChromeSnapshot()).toMatchObject({
@@ -1714,8 +1790,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("contains unreadable non-loading row collections and retains accepted rows", () => {
     const rowsRead = vi.fn();
-    const unreadable = (version: number, status: "ready" | "stale") =>
-      ({
+    const unreadable = (version: number, status: "ready" | "stale") => {
+      const publication = {
         get rows(): readonly Row[] {
           rowsRead();
           throw new Error("Hostile row getter.");
@@ -1723,7 +1799,10 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         totalRows: 1,
         version,
         status,
-      }) as ReturnType<typeof source>;
+      };
+      // SAFETY: This fixture deliberately crosses the source envelope boundary to install a throwing rows getter.
+      return publication as ReturnType<typeof source>;
+    };
     const initialRuntime = createRuntime(unreadable(1, "ready"));
     const accepted = { id: "accepted", name: "Ada" } satisfies Row;
     const updatedRuntime = createRuntime(source([accepted], "stale"));
@@ -1779,8 +1858,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("does not read candidate rows from loading publications", () => {
     const rowsRead = vi.fn();
-    const loadingSource = (version: number) =>
-      ({
+    const loadingSource = (version: number) => {
+      const publication = {
         get rows(): readonly Row[] {
           rowsRead();
           throw new Error("Loading rows must stay unread.");
@@ -1788,7 +1867,10 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         totalRows: 1_000_000,
         version,
         status: "loading",
-      }) as ReturnType<typeof source>;
+      };
+      // SAFETY: This fixture deliberately crosses the source envelope boundary to ensure loading rows are never read.
+      return publication as ReturnType<typeof source>;
+    };
     const runtime = createRuntime(loadingSource(1));
 
     expect(runtime.getBodySnapshot()).toEqual({ kind: "loading", totalRows: 1_000_000 });
@@ -1926,7 +2008,10 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   });
 
   it("does not retain mutable caller-owned order entries in query snapshots", () => {
-    const mutableOrderBy = [{ columnId: "COL_ID_NAME", direction: "asc" as "asc" | "desc" }];
+    const mutableOrderBy: Array<{
+      columnId: string;
+      direction: "asc" | "desc";
+    }> = [{ columnId: "COL_ID_NAME", direction: "asc" }];
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
       (row) => row.id,
@@ -2095,8 +2180,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       ...source([row], "stale"),
       statusCode: 503,
       message: null,
-    } as unknown as ReturnType<typeof source>;
+    };
 
+    // @ts-expect-error Runtime-boundary coverage deliberately supplies malformed lifecycle metadata.
     expect(() => runtime.publish(malformed)).not.toThrow();
     expect(runtime.getChromeSnapshot()).toMatchObject({ status: "stale" });
     expect(runtime.getChromeSnapshot()).not.toHaveProperty("statusCode");
@@ -2118,9 +2204,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const malformedRetries = [null, { run: null, pending: false }, { run: vi.fn(), pending: 1 }];
 
     for (const retry of malformedRetries) {
-      const malformed = { ...source([row], "error"), retry } as unknown as ReturnType<
-        typeof source
-      >;
+      const malformed = { ...source([row], "error"), retry };
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies malformed retry data.
       expect(() => runtime.publish(malformed)).not.toThrow();
       expect(runtime.getChromeSnapshot()).not.toHaveProperty("retry");
       expect(() => runtime.retry()).not.toThrow();
@@ -2141,8 +2226,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     };
     runtime.publish({
       ...source([row], "error"),
+      // @ts-expect-error Runtime-boundary coverage deliberately supplies a hostile retry getter.
       retry: changingRetry,
-    } as unknown as ReturnType<typeof source>);
+    });
     runtime.retry();
     expect(runReads).toBe(1);
     expect(pendingReads).toBe(1);
@@ -2164,9 +2250,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       },
     ];
     for (const retry of throwingRetries) {
-      const malformed = { ...source([row], "error"), retry } as unknown as ReturnType<
-        typeof source
-      >;
+      const malformed = { ...source([row], "error"), retry };
       expect(() => runtime.publish(malformed)).not.toThrow();
       expect(runtime.getChromeSnapshot()).not.toHaveProperty("retry");
     }

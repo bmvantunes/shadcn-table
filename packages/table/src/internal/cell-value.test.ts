@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { readCompiledColumnValue } from "./cell-value";
 import { compileColumns } from "./compile-columns";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 describe("readCompiledColumnValue", () => {
   it("reads fields admitted by primitive and tuple row types", () => {
@@ -33,7 +34,7 @@ describe("readCompiledColumnValue", () => {
         fields: ["__proto__"],
         headerName: "Protocol",
         valueType: "text",
-        valueGetter: ({ row }: { readonly row: Readonly<Record<string, unknown>> }) => ({
+        valueGetter: ({ row }: { readonly row: BrunoTableRuntimeRecord }) => ({
           own: Object.hasOwn(row, "__proto__"),
           value: row["__proto__"],
         }),
@@ -45,5 +46,43 @@ describe("readCompiledColumnValue", () => {
       own: true,
       value: "safe-value",
     });
+  });
+
+  it("passes only the declared row parameter to computed getters", () => {
+    let parameterKeys: readonly string[] = [];
+    const [column] = compileColumns([
+      {
+        columnId: "COL_ID_SHAPE",
+        fields: ["length"],
+        headerName: "Shape",
+        valueType: "number",
+        valueGetter: (parameters: { readonly row: BrunoTableRuntimeRecord }) => {
+          parameterKeys = Object.keys(parameters);
+          return parameters.row["length"];
+        },
+      },
+    ]);
+
+    expect(readCompiledColumnValue(column!, "Ada")).toBe(3);
+    expect(parameterKeys).toEqual(["row"]);
+  });
+
+  it("invokes computed getters without a receiver", () => {
+    let receiverWasUndefined = false;
+    const [column] = compileColumns([
+      {
+        columnId: "COL_ID_COMPUTED_RECEIVER",
+        fields: ["value"],
+        headerName: "Computed receiver",
+        valueType: "number",
+        valueGetter: function (this: void, { row }: { readonly row: BrunoTableRuntimeRecord }) {
+          receiverWasUndefined = this === undefined;
+          return row["value"];
+        },
+      },
+    ]);
+
+    expect(readCompiledColumnValue(column!, { value: 1 })).toBe(1);
+    expect(receiverWasUndefined).toBe(true);
   });
 });

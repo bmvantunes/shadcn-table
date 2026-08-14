@@ -7,7 +7,13 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import { BrunoTableClient, BrunoTableComputedColumn, BrunoTableToolbar } from "./index";
-import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
+import type {
+  BrunoTableColumnId,
+  BrunoTableColumns,
+  BrunoTableDecodeResult,
+  BrunoTableValueType,
+} from "./public-types";
+import type { BrunoTableRuntimeValue } from "./internal/runtime-value";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -29,8 +35,12 @@ import {
 } from "./internal/bruno-table-view";
 import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
-import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import { createBrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
 import {
   BrunoTableGridRuntime,
   type BrunoTableRowPipelineRuntimeView,
@@ -41,6 +51,16 @@ type Row = {
   readonly name: string;
   readonly score: number;
 };
+
+const rowPipeline = createBrunoTableClientRowPipeline<Row>();
+
+function stressColumnId(index: number): BrunoTableColumnId {
+  const columnId = `COL_ID_STRESS_${String(index).padStart(3, "0")}`;
+  // SAFETY: This fixture constructs only uppercase, whitespace-free COL_ID_STRESS_ identities;
+  // the numeric suffix is bounded to the generated 0-149 column range.
+  const brandedColumnId = columnId as BrunoTableColumnId;
+  return brandedColumnId;
+}
 
 const columns = [
   {
@@ -84,18 +104,23 @@ type SparseRowPipelineAdapter = Readonly<{
   readonly queryGeneration: number;
 }>;
 
-function SparseRowPipeline({
-  children,
-  columns,
-  rowPipelineAdapter,
-}: BrunoTableRowPipelineProps<BrunoTableRowPipelineRuntimeView, SparseRowPipelineAdapter>) {
-  return children({
-    kind: "rows",
+function createSparseRowPipeline<TRow extends BrunoTableRuntimeValue>() {
+  return function SparseRowPipeline({
+    children,
     columns,
-    rowSpace: rowPipelineAdapter.rowSpace,
-    queryGeneration: rowPipelineAdapter.queryGeneration,
-  });
+    rowPipelineAdapter,
+  }: BrunoTableRowPipelineProps<BrunoTableRowPipelineRuntimeView<TRow>, SparseRowPipelineAdapter>) {
+    return children({
+      kind: "rows",
+      columns,
+      rowSpace: rowPipelineAdapter.rowSpace,
+      queryGeneration: rowPipelineAdapter.queryGeneration,
+    });
+  };
 }
+
+const SparseNeverRowPipeline = createSparseRowPipeline<never>();
+const SparseRowPipeline = createSparseRowPipeline<Row>();
 
 function TrackedRowAction({
   row,
@@ -605,12 +630,13 @@ describe("BrunoTableClient browser surface", () => {
         0,
       );
     });
-    expect(
-      (loadingName.element().firstElementChild as HTMLElement | null)?.style.marginInlineEnd,
-    ).toBe("auto");
-    expect(
-      (loadingScore.element().firstElementChild as HTMLElement | null)?.style.marginInlineStart,
-    ).toBe("auto");
+    const loadingNameChild = loadingName.element().firstElementChild;
+    const loadingScoreChild = loadingScore.element().firstElementChild;
+    if (!(loadingNameChild instanceof HTMLElement) || !(loadingScoreChild instanceof HTMLElement)) {
+      throw new Error("Loading cells must render HTMLElement skeleton children.");
+    }
+    expect(loadingNameChild.style.marginInlineEnd).toBe("auto");
+    expect(loadingScoreChild.style.marginInlineStart).toBe("auto");
     expect(renderer).not.toHaveBeenCalled();
     expect(valueGetter).not.toHaveBeenCalled();
     expect(sampledFields).toEqual([]);
@@ -824,6 +850,11 @@ describe("BrunoTableClient browser surface", () => {
       readonly email: Email;
       readonly note: string;
     }>;
+    const isEmail = (input: unknown): input is Email =>
+      typeof input === "object" &&
+      input !== null &&
+      "address" in input &&
+      typeof input.address === "string";
     const emailValueType: BrunoTableValueType<Email, "text", "text"> = {
       codecId: "test/email-membership",
       codecVersion: 1,
@@ -833,10 +864,8 @@ describe("BrunoTableClient browser surface", () => {
       editorLayout: "inline",
       defaultWidth: 180,
       decodeRuntime: (input) =>
-        typeof input === "object" &&
-        input !== null &&
-        typeof Reflect.get(input, "address") === "string"
-          ? { _tag: "Success", value: Object.freeze({ address: Reflect.get(input, "address") }) }
+        isEmail(input)
+          ? { _tag: "Success", value: Object.freeze({ address: input.address }) }
           : { _tag: "Failure", message: "Expected email." },
       equivalent: (left, right) => left.address === right.address,
       compare: (left, right) =>
@@ -1419,7 +1448,7 @@ describe("BrunoTableClient browser surface", () => {
         tableId="TABLE_ID_SPARSE"
         compiledColumns={compiledColumns}
         toolbar={toolbar}
-        rowPipeline={SparseRowPipeline}
+        rowPipeline={SparseNeverRowPipeline}
         rowPipelineAdapter={adapter}
       />
     );
@@ -1648,7 +1677,11 @@ describe("BrunoTableClient browser surface", () => {
     );
     expect(document.activeElement).toBe(retry.element());
     await expect.element(retry).toHaveAttribute("aria-disabled", "true");
-    (retry.element() as HTMLButtonElement).click();
+    const retryButton = retry.element();
+    if (!(retryButton instanceof HTMLButtonElement)) {
+      throw new Error("Retry control must render a button.");
+    }
+    retryButton.click();
     expect(run).toHaveBeenCalledOnce();
 
     await screen.rerender(<BrunoTableClient {...props} clientSource={readySource()} />);
@@ -1924,18 +1957,14 @@ describe("BrunoTableClient browser surface", () => {
       expect(cellRenders).not.toHaveBeenCalled();
       expect(gridSurfaceRenders).not.toHaveBeenCalled();
 
+      const malformedRowsSource = readySource(candidateRows);
+      Object.defineProperty(malformedRowsSource, "rows", { value: null });
+      Object.defineProperty(malformedRowsSource, "status", { value: "stale" });
       await screen.rerender(
         <BrunoTableClient
           {...props}
           initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-          clientSource={
-            {
-              rows: null,
-              totalRows: candidateRows.length,
-              version: 5,
-              status: "stale",
-            } as unknown as ReturnType<typeof readySource>
-          }
+          clientSource={malformedRowsSource}
         />,
       );
       await vi.waitFor(() =>
@@ -1953,18 +1982,14 @@ describe("BrunoTableClient browser surface", () => {
       expect(cellRenders).not.toHaveBeenCalled();
       expect(gridSurfaceRenders).not.toHaveBeenCalled();
 
+      const unsupportedStatusSource = readySource(candidateRows);
+      Object.defineProperty(unsupportedStatusSource, "version", { value: 6 });
+      Object.defineProperty(unsupportedStatusSource, "status", { value: "offline" });
       await screen.rerender(
         <BrunoTableClient
           {...props}
           initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-          clientSource={
-            {
-              rows: candidateRows,
-              totalRows: candidateRows.length,
-              version: 6,
-              status: "offline",
-            } as unknown as ReturnType<typeof readySource>
-          }
+          clientSource={unsupportedStatusSource}
         />,
       );
       await vi.waitFor(() =>
@@ -2004,6 +2029,10 @@ describe("BrunoTableClient browser surface", () => {
     );
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).toBeInTheDocument();
 
+    const malformedErrorRowsSource = readySource(candidateRows);
+    Object.defineProperty(malformedErrorRowsSource, "rows", { value: null });
+    Object.defineProperty(malformedErrorRowsSource, "status", { value: "error" });
+    Object.defineProperty(malformedErrorRowsSource, "version", { value: 3 });
     await screen.rerender(
       <BrunoTableClient
         {...props}
@@ -2030,14 +2059,7 @@ describe("BrunoTableClient browser surface", () => {
       <BrunoTableClient
         {...props}
         initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-        clientSource={
-          {
-            rows: null,
-            totalRows: candidateRows.length,
-            version: 3,
-            status: "error",
-          } as unknown as ReturnType<typeof readySource>
-        }
+        clientSource={malformedErrorRowsSource}
       />,
     );
     await expect
@@ -2047,18 +2069,14 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" }))
       .not.toBeInTheDocument();
 
+    const unsupportedErrorStatusSource = readySource(candidateRows);
+    Object.defineProperty(unsupportedErrorStatusSource, "version", { value: 4 });
+    Object.defineProperty(unsupportedErrorStatusSource, "status", { value: "offline" });
     await screen.rerender(
       <BrunoTableClient
         {...props}
         initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-        clientSource={
-          {
-            rows: candidateRows,
-            totalRows: candidateRows.length,
-            version: 4,
-            status: "offline",
-          } as unknown as ReturnType<typeof readySource>
-        }
+        clientSource={unsupportedErrorStatusSource}
       />,
     );
     await expect.element(screen.getByRole("alert")).toHaveTextContent("Unsupported source status");
@@ -2111,7 +2129,7 @@ describe("BrunoTableClient browser surface", () => {
           tableId="TABLE_ID_EMPTY_QUERY_RECOVERY"
           compiledColumns={compiledColumns}
           toolbar={toolbar}
-          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipeline={rowPipeline}
           rowPipelineAdapter={adapter}
         />
       </>,
@@ -2142,14 +2160,11 @@ describe("BrunoTableClient browser surface", () => {
     const removeGridSurfaceRenderListener =
       installBrunoTableClientGridSurfaceRenderListener(gridSurfaceRenders);
     try {
-      runtime.publish(
-        adapter.publish({
-          rows: null,
-          totalRows: candidateRows.length,
-          version: 3,
-          status: "error",
-        } as unknown as ReturnType<typeof readySource>),
-      );
+      const malformedQueryRowsSource = readySource(candidateRows);
+      Object.defineProperty(malformedQueryRowsSource, "rows", { value: null });
+      Object.defineProperty(malformedQueryRowsSource, "status", { value: "error" });
+      Object.defineProperty(malformedQueryRowsSource, "version", { value: 3 });
+      runtime.publish(adapter.publish(malformedQueryRowsSource));
       await expect
         .element(screen.getByRole("alert"))
         .toHaveTextContent("Invalid Client Source rows: null.");
@@ -2171,17 +2186,16 @@ describe("BrunoTableClient browser surface", () => {
       queryReads.mockClear();
       gridSurfaceRenders.mockClear();
 
-      runtime.publish(
-        adapter.publish({
-          get rows(): readonly Row[] {
-            unsupportedRowsRead();
-            throw new Error("Unsupported source rows must stay unread.");
-          },
-          totalRows: candidateRows.length,
-          version: 4,
-          status: "offline",
-        } as unknown as ReturnType<typeof readySource>),
-      );
+      const unsupportedQueryRowsSource = readySource(candidateRows);
+      Object.defineProperty(unsupportedQueryRowsSource, "rows", {
+        get: () => {
+          unsupportedRowsRead();
+          throw new Error("Unsupported source rows must stay unread.");
+        },
+      });
+      Object.defineProperty(unsupportedQueryRowsSource, "status", { value: "offline" });
+      Object.defineProperty(unsupportedQueryRowsSource, "version", { value: 4 });
+      runtime.publish(adapter.publish(unsupportedQueryRowsSource));
       await expect
         .element(screen.getByRole("alert"))
         .toHaveTextContent("Unsupported source status");
@@ -2257,7 +2271,7 @@ describe("BrunoTableClient browser surface", () => {
           tableId="TABLE_ID_INITIAL_STALE_RECOVERY"
           compiledColumns={compiledColumns}
           toolbar={new BrunoTableToolbarStore(undefined)}
-          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipeline={rowPipeline}
           rowPipelineAdapter={adapter}
         />
       </>,
@@ -2329,7 +2343,7 @@ describe("BrunoTableClient browser surface", () => {
           tableId="TABLE_ID_EMPTY_STALE_FALLBACK"
           compiledColumns={compiledColumns}
           toolbar={new BrunoTableToolbarStore(undefined)}
-          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipeline={rowPipeline}
           rowPipelineAdapter={adapter}
         />,
       );
@@ -2547,10 +2561,8 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("rejects an unsupported runtime source status with visible error chrome", async () => {
-    const malformedSource = {
-      ...readySource([{ id: "candidate", name: "Untrusted", score: 1 }]),
-      status: "offline",
-    } as unknown as ReturnType<typeof readySource>;
+    const malformedSource = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
+    Object.defineProperty(malformedSource, "status", { value: "offline" });
     const screen = await render(<BrunoTableClient {...props} clientSource={malformedSource} />);
 
     const alert = screen.getByRole("alert");
@@ -2603,10 +2615,8 @@ describe("BrunoTableClient browser surface", () => {
   test("retains accepted rows when a required lifecycle value is invalid", async () => {
     const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
     const acceptedAdaCell = screen.getByRole("gridcell", { name: "Ada" }).element();
-    const invalid = {
-      ...readySource([{ id: "candidate", name: "Untrusted", score: 1 }]),
-      totalRows: "one",
-    } as unknown as ReturnType<typeof readySource>;
+    const invalid = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
+    Object.defineProperty(invalid, "totalRows", { value: "one" });
 
     await expect(
       screen.rerender(<BrunoTableClient {...props} clientSource={invalid} />),
@@ -2623,12 +2633,8 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("rejects a malformed runtime row collection with visible error chrome", async () => {
-    const malformedSource = {
-      rows: null,
-      totalRows: 1,
-      version: 1,
-      status: "ready",
-    } as unknown as ReturnType<typeof readySource>;
+    const malformedSource = readySource([{ id: "candidate", name: "Untrusted", score: 1 }]);
+    Object.defineProperty(malformedSource, "rows", { value: null });
     const screen = await render(<BrunoTableClient {...props} clientSource={malformedSource} />);
 
     const alert = screen.getByRole("alert");
@@ -2669,14 +2675,12 @@ describe("BrunoTableClient browser surface", () => {
     await screen.rerender(
       <BrunoTableClient
         {...props}
-        clientSource={
-          {
-            rows: null,
-            totalRows: rows.length,
-            version: 2,
-            status: "ready",
-          } as unknown as ReturnType<typeof readySource>
-        }
+        clientSource={(() => {
+          const malformedSource = readySource(rows);
+          Object.defineProperty(malformedSource, "rows", { value: null });
+          Object.defineProperty(malformedSource, "version", { value: 2 });
+          return malformedSource;
+        })()}
       />,
     );
 
@@ -2779,7 +2783,11 @@ describe("BrunoTableClient browser surface", () => {
 
     expect(document.activeElement).toBe(retry.element());
     await expect.element(retry).toHaveAttribute("aria-disabled", "true");
-    (retry.element() as HTMLButtonElement).click();
+    const retryButton = retry.element();
+    if (!(retryButton instanceof HTMLButtonElement)) {
+      throw new Error("Retry control must render a button.");
+    }
+    retryButton.click();
     await expect.element(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
     expect(run).not.toHaveBeenCalled();
   });
@@ -2871,15 +2879,18 @@ describe("BrunoTableClient browser surface", () => {
       name: `Stress row ${String(index).padStart(4, "0")}`,
       score: index,
     })) satisfies readonly Row[];
-    const stressColumns = Array.from({ length: 150 }, (_, index) => ({
-      columnId: `COL_ID_STRESS_${String(index).padStart(3, "0")}`,
-      field: "name" as const,
-      headerName: `Stress ${String(index).padStart(3, "0")}`,
-      valueType: "text" as const,
-      width: 120,
-      ...(index === 0 ? { pinned: "start" as const } : {}),
-      ...(index === 149 ? { pinned: "end" as const } : {}),
-    })) as BrunoTableColumns<Row>;
+    const stressColumns = Array.from({ length: 150 }, (_, index) => {
+      const base = {
+        columnId: stressColumnId(index),
+        field: "name" as const,
+        headerName: `Stress ${String(index).padStart(3, "0")}`,
+        valueType: "text" as const,
+        width: 120,
+      };
+      if (index === 0) return { ...base, pinned: "start" as const };
+      if (index === 149) return { ...base, pinned: "end" as const };
+      return base;
+    }) satisfies BrunoTableColumns<Row>;
     const screen = await render(
       <BrunoTableClient
         tableId="TABLE_ID_150_COLUMNS"
@@ -2976,6 +2987,7 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("keeps logical pinned regions and horizontal reveal correct in RTL", async () => {
+    // SAFETY: Every generated identifier has a fixed COL_ID_RTL_ prefix and a numeric suffix, and the spread columns are already typed.
     const rtlColumns = [
       {
         ...columns[0],
@@ -3010,7 +3022,9 @@ describe("BrunoTableClient browser surface", () => {
       </div>,
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RTL" });
-    const gridElement = grid.element() as HTMLElement;
+    const gridElement = grid.element();
+    if (!(gridElement instanceof HTMLElement))
+      throw new Error("The RTL grid must be an HTMLElement.");
     const startHeader = screen.getByRole("columnheader", { name: "RTL start" }).element();
     const endHeader = screen.getByRole("columnheader", { name: "RTL end" }).element();
     const gridRect = gridElement.getBoundingClientRect();
@@ -3133,9 +3147,8 @@ describe("BrunoTableClient browser surface", () => {
           clientSource={readySource()}
         />,
       );
-      const grid = screen
-        .getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" })
-        .element() as HTMLElement;
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GRID_ONLY_RTL" }).element();
+      if (!(grid instanceof HTMLElement)) throw new Error("The RTL grid must be an HTMLElement.");
       const overlay = grid.parentElement?.querySelector<HTMLElement>(
         "[data-bruno-scrollbar-overlay]",
       );
@@ -3222,7 +3235,9 @@ describe("BrunoTableClient browser surface", () => {
         />,
       );
       const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" });
-      const gridElement = grid.element() as HTMLElement;
+      const gridElement = grid.element();
+      if (!(gridElement instanceof HTMLElement))
+        throw new Error("The geometry grid must be an HTMLElement.");
       const rowLayer = gridElement.querySelector<HTMLElement>("[data-bruno-row-layer]");
       expect(rowLayer).not.toBeNull();
       expect(
@@ -3309,7 +3324,9 @@ describe("BrunoTableClient browser surface", () => {
 
       const replacementGrid = screen
         .getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" })
-        .element() as HTMLElement;
+        .element();
+      if (!(replacementGrid instanceof HTMLElement))
+        throw new Error("The replacement grid must be an HTMLElement.");
       replacementGrid.scrollTop = 2_400;
       replacementGrid.dispatchEvent(new Event("scroll"));
       await expect
@@ -3337,7 +3354,9 @@ describe("BrunoTableClient browser surface", () => {
         <BrunoTableClient {...props} clientSource={readySource(manyRows)} />,
       );
       const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PEOPLE" });
-      const gridElement = grid.element() as HTMLElement;
+      const gridElement = grid.element();
+      if (!(gridElement instanceof HTMLElement))
+        throw new Error("The reduced-motion grid must be an HTMLElement.");
       expect(window.matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
       gridElement.style.scrollBehavior = "smooth";
       gridElement.focus();
@@ -3364,11 +3383,14 @@ describe("BrunoTableClient browser surface", () => {
     const restoreMirroredQueryReadListener = installBrunoTableClientQueryValueReadListener(
       (_rowId, columnId) => mirroredQueryReads.push(columnId),
     );
-    const secondaryDecode = vi.fn((input: unknown) =>
-      typeof input === "number" && Number.isFinite(input)
-        ? ({ _tag: "Success", value: input } as const)
-        : ({ _tag: "Failure", message: "Expected a number." } as const),
-    );
+    const secondaryDecode = vi.fn(function (
+      this: void,
+      input: unknown,
+    ): BrunoTableDecodeResult<number> {
+      return typeof input === "number" && Number.isFinite(input)
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected a number." };
+    });
     const secondaryValueType: BrunoTableValueType<number, "numeric", "number"> = {
       codecId: "test/lazy-secondary-number",
       codecVersion: 1,
@@ -3389,6 +3411,7 @@ describe("BrunoTableClient browser surface", () => {
           ? { _tag: "Success", value: Number(input) }
           : { _tag: "Failure", message: "Expected persisted text." },
     };
+    // SAFETY: The generated lazy fixture uses fixed uppercase COL_ID_LAZY_ identities and the explicit field/value branches preserve Row correlation.
     const lazyColumns = Array.from({ length: 100 }, (_, index) => ({
       columnId: `COL_ID_LAZY_${String(index).padStart(3, "0")}`,
       field: index === 75 ? ("score" as const) : ("name" as const),
@@ -3433,7 +3456,7 @@ describe("BrunoTableClient browser surface", () => {
           tableId="TABLE_ID_LAZY_SECONDARY_SORT"
           compiledColumns={compiledLazyColumns}
           toolbar={toolbar}
-          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipeline={rowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
         />,
       );
@@ -3604,7 +3627,9 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     const region = screen.getByRole("grid", { name: "Data for TABLE_ID_SCROLL" });
-    const gridElement = region.element() as HTMLElement;
+    const gridElement = region.element();
+    if (!(gridElement instanceof HTMLElement))
+      throw new Error("The scroll grid must be an HTMLElement.");
     await expect
       .element(screen.getByRole("gridcell", { name: "Row 0" }).nth(0))
       .toBeInTheDocument();
@@ -3818,11 +3843,12 @@ describe("BrunoTableClient browser surface", () => {
       .element()
       .closest('[data-bruno-pinned-body-region="start"]');
     expect(Number(headerLayer?.style.zIndex)).toBeGreaterThan(
-      Number((bodyPinnedLayer as HTMLElement | null)?.style.zIndex),
+      Number(bodyPinnedLayer instanceof HTMLElement ? bodyPinnedLayer.style.zIndex : undefined),
     );
   });
 
   test("virtualizes, reveals, and restores a suspended many-column pinned layout", async () => {
+    // SAFETY: The generated narrow fixture uses fixed uppercase COL_ID_NARROW_ identities and preserves the declared Row column shape.
     const narrowColumns = [
       ...Array.from({ length: 30 }, (_, index) => ({
         ...columns[0],
@@ -3977,6 +4003,7 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("bounds and restores an oversized centreless pinned layout from its first commit", async () => {
+    // SAFETY: The generated all-pinned fixture uses fixed uppercase COL_ID_ALL_PINNED_ identities and preserves the declared Row column shape.
     const allPinnedColumns = [
       ...Array.from({ length: 30 }, (_, index) => ({
         ...columns[0],
@@ -4340,7 +4367,10 @@ describe("BrunoTableClient browser surface", () => {
     for (const name of ["Second", "Third", "Fourth"]) {
       const current = screen.getByRole("button", { name: /Open/u }).element();
       expect(current.tabIndex).toBe(-1);
-      detached.push(current as HTMLButtonElement);
+      if (!(current instanceof HTMLButtonElement)) {
+        throw new Error("Row actions must render buttons.");
+      }
+      detached.push(current);
       await screen.rerender(
         <BrunoTableClient
           tableId="TABLE_ID_REPLACED_ACTIONS"
@@ -4901,11 +4931,8 @@ describe("BrunoTableClient browser surface", () => {
     firstHost.innerHTML = markup;
     secondHost.innerHTML = markup;
     document.body.append(firstHost, secondHost);
-    const actEnvironment = globalThis as typeof globalThis & {
-      IS_REACT_ACT_ENVIRONMENT?: boolean;
-    };
-    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
-    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const previousActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     const firstRecoverableErrors: unknown[] = [];
     const secondRecoverableErrors: unknown[] = [];
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -4953,9 +4980,9 @@ describe("BrunoTableClient browser surface", () => {
         secondRoot?.unmount();
       });
       if (previousActEnvironment === undefined) {
-        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+        Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
       } else {
-        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+        globalThis.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
       }
       consoleError.mockRestore();
       firstHost.remove();
@@ -4983,11 +5010,8 @@ describe("BrunoTableClient browser surface", () => {
     firstHost.innerHTML = markup;
     secondHost.innerHTML = markup;
     document.body.append(firstHost, secondHost);
-    const actEnvironment = globalThis as typeof globalThis & {
-      IS_REACT_ACT_ENVIRONMENT?: boolean;
-    };
-    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
-    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const previousActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     const recoverableErrors: unknown[] = [];
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let firstRoot: Root | undefined;
@@ -5047,9 +5071,9 @@ describe("BrunoTableClient browser surface", () => {
         secondRoot?.unmount();
       });
       if (previousActEnvironment === undefined) {
-        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+        Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
       } else {
-        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+        globalThis.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
       }
       consoleError.mockRestore();
       firstHost.remove();
@@ -5098,6 +5122,7 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("indexes active-descendant proxies in pinned-region order", async () => {
+    // SAFETY: The interleaved fixture contains only the already-typed Row columns with literal COL_ID identities.
     const interleavedColumns = [
       {
         ...columns[1],
