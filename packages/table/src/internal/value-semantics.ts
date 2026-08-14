@@ -10,13 +10,13 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
-import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 type SemanticsOverrides = {
-  readonly cellAlign?: BrunoTableRuntimeValue;
-  readonly editorLayout?: BrunoTableRuntimeValue;
-  readonly width?: BrunoTableRuntimeValue;
-  readonly format?: BrunoTableRuntimeValue;
+  readonly cellAlign?: BrunoTableRuntimeRecord[PropertyKey];
+  readonly editorLayout?: BrunoTableRuntimeRecord[PropertyKey];
+  readonly width?: BrunoTableRuntimeRecord[PropertyKey];
+  readonly format?: BrunoTableRuntimeRecord[PropertyKey];
 };
 
 /**
@@ -27,25 +27,37 @@ type SemanticsOverrides = {
  * validator narrows them to the public contract.
  */
 interface RuntimeValueTypeCallbacks {
-  readonly decodeRuntime: (this: void, input: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+  readonly decodeRuntime: (
+    this: void,
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
   readonly equivalent: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
-  ) => BrunoTableRuntimeValue;
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
   readonly compare: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
-  ) => BrunoTableRuntimeValue;
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
   readonly formatCanonicalText: (
     this: void,
-    value: BrunoTableRuntimeValue,
-  ) => BrunoTableRuntimeValue;
-  readonly parseCanonicalText: (this: void, text: string) => BrunoTableRuntimeValue;
-  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
-  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
-  readonly decodePersisted: (this: void, input: BrunoTableRuntimeValue) => BrunoTableRuntimeValue;
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
+  readonly parseCanonicalText: (this: void, text: string) => BrunoTableRuntimeRecord[PropertyKey];
+  readonly formatDisplay: (
+    this: void,
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
+  readonly encodePersisted: (
+    this: void,
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
+  readonly decodePersisted: (
+    this: void,
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableRuntimeRecord[PropertyKey];
 }
 
 type RuntimeValueTypeDescriptor = {
@@ -59,29 +71,32 @@ type RuntimeValueTypeDescriptor = {
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly decodeRuntime: (
     this: void,
-    input: BrunoTableRuntimeValue,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
   readonly equivalent: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
   ) => boolean;
   readonly compare: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
   ) => BrunoTableOrdering;
-  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeRecord[PropertyKey]) => string;
   readonly parseCanonicalText: (
     this: void,
     text: string,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
-  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => string;
-  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableJsonValue;
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
+  readonly formatDisplay: (this: void, value: BrunoTableRuntimeRecord[PropertyKey]) => string;
+  readonly encodePersisted: (
+    this: void,
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableJsonValue;
   readonly decodePersisted: (
     this: void,
-    input: BrunoTableRuntimeValue,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
 };
 
 export type CompiledColumnValueSemantics = {
@@ -95,29 +110,32 @@ export type CompiledColumnValueSemantics = {
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly decodeRuntime: (
     this: void,
-    input: BrunoTableRuntimeValue,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
   readonly equivalent: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
   ) => boolean;
   readonly compare: (
     this: void,
-    left: BrunoTableRuntimeValue,
-    right: BrunoTableRuntimeValue,
+    left: BrunoTableRuntimeRecord[PropertyKey],
+    right: BrunoTableRuntimeRecord[PropertyKey],
   ) => BrunoTableOrdering;
-  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeValue) => string;
+  readonly formatCanonicalText: (this: void, value: BrunoTableRuntimeRecord[PropertyKey]) => string;
   readonly parseCanonicalText: (
     this: void,
     text: string,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
-  readonly formatDisplay: (this: void, value: BrunoTableRuntimeValue) => string;
-  readonly encodePersisted: (this: void, value: BrunoTableRuntimeValue) => BrunoTableJsonValue;
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
+  readonly formatDisplay: (this: void, value: BrunoTableRuntimeRecord[PropertyKey]) => string;
+  readonly encodePersisted: (
+    this: void,
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableJsonValue;
   readonly decodePersisted: (
     this: void,
-    input: BrunoTableRuntimeValue,
-  ) => BrunoTableDecodeResult<BrunoTableRuntimeValue>;
+    input: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]>;
 };
 
 export class ValueSemanticsConfigurationError extends TypeError {}
@@ -167,7 +185,7 @@ const builtInValueTypes: Readonly<Record<BrunoTableBuiltInValueType, RuntimeValu
   });
 
 export function compileColumnValueSemantics(
-  selection: BrunoTableRuntimeValue,
+  selection: BrunoTableRuntimeRecord[PropertyKey],
   overrides: SemanticsOverrides,
 ): CompiledColumnValueSemantics {
   const builtInSelection = isBuiltInValueType(selection) ? selection : undefined;
@@ -205,7 +223,8 @@ export function compileColumnValueSemantics(
     );
   }
 
-  let formatDisplay = (value: BrunoTableRuntimeValue) => descriptor.formatDisplay(value);
+  let formatDisplay = (value: BrunoTableRuntimeRecord[PropertyKey]) =>
+    descriptor.formatDisplay(value);
   if (format !== undefined) {
     if (!isRecord(format)) {
       throw new ValueSemanticsConfigurationError(
@@ -257,7 +276,9 @@ export function compileColumnValueSemantics(
 
 const BRUNO_TABLE_NUMBER_DISPLAY_LOCALE = "en-US";
 
-function snapshotCustomValueType(selection: BrunoTableRuntimeValue): RuntimeValueTypeDescriptor {
+function snapshotCustomValueType(
+  selection: BrunoTableRuntimeRecord[PropertyKey],
+): RuntimeValueTypeDescriptor {
   if (!isRecord(selection)) {
     throw new ValueSemanticsConfigurationError(
       "BrunoTable valueType must be text, number, bigint, boolean, or a Value Type descriptor.",
@@ -337,7 +358,9 @@ function snapshotCustomValueType(selection: BrunoTableRuntimeValue): RuntimeValu
   return Object.freeze(descriptor);
 }
 
-function snapshotAggregateResults(input: BrunoTableRuntimeValue): BrunoTableAggregateResults {
+function snapshotAggregateResults(
+  input: BrunoTableRuntimeRecord[PropertyKey],
+): BrunoTableAggregateResults {
   if (input === undefined) return Object.freeze({});
   if (!isRecord(input)) {
     throw new ValueSemanticsConfigurationError(
@@ -507,9 +530,12 @@ function persisted(type: string, value: BrunoTableJsonValue): BrunoTableJsonValu
 }
 
 function decodePersistedTag<TValue>(
-  input: BrunoTableRuntimeValue,
+  input: BrunoTableRuntimeRecord[PropertyKey],
   type: string,
-  decode: (this: void, value: BrunoTableRuntimeValue) => BrunoTableDecodeResult<TValue>,
+  decode: (
+    this: void,
+    value: BrunoTableRuntimeRecord[PropertyKey],
+  ) => BrunoTableDecodeResult<TValue>,
 ): BrunoTableDecodeResult<TValue> {
   return isRecord(input) && input["$brunoTableValue"] === type && input["version"] === 1
     ? decode(input["value"])
@@ -531,28 +557,28 @@ function failure(message: string): BrunoTableDecodeResult<never> {
   return { _tag: "Failure", message };
 }
 
-function assertFiniteNumber(value: BrunoTableRuntimeValue): number {
+function assertFiniteNumber(value: BrunoTableRuntimeRecord[PropertyKey]): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError("BrunoTable Number Value Type received a non-finite value.");
   }
   return value;
 }
 
-function assertString(value: BrunoTableRuntimeValue): string {
+function assertString(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   if (typeof value !== "string") {
     throw new TypeError("BrunoTable Text Value Type received a non-string value.");
   }
   return value;
 }
 
-function assertBigInt(value: BrunoTableRuntimeValue): bigint {
+function assertBigInt(value: BrunoTableRuntimeRecord[PropertyKey]): bigint {
   if (typeof value !== "bigint") {
     throw new TypeError("BrunoTable BigInt Value Type received a non-bigint value.");
   }
   return value;
 }
 
-function assertBoolean(value: BrunoTableRuntimeValue): boolean {
+function assertBoolean(value: BrunoTableRuntimeRecord[PropertyKey]): boolean {
   if (typeof value !== "boolean") {
     throw new TypeError("BrunoTable Boolean Value Type received a non-boolean value.");
   }
@@ -561,9 +587,9 @@ function assertBoolean(value: BrunoTableRuntimeValue): boolean {
 
 function safeDecode(
   decoder: RuntimeValueTypeCallbacks["decodeRuntime"],
-  input: BrunoTableRuntimeValue,
+  input: BrunoTableRuntimeRecord[PropertyKey],
   operation: "decodePersisted" | "decodeRuntime",
-): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
+): BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]> {
   try {
     return validateDecodeResult(decoder(input));
   } catch {
@@ -574,7 +600,7 @@ function safeDecode(
 function safeParseCanonicalText(
   decoder: RuntimeValueTypeCallbacks["parseCanonicalText"],
   text: string,
-): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
+): BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]> {
   try {
     return validateDecodeResult(decoder(text));
   } catch {
@@ -582,7 +608,7 @@ function safeParseCanonicalText(
   }
 }
 
-function validateBoolean(value: BrunoTableRuntimeValue): boolean {
+function validateBoolean(value: BrunoTableRuntimeRecord[PropertyKey]): boolean {
   if (typeof value !== "boolean") {
     throw new TypeError("BrunoTable Value Type equivalent must return a boolean.");
   }
@@ -590,8 +616,8 @@ function validateBoolean(value: BrunoTableRuntimeValue): boolean {
 }
 
 function validateDecodeResult(
-  value: BrunoTableRuntimeValue,
-): BrunoTableDecodeResult<BrunoTableRuntimeValue> {
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): BrunoTableDecodeResult<BrunoTableRuntimeRecord[PropertyKey]> {
   if (!isRecord(value) || (value["_tag"] !== "Success" && value["_tag"] !== "Failure")) {
     throw new TypeError("BrunoTable Value Type returned an invalid decode result.");
   }
@@ -604,21 +630,21 @@ function validateDecodeResult(
   return { _tag: "Success", value: value["value"] };
 }
 
-function validateOrdering(value: BrunoTableRuntimeValue): BrunoTableOrdering {
+function validateOrdering(value: BrunoTableRuntimeRecord[PropertyKey]): BrunoTableOrdering {
   if (value !== -1 && value !== 0 && value !== 1) {
     throw new TypeError("BrunoTable Value Type compare must return -1, 0, or 1.");
   }
   return value;
 }
 
-function validateText(value: BrunoTableRuntimeValue): string {
+function validateText(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   if (typeof value !== "string") {
     throw new TypeError("BrunoTable Value Type formatter must return a string.");
   }
   return value;
 }
 
-function validateJsonValue(value: BrunoTableRuntimeValue): BrunoTableJsonValue {
+function validateJsonValue(value: BrunoTableRuntimeRecord[PropertyKey]): BrunoTableJsonValue {
   if (!isJsonValue(value, new Set())) {
     throw new TypeError("BrunoTable Value Type persisted output must be JSON-safe.");
   }
@@ -626,7 +652,7 @@ function validateJsonValue(value: BrunoTableRuntimeValue): BrunoTableJsonValue {
 }
 
 function isJsonValue(
-  value: BrunoTableRuntimeValue,
+  value: BrunoTableRuntimeRecord[PropertyKey],
   ancestors: Set<object>,
 ): value is BrunoTableJsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
@@ -643,7 +669,7 @@ function isJsonValue(
 }
 
 function isDenseJsonArray(
-  value: readonly BrunoTableRuntimeValue[],
+  value: readonly BrunoTableRuntimeRecord[PropertyKey][],
   ancestors: Set<object>,
 ): boolean {
   const ownKeys = Reflect.ownKeys(value);
@@ -671,11 +697,15 @@ function isJsonObject(value: BrunoTableRuntimeRecord, ancestors: Set<object>): b
   });
 }
 
-function isBuiltInValueType(value: BrunoTableRuntimeValue): value is BrunoTableBuiltInValueType {
+function isBuiltInValueType(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is BrunoTableBuiltInValueType {
   return value === "text" || value === "number" || value === "bigint" || value === "boolean";
 }
 
-function isFilterFamily(value: BrunoTableRuntimeValue): value is BrunoTableFilterFamily {
+function isFilterFamily(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is BrunoTableFilterFamily {
   return (
     value === "boolean" ||
     value === "equality" ||
@@ -685,7 +715,9 @@ function isFilterFamily(value: BrunoTableRuntimeValue): value is BrunoTableFilte
   );
 }
 
-function isEditorFamily(value: BrunoTableRuntimeValue): value is BrunoTableEditorFamily {
+function isEditorFamily(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is BrunoTableEditorFamily {
   return (
     value === "bigdecimal" ||
     value === "bigint" ||
@@ -696,15 +728,17 @@ function isEditorFamily(value: BrunoTableRuntimeValue): value is BrunoTableEdito
   );
 }
 
-function isCellAlign(value: BrunoTableRuntimeValue): value is BrunoTableCellAlign {
+function isCellAlign(value: BrunoTableRuntimeRecord[PropertyKey]): value is BrunoTableCellAlign {
   return value === "start" || value === "center" || value === "end";
 }
 
-function isEditorLayout(value: BrunoTableRuntimeValue): value is BrunoTableEditorLayout {
+function isEditorLayout(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is BrunoTableEditorLayout {
   return value === "inline" || value === "center" || value === "fullWidth";
 }
 
-function isRecord(value: BrunoTableRuntimeValue): value is BrunoTableRuntimeRecord {
+function isRecord(value: BrunoTableRuntimeRecord[PropertyKey]): value is BrunoTableRuntimeRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

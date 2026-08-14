@@ -20,8 +20,8 @@ import type {
   BrunoTableComputedColumnInput,
   BrunoTableDecodeResult,
   BrunoTableEditorLayout,
-  BrunoTableFieldColumnDefinition,
-  BrunoTableFieldColumnInput,
+  BrunoTableFieldColumnDefinitionForValue,
+  BrunoTableFieldColumnInputForValue,
   BrunoTableFieldKey,
   BrunoTableGroupKeyCellParams,
   BrunoTableNonEmptyFields,
@@ -273,7 +273,14 @@ type BigDecimalFieldInput<
   TField extends FieldOfBigDecimal<TRow>,
   TColumnId extends BrunoTableColumnId,
 > = DistributiveOmit<
-  BrunoTableFieldColumnInput<TRow, TField, typeof BrunoTableBigDecimalValueType, void, TColumnId>,
+  BrunoTableFieldColumnInputForValue<
+    TRow,
+    TField,
+    BigDecimal.BigDecimal,
+    typeof BrunoTableBigDecimalValueType,
+    void,
+    TColumnId
+  >,
   "valueType"
 >;
 
@@ -478,9 +485,10 @@ type BrunoTableBigDecimalColumnPreset<TDefaults extends BrunoTableBigDecimalColu
     ): BigDecimalPresetResult<
       EffectiveFieldPresetDefaults<TDefaults, TOptions>,
       TOptions,
-      BrunoTableFieldColumnDefinition<
+      BrunoTableFieldColumnDefinitionForValue<
         TRow,
         TField,
+        BigDecimal.BigDecimal,
         typeof BrunoTableBigDecimalValueType,
         Merge<EffectiveFieldPresetDefaults<TDefaults, TOptions>, TOptions>,
         TColumnId
@@ -528,9 +536,10 @@ type BrunoTableBigDecimalColumnHelper = {
       OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
   ): BigDecimalHelperResult<
     TOptions,
-    BrunoTableFieldColumnDefinition<
+    BrunoTableFieldColumnDefinitionForValue<
       TRow,
       TField,
+      BigDecimal.BigDecimal,
       typeof BrunoTableBigDecimalValueType,
       TOptions,
       TColumnId
@@ -548,9 +557,10 @@ type BrunoTableBigDecimalColumnHelper = {
       OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
   ): BigDecimalHelperResult<
     TOptions,
-    BrunoTableFieldColumnDefinition<
+    BrunoTableFieldColumnDefinitionForValue<
       TRow,
       TField,
+      BigDecimal.BigDecimal,
       typeof BrunoTableBigDecimalValueType,
       TOptions,
       TColumnId
@@ -567,9 +577,10 @@ type BrunoTableBigDecimalColumnHelper = {
       OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
   ): BigDecimalHelperResult<
     TOptions,
-    BrunoTableFieldColumnDefinition<
+    BrunoTableFieldColumnDefinitionForValue<
       TRow,
       TField,
+      BigDecimal.BigDecimal,
       typeof BrunoTableBigDecimalValueType,
       TOptions,
       TColumnId
@@ -586,9 +597,10 @@ type BrunoTableBigDecimalColumnHelper = {
       OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
   ): BigDecimalHelperResult<
     TOptions,
-    BrunoTableFieldColumnDefinition<
+    BrunoTableFieldColumnDefinitionForValue<
       TRow,
       TField,
+      BigDecimal.BigDecimal,
       typeof BrunoTableBigDecimalValueType,
       TOptions,
       TColumnId
@@ -845,9 +857,10 @@ function BrunoTableBigDecimalColumnWithDefaults<
   ): BigDecimalPresetResult<
     EffectiveFieldPresetDefaults<TDefaults, TOptions>,
     TOptions,
-    BrunoTableFieldColumnDefinition<
+    BrunoTableFieldColumnDefinitionForValue<
       TRow,
       TField,
+      BigDecimal.BigDecimal,
       typeof BrunoTableBigDecimalValueType,
       Merge<EffectiveFieldPresetDefaults<TDefaults, TOptions>, TOptions>,
       TColumnId

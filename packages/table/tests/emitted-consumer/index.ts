@@ -264,6 +264,57 @@ const exactAmountValueType = {
       : { _tag: "Failure", message: "Expected persisted exact amount." },
 } satisfies BrunoTableValueType<ExactAmount, "numeric", "text">;
 
+type OtherAmount = { readonly major: number };
+const otherAmountValueType = {
+  codecId: "consumer/other-amount",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input): BrunoTableDecodeResult<OtherAmount> =>
+    typeof input === "object" &&
+    input !== null &&
+    "major" in input &&
+    typeof input.major === "number"
+      ? { _tag: "Success", value: { major: input.major } }
+      : { _tag: "Failure", message: "Expected another amount." },
+  equivalent: (left, right) => left.major === right.major,
+  compare: (left, right) => (left.major === right.major ? 0 : left.major < right.major ? -1 : 1),
+  formatCanonicalText: (value) => String(value.major),
+  parseCanonicalText: (text) =>
+    /^\d+(?:\.\d+)?$/u.test(text)
+      ? { _tag: "Success", value: { major: Number(text) } }
+      : { _tag: "Failure", message: "Expected another amount." },
+  formatDisplay: (value) => String(value.major),
+  encodePersisted: (value) => ({ major: value.major }),
+  decodePersisted: () => ({ _tag: "Failure", message: "Not used in this type proof." }),
+} satisfies BrunoTableValueType<OtherAmount, "numeric", "text">;
+
+const invalidEmittedCodecPairing = [
+  // @ts-expect-error Emitted declarations reject a codec paired with another field domain.
+  {
+    columnId: "COL_ID_WRONG_AMOUNT_CODEC",
+    field: "amount",
+    headerName: "Wrong amount codec",
+    valueType: otherAmountValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+void invalidEmittedCodecPairing;
+
+const invalidEmittedComputedCodecPairing = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_WRONG_COMPUTED_CODEC",
+    fields: ["amount"],
+    headerName: "Wrong computed codec",
+    valueType: otherAmountValueType,
+    // @ts-expect-error Emitted declarations reject a computed getter paired with another domain.
+    valueGetter: ({ row }) => row.amount,
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+void invalidEmittedComputedCodecPairing;
+
 const exactAmountColumns = [
   {
     columnId: "COL_ID_AMOUNT",

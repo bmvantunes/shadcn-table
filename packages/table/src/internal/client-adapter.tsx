@@ -21,7 +21,7 @@ import {
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
-import type { BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 import type { ClientOrderBy } from "./client-row-model";
 import { createClientFilterPredicate } from "./client-row-model";
 
@@ -276,7 +276,7 @@ function readCanonicalValue<TRow>(
   row: AdapterRow<TRow>,
   column: CompiledColumn,
   tableId: string,
-): BrunoTableRuntimeValue {
+): BrunoTableRuntimeRecord[PropertyKey] {
   for (const listener of queryValueReadListeners) listener(row.rowId, column.columnId, tableId);
   const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
   if (isBrunoTableInvalidCellValue(value)) throw new ClientInvalidValueError(value.invalid);

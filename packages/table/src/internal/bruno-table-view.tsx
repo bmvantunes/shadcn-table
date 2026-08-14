@@ -99,22 +99,13 @@ import type {
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
+import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeRecord } from "./runtime-value";
 import {
-  isBrunoTableRuntimeRecord,
-  type BrunoTableRuntimeRecord,
-  type BrunoTableRuntimeValue,
-} from "./runtime-value";
-import {
-  recordBrunoTableClientCellRender,
   recordBrunoTableClientColumnPreviewStyleWrite,
   recordBrunoTableClientColumnReorderFrame,
   recordBrunoTableClientColumnResizeFrame,
   recordBrunoTableClientColumnGestureFrame,
   recordBrunoTableClientColumnGestureListener,
-  recordBrunoTableClientGridSurfaceRender,
-  recordBrunoTableClientHeaderRender,
-  recordBrunoTableClientRowRender,
-  recordBrunoTableClientViewRender,
   hasBrunoTableClientColumnGestureFrameListener,
 } from "./render-instrumentation";
 import {
@@ -4246,7 +4237,7 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
   return Object.freeze({ children, hasToolbar: hasRenderableChildren(children) });
 }
 
-type BrunoTableToolbarNode = ReactNode | BrunoTableRuntimeValue;
+type BrunoTableToolbarNode = ReactNode | BrunoTableRuntimeRecord[PropertyKey];
 
 function sameToolbarNode(previous: BrunoTableToolbarNode, next: BrunoTableToolbarNode): boolean {
   if (Object.is(previous, next)) return true;

@@ -1,9 +1,9 @@
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
-import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 interface MutableRuntimeRecord {
-  [key: PropertyKey]: BrunoTableRuntimeValue;
+  [key: PropertyKey]: BrunoTableRuntimeRecord[PropertyKey];
 }
 
 export type ClientOrderBy = readonly {
@@ -151,7 +151,7 @@ export function createClientFilterPredicate<TRow>(
   readValue: (
     column: CompiledColumn,
     row: TRow,
-  ) => BrunoTableRuntimeValue = readCompiledColumnValue,
+  ) => BrunoTableRuntimeRecord[PropertyKey] = readCompiledColumnValue,
 ): ((row: TRow) => boolean) | undefined {
   if (filters === undefined || filters.length === 0) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
@@ -263,10 +263,10 @@ function captureFilterRecord(filter: BrunoTableRuntimeRecord): BrunoTableRuntime
 }
 
 function captureDenseFilterArray(
-  value: BrunoTableRuntimeValue,
+  value: BrunoTableRuntimeRecord[PropertyKey],
   context: FilterSanitizationContext,
   reserveConditions: boolean,
-): readonly BrunoTableRuntimeValue[] | undefined {
+): readonly BrunoTableRuntimeRecord[PropertyKey][] | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) {
     return admitFilterArrayLength(value.length, context, reserveConditions) ? value : undefined;
@@ -298,7 +298,9 @@ function admitFilterArrayLength(
   return false;
 }
 
-function captureFilterArrayLength(value: BrunoTableRuntimeValue): CapturedFilterArray | undefined {
+function captureFilterArrayLength(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): CapturedFilterArray | undefined {
   try {
     if (!Array.isArray(value)) return undefined;
     const length = value.length;
@@ -332,7 +334,9 @@ function memoizeSanitizedFilter(
   return sanitized;
 }
 
-function filterCaptureKeys(type: BrunoTableRuntimeValue): readonly string[] | undefined {
+function filterCaptureKeys(
+  type: BrunoTableRuntimeRecord[PropertyKey],
+): readonly string[] | undefined {
   if (type === "AND" || type === "OR") return ["conditions"];
   if (type === "NOT") return ["condition"];
   if (type === "blank" || type === "notBlank") return ["columnId"];
@@ -412,7 +416,8 @@ function sanitizeFilterRecord(
     filter: sanitizedFilter,
   });
   const operand = filter["filter"];
-  const decode = (value: BrunoTableRuntimeValue) => column.semantics.decodeRuntime(value);
+  const decode = (value: BrunoTableRuntimeRecord[PropertyKey]) =>
+    column.semantics.decodeRuntime(value);
   if (type === "blank" || type === "notBlank") {
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
@@ -531,7 +536,7 @@ function snapshotFilter(
 }
 
 function snapshotSanitizedFilterArray<T>(
-  input: BrunoTableRuntimeValue,
+  input: BrunoTableRuntimeRecord[PropertyKey],
   values: readonly T[],
 ): readonly T[] {
   if (
@@ -558,7 +563,7 @@ function evaluateFilter<TRow>(
   candidate: BrunoTableRuntimeRecord,
   row: TRow,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeValue,
+  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeRecord[PropertyKey],
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   if (completed === undefined) {
@@ -576,7 +581,7 @@ function evaluateFilterRecord<TRow>(
   candidate: BrunoTableRuntimeRecord,
   row: TRow,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeValue,
+  readValue: (column: CompiledColumn, row: TRow) => BrunoTableRuntimeRecord[PropertyKey],
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   const filter = candidate;
@@ -682,8 +687,8 @@ function containsSharedFilterNodes(filters: readonly unknown[]): boolean {
 
 function compareEquality(
   column: CompiledColumn,
-  value: BrunoTableRuntimeValue,
-  operand: BrunoTableRuntimeValue,
+  value: BrunoTableRuntimeRecord[PropertyKey],
+  operand: BrunoTableRuntimeRecord[PropertyKey],
   caseSensitive: boolean,
   accentSensitive: boolean,
 ): boolean {
@@ -713,12 +718,12 @@ function hasValidTextSensitivity(filter: BrunoTableRuntimeRecord, supported: boo
 }
 
 function snapshotDenseArray(
-  values: BrunoTableRuntimeValue,
+  values: BrunoTableRuntimeRecord[PropertyKey],
   length: number,
-): readonly BrunoTableRuntimeValue[] | undefined {
+): readonly BrunoTableRuntimeRecord[PropertyKey][] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
-    const snapshot: BrunoTableRuntimeValue[] = [];
+    const snapshot: BrunoTableRuntimeRecord[PropertyKey][] = [];
     for (let index = 0; index < length; index += 1) {
       if (!Object.hasOwn(values, index)) return undefined;
       snapshot.push(values[index]);
@@ -730,15 +735,15 @@ function snapshotDenseArray(
 }
 
 function snapshotRootEntries(
-  values: BrunoTableRuntimeValue | undefined,
-): readonly BrunoTableRuntimeValue[] | undefined {
+  values: BrunoTableRuntimeRecord[PropertyKey] | undefined,
+): readonly BrunoTableRuntimeRecord[PropertyKey][] | undefined {
   try {
     if (!Array.isArray(values)) return undefined;
     const length = values.length;
     if (!Number.isSafeInteger(length) || length < 0) return undefined;
     const indexes = readOwnArrayIndexes(values, length);
     if (indexes === undefined) return undefined;
-    const snapshot: BrunoTableRuntimeValue[] = [];
+    const snapshot: BrunoTableRuntimeRecord[PropertyKey][] = [];
     for (const index of indexes) {
       try {
         snapshot.push(values[index]);
@@ -772,7 +777,7 @@ function readOwnArrayIndexes(
   }
 }
 
-function isReadableEmptyArray(value: BrunoTableRuntimeValue): boolean {
+function isReadableEmptyArray(value: BrunoTableRuntimeRecord[PropertyKey]): boolean {
   try {
     return Array.isArray(value) && value.length === 0;
   } catch {
@@ -807,7 +812,7 @@ type FilterSanitizationContext = {
 type CapturedFilterArray = {
   attempted: boolean;
   readonly length: number;
-  snapshot: readonly BrunoTableRuntimeValue[] | undefined;
+  snapshot: readonly BrunoTableRuntimeRecord[PropertyKey][] | undefined;
 };
 
 type SanitizedFilterNode = {

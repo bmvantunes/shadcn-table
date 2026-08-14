@@ -11,7 +11,7 @@ const activeRoot = join(repositoryRoot, "tools/oxlint/anti-slop");
 
 const correctedRuleMarkers = {
   "rules/no-runtime-typeof.ts": ["runtimeTypeTags", "isBoundaryComparison"],
-  "rules/no-reflect-get.ts": ["isProxyGetTrap"],
+  "rules/no-reflect-get.ts": ["isGlobalProxy", "isDelegatingProxyGetTrap"],
   "rules/no-unknown-parameters.ts": ["typePredicateParameterName", 'name === "cause"'],
   "rules/no-unsafe-dictionary-type.ts": [
     "classifyUnsafeDictionaryValue",

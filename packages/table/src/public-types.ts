@@ -3,16 +3,6 @@ import { brunoTableComputedColumnMarker } from "./internal/computed-column-marke
 import type { BrunoTableRuntimeRecord } from "./internal/runtime-value";
 
 type BrunoTableComputedColumnImplementationOptions = BrunoTableRuntimeRecord;
-type BrunoTableErasedValue =
-  | object
-  | string
-  | number
-  | bigint
-  | boolean
-  | symbol
-  | null
-  | undefined;
-type BrunoTableErasedDecodeResult = object;
 
 type ColumnIdFirstCharacter =
   | "_"
@@ -171,8 +161,8 @@ export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
   readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<infer TValue>;
 }
   ? TValue
-  : TValueType extends ErasedValueType
-    ? BrunoTableErasedValue
+  : TValueType extends ErasedValueType<infer TValue>
+    ? TValue
     : never;
 
 export type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
@@ -407,7 +397,11 @@ type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
 type FieldColumn<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TValue,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = ColumnPresentation<TRow, TRow[TField]> &
   ColumnLayout & {
@@ -435,7 +429,7 @@ type RawCustomFieldValueType<
 >;
 
 type RawCustomFieldColumnWithoutAggregate<TRow, TField extends FieldKey<TRow>> = Extract<
-  FieldColumn<TRow, TField, RawCustomFieldValueType<TRow[TField]>>,
+  FieldColumn<TRow, TField, NonNullish<TRow[TField]>, RawCustomFieldValueType<TRow[TField]>>,
   { readonly aggFunc?: never }
 >;
 
@@ -445,6 +439,7 @@ type RawCustomAggregatedFieldColumn<TRow, TField extends FieldKey<TRow>> = {
       FieldColumn<
         TRow,
         TField,
+        NonNullish<TRow[TField]>,
         RawCustomFieldValueType<TRow[TField], Readonly<Record<TAggFunc, TResultKind>>>
       >,
       { readonly aggFunc: TAggFunc }
@@ -457,11 +452,17 @@ type FieldColumns<TRow> = {
     | ([NonNullish<TRow[TField]>] extends [never]
         ? never
         : NonNullish<TRow[TField]> extends string
-          ? FieldColumn<TRow, TField, "text">
+          ? FieldColumn<TRow, TField, string, "text">
           : never)
-    | (NonNullish<TRow[TField]> extends number ? FieldColumn<TRow, TField, "number"> : never)
-    | (NonNullish<TRow[TField]> extends bigint ? FieldColumn<TRow, TField, "bigint"> : never)
-    | (NonNullish<TRow[TField]> extends boolean ? FieldColumn<TRow, TField, "boolean"> : never)
+    | (NonNullish<TRow[TField]> extends number
+        ? FieldColumn<TRow, TField, number, "number">
+        : never)
+    | (NonNullish<TRow[TField]> extends bigint
+        ? FieldColumn<TRow, TField, bigint, "bigint">
+        : never)
+    | (NonNullish<TRow[TField]> extends boolean
+        ? FieldColumn<TRow, TField, boolean, "boolean">
+        : never)
     | ([NonNullish<TRow[TField]>] extends [never]
         ? never
         :
@@ -473,7 +474,10 @@ type ComputedColumn<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
 > = ColumnPresentation<TRow, TValue> &
   ColumnLayout & {
     readonly [brunoTableComputedColumnMarker]: true;
@@ -489,7 +493,7 @@ type ComputedColumn<
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };
 
-type ErasedValueType = {
+type ErasedValueType<TValue> = {
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
@@ -498,14 +502,14 @@ type ErasedValueType = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
   readonly aggregateResults?: BrunoTableAggregateResults;
-  readonly decodeRuntime: (this: void, input: unknown) => BrunoTableErasedDecodeResult;
-  readonly equivalent: (this: void, ...parameters: never[]) => boolean;
-  readonly compare: (this: void, ...parameters: never[]) => BrunoTableOrdering;
-  readonly formatCanonicalText: (this: void, ...parameters: never[]) => string;
-  readonly parseCanonicalText: (this: void, text: string) => BrunoTableErasedDecodeResult;
-  readonly formatDisplay: (this: void, ...parameters: never[]) => string;
-  readonly encodePersisted: (this: void, ...parameters: never[]) => BrunoTableJsonValue;
-  readonly decodePersisted: (this: void, input: unknown) => BrunoTableErasedDecodeResult;
+  decodeRuntime(input: unknown): BrunoTableDecodeResult<TValue>;
+  equivalent(left: TValue, right: TValue): boolean;
+  compare(left: TValue, right: TValue): BrunoTableOrdering;
+  formatCanonicalText(value: TValue): string;
+  parseCanonicalText(text: string): BrunoTableDecodeResult<TValue>;
+  formatDisplay(value: TValue): string;
+  encodePersisted(value: TValue): BrunoTableJsonValue;
+  decodePersisted(input: unknown): BrunoTableDecodeResult<TValue>;
 };
 
 type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
@@ -514,8 +518,11 @@ type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
     readonly columnId: BrunoTableColumnId;
     readonly headerName: string;
     readonly fields: NonEmptyFields<TRow>;
-    readonly valueGetter: (this: void, ...parameters: never[]) => BrunoTableErasedValue;
-    readonly valueType: ErasedValueType;
+    readonly valueGetter: (
+      this: void,
+      ...parameters: never[]
+    ) => BrunoTableRuntimeRecord[PropertyKey];
+    readonly valueType: ErasedValueType<BrunoTableRuntimeRecord[PropertyKey]>;
     readonly field?: never;
     readonly enableFilter?: never;
     readonly enableSorting?: never;
@@ -543,10 +550,36 @@ type ComputedColumnOptions<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
 > = Omit<
   ComputedColumn<TRow, TFields, TValue, TValueType>,
   typeof brunoTableComputedColumnMarker | "fields" | "valueGetter"
+>;
+
+type CustomComputedValue<TValueType> = BrunoTableValueTypeValue<TValueType>;
+
+type CustomComputedValueType<TValueType> = TValueType &
+  (
+    | ErasedValueType<CustomComputedValue<TValueType>>
+    | BrunoTableValueType<CustomComputedValue<TValueType>>
+  );
+
+type CustomComputedColumnOptionsWithoutValueType<
+  TRow,
+  TFields extends NonEmptyFields<TRow>,
+  TValueType,
+> = Omit<
+  ComputedColumn<
+    TRow,
+    TFields,
+    CustomComputedValue<TValueType>,
+    | ErasedValueType<CustomComputedValue<TValueType>>
+    | BrunoTableValueType<CustomComputedValue<TValueType>>
+  >,
+  typeof brunoTableComputedColumnMarker | "fields" | "valueGetter" | "valueType"
 >;
 
 /** A string key of the consumer's Row type. */
@@ -575,7 +608,10 @@ type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void
 export type BrunoTableFieldColumnDefinition<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<BrunoTableNonNullish<TRow[TField]>>
+    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>,
   TOptions = void,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId>;
@@ -584,17 +620,55 @@ export type BrunoTableFieldColumnDefinition<
 export type BrunoTableFieldColumnInput<
   TRow,
   TField extends FieldKey<TRow>,
-  TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<BrunoTableNonNullish<TRow[TField]>>
+    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>,
   TOptions = void,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
-> = SelectFieldColumnCapabilities<FieldColumn<TRow, TField, TValueType, TColumnId>, TOptions>;
+> = SelectFieldColumnCapabilities<
+  FieldColumn<TRow, TField, BrunoTableNonNullish<TRow[TField]>, TValueType, TColumnId>,
+  TOptions
+>;
+
+/** @internal Exact-value input shape used by typed Value Type helpers. */
+export type BrunoTableFieldColumnInputForValue<
+  TRow,
+  TField extends FieldKey<TRow>,
+  TValue,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
+  TOptions = void,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
+> = SelectFieldColumnCapabilities<
+  FieldColumn<TRow, TField, TValue, TValueType, TColumnId>,
+  TOptions
+>;
+
+/** @internal Exact-value definition shape used by typed Value Type helpers. */
+export type BrunoTableFieldColumnDefinitionForValue<
+  TRow,
+  TField extends FieldKey<TRow>,
+  TValue,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
+  TOptions = void,
+  TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
+> = BrunoTableFieldColumnInputForValue<TRow, TField, TValue, TValueType, TOptions, TColumnId>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 export type BrunoTableComputedColumnDefinition<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
 > = ComputedColumn<TRow, TFields, TValue, TValueType>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
@@ -609,7 +683,10 @@ export type BrunoTableComputedColumnInput<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | ErasedValueType<TValue>
+    | BrunoTableValueType<TValue>,
 > = ComputedColumnOptions<TRow, TFields, TValue, TValueType> &
   ComputedColumnDependencies<TRow, TFields, TValue>;
 
@@ -664,21 +741,22 @@ export function BrunoTableComputedColumn<
 export function BrunoTableComputedColumn<
   TRow,
   const TFields extends NonEmptyFields<TRow>,
-  const TValueType extends ErasedValueType,
-  const TOptions extends ComputedColumnOptions<
-    TRow,
-    TFields,
-    BrunoTableValueTypeValue<TValueType>,
-    TValueType
-  >,
+  const TValueType,
+  const TOptions extends CustomComputedColumnOptionsWithoutValueType<TRow, TFields, TValueType>,
 >(
   options: TOptions &
     BrunoTableColumnIdentityInput<TOptions> & {
-      readonly valueType: TValueType;
-    } & ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>>,
-): TOptions &
-  ComputedColumnDependencies<TRow, TFields, BrunoTableValueTypeValue<TValueType>> &
-  ComputedColumn<TRow, TFields, BrunoTableValueTypeValue<TValueType>, TValueType>;
+      readonly valueType: CustomComputedValueType<TValueType>;
+    } & ComputedColumnDependencies<TRow, TFields, CustomComputedValue<TValueType>>,
+): TOptions & {
+  readonly valueType: CustomComputedValueType<TValueType>;
+} & ComputedColumnDependencies<TRow, TFields, CustomComputedValue<TValueType>> &
+  ComputedColumn<
+    TRow,
+    TFields,
+    CustomComputedValue<TValueType>,
+    CustomComputedValueType<TValueType>
+  >;
 export function BrunoTableComputedColumn(options: BrunoTableComputedColumnImplementationOptions) {
   return { ...options, [brunoTableComputedColumnMarker]: true };
 }

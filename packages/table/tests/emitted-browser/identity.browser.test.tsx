@@ -394,7 +394,15 @@ test("runs emitted resize, reorder, visibility, and reset commands", async () =>
     .toHaveAttribute("aria-valuenow", "160");
 });
 
-function replaceBrowserProcess(value: unknown): () => void {
+type EmittedBrowserProcessStub =
+  | Readonly<{
+      readonly env?: Readonly<{
+        readonly NODE_ENV?: string;
+      }>;
+    }>
+  | undefined;
+
+function replaceBrowserProcess(value: EmittedBrowserProcessStub): () => void {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "process");
   Object.defineProperty(globalThis, "process", {
     configurable: true,

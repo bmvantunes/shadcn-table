@@ -18,9 +18,11 @@ import type {
 import { useClientRowIds } from "./client-adapter";
 import { createClientFilterPredicate } from "./client-row-model";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
-import type { BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
-export type BrunoTableClientRowPipelineAdapterView<TRow extends BrunoTableRuntimeValue> = Readonly<{
+export type BrunoTableClientRowPipelineAdapterView<
+  TRow extends BrunoTableRuntimeRecord[PropertyKey],
+> = Readonly<{
   readonly createRowsStore: (
     runtime: BrunoTableRowPipelineRuntimeView<TRow>,
     createDetector: () => BrunoTableClientRowOrderChangeDetector<TRow>,
@@ -33,21 +35,22 @@ export type BrunoTableClientRowPipelineAdapterView<TRow extends BrunoTableRuntim
   readonly retryQueryRows: () => BrunoTableRowPipelinePublication<TRow> | undefined;
 }>;
 
-type ClientResolvedRowOrderProps<TRow extends BrunoTableRuntimeValue> = BrunoTableRowPipelineProps<
-  BrunoTableRowPipelineRuntimeView<TRow>,
-  BrunoTableClientRowPipelineAdapterView<TRow>
-> & {
-  readonly columnLayout: BrunoTableColumnLayoutSnapshot;
-  readonly filters: readonly unknown[];
-  readonly queryGeneration: number;
-  readonly orderBy: readonly {
-    readonly columnId: string;
-    readonly direction: "asc" | "desc";
-  }[];
-};
+type ClientResolvedRowOrderProps<TRow extends BrunoTableRuntimeRecord[PropertyKey]> =
+  BrunoTableRowPipelineProps<
+    BrunoTableRowPipelineRuntimeView<TRow>,
+    BrunoTableClientRowPipelineAdapterView<TRow>
+  > & {
+    readonly columnLayout: BrunoTableColumnLayoutSnapshot;
+    readonly filters: readonly unknown[];
+    readonly queryGeneration: number;
+    readonly orderBy: readonly {
+      readonly columnId: string;
+      readonly direction: "asc" | "desc";
+    }[];
+  };
 
 export function createBrunoTableClientRowPipeline<
-  TRow extends BrunoTableRuntimeValue,
+  TRow extends BrunoTableRuntimeRecord[PropertyKey],
 >(): NamedExoticComponent<
   BrunoTableRowPipelineProps<
     BrunoTableRowPipelineRuntimeView<TRow>,
@@ -145,12 +148,12 @@ export function createBrunoTableClientRowPipeline<
 
 export const BrunoTableClientRowPipeline: NamedExoticComponent<
   BrunoTableRowPipelineProps<
-    BrunoTableRowPipelineRuntimeView<BrunoTableRuntimeValue>,
-    BrunoTableClientRowPipelineAdapterView<BrunoTableRuntimeValue>
+    BrunoTableRowPipelineRuntimeView<BrunoTableRuntimeRecord[PropertyKey]>,
+    BrunoTableClientRowPipelineAdapterView<BrunoTableRuntimeRecord[PropertyKey]>
   >
-> = createBrunoTableClientRowPipeline<BrunoTableRuntimeValue>();
+> = createBrunoTableClientRowPipeline<BrunoTableRuntimeRecord[PropertyKey]>();
 
-function createRowOrderChangeDetector<TRow extends BrunoTableRuntimeValue>(
+function createRowOrderChangeDetector<TRow extends BrunoTableRuntimeRecord[PropertyKey]>(
   tableId: string,
   columns: readonly CompiledColumn[],
   filters: readonly unknown[],
@@ -225,8 +228,8 @@ const FILTER_VALUE_INVALID = Object.freeze({});
 
 function equivalentOrderedValue(
   column: CompiledColumn,
-  previousValue: BrunoTableRuntimeValue,
-  nextValue: BrunoTableRuntimeValue,
+  previousValue: BrunoTableRuntimeRecord[PropertyKey],
+  nextValue: BrunoTableRuntimeRecord[PropertyKey],
 ): boolean {
   if (
     previousValue === null ||

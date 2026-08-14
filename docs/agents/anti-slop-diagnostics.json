@@ -1,5 +1,6 @@
 {
   "mergeBase": "4249e9296bb92878aebed2cca6a81c4f63a96186",
+  "publicationValidationBase": "1309ef36e1907c55037903da123586d2bd10f67e",
   "toolVersions": {
     "oxlint": "1.78.0",
     "@oxlint/plugins": "1.78.0"

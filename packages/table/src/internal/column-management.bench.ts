@@ -2,7 +2,7 @@ import { bench, describe } from "vite-plus/test";
 
 import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
-import type { BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 type DiagnosticSamples = {
   resize: number[];
@@ -29,7 +29,9 @@ const benchmarkPublication = {
 };
 const benchmarkOrder = [{ columnId: benchmarkColumns[0]!.columnId, direction: "asc" as const }];
 
-function createRuntime(tableId: string): BrunoTableGridRuntime<BrunoTableRuntimeValue> {
+function createRuntime(
+  tableId: string,
+): BrunoTableGridRuntime<BrunoTableRuntimeRecord[PropertyKey]> {
   return new BrunoTableGridRuntime(
     benchmarkPublication,
     benchmarkColumns,
@@ -41,7 +43,9 @@ function createRuntime(tableId: string): BrunoTableGridRuntime<BrunoTableRuntime
   );
 }
 
-function createDirtyResetRuntime(index: number): BrunoTableGridRuntime<BrunoTableRuntimeValue> {
+function createDirtyResetRuntime(
+  index: number,
+): BrunoTableGridRuntime<BrunoTableRuntimeRecord[PropertyKey]> {
   const runtime = createRuntime(`TABLE_ID_BENCH_RESET_${String(index)}`);
   runtime.dispatchGridCommand({
     type: "column.resize.commit",

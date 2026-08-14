@@ -8,7 +8,14 @@ import type {
   BrunoTableFilterExpressions,
   BrunoTableGroupKeyValues,
   BrunoTableValueType,
+  BrunoTableValueTypeValue,
 } from "@bruno/table";
+
+type Equal<TLeft, TRight> =
+  (<TValue>() => TValue extends TLeft ? 1 : 2) extends <TValue>() => TValue extends TRight ? 1 : 2
+    ? true
+    : false;
+type Expect<TValue extends true> = TValue;
 
 type PriceRow = {
   readonly price: BigDecimal.BigDecimal;
@@ -54,8 +61,20 @@ const rawColumns = [
 ] satisfies BrunoTableColumns<PriceRow>;
 
 type PriceValue = BrunoTableColumnValue<PriceRow, typeof columns, "COL_ID_PRICE">;
+type SpreadValue = BrunoTableColumnValue<PriceRow, typeof columns, "COL_ID_SPREAD">;
+type PriceValueRemainsExact = Expect<Equal<PriceValue, BigDecimal.BigDecimal>>;
+type SpreadValueRemainsExact = Expect<Equal<SpreadValue, BigDecimal.BigDecimal>>;
+type BigDecimalCodecValueRemainsExact = Expect<
+  Equal<BrunoTableValueTypeValue<typeof BrunoTableBigDecimalValueType>, BigDecimal.BigDecimal>
+>;
 const exactPrice: PriceValue = BigDecimal.make(123n, 2);
+const priceValueRemainsExact: PriceValueRemainsExact = true;
+const spreadValueRemainsExact: SpreadValueRemainsExact = true;
+const bigDecimalCodecValueRemainsExact: BigDecimalCodecValueRemainsExact = true;
 void exactPrice;
+void priceValueRemainsExact;
+void spreadValueRemainsExact;
+void bigDecimalCodecValueRemainsExact;
 void rawColumns;
 
 const filters = [

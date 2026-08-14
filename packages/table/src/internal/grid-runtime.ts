@@ -23,7 +23,7 @@ import {
   sanitizeBrunoTableFilters,
   sanitizeBrunoTableOrderBy,
 } from "./grid-query";
-import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeValue } from "./runtime-value";
+import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeRecord } from "./runtime-value";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
 import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
 
@@ -122,10 +122,15 @@ export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
   readonly loadedRows: number;
   readonly getRowId: (index: number) => BrunoTableRowId | undefined;
   readonly getRow: (rowId: BrunoTableRowId) => TRow | undefined;
-  readonly getCellValue: (rowId: BrunoTableRowId, columnId: string) => BrunoTableRuntimeValue;
+  readonly getCellValue: (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableRuntimeRecord[PropertyKey];
 }>;
 
-export type BrunoTableRuntimeView<TRow extends BrunoTableRuntimeValue = BrunoTableRuntimeValue> = {
+export type BrunoTableRuntimeView<
+  TRow extends BrunoTableRuntimeRecord[PropertyKey] = BrunoTableRuntimeRecord[PropertyKey],
+> = {
   readonly getChromeSnapshot: () => BrunoTableChromeSnapshot;
   readonly getSourceSnapshot: () => BrunoTableSourceSnapshot;
   readonly getSourceVersionSnapshot: () => BrunoTableSourceVersionSnapshot;
@@ -139,7 +144,7 @@ export type BrunoTableRuntimeView<TRow extends BrunoTableRuntimeValue = BrunoTab
   readonly getCellValueSnapshot: (
     rowId: BrunoTableRowId,
     columnId: string,
-  ) => BrunoTableRuntimeValue;
+  ) => BrunoTableRuntimeRecord[PropertyKey];
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
   /** Controlled Client column input; width-only commits do not publish it. */
@@ -166,7 +171,7 @@ export type BrunoTableRuntimeView<TRow extends BrunoTableRuntimeValue = BrunoTab
 };
 
 export type BrunoTableRowPipelineRuntimeView<
-  TRow extends BrunoTableRuntimeValue = BrunoTableRuntimeValue,
+  TRow extends BrunoTableRuntimeRecord[PropertyKey] = BrunoTableRuntimeRecord[PropertyKey],
 > = BrunoTableRuntimeView<TRow> & {
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
   readonly subscribeQuery: (listener: Listener) => () => void;
@@ -231,11 +236,11 @@ type RuntimeState<TRow> = Readonly<{
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
 }>;
 
-export type BrunoTableCellSnapshot<TRow = BrunoTableRuntimeValue> = Readonly<{
+export type BrunoTableCellSnapshot<TRow = BrunoTableRuntimeRecord[PropertyKey]> = Readonly<{
   readonly column: CompiledColumn | undefined;
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
   readonly rowPresent: boolean;
-  readonly value: BrunoTableRuntimeValue;
+  readonly value: BrunoTableRuntimeRecord[PropertyKey];
 }>;
 
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
@@ -255,7 +260,7 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
-export class BrunoTableGridRuntime<TRow extends BrunoTableRuntimeValue> {
+export class BrunoTableGridRuntime<TRow extends BrunoTableRuntimeRecord[PropertyKey]> {
   private readonly chromeListeners = new Set<Listener>();
   private readonly sourceListeners = new Set<Listener>();
   private readonly sourceVersionListeners = new Set<Listener>();
@@ -475,7 +480,7 @@ export class BrunoTableGridRuntime<TRow extends BrunoTableRuntimeValue> {
   public readonly getCellValueSnapshot = (
     rowId: BrunoTableRowId,
     columnId: string,
-  ): BrunoTableRuntimeValue => this.currentCellSnapshot(rowId, columnId).value;
+  ): BrunoTableRuntimeRecord[PropertyKey] => this.currentCellSnapshot(rowId, columnId).value;
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 

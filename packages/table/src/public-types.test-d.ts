@@ -35,6 +35,7 @@ import type {
   BrunoTableSortableColumnId,
   BrunoTableSortBy,
   BrunoTableValueType,
+  BrunoTableValueTypeValue,
 } from "./index";
 
 type Order = {
@@ -773,6 +774,59 @@ const exactAmountValueType = {
   decodePersisted: () => ({ _tag: "Failure", message: "Not used in this type proof." }),
 } satisfies BrunoTableValueType<ExactAmount, "numeric", "text">;
 
+expectTypeOf<BrunoTableValueTypeValue<typeof exactAmountValueType>>().toEqualTypeOf<ExactAmount>();
+
+type OtherAmount = { readonly major: number };
+const otherAmountValueType = {
+  codecId: "test/other-amount",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input): BrunoTableDecodeResult<OtherAmount> =>
+    typeof input === "object" &&
+    input !== null &&
+    "major" in input &&
+    typeof input.major === "number"
+      ? { _tag: "Success", value: { major: input.major } }
+      : { _tag: "Failure", message: "Expected another amount." },
+  equivalent: (left, right) => left.major === right.major,
+  compare: (left, right) => (left.major === right.major ? 0 : left.major < right.major ? -1 : 1),
+  formatCanonicalText: (value) => String(value.major),
+  parseCanonicalText: (text) =>
+    /^\d+(?:\.\d+)?$/u.test(text)
+      ? { _tag: "Success", value: { major: Number(text) } }
+      : { _tag: "Failure", message: "Expected another amount." },
+  formatDisplay: (value) => String(value.major),
+  encodePersisted: (value) => ({ major: value.major }),
+  decodePersisted: () => ({ _tag: "Failure", message: "Not used in this type proof." }),
+} satisfies BrunoTableValueType<OtherAmount, "numeric", "text">;
+
+const invalidCodecPairing = [
+  // @ts-expect-error A codec for another domain cannot be paired with this field.
+  {
+    columnId: "COL_ID_WRONG_AMOUNT_CODEC",
+    field: "amount",
+    headerName: "Wrong amount codec",
+    valueType: otherAmountValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+void invalidCodecPairing;
+
+const invalidComputedCodecPairing = [
+  BrunoTableComputedColumn({
+    columnId: "COL_ID_WRONG_COMPUTED_CODEC",
+    fields: ["amount"],
+    headerName: "Wrong computed codec",
+    valueType: otherAmountValueType,
+    // @ts-expect-error A computed getter cannot be paired with another domain's codec.
+    valueGetter: ({ row }) => row.amount,
+  }),
+] satisfies BrunoTableColumns<AmountRow>;
+void invalidComputedCodecPairing;
+
 const customValueColumns = [
   {
     columnId: "COL_ID_AMOUNT",
@@ -897,6 +951,15 @@ const invalidComputedDependency = [
   }),
 ] satisfies BrunoTableColumns<Order>;
 
+const zeroParameterComputed = BrunoTableComputedColumn({
+  columnId: "COL_ID_ZERO_QUANTITY",
+  fields: ["quantity"],
+  headerName: "Zero quantity",
+  valueType: "bigint",
+  valueGetter: (_parameters: { readonly row: Pick<Order, "quantity"> }) => 0n,
+});
+void zeroParameterComputed;
+
 const invalidEmptyComputedDependencies = [
   BrunoTableComputedColumn({
     columnId: "COL_ID_DOUBLE_QUANTITY",
@@ -905,8 +968,6 @@ const invalidEmptyComputedDependencies = [
     headerName: "Double quantity",
     // @ts-expect-error no Value Type overload accepts an empty dependency tuple.
     valueType: "bigint",
-    // A zero-parameter getter remains assignable; the empty dependency tuple is rejected above.
-    valueGetter: () => 0n,
   }),
 ] satisfies BrunoTableColumns<Order>;
 

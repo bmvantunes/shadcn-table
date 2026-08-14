@@ -1,20 +1,17 @@
-/** The named JavaScript value domain accepted at BrunoTable runtime parsing boundaries. */
-export type BrunoTableRuntimeValue =
-  | object
-  | string
-  | number
-  | bigint
-  | boolean
-  | symbol
-  | null
-  | undefined;
-
 /**
  * A parsed object-shaped runtime value owned by a BrunoTable boundary.
  * @anti-slop-dictionary-owner This record is created only after the boundary object check.
  */
 export interface BrunoTableRuntimeRecord {
-  readonly [key: PropertyKey]: BrunoTableRuntimeValue;
+  readonly [key: PropertyKey]:
+    | object
+    | string
+    | number
+    | bigint
+    | boolean
+    | symbol
+    | null
+    | undefined;
 }
 
 /** Parse an arbitrary JavaScript value into the record shape owned by a runtime boundary. */

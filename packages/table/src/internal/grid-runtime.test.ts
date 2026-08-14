@@ -10,7 +10,7 @@ import {
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
-import type { BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
 type TextValue = Readonly<{ readonly text: string }>;
@@ -379,30 +379,30 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         ...baseColumn!,
         semantics: Object.freeze({
           ...baseColumn!.semantics,
-          decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+          decodeRuntime: function (this: void, input: BrunoTableRuntimeRecord[PropertyKey]) {
             return typeof input === "string"
               ? ({ _tag: "Success", value: Object.freeze({ text: input }) } as const)
               : ({ _tag: "Failure", message: "Expected text." } as const);
           },
           equivalent: function (
             this: void,
-            left: BrunoTableRuntimeValue,
-            right: BrunoTableRuntimeValue,
+            left: BrunoTableRuntimeRecord[PropertyKey],
+            right: BrunoTableRuntimeRecord[PropertyKey],
           ) {
             if (!isTextValue(left) || !isTextValue(right)) return false;
             return left.text === right.text;
           },
           compare: function (
             this: void,
-            left: BrunoTableRuntimeValue,
-            right: BrunoTableRuntimeValue,
+            left: BrunoTableRuntimeRecord[PropertyKey],
+            right: BrunoTableRuntimeRecord[PropertyKey],
           ) {
             if (!isTextValue(left) || !isTextValue(right)) return 0;
             const leftText = left.text;
             const rightText = right.text;
             return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
           },
-          formatDisplay: function (this: void, value: BrunoTableRuntimeValue) {
+          formatDisplay: function (this: void, value: BrunoTableRuntimeRecord[PropertyKey]) {
             return isTextValue(value) ? value.text : "";
           },
         }),
@@ -1146,7 +1146,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("decodes query columns columnarly and presentation cells on demand", () => {
     const decodeRuntime = vi.fn(
-      (input: BrunoTableRuntimeValue) =>
+      (input: BrunoTableRuntimeRecord[PropertyKey]) =>
         ({
           _tag: "Success",
           value: input,
@@ -1195,7 +1195,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("enforces one table-wide bound for primitive-row canonical values", () => {
     const decodeRuntime = vi.fn(
-      (input: BrunoTableRuntimeValue) =>
+      (input: BrunoTableRuntimeRecord[PropertyKey]) =>
         ({
           _tag: "Success",
           value: input,
@@ -1253,7 +1253,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
   it("enforces the same table-wide bound for retained object rows", () => {
     const decodeRuntime = vi.fn(
-      (input: BrunoTableRuntimeValue) =>
+      (input: BrunoTableRuntimeRecord[PropertyKey]) =>
         ({
           _tag: "Success",
           value: input,
@@ -1319,7 +1319,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         ...baseColumn!,
         semantics: Object.freeze({
           ...baseColumn!.semantics,
-          decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+          decodeRuntime: function (this: void, input: BrunoTableRuntimeRecord[PropertyKey]) {
             return typeof input === "string"
               ? ({ _tag: "Success", value: input.toUpperCase() } as const)
               : ({ _tag: "Failure", message: "Expected text." } as const);

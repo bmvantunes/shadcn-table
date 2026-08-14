@@ -13,7 +13,7 @@ import type {
   BrunoTableDecodeResult,
   BrunoTableValueType,
 } from "./public-types";
-import type { BrunoTableRuntimeValue } from "./internal/runtime-value";
+import type { BrunoTableRuntimeRecord } from "./internal/runtime-value";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -104,7 +104,7 @@ type SparseRowPipelineAdapter = Readonly<{
   readonly queryGeneration: number;
 }>;
 
-function createSparseRowPipeline<TRow extends BrunoTableRuntimeValue>() {
+function createSparseRowPipeline<TRow extends BrunoTableRuntimeRecord[PropertyKey]>() {
   return function SparseRowPipeline({
     children,
     columns,

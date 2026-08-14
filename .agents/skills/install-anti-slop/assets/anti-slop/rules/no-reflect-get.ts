@@ -1,9 +1,24 @@
 import { defineRule } from "@oxlint/plugins";
-import type { ESTree } from "@oxlint/plugins";
+import type { ESTree, Scope, SourceCode } from "@oxlint/plugins";
 
 import { isGlobalReflectMethodCall } from "../shared/reflect-method.ts";
 
-function isProxyGetTrap(node: ESTree.CallExpression): boolean {
+function isGlobalProxy(sourceCode: SourceCode, expression: ESTree.Node): boolean {
+  if (expression.type !== "Identifier" || expression.name !== "Proxy") return false;
+  if (sourceCode.isGlobalReference(expression)) return true;
+  let scope: Scope | null = sourceCode.getScope(expression);
+  while (scope !== null) {
+    const variable = scope.set.get(expression.name);
+    if (variable !== undefined) return variable.defs.length === 0;
+    scope = scope.upper;
+  }
+  return true;
+}
+
+function isDelegatingProxyGetTrap(
+  node: ESTree.CallExpression,
+  sourceCode: SourceCode,
+): boolean {
   let current: ESTree.Node | null = node.parent;
   let functionNode: ESTree.Function | ESTree.ArrowFunctionExpression | null = null;
   while (current !== null && current.type !== "Program") {
@@ -28,11 +43,29 @@ function isProxyGetTrap(node: ESTree.CallExpression): boolean {
   const object = property.parent;
   if (object.type !== "ObjectExpression" || object.parent === null) return false;
   const construction = object.parent;
+  if (
+    construction.type !== "NewExpression" ||
+    !isGlobalProxy(sourceCode, construction.callee) ||
+    construction.arguments.length !== 2 ||
+    construction.arguments[1] !== object ||
+    functionNode.params.length !== 3 ||
+    node.arguments.length !== 3
+  ) {
+    return false;
+  }
+
+  const [targetParameter, propertyParameter, receiverParameter] = functionNode.params;
+  const [targetArgument, propertyArgument, receiverArgument] = node.arguments;
   return (
-    construction.type === "NewExpression" &&
-    construction.callee.type === "Identifier" &&
-    construction.callee.name === "Proxy" &&
-    construction.arguments.includes(object)
+    targetParameter?.type === "Identifier" &&
+    propertyParameter?.type === "Identifier" &&
+    receiverParameter?.type === "Identifier" &&
+    targetArgument?.type === "Identifier" &&
+    propertyArgument?.type === "Identifier" &&
+    receiverArgument?.type === "Identifier" &&
+    targetArgument.name === targetParameter.name &&
+    propertyArgument.name === propertyParameter.name &&
+    receiverArgument.name === receiverParameter.name
   );
 }
 
@@ -55,7 +88,7 @@ export const noReflectGetRule = defineRule({
         if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;
         if (
           isGlobalReflectMethodCall(context.sourceCode, node.callee, "get") &&
-          !isProxyGetTrap(node)
+          !isDelegatingProxyGetTrap(node, context.sourceCode)
         ) {
           context.report({ node, messageId: "reflectGet" });
         }

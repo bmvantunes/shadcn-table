@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { BrunoTableAggFunc, BrunoTableColumnId } from "../public-types";
-import type { BrunoTableRuntimeRecord, BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 import {
   compileColumnValueSemantics,
   ValueSemanticsConfigurationError,
@@ -15,11 +15,13 @@ const columnIdWhitespacePattern = /\s/u;
 type RuntimeColumnDefinition = BrunoTableRuntimeRecord;
 /** Erased presentation callbacks intentionally receive the raw row and canonical value. */
 export interface BrunoTableRuntimeCallbackParameters {
-  readonly row: BrunoTableRuntimeValue;
-  readonly value: BrunoTableRuntimeValue;
+  readonly row: BrunoTableRuntimeRecord[PropertyKey];
+  readonly value: BrunoTableRuntimeRecord[PropertyKey];
 }
 
-type RuntimeCallback = (parameters: BrunoTableRuntimeCallbackParameters) => BrunoTableRuntimeValue;
+type RuntimeCallback = (
+  parameters: BrunoTableRuntimeCallbackParameters,
+) => BrunoTableRuntimeRecord[PropertyKey];
 type RuntimeCellRenderer = (parameters: BrunoTableRuntimeCallbackParameters) => ReactNode;
 
 export interface BrunoTableRuntimeComputedGetterParameters {
@@ -28,7 +30,7 @@ export interface BrunoTableRuntimeComputedGetterParameters {
 
 type RuntimeComputedGetter = (
   parameters: BrunoTableRuntimeComputedGetterParameters,
-) => BrunoTableRuntimeValue;
+) => BrunoTableRuntimeRecord[PropertyKey];
 
 type PresentationCallbacks = {
   valueFormatter?: RuntimeCallback;
@@ -53,7 +55,7 @@ type CompiledColumnBase = {
   readonly columnId: BrunoTableColumnId;
   readonly headerName: string;
   readonly pinned?: "start" | "end";
-  readonly valueType: BrunoTableRuntimeValue;
+  readonly valueType: BrunoTableRuntimeRecord[PropertyKey];
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
@@ -412,7 +414,7 @@ function isRuntimeColumnDefinition(value: unknown): value is RuntimeColumnDefini
 
 function compilePresentationCallbacks(
   candidate: RuntimeColumnDefinition,
-  columnId: BrunoTableRuntimeValue,
+  columnId: BrunoTableRuntimeRecord[PropertyKey],
   family: "groupKey" | "aggregate",
 ): CompiledPresentationCallbacks {
   const valueFormatterKey = `${family}ValueFormatter`;
@@ -453,19 +455,23 @@ function compilePresentationCallbacks(
   };
 }
 
-function isRuntimeCallback(value: BrunoTableRuntimeValue): value is RuntimeCallback {
+function isRuntimeCallback(value: BrunoTableRuntimeRecord[PropertyKey]): value is RuntimeCallback {
   return typeof value === "function";
 }
 
-function isRuntimeCellRenderer(value: BrunoTableRuntimeValue): value is RuntimeCellRenderer {
+function isRuntimeCellRenderer(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is RuntimeCellRenderer {
   return typeof value === "function";
 }
 
-function isRuntimeComputedGetter(value: BrunoTableRuntimeValue): value is RuntimeComputedGetter {
+function isRuntimeComputedGetter(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): value is RuntimeComputedGetter {
   return typeof value === "function";
 }
 
-function describeRuntimeColumnId(value: BrunoTableRuntimeValue): string {
+function describeRuntimeColumnId(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   if (typeof value === "object" && value !== null) {
     return Object.prototype.toString.call(value);
   }

@@ -1,14 +1,14 @@
 import type { CompiledColumn } from "./compile-columns";
-import type { BrunoTableRuntimeValue } from "./runtime-value";
+import type { BrunoTableRuntimeRecord } from "./runtime-value";
 
 interface RuntimeRowObject {
-  readonly [key: string]: BrunoTableRuntimeValue;
+  readonly [key: string]: BrunoTableRuntimeRecord[PropertyKey];
 }
 
 export function readCompiledColumnValue<TRow>(
   column: CompiledColumn,
   row: TRow,
-): BrunoTableRuntimeValue {
+): BrunoTableRuntimeRecord[PropertyKey] {
   if (column.kind === "field") return readField(row, column.field);
 
   const dependencies = Object.fromEntries(
@@ -18,7 +18,7 @@ export function readCompiledColumnValue<TRow>(
   return valueGetter({ row: dependencies });
 }
 
-function readField<TRow>(row: TRow, field: string): BrunoTableRuntimeValue {
+function readField<TRow>(row: TRow, field: string): BrunoTableRuntimeRecord[PropertyKey] {
   if (row === null || row === undefined) {
     throw new TypeError("BrunoTable cannot read a column field from a nullish row.");
   }

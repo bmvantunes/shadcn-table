@@ -14,7 +14,7 @@ import type {
 import { createBrunoTableInvalidCellValue, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
-import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeValue } from "./runtime-value";
+import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeRecord } from "./runtime-value";
 import type { ClientOrderBy } from "./grid-query";
 import {
   reconcileClientOrderBy,
@@ -52,7 +52,7 @@ export function installBrunoTableClientValueCachePruneListener(
   };
 }
 
-export class BrunoTableClientRowPipelineAdapter<TRow extends BrunoTableRuntimeValue> {
+export class BrunoTableClientRowPipelineAdapter<TRow extends BrunoTableRuntimeRecord[PropertyKey]> {
   private observedRows: TRow[] | undefined;
   private source: ClientSourceSnapshot<TRow>;
   private getRowId: (row: TRow) => BrunoTableRowId;
@@ -392,7 +392,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow extends BrunoTableRuntimeVa
   };
 }
 
-export type BrunoTableClientRowOrderChangeDetector<TRow = BrunoTableRuntimeValue> = (
+export type BrunoTableClientRowOrderChangeDetector<TRow = BrunoTableRuntimeRecord[PropertyKey]> = (
   previousRows: readonly BrunoTableClientAdmittedRow<TRow>[],
   nextRows: readonly BrunoTableClientAdmittedRow<TRow>[],
   change: BrunoTableClientRowOrderChange,
@@ -403,25 +403,25 @@ export type BrunoTableClientRowOrderChange = Readonly<{
   readonly changedIndexes: readonly number[];
 }>;
 
-export type BrunoTableClientRowsStore<TRow = BrunoTableRuntimeValue> = Readonly<{
+export type BrunoTableClientRowsStore<TRow = BrunoTableRuntimeRecord[PropertyKey]> = Readonly<{
   readonly getSnapshot: () => readonly BrunoTableClientAdmittedRow<TRow>[];
   readonly subscribe: (listener: () => void) => () => void;
 }>;
 
-export type BrunoTableClientAdmittedRow<TRow = BrunoTableRuntimeValue> = Readonly<{
+export type BrunoTableClientAdmittedRow<TRow = BrunoTableRuntimeRecord[PropertyKey]> = Readonly<{
   readonly raw: TRow;
   readonly rowId: BrunoTableRowId;
   readonly rowIndex: number;
   readonly values: BrunoTableClientValueCache<TRow>;
 }>;
 
-export type BrunoTableClientValueCache<TRow = BrunoTableRuntimeValue> = Readonly<{
+export type BrunoTableClientValueCache<TRow = BrunoTableRuntimeRecord[PropertyKey]> = Readonly<{
   readonly read: (
     row: TRow,
     rowId: BrunoTableRowId,
     rowIndex: number,
     column: CompiledColumn,
-  ) => BrunoTableRuntimeValue;
+  ) => BrunoTableRuntimeRecord[PropertyKey];
 }>;
 
 type ClientCoherentSnapshot<TRow> = BrunoTableRowSpaceSnapshot<TRow> &
@@ -715,7 +715,7 @@ function persistentSequenceArray<T>(sequence: ClientPersistentSequence<T>): read
         };
       }
       const index = arrayIndex(property);
-      return index === undefined ? Reflect.get(target, property, receiver) : sequence.get(index);
+      return index === undefined ? Reflect.get(_target, property, receiver) : sequence.get(index);
     },
     has: (_target, property) => {
       const index = arrayIndex(property);
@@ -1142,7 +1142,7 @@ function coherentResult<TRow>(
 
 type ClientBoundedValue = Readonly<{
   readonly raw: unknown;
-  readonly value: BrunoTableRuntimeValue;
+  readonly value: BrunoTableRuntimeRecord[PropertyKey];
   readonly token: object;
 }>;
 
@@ -1164,12 +1164,12 @@ class ClientCanonicalValueCache<TRow> implements BrunoTableClientValueCache<TRow
     rowId: BrunoTableRowId,
     rowIndex: number,
     column: CompiledColumn,
-  ): BrunoTableRuntimeValue => {
+  ): BrunoTableRuntimeRecord[PropertyKey] => {
     const bounded = this.readBounded(row, rowId, rowIndex, column);
     if (bounded.found) {
       return bounded.value;
     }
-    let value: BrunoTableRuntimeValue;
+    let value: BrunoTableRuntimeRecord[PropertyKey];
     try {
       value = readCompiledColumnValue(column, row);
     } catch {
@@ -1232,7 +1232,11 @@ class ClientCanonicalValueCache<TRow> implements BrunoTableClientValueCache<TRow
     rowId: BrunoTableRowId,
     rowIndex: number,
     column: CompiledColumn,
-  ): Readonly<{ found: true; value: BrunoTableRuntimeValue }> | Readonly<{ found: false }> => {
+  ):
+    | Readonly<{ found: true; value: BrunoTableRuntimeRecord[PropertyKey] }>
+    | Readonly<{
+        found: false;
+      }> => {
     const values = this.boundedValuesByRow.get(rowId);
     const cached = values?.get(column);
     if (cached === undefined) return NOT_FOUND;
@@ -1253,7 +1257,7 @@ class ClientCanonicalValueCache<TRow> implements BrunoTableClientValueCache<TRow
     row: TRow,
     rowId: BrunoTableRowId,
     column: CompiledColumn,
-    value: BrunoTableRuntimeValue,
+    value: BrunoTableRuntimeRecord[PropertyKey],
   ): void => {
     let values = this.boundedValuesByRow.get(rowId);
     if (values === undefined) {
@@ -1279,10 +1283,10 @@ class ClientCanonicalValueCache<TRow> implements BrunoTableClientValueCache<TRow
 }
 
 function currentInvalidRow(
-  value: BrunoTableRuntimeValue,
+  value: BrunoTableRuntimeRecord[PropertyKey],
   rowIndex: number,
   columnId: string,
-): BrunoTableRuntimeValue {
+): BrunoTableRuntimeRecord[PropertyKey] {
   if (!isBrunoTableInvalidCellValue(value) || value.invalid.rowIndex === rowIndex) return value;
   return createBrunoTableInvalidCellValue(invalidValue(rowIndex, columnId, value.invalid.message));
 }
@@ -1309,7 +1313,7 @@ function asClientCoherent<TRow>(
 
 function notifyRowsStoreListeners(
   listeners: Set<() => void>,
-  initialError?: BrunoTableRuntimeValue,
+  initialError?: BrunoTableRuntimeRecord[PropertyKey],
 ): void {
   let firstError = initialError;
   for (const listener of listeners) {
@@ -1384,7 +1388,7 @@ function snapshotSource<TRow>(
 }
 
 type ClientRequiredSourceEnvelope = Readonly<{
-  readonly sourceStatus: BrunoTableRuntimeValue;
+  readonly sourceStatus: BrunoTableRuntimeRecord[PropertyKey];
   readonly totalRows: number;
   readonly version: number;
 }>;
@@ -1394,7 +1398,7 @@ function snapshotRequiredSourceEnvelope<TRow>(
 ):
   | ClientRequiredSourceEnvelope
   | Readonly<{ readonly invalidLifecycle: "status" | "totalRows" | "version" }> {
-  let sourceStatus: BrunoTableRuntimeValue;
+  let sourceStatus: BrunoTableRuntimeRecord[PropertyKey];
   try {
     sourceStatus = source.status;
   } catch {
@@ -1422,8 +1426,8 @@ function snapshotRequiredSourceEnvelope<TRow>(
 }
 
 function readOptionalSourceField(
-  read: () => BrunoTableRuntimeValue,
-): BrunoTableRuntimeValue | undefined {
+  read: () => BrunoTableRuntimeRecord[PropertyKey],
+): BrunoTableRuntimeRecord[PropertyKey] | undefined {
   try {
     return read();
   } catch {
@@ -1445,7 +1449,9 @@ function snapshotSourceRows<TRow>(
   }
 }
 
-function snapshotSourceStatus(value: BrunoTableRuntimeValue): BrunoTableSourceStatus | undefined {
+function snapshotSourceStatus(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): BrunoTableSourceStatus | undefined {
   return value === "loading" ||
     value === "ready" ||
     value === "stale" ||
@@ -1455,16 +1461,16 @@ function snapshotSourceStatus(value: BrunoTableRuntimeValue): BrunoTableSourceSt
     : undefined;
 }
 
-function describeInvalidStatus(value: BrunoTableRuntimeValue): string {
+function describeInvalidStatus(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   if (typeof value === "string") return boundedText(value, 128);
   return describeUnknownValueKind(value);
 }
 
-function describeInvalidRows(value: BrunoTableRuntimeValue): string {
+function describeInvalidRows(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   return describeUnknownValueKind(value);
 }
 
-function describeUnknownValueKind(value: BrunoTableRuntimeValue): string {
+function describeUnknownValueKind(value: BrunoTableRuntimeRecord[PropertyKey]): string {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
   if (typeof value === "boolean") return "boolean";
@@ -1475,7 +1481,9 @@ function describeUnknownValueKind(value: BrunoTableRuntimeValue): string {
   return "object";
 }
 
-function snapshotRetry(value: BrunoTableRuntimeValue): BrunoTableSourceRetry | undefined {
+function snapshotRetry(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+): BrunoTableSourceRetry | undefined {
   if (!isBrunoTableRuntimeRecord(value)) return undefined;
   try {
     const run = value["run"];
@@ -1488,7 +1496,7 @@ function snapshotRetry(value: BrunoTableRuntimeValue): BrunoTableSourceRetry | u
   }
 }
 
-function isBrunoTableRetryRun(value: BrunoTableRuntimeValue): value is () => void {
+function isBrunoTableRetryRun(value: BrunoTableRuntimeRecord[PropertyKey]): value is () => void {
   return typeof value === "function";
 }
 
@@ -1591,7 +1599,10 @@ function boundedText(value: string, limit: number): string {
   return value.length <= limit ? value : value.slice(0, limit);
 }
 
-function boundedOptionalText(value: BrunoTableRuntimeValue, limit: number): string | undefined {
+function boundedOptionalText(
+  value: BrunoTableRuntimeRecord[PropertyKey],
+  limit: number,
+): string | undefined {
   return typeof value === "string" ? boundedText(value, limit) : undefined;
 }
 

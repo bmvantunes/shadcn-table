@@ -27,15 +27,30 @@ const packageConfigs = [
   resolve(repositoryRoot, "packages/shadcn"),
 ];
 
-for (const cwd of [repositoryRoot, ...packageConfigs]) {
+const rootConfigSource = readFileSync(resolve(repositoryRoot, "vite.config.ts"), "utf8");
+const sharedConfigSource = readFileSync(
+  resolve(repositoryRoot, "config/anti-slop-lint.ts"),
+  "utf8",
+);
+assert.match(rootConfigSource, /antiSlopJavaScriptPlugin/u);
+assert.match(rootConfigSource, /antiSlopRules/u);
+for (const ruleName of ruleNames) {
+  assert.match(
+    sharedConfigSource,
+    new RegExp(`['"]anti-slop/${ruleName}['"]\\s*:\\s*['"]error['"]`, "u"),
+    `${repositoryRoot}/config/anti-slop-lint.ts must enable ${ruleName} at error severity`,
+  );
+}
+
+for (const cwd of packageConfigs) {
   const configSource = readFileSync(resolve(cwd, "vite.config.ts"), "utf8");
-  for (const ruleName of ruleNames) {
-    assert.match(
-      configSource,
-      new RegExp(`['"]anti-slop/${ruleName}['"]\\s*:\\s*['"]error['"]`, "u"),
-      `${cwd} must enable ${ruleName} at error severity`,
-    );
-  }
+  assert.match(configSource, /antiSlopJavaScriptPlugin/u, `${cwd} must use the shared plugin`);
+  assert.match(configSource, /\.\.\.antiSlopRules/u, `${cwd} must use the shared rules`);
+  assert.doesNotMatch(
+    configSource,
+    /anti-slop\/[a-z-]+/u,
+    `${cwd} must not duplicate anti-slop rule definitions`,
+  );
 }
 
 withFixtureDirectory((directory) => {
@@ -48,6 +63,11 @@ withFixtureDirectory((directory) => {
 `,
   );
 
+  const rootDiagnostics = lintFixture(fixturePath, {
+    cwd: repositoryRoot,
+    expectedCodes: ["anti-slop(no-object-parameters)"],
+  });
+  assert.equal(rootDiagnostics.length, 1, repositoryRoot);
   for (const cwd of packageConfigs) {
     const diagnostics = lintFixture(fixturePath, {
       cwd,

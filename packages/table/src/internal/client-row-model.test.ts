@@ -9,11 +9,7 @@ import {
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
 } from "./client-row-model";
-import {
-  isBrunoTableRuntimeRecord,
-  type BrunoTableRuntimeRecord,
-  type BrunoTableRuntimeValue,
-} from "./runtime-value";
+import { isBrunoTableRuntimeRecord, type BrunoTableRuntimeRecord } from "./runtime-value";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -364,7 +360,7 @@ describe("Client row model", () => {
       cellAlign: "start",
       editorLayout: "inline",
       defaultWidth: 180,
-      decodeRuntime: function (this: void, input: BrunoTableRuntimeValue) {
+      decodeRuntime: function (this: void, input: BrunoTableRuntimeRecord[PropertyKey]) {
         return isEmail(input)
           ? ({ _tag: "Success", value: input } as const)
           : ({ _tag: "Failure", message: "Expected email." } as const);
@@ -377,7 +373,7 @@ describe("Client row model", () => {
         ({ _tag: "Success", value: Object.freeze({ address: text }) }) as const,
       formatDisplay: (value: Email) => value.address,
       encodePersisted: (value: Email) => value.address,
-      decodePersisted: function (this: void, input: BrunoTableRuntimeValue) {
+      decodePersisted: function (this: void, input: BrunoTableRuntimeRecord[PropertyKey]) {
         return typeof input === "string"
           ? ({ _tag: "Success", value: Object.freeze({ address: input }) } as const)
           : ({ _tag: "Failure", message: "Expected persisted email." } as const);

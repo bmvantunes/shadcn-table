@@ -13,14 +13,32 @@ const proxy = new Proxy(target, {
     return Reflect.get(proxyTarget, property, receiver);
   },
 });
+const unrelated = new Proxy(target, {
+  get(proxyTarget, property, receiver) {
+    return Reflect.get(target, property, receiver);
+  },
+});
+function shadowedProxy(Proxy: typeof globalThis.Proxy) {
+  return new Proxy(target, {
+    get(proxyTarget, property, receiver) {
+      return Reflect.get(proxyTarget, property, receiver);
+    },
+  });
+}
 void ordinary;
 void proxy;
+void unrelated;
+void shadowedProxy;
 `,
   );
 
   const diagnostics = lintFixture(fixturePath, {
-    expectedCodes: ["anti-slop(no-reflect-get)"],
-    expectedLocations: [2],
+    expectedCodes: [
+      "anti-slop(no-reflect-get)",
+      "anti-slop(no-reflect-get)",
+      "anti-slop(no-reflect-get)",
+    ],
+    expectedLocations: [2, 10, 16],
   });
-  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics.length, 3);
 });
