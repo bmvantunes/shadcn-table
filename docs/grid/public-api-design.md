@@ -310,6 +310,7 @@ Persistence is callback-based rather than storage-adapter based:
   tableId="orders"
   columns={columns}
   viewportSource={viewportSource}
+  initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
   initialPersistedState={savedPreferences}
   onPersistChange={(nextPreferences) => {
     publishPreferences(nextPreferences);
