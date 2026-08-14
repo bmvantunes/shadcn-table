@@ -72,7 +72,7 @@ test("reports incompatible Table Identity reuse from the emitted browser runtime
   }
 });
 
-test("keeps emitted identity diagnostics disabled without a process environment", async () => {
+test("reports incompatible Table Identity reuse without a process environment", async () => {
   const restoreProcess = replaceBrowserProcess(undefined);
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const firstColumns = [
@@ -112,10 +112,62 @@ test("keeps emitted identity diagnostics disabled without a process environment"
       </>,
     );
 
-    expect(consoleError).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('simultaneous use of tableId "TABLE_ID_EMITTED_NO_PROCESS"'),
+    );
     expect(
       screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_NO_PROCESS" }).all(),
     ).toHaveLength(2);
+  } finally {
+    restoreProcess();
+  }
+});
+
+test("keeps emitted identity diagnostics disabled in production", async () => {
+  const restoreProcess = replaceBrowserProcess({ env: { NODE_ENV: "production" } });
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const firstColumns = [
+    {
+      columnId: "COL_ID_VALUE_IN_PRODUCTION",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+    },
+  ] as const;
+  const incompatibleColumns = [
+    {
+      columnId: "COL_ID_VALUE_IN_PRODUCTION",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+    },
+  ] as const;
+
+  try {
+    const screen = await render(
+      <>
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_PRODUCTION"
+          getRowId={(row: Row) => row.id}
+          columns={firstColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE_IN_PRODUCTION", direction: "asc" }]}
+          clientSource={source}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_EMITTED_PRODUCTION"
+          getRowId={(row: Row) => row.id}
+          columns={incompatibleColumns}
+          initialOrderBy={[{ columnId: "COL_ID_VALUE_IN_PRODUCTION", direction: "asc" }]}
+          clientSource={source}
+        />
+      </>,
+    );
+
+    expect(
+      screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_PRODUCTION" }).all(),
+    ).toHaveLength(2);
+    expect(consoleError).not.toHaveBeenCalled();
   } finally {
     restoreProcess();
   }
