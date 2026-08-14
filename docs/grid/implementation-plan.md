@@ -251,7 +251,7 @@ Success criteria:
 - deletion of a row with committed Batch drafts preserves sparse history as blocked missing-row work, projects no phantom body row, disables Save, and exposes explicit review, undo, discard, Reset, or same-identity reconnection
 - disappearance of a row with a pending Immediate operation causes no special transition; after Promise resolution, authoritative absence reconciles that row and releases its owned cell locks
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
-- source JSX and emitted-package consumer type tests prove that both public variants require a non-empty `initialOrderBy` whose `columnId` is the exact autocomplete-friendly union of sortable IDs and reject unknown, misspelled, computed, explicitly nonsortable, and sort-free definitions
+- source and emitted-package consumer type tests prove that both public variants require a non-empty `initialOrderBy` whose `columnId` is the exact autocomplete-friendly union of sortable IDs and reject unknown, misspelled, computed, explicitly nonsortable, and sort-free definitions; Client JSX coverage applies now, while Server JSX coverage begins when its component ships
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`

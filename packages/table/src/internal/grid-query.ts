@@ -42,7 +42,7 @@ export function sanitizeClientInitialOrderBy(
   if (sanitized.length === 0) {
     throw new TypeError(
       orderBy === undefined || isReadableEmptyArray(orderBy)
-        ? "BrunoTable initialOrderBy is required when sorting is available."
+        ? "BrunoTable initialOrderBy is required."
         : hasSortableColumns(columns)
           ? "BrunoTable initialOrderBy contains no valid sortable column."
           : "BrunoTableClient requires at least one sortable column.",

@@ -137,7 +137,9 @@ describe("Client row model", () => {
       },
     ]);
 
-    expect(() => sanitizeClientInitialOrderBy(undefined, columns)).toThrow(/is required/u);
+    expect(() => sanitizeClientInitialOrderBy(undefined, columns)).toThrow(
+      "BrunoTable initialOrderBy is required.",
+    );
     expect(() =>
       sanitizeClientInitialOrderBy([{ columnId: "COL_ID_MISSING", direction: "asc" }], columns),
     ).toThrow(/no valid sortable column/u);
