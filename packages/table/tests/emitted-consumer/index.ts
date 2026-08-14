@@ -9,6 +9,7 @@ import {
   BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
   type BrunoTableClientProps,
+  type BrunoTableCommonProps,
   type BrunoTableColumnField,
   type BrunoTableColumnId,
   type BrunoTableColumnValue,
@@ -368,6 +369,57 @@ void BrunoTableClient({
   clientSource: emittedViewServerResult,
 });
 
+const emittedSortingTypeTestViewportSource = {
+  viewport: {},
+  totalRows: 0,
+  version: 1,
+  status: "ready",
+} as const;
+
+const invalidEmittedServerUnknownSort = {
+  tableId: "invalid-server-unknown-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Server props preserve exact Column Identity inference.
+    { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+  ],
+  viewportSource: emittedSortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidEmittedServerUnknownSort;
+
+const invalidEmittedServerMisspelledSort = {
+  tableId: "invalid-server-misspelled-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Server props reject misspelled Column Identities.
+    { columnId: "COL_ID_SYMBOOL", direction: "asc" },
+  ],
+  viewportSource: emittedSortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidEmittedServerMisspelledSort;
+
+const invalidEmittedServerComputedSort = {
+  tableId: "invalid-server-computed-sort",
+  columns,
+  initialOrderBy: [
+    // @ts-expect-error emitted computed columns have no automatic Server sort mapping.
+    { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
+  ],
+  viewportSource: emittedSortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns>;
+void invalidEmittedServerComputedSort;
+
+const invalidEmittedServerNonsortableSort = {
+  tableId: "invalid-server-nonsortable-sort",
+  columns: capabilityColumns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Server props exclude explicitly nonsortable identities.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  viewportSource: emittedSortingTypeTestViewportSource,
+} satisfies BrunoTableServerProps<Order, CapabilityColumns>;
+void invalidEmittedServerNonsortableSort;
+
 const noSortingColumns = [
   {
     columnId: "COL_ID_SYMBOL",
@@ -439,6 +491,48 @@ const props = {
   ] satisfies BrunoTableSortBy<Columns>,
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+
+const emittedServerWithoutInitialOrderBy = {
+  tableId: "orders-without-order",
+  columns,
+  viewportSource: source,
+} as const;
+
+// @ts-expect-error emitted Server props always require a typed non-empty Initial Order By.
+const invalidEmittedServerWithoutInitialOrderBy: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof source.viewport
+> = emittedServerWithoutInitialOrderBy;
+void invalidEmittedServerWithoutInitialOrderBy;
+
+// @ts-expect-error emitted Common props always require a typed non-empty Initial Order By.
+const invalidEmittedCommonWithoutInitialOrderBy: BrunoTableCommonProps<Order, Columns> = {
+  tableId: "orders-without-order",
+  columns,
+};
+void invalidEmittedCommonWithoutInitialOrderBy;
+
+const invalidEmittedServerWithoutSortingCapability = {
+  tableId: "unsortable-server",
+  columns: noSortingColumns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Server props reject definitions without a sortable Column Identity.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  viewportSource: source,
+} satisfies BrunoTableServerProps<Order, NoSortingColumns, typeof source.viewport>;
+void invalidEmittedServerWithoutSortingCapability;
+
+const invalidEmittedCommonWithoutSortingCapability = {
+  tableId: "unsortable-common",
+  columns: noSortingColumns,
+  initialOrderBy: [
+    // @ts-expect-error emitted Common props reject definitions without a sortable Column Identity.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+} satisfies BrunoTableCommonProps<Order, NoSortingColumns>;
+void invalidEmittedCommonWithoutSortingCapability;
 
 const emittedClient = BrunoTableClient({
   tableId: "orders",
@@ -728,14 +822,14 @@ const invalidOptedOutSort = [
 ] satisfies BrunoTableSortBy<CapabilityColumns>;
 
 const invalidNoCapabilitySort = [
-  // @ts-expect-error emitted declarations expose no order for a table without sortable columns.
+  // @ts-expect-error every emitted table requires a sortable Column Identity for Initial Order By.
   { columnId: "COL_ID_SYMBOL", direction: "asc" },
 ] satisfies BrunoTableSortBy<NoSortingColumns>;
 
 const invalidInitialOrderByWithoutSortingCapability = {
   tableId: "unsortable-orders",
   columns: noSortingColumns,
-  // @ts-expect-error no valid Initial Order By exists when sorting capability is absent.
+  // @ts-expect-error no mandatory Initial Order By can exist without a sortable Column Identity.
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {

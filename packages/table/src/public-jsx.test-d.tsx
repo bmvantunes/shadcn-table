@@ -192,7 +192,7 @@ const sortFreeClient = (
     tableId="TABLE_ID_JSX_SORT_FREE"
     getRowId={(row) => row.id}
     columns={sortFreeColumns}
-    // @ts-expect-error The first live Client rejects sort-free definitions.
+    // @ts-expect-error Every Client Table rejects definitions without a sortable Column Identity.
     initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
     clientSource={clientSource}
   />

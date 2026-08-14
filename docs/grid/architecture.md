@@ -63,7 +63,12 @@ Expose two public React composition roots:
   clientSource={...}
   initialOrderBy={[{ columnId: "COL_ID_CREATED_AT", direction: "desc" }]}
 />
-<BrunoTableServer tableId={...} columns={...} viewportSource={...} />
+<BrunoTableServer
+  tableId={...}
+  columns={...}
+  initialOrderBy={[{ columnId: "COL_ID_CREATED_AT", direction: "desc" }]}
+  viewportSource={...}
+/>
 ```
 
 Do not expose one component with a row-model flag or incompatible source union. The two variants have materially different data ownership and lifecycles, so the public seam should make that difference explicit.
