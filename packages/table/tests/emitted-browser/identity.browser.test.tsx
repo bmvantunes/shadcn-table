@@ -224,9 +224,12 @@ test("hydrates emitted custom controls after removing their inert server boundar
   container.append(beforeHydration, hydrationHost, afterHydration);
   document.body.append(container);
   const before = page.getByRole("button", { name: "Before hydration" });
+  const sortPanel = page.getByRole("button", { name: "Sort rows, 1 active" });
   const grid = page.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_HYDRATION" });
   const after = page.getByRole("button", { name: "After hydration" });
   before.element().focus();
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(sortPanel.element());
   await userEvent.keyboard("{Tab}");
   expect(document.activeElement).toBe(grid.element());
   await userEvent.keyboard("{Tab}");

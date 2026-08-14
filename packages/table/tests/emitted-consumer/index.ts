@@ -335,6 +335,19 @@ void BrunoTableClient({
   clientSource: emittedViewServerResult,
 });
 void BrunoTableClient({
+  tableId: "invalid-sort-direction",
+  columns,
+  initialOrderBy: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      // @ts-expect-error emitted Client component admits only asc and desc directions.
+      direction: "ascending",
+    },
+  ],
+  getRowId: (row) => row.id,
+  clientSource: emittedViewServerResult,
+});
+void BrunoTableClient({
   tableId: "invalid-computed-sort",
   columns,
   initialOrderBy: [

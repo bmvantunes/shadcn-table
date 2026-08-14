@@ -113,6 +113,28 @@ function createClientRuntime(
   });
 }
 
+describe("BrunoTableGridRuntime sorting invariant", () => {
+  it("normalizes an empty baseline when sortable columns are installed", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      { baselineFilters: [], baselineOrderBy: [] },
+      "TABLE_ID_NON_EMPTY_SORTING",
+    );
+
+    expect(runtime.getView().getSortingSnapshot()).toEqual([
+      { columnId: "COL_ID_NAME", direction: "asc" },
+    ]);
+  });
+});
+
 describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
   it("constructs a row-order detector only after subscription and reuses it", () => {
     const first = { id: "first", name: "Ada" } satisfies Row;
@@ -1898,9 +1920,11 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
     const queryListener = vi.fn();
+    const sortingListener = vi.fn();
     const nameListener = vi.fn();
     const aliasListener = vi.fn();
     runtime.subscribeQuery(queryListener);
+    runtime.subscribeSorting(sortingListener);
     runtime.subscribeColumnCommands("COL_ID_NAME", nameListener);
     runtime.subscribeColumnCommands("COL_ID_ALIAS", aliasListener);
 
@@ -1910,6 +1934,8 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     ]);
     expect(nameListener).toHaveBeenCalledOnce();
     expect(aliasListener).not.toHaveBeenCalled();
+    expect(sortingListener).toHaveBeenCalledOnce();
+    expect(runtime.getSortingSnapshot()).toEqual([{ columnId: "COL_ID_NAME", direction: "desc" }]);
 
     runtime.clearColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toEqual([]);
@@ -1917,12 +1943,64 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       filterActive: false,
       filterBaselineAvailable: true,
     });
+    expect(sortingListener).toHaveBeenCalledOnce();
 
     runtime.resetColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toHaveLength(1);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME").filterActive).toBe(true);
     expect(runtime.getQuerySnapshot().generation).toBe(3);
     expect(queryListener).toHaveBeenCalledTimes(3);
+    expect(sortingListener).toHaveBeenCalledOnce();
+  });
+
+  it("routes panel sorting commands through one non-empty runtime projection", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const listener = vi.fn();
+    runtime.subscribeSorting(listener);
+
+    runtime.dispatchGridCommand({ type: "sorting.add", columnId: "COL_ID_ALIAS" });
+    runtime.dispatchGridCommand({ type: "sorting.add", columnId: "COL_ID_NOTE" });
+    runtime.dispatchGridCommand({
+      type: "sorting.move",
+      columnId: "COL_ID_NOTE",
+      targetIndex: 0,
+    });
+    runtime.dispatchGridCommand({ type: "sorting.remove", columnId: "COL_ID_ALIAS" });
+    runtime.dispatchGridCommand({ type: "sorting.remove", columnId: "COL_ID_NAME" });
+    runtime.dispatchGridCommand({ type: "sorting.remove", columnId: "COL_ID_NOTE" });
+
+    expect(runtime.getSortingSnapshot()).toEqual([{ columnId: "COL_ID_NOTE", direction: "asc" }]);
+    expect(listener).toHaveBeenCalledTimes(5);
+
+    runtime.dispatchGridCommand({ type: "sorting.reset" });
+    expect(runtime.getSortingSnapshot()).toEqual([{ columnId: "COL_ID_NAME", direction: "asc" }]);
+    expect(listener).toHaveBeenCalledTimes(6);
   });
 
   it("does not retain mutable caller-owned order entries in query snapshots", () => {

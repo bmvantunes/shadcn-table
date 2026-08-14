@@ -22,7 +22,10 @@ import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { ClientOrderBy } from "./client-row-model";
-import { createClientFilterPredicate } from "./client-row-model";
+import {
+  createBrunoTableClientRowComparator,
+  createClientFilterPredicate,
+} from "./client-row-model";
 
 const clientFeatures = tableFeatures({
   columnOrderingFeature,
@@ -72,15 +75,24 @@ export function useClientRowIds(
       }),
     );
   }, [columnLayout, compiledColumns]);
-  const tieBreaker = orderBy.at(-1);
   const filterPredicate = useMemo(() => {
     return createClientFilterPredicate<ClientRow>(compiledColumns, filters, (column, row) =>
       row.getValue(column.columnId),
     );
   }, [compiledColumns, filters]);
+  const rowComparator = useMemo(
+    () =>
+      createBrunoTableClientRowComparator<ClientRow>(
+        compiledColumns,
+        orderBy,
+        (column, row) => row.getValue(column.columnId),
+        (row) => row.original.rowIndex,
+      ),
+    [compiledColumns, orderBy],
+  );
   const adapterColumns = useMemo(
-    () => buildAdapterColumns(compiledColumns, tieBreaker, filterPredicate, tableId),
-    [compiledColumns, filterPredicate, tableId, tieBreaker],
+    () => buildAdapterColumns(compiledColumns, orderBy, rowComparator, filterPredicate, tableId),
+    [compiledColumns, filterPredicate, orderBy, rowComparator, tableId],
   );
   const columnFilters = useMemo(
     () =>
@@ -88,11 +100,7 @@ export function useClientRowIds(
     [filterPredicate, filters],
   );
   const sorting = useMemo(
-    () =>
-      orderBy.map((sort) => ({
-        id: sort.columnId,
-        desc: sort.direction === "desc",
-      })),
+    () => orderBy.map((sort) => ({ id: sort.columnId, desc: sort.direction === "desc" })),
     [orderBy],
   );
   const columnOrder = useMemo(
@@ -233,27 +241,22 @@ function mergeColumnLayout(current: CompiledColumn, requested: CompiledColumn): 
 
 function buildAdapterColumns(
   compiledColumns: readonly CompiledColumn[],
-  tieBreaker: { readonly columnId: string; readonly direction: "asc" | "desc" } | undefined,
+  orderBy: ClientOrderBy,
+  rowComparator: (left: ClientRow, right: ClientRow) => number,
   filterPredicate: ((row: ClientRow) => boolean) | undefined,
   tableId: string,
 ): ClientColumn[] {
-  const columns = compiledColumns.map(
-    (column): ClientColumn => ({
+  const directions = new Map(orderBy.map((sort) => [sort.columnId, sort.direction]));
+  const columns = compiledColumns.map((column): ClientColumn => {
+    const direction = directions.get(column.columnId);
+    return {
       id: column.columnId,
       header: column.headerName,
       accessorFn: (row: AdapterRow) => readCanonicalValue(row, column, tableId),
       sortUndefined: false,
-      sortFn: (rowA, rowB) => {
-        const comparison = column.semantics.compare(
-          rowA.getValue(column.columnId),
-          rowB.getValue(column.columnId),
-        );
-        return comparison === 0 && column.columnId === tieBreaker?.columnId
-          ? compareRowIds(rowA.id, rowB.id) * (tieBreaker.direction === "desc" ? -1 : 1)
-          : comparison;
-      },
-    }),
-  );
+      sortFn: direction === "desc" ? (left, right) => -rowComparator(left, right) : rowComparator,
+    };
+  });
   return [
     {
       id: INTERNAL_FILTER_COLUMN_ID,
@@ -276,12 +279,6 @@ function readCanonicalValue(row: AdapterRow, column: CompiledColumn, tableId: st
   const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
   if (isBrunoTableInvalidCellValue(value)) throw new ClientInvalidValueError(value.invalid);
   return value;
-}
-
-function compareRowIds(left: string, right: string): -1 | 0 | 1 {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }
 
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);

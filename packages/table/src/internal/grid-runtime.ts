@@ -21,10 +21,10 @@ import {
   collectClientFilterColumnIds,
   reconcileBrunoTableOrderBy,
   sanitizeBrunoTableFilters,
-  sanitizeBrunoTableOrderBy,
 } from "./grid-query";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
 import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
+import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
 export type BrunoTableInvalidSourceSnapshot =
@@ -114,6 +114,7 @@ export type BrunoTableRuntimeView = {
   readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
   readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
+  readonly getSortingSnapshot: () => BrunoTableOrderBy;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
   /** Controlled Client column input; width-only commits do not publish it. */
   readonly getColumnStructureSnapshot: () => BrunoTableColumnLayoutSnapshot;
@@ -129,6 +130,7 @@ export type BrunoTableRuntimeView = {
     listener: Listener,
   ) => () => void;
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
+  readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => void;
@@ -213,6 +215,7 @@ const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 
 type QueryTransition = Readonly<{
   readonly queryChanged: boolean;
+  readonly sortingChanged: boolean;
   readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
 }>;
 
@@ -241,6 +244,7 @@ export class BrunoTableGridRuntime<TRow> {
     Readonly<{ rowId: BrunoTableRowId; columnId: string }>
   >();
   private readonly queryListeners = new Set<Listener>();
+  private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
@@ -268,7 +272,17 @@ export class BrunoTableGridRuntime<TRow> {
     this.columns = columns;
     this.columnsById = indexColumns(columns);
     this.baselineFilters = queryConfiguration.baselineFilters;
-    this.baselineOrderBy = queryConfiguration.baselineOrderBy;
+    const normalizedBaselineOrderBy = reconcileBrunoTableOrderBy(
+      queryConfiguration.baselineOrderBy,
+      queryConfiguration.baselineOrderBy,
+      columns,
+    );
+    this.baselineOrderBy = sameOrderBy(
+      queryConfiguration.baselineOrderBy,
+      normalizedBaselineOrderBy,
+    )
+      ? queryConfiguration.baselineOrderBy
+      : normalizedBaselineOrderBy;
     this.query = Object.freeze({
       columns,
       filters: this.baselineFilters,
@@ -302,6 +316,7 @@ export class BrunoTableGridRuntime<TRow> {
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
+        getSortingSnapshot: this.getSortingSnapshot,
         getColumnLayoutSnapshot: this.getColumnLayoutSnapshot,
         getColumnStructureSnapshot: this.getColumnStructureSnapshot,
         subscribeChrome: this.subscribeChrome,
@@ -314,6 +329,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeQuery: this.subscribeQuery,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
+        subscribeSorting: this.subscribeSorting,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
         dispatchGridCommand: this.dispatchGridCommand,
@@ -445,6 +461,8 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 
+  public readonly getSortingSnapshot = (): BrunoTableOrderBy => this.query.orderBy;
+
   public readonly getColumnCommandSnapshot = (columnId: string): BrunoTableColumnCommandSnapshot =>
     this.columnCommands.get(columnId) ?? EMPTY_COLUMN_COMMAND;
 
@@ -523,6 +541,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeQuery = (listener: Listener): (() => void) =>
     subscribe(this.queryListeners, listener);
 
+  public readonly subscribeSorting = (listener: Listener): (() => void) =>
+    subscribe(this.sortingListeners, listener);
+
   public readonly subscribeColumnCommands = (
     columnId: string,
     listener: Listener,
@@ -553,8 +574,14 @@ export class BrunoTableGridRuntime<TRow> {
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableGridCommand(this.tableId, command);
     }
-    if (command.type === "column.sort.toggle") {
-      this.toggleColumnSortImpl(command.columnId, command.multi);
+    if (isBrunoTableSortingCommand(command)) {
+      const nextOrderBy = applyBrunoTableSortingCommand(
+        this.query.orderBy,
+        this.baselineOrderBy,
+        this.columns,
+        command,
+      );
+      this.publishQuery(this.query.filters, nextOrderBy);
       return;
     }
     if (command.type === "column.filter.clear") {
@@ -588,25 +615,6 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly toggleColumnSort = (columnId: string, multi: boolean): void => {
     this.dispatchGridCommand({ type: "column.sort.toggle", columnId, multi });
-  };
-
-  private readonly toggleColumnSortImpl = (columnId: string, multi: boolean): void => {
-    if (
-      !this.columns.some((column) => column.columnId === columnId && column.enableSorting !== false)
-    ) {
-      return;
-    }
-    const currentIndex = this.query.orderBy.findIndex((sort) => sort.columnId === columnId);
-    const current = this.query.orderBy[currentIndex];
-    const nextDirection: "asc" | "desc" = current?.direction === "asc" ? "desc" : "asc";
-    const nextOrderBy = multi
-      ? current === undefined
-        ? [...this.query.orderBy, { columnId, direction: "asc" as const }]
-        : this.query.orderBy.map((sort, index) =>
-            index === currentIndex ? { columnId, direction: nextDirection } : sort,
-          )
-      : [{ columnId, direction: nextDirection }];
-    this.publishQuery(this.query.filters, sanitizeBrunoTableOrderBy(nextOrderBy, this.columns));
   };
 
   public readonly clearColumnFilters = (columnId: string): void => {
@@ -699,7 +707,11 @@ export class BrunoTableGridRuntime<TRow> {
       query,
       columnCommands,
       columnLayout,
-      transition: Object.freeze({ queryChanged: true, previousCommands: this.columnCommands }),
+      transition: Object.freeze({
+        queryChanged: true,
+        sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
+        previousCommands: this.columnCommands,
+      }),
     });
   }
 
@@ -719,8 +731,8 @@ export class BrunoTableGridRuntime<TRow> {
     orderBy: BrunoTableOrderBy,
     forceColumnRefresh = false,
   ): QueryTransition | undefined {
-    const queryChanged =
-      !sameReferences(this.query.filters, filters) || !sameOrderBy(this.query.orderBy, orderBy);
+    const sortingChanged = !sameOrderBy(this.query.orderBy, orderBy);
+    const queryChanged = !sameReferences(this.query.filters, filters) || sortingChanged;
     if (!queryChanged && !forceColumnRefresh) return undefined;
     const previousCommands = this.columnCommands;
     if (queryChanged) {
@@ -738,11 +750,18 @@ export class BrunoTableGridRuntime<TRow> {
       previousCommands,
       this.columnLayoutSnapshot,
     );
-    return Object.freeze({ queryChanged, previousCommands });
+    return Object.freeze({
+      queryChanged,
+      sortingChanged,
+      previousCommands,
+    });
   }
 
   private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
+    if (transition.sortingChanged) {
+      firstError = firstListenerError(firstError, notify(this.sortingListeners));
+    }
     const columnIds = new Set([
       ...transition.previousCommands.keys(),
       ...this.columnCommands.keys(),
