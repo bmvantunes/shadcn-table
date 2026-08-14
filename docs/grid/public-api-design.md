@@ -167,19 +167,11 @@ The base properties and explicit source variants have this conceptual shape. The
 ```ts
 type BrunoTableSortingCapability<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = [BrunoTableSortableColumnId<TColumns>] extends [never]
-  ? { initialOrderBy?: never }
-  : { initialOrderBy: BrunoTableSortBy<TColumns> };
-
-type BrunoTableClientSortingCapability<
-  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = { initialOrderBy: BrunoTableSortBy<TColumns> };
 
 type BrunoTablePersistedSortingCapability<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = [BrunoTableSortableColumnId<TColumns>] extends [never]
-  ? { orderBy?: never }
-  : { orderBy: BrunoTableSortBy<TColumns> };
+> = { orderBy: BrunoTableSortBy<TColumns> };
 
 type BrunoTableBaseProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   tableId: string;
@@ -225,7 +217,7 @@ type BrunoTableClientProps<
   TColumns extends BrunoTableColumns<TRow>,
   TRowVersion = never,
 > = BrunoTableBaseProps<TRow, TColumns> &
-  BrunoTableClientSortingCapability<TColumns> &
+  BrunoTableSortingCapability<TColumns> &
   BrunoTableEditingCapability<TRow, TColumns, TRowVersion> & {
     getRowId: (row: TRow) => BrunoTableRowId;
     clientSource: BrunoTableClientSource<TRow>;
@@ -280,7 +272,7 @@ Rules:
 - `getRowId` is mandatory only for `BrunoTableClient`, where it identifies ordinary `TRow` records. Read-only Client flat grouped-summary rows use private Adapter-owned identity and never invoke this callback. `BrunoTableServer` rejects the prop and receives authoritative raw and grouped row keys from its Viewport Source. Row indexes are never identities.
 - `columns` is a stable typed array.
 - `initialFilters` is an optional one-time baseline for internally owned Grid Filter state. Valid restored user preferences take precedence. Later prop changes never overwrite user changes; Clear removes all Grid Filters, while Reset returns to this baseline.
-- Issue #7's first live `BrunoTableClient` uses `BrunoTableClientSortingCapability`: `initialOrderBy` is always a mandatory non-empty Column Identity-keyed baseline, so a sort-free Client definition is rejected. The broader common and Server design retains `BrunoTableSortingCapability`; there, no sortable identity means `initialOrderBy` and persisted normal `orderBy` are forbidden and no normal sorting state, persistence, command, or UI is installed. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to the baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a sorting-capable normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites a normal baseline or current order when that capability exists.
+- Every public Client and Server Table uses `BrunoTableSortingCapability`: `initialOrderBy` is a mandatory non-empty Column Identity-keyed baseline, so every variant rejects definitions with no sortable Column Identity. A valid non-empty restored `orderBy` takes precedence; later prop changes never overwrite user sorting, and Reset returns to the baseline. An empty, fully invalid, or stale restored order falls back to `initialOrderBy`, so a normal table is never unsorted. Grouped summaries use the separate persisted `groupOrderBy` context described below; grouping never overwrites the normal baseline or current order.
 - `quickFilterFields` is an optional explicit non-empty tuple of string-valued Query Fields. BrunoTable never infers it from visible columns or accepts Column Identities in its place. Omitting it means the table has no Quick Filter capability.
 - `initialPersistedState` is an optional one-time, versioned, JSON-safe snapshot obtained by the application. BrunoTable sanitizes it against `tableId`, current columns, capabilities, and codecs before the table becomes interactive. It is not a controlled prop; later prop changes do not overwrite user state.
 - `onPersistChange` receives the complete current JSON-safe snapshot after each committed Grid Filter, sort, Group By add/remove/reorder, column-order, visibility, width, or pinning change. It does not fire for Quick Filter, External Filters, Feed Route, selection, scroll, or edit state, and it does not echo initial restoration. BrunoTable neither awaits the callback nor interprets its return value; publishing, retries, failure handling, Kafka, View Server, and every other storage concern belong to the application.
@@ -1030,9 +1022,9 @@ const orderBy = [
 ] satisfies BrunoTableSortBy<typeof columns>;
 ```
 
-`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, a sorting-capable table's `initialOrderBy` receives contextual autocomplete for its sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted normal-row `orderBy` use this shape when the capability exists. A common or Server variant with no sortable identity admits neither value; the first live Client instead rejects that column configuration because it cannot satisfy its mandatory tuple. The View Server Adapter resolves each Column Identity to its current Query Field only when compiling a raw `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
+`BrunoTableSortBy<TColumns>` is a non-empty tuple. Its `columnId` property is `BrunoTableSortableColumnId<TColumns>`: the exact literal union derived from the supplied `columns` tuple, never the broad `BrunoTableColumnId` pattern and never `string`. Consequently, every table's `initialOrderBy` receives contextual autocomplete for its sortable columns, while typos, unknown identities, and identities of computed or explicitly nonsortable columns fail compilation. Array order is sort priority. Both `initialOrderBy` and persisted normal-row `orderBy` always use this shape. Every public variant rejects a column configuration with no sortable identity because it cannot satisfy the mandatory tuple. The View Server Adapter resolves each Column Identity to its current Query Field only when compiling a raw `query.orderBy`. Dynamically restored values remain untrusted and are sanitized against the compiled columns at runtime. BrunoTable does not add complex tuple-uniqueness typing for duplicate sort identities; normalization quietly retains the first, highest-priority occurrence of each identity before state or query compilation.
 
-Sorting has no unsorted state in any installed sorting context. A sorting-capable normal `orderBy` and active grouped `groupOrderBy` each may contain from one entry through every target eligible in that context. Plain activation, Shift activation, panel removal/reorder, keyboard behavior, direction toggling, duplicate normalization, visible priority, and the prohibition on removing the final entry are identical. A sort-free normal table installs no such context. BrunoTable does not infer a descending-first cycle for numeric Value Types.
+Sorting has no unsorted state. A normal `orderBy` and active grouped `groupOrderBy` each may contain from one entry through every target eligible in that context. Plain activation, Shift activation, panel removal/reorder, keyboard behavior, direction toggling, duplicate normalization, visible priority, and the prohibition on removing the final entry are identical. BrunoTable does not infer a descending-first cycle for numeric Value Types.
 
 Every committed ordering change creates a new logical row-position generation and resets vertical scroll to row zero in both Client and Server Tables. Horizontal scroll and column layout remain unchanged. Position-based Active Cell and Linear Cell Range state is cleared because its old indexes no longer describe the reordered row space, while drafts and conflicts survive through stable `rowId + columnId` identity. Keyboard focus stays on the header or Sort panel control that initiated the command rather than jumping into the body.
 

@@ -41,7 +41,7 @@ Build:
 - mandatory explicit non-empty `` `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}` `` identity on every leaf column, with an ASCII uppercase letter, digit, or underscore as the first suffix character
 - mandatory explicit non-empty `headerName` on every leaf column
 - mandatory explicit runtime `valueType` on raw value-bearing columns, with no row sampling
-- issue #7's first live `BrunoTableClient` unconditionally requires non-empty Column Identity-keyed `initialOrderBy` and rejects sort-free Client definitions; the broader common and Server design remains capability-conditional
+- every public Client and Server Table unconditionally requires non-empty Column Identity-keyed `initialOrderBy` and rejects definitions with no sortable Column Identity
 - separate typed `BrunoTableGroupSortBy` persistence for grouped summaries, including the reserved Rows System Column Identity
 - optional typed `BrunoTableGroupRowsColumnOptions` for the fixed Rows label, baseline width, and exact-`bigint` presentation
 - Rows-aware persisted-width typing that admits the reserved identity only in `columnWidths`
@@ -215,16 +215,16 @@ Build:
 - one-time `initialPersistedState` restoration supplied by the application
 - complete JSON-safe `onPersistChange` snapshots after committed preference changes
 - ordered Group By persistence beside one durable base Column Order and Column Pinning snapshot
-- independent durable sorting-capable normal `orderBy` and grouped `groupOrderBy` contexts, with no `initialGroupOrderBy` prop
+- independent durable non-empty normal `orderBy` and grouped `groupOrderBy` contexts, with no `initialGroupOrderBy` prop
 - one-time `initialFilters` baseline with persisted-state precedence and distinct Clear-versus-Reset behavior
-- mandatory non-empty `initialOrderBy` baseline for the first live Client, with valid persisted `orderBy` precedence and no unsorted state; sort-free common or Server variants install neither value nor normal sorting state
+- mandatory non-empty `initialOrderBy` baseline for every Client and Server Table, with valid persisted `orderBy` precedence and no unsorted state
 - schema versioning and sanitization
 - tagged, versioned JSON-safe codecs for exact filter operands
 
 Persist only:
 
 - Grid Filter Expressions
-- non-empty normal `orderBy` only when at least one sortable Column Identity exists
+- always-non-empty normal `orderBy`; every public table requires at least one sortable Column Identity
 - grouped `groupOrderBy` once established
 - ordered Group By state
 - order
@@ -235,13 +235,13 @@ Persist only:
 Success criteria:
 
 - new/removed columns reconcile safely
-- restored `orderBy` sanitization in a sorting-capable table can never produce an empty order; it falls back to `initialOrderBy`, while a future sort-free common or Server variant drops normal sorting persistence entirely
+- restored `orderBy` sanitization can never produce an empty order; it falls back to `initialOrderBy`
 - grouped restoration and every Group By or aggregate-visibility change retain valid `groupOrderBy` priorities and fall back to all active keys ascending when no entry survives
 - clearing grouping restores untouched normal `orderBy`, while re-entering a compatible grouping may restore its dormant grouped order
 - grouped sort IDs autocomplete from potential group keys, aggregate columns, and Rows, then runtime validation admits only active keys, Rows, and visible participating aggregates
 - the Viewport Adapter maps grouped key identities to fields and grouped result identities to private aggregate aliases without leaking aliases into persistence
 - duplicate sort identities normalize quietly by retaining the first, highest-priority occurrence rather than requiring complex tuple-uniqueness typing
-- when normal sorting is installed, pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry, while sort-free tables expose none of those paths
+- pointer, Shift-pointer, keyboard, panel, command, and reset paths allow one through all sortable columns while always retaining at least one active sort; the Sort panel disables removal of the final entry
 - Shift-add appends at lowest priority, Shift-direction toggles preserve priority, plain activation of an existing sorted column toggles it while making it the sole priority-one sort, and Sort panel priority reordering works through both pointer drag and keyboard actions
 - every committed ordering change resets both row models to vertical row zero, preserves horizontal scroll, layout, drafts, and conflicts, clears position-based cell selection, and retains focus on the initiating sort control
 - live sort-key row movement never resets scroll or retargets the old index; it follows stable identity without forced reveal when possible and safely clears unknown Server activation or newly noncontiguous Client ranges
@@ -251,7 +251,7 @@ Success criteria:
 - deletion of a row with committed Batch drafts preserves sparse history as blocked missing-row work, projects no phantom body row, disables Save, and exposes explicit review, undo, discard, Reset, or same-identity reconnection
 - disappearance of a row with a pending Immediate operation causes no special transition; after Promise resolution, authoritative absence reconciles that row and releases its owned cell locks
 - sorting through an active editor is rejected with editor focus restored when validation fails; a valid Batch draft or Immediate save operation commits first and then sorting proceeds without awaiting transport
-- source JSX and emitted-package consumer type tests prove that `BrunoTableClient` requires a non-empty `initialOrderBy` whose `columnId` is the exact autocomplete-friendly union of sortable IDs and rejects unknown, misspelled, computed, explicitly nonsortable, and sort-free Client definitions
+- source JSX and emitted-package consumer type tests prove that both public variants require a non-empty `initialOrderBy` whose `columnId` is the exact autocomplete-friendly union of sortable IDs and reject unknown, misspelled, computed, explicitly nonsortable, and sort-free definitions
 - Quick Filter and toolbar-created Grid Filters appear in global active-filter review
 - Quick Filter fields are never inferred from columns, compile to `OR`-combined `contains` leaves whose group is `AND`-combined with External Filters and Grid Filters, and neither their configuration nor committed text is persisted
 - filter overlays expose only operators valid for their exact Value Type, and cross-column leaves combine with `AND`

@@ -17,6 +17,7 @@ import {
 import type {
   BrunoTableClientProps,
   BrunoTableClientSource,
+  BrunoTableCommonProps,
   BrunoTableColumnField,
   BrunoTableColumnId,
   BrunoTableColumnIdOf,
@@ -618,7 +619,7 @@ describe("BrunoTable public types", () => {
     void BrunoTableClient<Order, typeof noSortColumns>({
       tableId: "orders-no-sort",
       columns: noSortColumns,
-      // @ts-expect-error initialOrderBy is forbidden when no column is sortable.
+      // @ts-expect-error a Client definition without a sortable Column Identity is invalid.
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       getRowId: (row: Order) => row.id,
       clientSource: clientProps.clientSource,
@@ -1209,10 +1210,33 @@ const clientWithoutInitialOrderBy = {
 const invalidClientWithoutInitialOrderBy: BrunoTableClientProps<Order, Columns> =
   clientWithoutInitialOrderBy;
 
+const serverWithoutInitialOrderBy = {
+  tableId: "orders",
+  columns,
+  viewportSource: {
+    viewport: {},
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const;
+
+// @ts-expect-error every Server Table requires a non-empty Initial Order By baseline.
+const invalidServerWithoutInitialOrderBy: BrunoTableServerProps<Order, Columns> =
+  serverWithoutInitialOrderBy;
+void invalidServerWithoutInitialOrderBy;
+
+// @ts-expect-error exported Common props also require a non-empty Initial Order By baseline.
+const invalidCommonWithoutInitialOrderBy: BrunoTableCommonProps<Order, Columns> = {
+  tableId: "orders",
+  columns,
+};
+void invalidCommonWithoutInitialOrderBy;
+
 const invalidInitialOrderByWithoutSortingCapability = {
   tableId: "unsortable-orders",
   columns: noSortingColumns,
-  // @ts-expect-error a table with no sortable columns does not install an Initial Order By prop.
+  // @ts-expect-error every table requires a sortable Column Identity for Initial Order By.
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   getRowId: (row: Order) => row.id,
   clientSource: {
@@ -1222,6 +1246,32 @@ const invalidInitialOrderByWithoutSortingCapability = {
     status: "ready",
   },
 } satisfies BrunoTableClientProps<Order, NoSortingColumns>;
+
+const invalidServerWithoutSortingCapability = {
+  tableId: "unsortable-orders",
+  columns: noSortingColumns,
+  initialOrderBy: [
+    // @ts-expect-error every Server Table requires a sortable Column Identity.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+  viewportSource: {
+    viewport: {},
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} satisfies BrunoTableServerProps<Order, NoSortingColumns>;
+void invalidServerWithoutSortingCapability;
+
+const invalidCommonWithoutSortingCapability = {
+  tableId: "unsortable-orders",
+  columns: noSortingColumns,
+  initialOrderBy: [
+    // @ts-expect-error public Common props reject definitions without a sortable Column Identity.
+    { columnId: "COL_ID_SYMBOL", direction: "asc" },
+  ],
+} satisfies BrunoTableCommonProps<Order, NoSortingColumns>;
+void invalidCommonWithoutSortingCapability;
 
 const invalidNumberHelperField = [
   // @ts-expect-error the rejected helper result cannot enter the typed column tuple.

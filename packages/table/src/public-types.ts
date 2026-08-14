@@ -1010,22 +1010,33 @@ export type BrunoTableEditingCapability<
   TRowVersion,
 > = BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
-type InitialOrderByCapability<
-  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
-> = [BrunoTableSortableColumnId<TColumns>] extends [never]
-  ? { readonly initialOrderBy?: never }
-  : { readonly initialOrderBy: BrunoTableSortBy<TColumns> };
-
-export type BrunoTableCommonProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+type CommonPropsWithoutInitialOrderBy<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly tableId: string;
   readonly columns: TColumns & BrunoTableColumnIdentityGuard<NoInfer<TColumns>>;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
-} & InitialOrderByCapability<TColumns>;
+};
+
+export type BrunoTableCommonProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = CommonPropsWithoutInitialOrderBy<TRow, TColumns> & {
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
+};
+
+// This private conditional preserves focused diagnostics for invalid component calls. Both public
+// variants remove its property and replace it with the same mandatory non-empty tuple.
+type ComponentCommonProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = CommonPropsWithoutInitialOrderBy<TRow, TColumns> &
+  ([BrunoTableSortableColumnId<TColumns>] extends [never]
+    ? { readonly initialOrderBy?: never }
+    : { readonly initialOrderBy: BrunoTableSortBy<TColumns> });
 
 export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  BrunoTableCommonProps<TRow, TColumns>,
+  ComponentCommonProps<TRow, TColumns>,
   "initialOrderBy"
 > &
   BrunoTableReadOnlyCapability & {
@@ -1039,7 +1050,8 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = BrunoTableCommonProps<TRow, TColumns> & {
+> = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> & {
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
   /** Server row identity is supplied authoritatively by the Viewport Source. */
   readonly getRowId?: never;
   readonly viewportSource: BrunoTableServerSource<TViewport>;

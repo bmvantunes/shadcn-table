@@ -174,6 +174,7 @@ The grid must support:
 69. The View Server Adapter owns semantic Query Generation. Use `viewport.replace` only for meaningful Feed Route, projection, filter, sort, grouping, or aggregate changes; use `generation.setWindow` for scroll/reveal movement, retain only same-generation overlap, and never treat `setRowCount` lifecycle hints as generation authority.
 70. Empty Set Filter inclusion intent means Match None for current and future values. Compile it through a source-native Match-None Filter Expression; do not enumerate or negate the current facet domain and do not rely on an empty `in` form that the source normalizes away.
 71. Editable Client Tables use one persistent full-width Edit Safety Footer with compact status controls at the start and Reset/Save at the end. Complete sparse edit collections belong in on-demand live reviews, not a permanent side ledger or bottom inspector. Persistent notifications must expose an assistive-technology-accessible Close control.
+72. Every public BrunoTable variant is always sorted. Client and Server Tables require at least one sortable Column Identity and a mandatory non-empty `initialOrderBy`; normal sorting always contains one through all sortable columns and never exposes, restores, or transitions through an unsorted state.
 
 ## Preferred technology split
 
