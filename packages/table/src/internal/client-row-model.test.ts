@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
 import {
+  createBrunoTableClientRowComparator,
   createClientFilterPredicate,
   filterClientRows,
   filterReferencesColumn,
+  reconcileClientOrderBy,
   sanitizeClientInitialFilters,
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
@@ -15,6 +17,71 @@ afterEach(() => {
 });
 
 describe("Client row model", () => {
+  it("sorts exact number and bigint keys by priority with stable source-order ties", () => {
+    type ExactRow = Readonly<{
+      sourceIndex: number;
+      score: number;
+      quantity: bigint;
+      label: string;
+    }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+      },
+    ]);
+    const rows = [
+      {
+        sourceIndex: 0,
+        score: 1.25,
+        quantity: 9_007_199_254_740_993n,
+        label: "first equal key",
+      },
+      {
+        sourceIndex: 1,
+        score: 1.5,
+        quantity: 9_007_199_254_740_994n,
+        label: "higher number priority",
+      },
+      {
+        sourceIndex: 2,
+        score: 1.25,
+        quantity: 9_007_199_254_740_992n,
+        label: "lower exact bigint",
+      },
+      {
+        sourceIndex: 3,
+        score: 1.25,
+        quantity: 9_007_199_254_740_993n,
+        label: "second equal key",
+      },
+    ] satisfies readonly ExactRow[];
+    const compare = createBrunoTableClientRowComparator<ExactRow>(
+      columns,
+      [
+        { columnId: "COL_ID_SCORE", direction: "asc" },
+        { columnId: "COL_ID_QUANTITY", direction: "desc" },
+      ],
+      (column, row) => (column.columnId === "COL_ID_SCORE" ? row.score : row.quantity),
+      (row) => row.sourceIndex,
+    );
+
+    expect(rows.toSorted(compare).map((row) => row.label)).toEqual([
+      "first equal key",
+      "second equal key",
+      "lower exact bigint",
+      "higher number priority",
+    ]);
+  });
+
   it("uses locale-independent case normalization", () => {
     const columns = compileColumns([
       {
@@ -118,6 +185,42 @@ describe("Client row model", () => {
         sortFreeColumns,
       ),
     ).toThrow(/requires at least one sortable column/u);
+  });
+
+  it("restores valid non-empty sorting and falls back to its baseline otherwise", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const baseline = sanitizeClientInitialOrderBy(
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      columns,
+    );
+
+    expect(
+      reconcileClientOrderBy(
+        [
+          { columnId: "COL_ID_SCORE", direction: "desc" },
+          { columnId: "COL_ID_SCORE", direction: "asc" },
+        ],
+        baseline,
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_SCORE", direction: "desc" }]);
+    expect(reconcileClientOrderBy([], baseline, columns)).toEqual(baseline);
+    expect(
+      reconcileClientOrderBy([{ columnId: "COL_ID_STALE", direction: "asc" }], baseline, columns),
+    ).toEqual(baseline);
   });
 
   it("keeps nullable text rows for notContains and applies half-open numeric ranges", () => {

@@ -142,6 +142,23 @@ const misspelledOrder = (
 );
 void misspelledOrder;
 
+const invalidDirectionOrder = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_INVALID_DIRECTION"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[
+      {
+        columnId: "COL_ID_NAME",
+        // @ts-expect-error Emitted JSX admits only asc and desc directions.
+        direction: "ascending",
+      },
+    ]}
+    clientSource={clientSource}
+  />
+);
+void invalidDirectionOrder;
+
 const computedOrder = (
   <BrunoTableClient
     tableId="TABLE_ID_EMITTED_JSX_COMPUTED_ORDER"

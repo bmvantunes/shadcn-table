@@ -7,6 +7,7 @@ import {
   recordBrunoTableClientGridSurfaceRender,
   recordBrunoTableClientHeaderRender,
   recordBrunoTableClientRowRender,
+  recordBrunoTableClientSortPanelRender,
   recordBrunoTableClientViewRender,
 } from "./render-instrumentation";
 import { BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL } from "./test-diagnostic-build-contract";
@@ -44,6 +45,18 @@ export function BrunoTableHeaderCommitDiagnosticProbe({
 }): ReactElement {
   void commitEvidence;
   useLayoutEffect(() => recordBrunoTableClientHeaderRender(tableId));
+  return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
+}
+
+export function BrunoTableSortPanelCommitDiagnosticProbe({
+  commitEvidence,
+  tableId,
+}: {
+  readonly commitEvidence: unknown;
+  readonly tableId: string;
+}): ReactElement {
+  void commitEvidence;
+  useLayoutEffect(() => recordBrunoTableClientSortPanelRender(tableId));
   return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
 }
 

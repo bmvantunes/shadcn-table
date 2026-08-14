@@ -1,4 +1,5 @@
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableSortingCommand } from "./sorting";
 
 export const BRUNO_TABLE_MIN_COLUMN_WIDTH = 32;
 export const BRUNO_TABLE_MAX_COLUMN_WIDTH = 1_000;
@@ -62,11 +63,7 @@ export type BrunoTableColumnLayoutCommand =
 /** The one private command bus used by all grid-owned header interactions. */
 export type BrunoTableGridCommand =
   | BrunoTableColumnLayoutCommand
-  | Readonly<{
-      readonly type: "column.sort.toggle";
-      readonly columnId: string;
-      readonly multi: boolean;
-    }>
+  | BrunoTableSortingCommand
   | Readonly<{
       readonly type: "column.filter.clear";
       readonly columnId: string;
@@ -95,6 +92,10 @@ export function isBrunoTableColumnLayoutCommand(
     case "column.reset.layout":
       return true;
     case "column.sort.toggle":
+    case "sorting.add":
+    case "sorting.remove":
+    case "sorting.move":
+    case "sorting.reset":
     case "column.filter.clear":
     case "column.filter.reset":
       return false;

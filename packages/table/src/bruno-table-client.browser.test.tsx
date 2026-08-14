@@ -255,7 +255,7 @@ describe("BrunoTableClient browser surface", () => {
     expect(header.closest("table")?.style.minWidth).toBe("");
   });
 
-  test("keeps the canonical row identity tie-break ascending under descending sorts", async () => {
+  test("keeps equal descending sort keys in stable source order", async () => {
     const tiedRows = [
       { id: "z-row", name: "Zulu", score: 4 },
       { id: "a-row", name: "Alpha", score: 4 },
@@ -270,7 +270,7 @@ describe("BrunoTableClient browser surface", () => {
 
     await expect
       .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
-      .toHaveTextContent("Alpha");
+      .toHaveTextContent("Zulu");
   });
 
   test("routes undefined and null sorting through BrunoTable value semantics", async () => {
@@ -315,10 +315,10 @@ describe("BrunoTableClient browser surface", () => {
 
     await expect
       .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
-      .toHaveTextContent("Null");
+      .toHaveTextContent("Undefined");
     await expect
       .element(screen.getByRole("row").nth(2).getByRole("gridcell").nth(0))
-      .toHaveTextContent("Undefined");
+      .toHaveTextContent("Null");
     await expect
       .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(0))
       .toHaveTextContent("Number");
@@ -373,6 +373,9 @@ describe("BrunoTableClient browser surface", () => {
     );
     await expect
       .element(screen.getByRole("row").nth(1).getByRole("gridcell").nth(0))
+      .toHaveTextContent("Undefined");
+    await expect
+      .element(screen.getByRole("row").nth(2).getByRole("gridcell").nth(0))
       .toHaveTextContent("Two becomes undefined");
     await expect
       .element(screen.getByRole("row").nth(3).getByRole("gridcell").nth(1))
@@ -4359,7 +4362,7 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
-  test("lets Shift+Tab leave an entered custom renderer without returning to the grid root", async () => {
+  test("lets Shift+Tab leave an entered custom renderer through the preceding table control", async () => {
     const interactiveColumns = [
       {
         ...columns[0],
@@ -4390,9 +4393,10 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
     await vi.waitFor(() =>
       expect(document.activeElement).toBe(
-        screen.getByRole("button", { name: "Before table" }).element(),
+        screen.getByRole("button", { name: "Sort rows, 1 active" }).element(),
       ),
     );
+    expect(document.activeElement).not.toBe(grid.element());
   });
 
   test("lets Shift+Tab leave the document when the grid is the first tab stop", async () => {
