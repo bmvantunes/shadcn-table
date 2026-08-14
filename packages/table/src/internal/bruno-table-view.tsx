@@ -1085,13 +1085,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       return next;
     });
     const queryGenerationRef = useRef(queryGeneration);
-    const appliedShapeRef = useRef<
-      | {
-          readonly columns: readonly CompiledColumn[];
-          readonly totalRows: number;
-        }
-      | undefined
-    >(undefined);
+    const appliedColumnsRef = useRef<readonly CompiledColumn[] | undefined>(undefined);
     const publishedRangeRef = useRef<
       | {
           readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -1123,13 +1117,10 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       navigation.setShape(rowSpace, logicalColumns);
     }, [logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
     useLayoutEffect(() => {
-      const previousShape = appliedShapeRef.current;
-      const shapeChanged =
-        previousShape?.columns !== logicalColumns ||
-        previousShape?.totalRows !== rowSpace.totalRows;
+      const columnsChanged = appliedColumnsRef.current !== logicalColumns;
       viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
       navigation.setShape(rowSpace, logicalColumns);
-      if (shapeChanged) {
+      if (columnsChanged) {
         const activeCell = navigation.getSnapshot();
         if (activeCell !== undefined) {
           viewport.revealCell(
@@ -1140,10 +1131,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
           );
         }
       }
-      appliedShapeRef.current = Object.freeze({
-        columns: logicalColumns,
-        totalRows: rowSpace.totalRows,
-      });
+      appliedColumnsRef.current = logicalColumns;
     }, [logicalColumns, navigation, rowSpace, viewport]);
     useLayoutEffect(() => {
       if (viewportSnapshot !== viewport.getSnapshot()) return;

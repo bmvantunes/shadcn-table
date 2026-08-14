@@ -384,4 +384,67 @@ describe("BrunoTableClient sorting", () => {
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(movedProxy.element().id);
     expect(grid.element().scrollTop).toBe(scrollBefore);
   });
+
+  test("preserves the viewport when a live active-row move also changes totalRows", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+      quantity: BigInt(index),
+    })) satisfies readonly Row[];
+    const screen = await render(<BrunoTableClient {...props} clientSource={source(largeRows)} />);
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SORTING" });
+    grid.element().focus();
+    await userEvent.keyboard("{PageDown}");
+
+    const activeBefore = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeBefore.element().id),
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const activeIdentity = activeBefore.element().id;
+    const scrollBefore = grid.element().scrollTop;
+    expect(scrollBefore).toBeGreaterThan(0);
+
+    const publishedRows = [
+      ...largeRows.map((row) => (row.id === "row-12" ? { ...row, score: 10_000 } : row)),
+      {
+        id: "row-inserted",
+        name: "Inserted row",
+        score: 12,
+        quantity: 10_000n,
+      },
+    ] satisfies readonly Row[];
+    expect(publishedRows).toHaveLength(101);
+
+    await screen.rerender(<BrunoTableClient {...props} clientSource={source(publishedRows, 2)} />);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+
+    expect(document.activeElement).toBe(grid.element());
+    expect(grid.element().scrollTop).toBe(scrollBefore);
+    const movedProxy = screen.getByRole("gridcell", { name: "Row 12", exact: true });
+    await expect.element(movedProxy).toHaveAttribute("data-bruno-active-proxy", "");
+    expect(movedProxy.element().id).toBe(activeIdentity);
+    expect(movedProxy.element().parentElement?.getAttribute("aria-rowindex")).toBe("102");
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "102");
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeIdentity);
+
+    const oldDisplayRow = screen
+      .getByRole("row")
+      .all()
+      .find(
+        (row) =>
+          row.element().getAttribute("aria-rowindex") === "14" &&
+          row.element().hasAttribute("aria-owns"),
+      );
+    expect(oldDisplayRow).toBeDefined();
+    expect(
+      oldDisplayRow
+        ?.getByRole("gridcell")
+        .all()
+        .some((cell) => cell.element().id === activeIdentity),
+    ).toBe(false);
+  });
 });
