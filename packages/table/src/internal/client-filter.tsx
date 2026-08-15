@@ -62,8 +62,11 @@ type FilterLeafDraft = Readonly<{
   readonly kind: "leaf";
   readonly operator: FilterOperator;
   readonly first: string;
+  readonly firstAuthored: boolean;
   readonly second: string;
+  readonly secondAuthored: boolean;
   readonly inValues: readonly string[];
+  readonly inValuesAuthored: readonly boolean[];
   readonly inValuesExplicit: boolean;
   readonly selectIndex: number | undefined;
   readonly caseSensitive: boolean;
@@ -534,10 +537,16 @@ function FilterExpressionEditor({
                         operator,
                         inValues:
                           operator === "in" && leaf.inValues.length === 0
-                            ? leaf.first.length > 0
+                            ? leaf.firstAuthored
                               ? Object.freeze([leaf.first])
                               : Object.freeze([])
                             : leaf.inValues,
+                        inValuesAuthored:
+                          operator === "in" && leaf.inValues.length === 0
+                            ? leaf.firstAuthored
+                              ? Object.freeze([true])
+                              : Object.freeze([])
+                            : leaf.inValuesAuthored,
                         inValuesExplicit: operator === "in" ? leaf.inValuesExplicit : false,
                       }),
                       "immediate",
@@ -750,7 +759,14 @@ function FilterOperand({
           aria-label={inputLabel}
           value={draft.first}
           onChange={(event) =>
-            onChange(Object.freeze({ ...draft, first: event.currentTarget.value }), "immediate")
+            onChange(
+              Object.freeze({
+                ...draft,
+                first: event.currentTarget.value,
+                firstAuthored: event.currentTarget.value.length > 0,
+              }),
+              "immediate",
+            )
           }
         >
           <NativeSelectOption value="">Choose a value</NativeSelectOption>
@@ -777,12 +793,8 @@ function FilterOperand({
             onChange(
               Object.freeze({
                 ...draft,
-                first:
-                  option === undefined
-                    ? ""
-                    : boundBrunoTableFilterOperandText(
-                        column.semantics.formatCanonicalText(option),
-                      ),
+                first: option === undefined ? "" : column.semantics.formatCanonicalText(option),
+                firstAuthored: option !== undefined,
                 selectIndex: index,
               }),
               "immediate",
@@ -842,11 +854,19 @@ function FilterOperand({
                   onChange={(event) => {
                     const nextValues = values.slice();
                     nextValues[index] = boundBrunoTableFilterOperandText(event.currentTarget.value);
+                    const nextValuesAuthored = (
+                      draft.inValuesAuthored.length > 0
+                        ? draft.inValuesAuthored
+                        : [draft.firstAuthored]
+                    ).slice() as boolean[];
+                    nextValuesAuthored[index] = true;
                     onChange(
                       Object.freeze({
                         ...draft,
                         first: nextValues[0] ?? "",
+                        firstAuthored: true,
                         inValues: Object.freeze(nextValues),
+                        inValuesAuthored: Object.freeze(nextValuesAuthored),
                         inValuesExplicit: true,
                       }),
                       continuous ? "continuous" : "immediate",
@@ -871,8 +891,19 @@ function FilterOperand({
                       Object.freeze({
                         ...draft,
                         first: nextValues[0] ?? "",
+                        firstAuthored: nextValues.length > 0,
                         inValues: Object.freeze(nextValues),
                         inValuesExplicit: true,
+                        inValuesAuthored: Object.freeze(
+                          nextValues.map((_, candidate) => {
+                            const sourceIndex = candidate >= index ? candidate + 1 : candidate;
+                            return (
+                              (draft.inValuesAuthored.length > 0
+                                ? draft.inValuesAuthored
+                                : [draft.firstAuthored])[sourceIndex] ?? false
+                            );
+                          }),
+                        ),
                       }),
                       continuous ? "continuous" : "immediate",
                     );
@@ -896,6 +927,12 @@ function FilterOperand({
                 Object.freeze({
                   ...draft,
                   inValues: Object.freeze([...values, ""]),
+                  inValuesAuthored: Object.freeze([
+                    ...(draft.inValuesAuthored.length > 0
+                      ? draft.inValuesAuthored
+                      : values.map((_, index) => index === 0 && draft.firstAuthored)),
+                    false,
+                  ]),
                   inValuesExplicit: true,
                 }),
                 continuous ? "continuous" : "immediate",
@@ -922,7 +959,7 @@ function FilterOperand({
             onChange={(event) => {
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
-                Object.freeze({ ...draft, first: value }),
+                Object.freeze({ ...draft, first: value, firstAuthored: true }),
                 continuous ? "continuous" : "immediate",
                 isNumber && event.currentTarget.validity.badInput,
               );
@@ -945,7 +982,7 @@ function FilterOperand({
             onChange={(event) => {
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
-                Object.freeze({ ...draft, second: value }),
+                Object.freeze({ ...draft, second: value, secondAuthored: true }),
                 continuous ? "continuous" : "immediate",
                 isNumber && event.currentTarget.validity.badInput,
               );
@@ -1054,8 +1091,17 @@ function draftFromNode(
     kind: "leaf",
     operator,
     first,
+    firstAuthored:
+      operator === "in"
+        ? inValues.length > 0
+        : rawFilter !== undefined &&
+          formatFilterDraftOperand(column, operator, rawFilter) !== undefined,
     second: formatOperand(column, record["filterTo"]) ?? "",
+    secondAuthored: record["filterTo"] !== undefined,
     inValues,
+    inValuesAuthored: Object.freeze(
+      operator === "in" && Array.isArray(rawFilter) ? rawFilter.map(() => true) : [],
+    ),
     inValuesExplicit: operator === "in" && Array.isArray(rawFilter),
     selectIndex:
       column.semantics.filterFamily === "select"
@@ -1128,15 +1174,19 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
     return { filter: Object.freeze(base) };
   }
   if (isSubstringFilterOperator(draft.operator)) {
-    return { filter: Object.freeze({ ...base, filter: draft.first }) };
+    return draft.firstAuthored
+      ? { filter: Object.freeze({ ...base, filter: draft.first }) }
+      : { filter: undefined, error: "Enter one or more valid values." };
   }
   if (draft.operator === "in") {
-    if (!draft.inValuesExplicit && draft.first.length === 0) {
+    if (!draft.inValuesExplicit && !draft.firstAuthored) {
       return { filter: undefined, error: "Enter one or more valid values." };
     }
-    const values = (draft.inValuesExplicit ? draft.inValues : [draft.first]).map(
-      boundBrunoTableFilterOperandText,
-    );
+    const authored = draft.inValuesExplicit ? draft.inValuesAuthored : [draft.firstAuthored];
+    if (authored.some((value) => !value)) {
+      return { filter: undefined, error: "Enter one or more valid values." };
+    }
+    const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
     const decoded = values.map((value) => column.semantics.parseCanonicalText(value));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };
@@ -1155,12 +1205,16 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
     if (option === undefined) return { filter: undefined, error: "Choose a value." };
     return { filter: Object.freeze({ ...base, filter: option }) };
   }
-  const first = column.semantics.parseCanonicalText(boundBrunoTableFilterOperandText(draft.first));
+  if (!draft.firstAuthored) {
+    return { filter: undefined, error: "Enter one or more valid values." };
+  }
+  const first = column.semantics.parseCanonicalText(draft.first);
   if (first._tag === "Failure") return { filter: undefined, error: first.message };
   if (draft.operator === "inRange") {
-    const second = column.semantics.parseCanonicalText(
-      boundBrunoTableFilterOperandText(draft.second),
-    );
+    if (!draft.secondAuthored) {
+      return { filter: undefined, error: "Enter an upper bound." };
+    }
+    const second = column.semantics.parseCanonicalText(draft.second);
     if (second._tag === "Failure") return { filter: undefined, error: second.message };
     return {
       filter: Object.freeze({ ...base, filter: first.value, filterTo: second.value }),
@@ -1219,8 +1273,11 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
     kind: "leaf",
     operator: defaultFilterOperator(column),
     first: defaultOperand(column),
+    firstAuthored: false,
     second: "",
+    secondAuthored: false,
     inValues: Object.freeze([]),
+    inValuesAuthored: Object.freeze([]),
     inValuesExplicit: false,
     selectIndex: undefined,
     caseSensitive: false,
@@ -1231,7 +1288,7 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
 function formatOperand(column: CompiledColumn, value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   try {
-    return boundBrunoTableFilterOperandText(column.semantics.formatCanonicalText(value));
+    return column.semantics.formatCanonicalText(value);
   } catch {
     return undefined;
   }
@@ -1243,7 +1300,7 @@ function formatFilterDraftOperand(
   value: unknown,
 ): string | undefined {
   if (isSubstringFilterOperator(operator) && typeof value === "string") {
-    return boundBrunoTableFilterOperandText(value);
+    return value;
   }
   return formatOperand(column, value);
 }

@@ -42,6 +42,10 @@ describe("BrunoTable Client Quick Filter", () => {
     expect(rows.filter(predicate!).map((row) => row.id)).toEqual(["three"]);
   });
 
+  it("does not create a predicate for text that normalizes to empty", () => {
+    expect(createClientQuickFilterPredicate("\u0301", ["symbol"], readField)).toBeUndefined();
+  });
+
   it("combines Grid Filters and Quick Filter with AND while preserving the empty-query identity", () => {
     const empty = createClientQueryPredicate(
       columns,

@@ -27,6 +27,7 @@ export function createClientQuickFilterPredicate<TRow>(
 ): ((row: TRow) => boolean) | undefined {
   if (text === undefined || text.length === 0) return undefined;
   const normalizedQuery = normalizeBrunoTableFilterText(text);
+  if (normalizedQuery.length === 0) return undefined;
   const quickFilterFields = fields ?? EMPTY_QUICK_FILTER_FIELDS;
   return (row) =>
     quickFilterFields.some((field) => {

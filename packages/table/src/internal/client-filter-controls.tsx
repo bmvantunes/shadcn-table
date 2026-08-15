@@ -15,6 +15,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -25,7 +26,7 @@ import type { ReactElement, ReactNode } from "react";
 import { BrunoTableColumnFilter } from "./client-filter";
 import type { BrunoTableColumnFilterRendererProps } from "./bruno-table-view";
 import type { CompiledColumn } from "./compile-columns";
-import { brunoTableFilterReferencesColumn } from "./grid-query";
+import { brunoTableFilterReferencesColumn, normalizeBrunoTableFilterText } from "./grid-query";
 import type {
   BrunoTableFilterSnapshot,
   BrunoTableRowPipelineRuntimeView,
@@ -206,7 +207,15 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
   readonly entries: readonly BrunoTableActiveFilterEntry[];
   readonly runtime: BrunoTableRowPipelineRuntimeView;
 }): ReactElement {
-  const [open, setOpen] = useState(false);
+  const [openStore] = useState(createBrunoTableActiveFilterOpenStore);
+  const open = useSyncExternalStore(
+    openStore.subscribe,
+    openStore.getSnapshot,
+    openStore.getSnapshot,
+  );
+  useLayoutEffect(() => {
+    openStore.setHasEntries(entries.length > 0);
+  }, [entries.length, openStore]);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const removeButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const focusFrame = useRef<number | null>(null);
@@ -247,7 +256,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     (entry: BrunoTableActiveFilterEntry): void => {
       const index = entries.findIndex((candidate) => candidate.key === entry.key);
       const nextKey = entries[index + 1]?.key ?? entries[index - 1]?.key;
-      if (nextKey === undefined) setOpen(false);
+      if (nextKey === undefined) openStore.setOpen(false);
       if (entry.kind === "quick") {
         runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
       } else {
@@ -258,7 +267,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
       }
       focusAfterMutation(nextKey);
     },
-    [entries, focusAfterMutation, runtime],
+    [entries, focusAfterMutation, openStore, runtime],
   );
 
   const trigger = (
@@ -274,7 +283,11 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     </Button>
   );
   return (
-    <Popover key={entries.length === 0 ? "empty" : "active"} open={open} onOpenChange={setOpen}>
+    <Popover
+      key={entries.length === 0 ? "empty" : "active"}
+      open={open}
+      onOpenChange={openStore.setOpen}
+    >
       <PopoverTrigger render={trigger} />
       {entries.length > 0 ? (
         <PopoverContent aria-label="Active filters" className="w-96" role="dialog">
@@ -310,7 +323,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  if (!entries.some((entry) => entry.kind === "quick")) setOpen(false);
+                  if (!entries.some((entry) => entry.kind === "quick")) openStore.setOpen(false);
                   runtime.dispatchGridCommand({ type: "column.filters.clear" });
                   focusAfterMutation(undefined);
                 }}
@@ -338,53 +351,102 @@ function activeFilterEntries(
   query: BrunoTableFilterSnapshot,
 ): readonly BrunoTableActiveFilterEntry[] {
   const entries: BrunoTableActiveFilterEntry[] = [];
-  if (query.quickFilter.length > 0) {
+  if (normalizeBrunoTableFilterText(query.quickFilter).length > 0) {
     entries.push({
       kind: "quick",
       key: "quick-filter",
       label: `Quick Filter contains ${JSON.stringify(query.quickFilter)}`,
     });
   }
+  const headerCounts = new Map<string, number>();
   for (const column of query.columns) {
+    headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
+  }
+  for (const [columnIndex, column] of query.columns.entries()) {
     const filters = query.filters.filter((filter) =>
       brunoTableFilterReferencesColumn(filter, column.columnId),
     );
     if (filters.length === 0) continue;
+    const columnLabel =
+      headerCounts.get(column.headerName) === 1
+        ? column.headerName
+        : `${column.headerName} (column ${String(columnIndex + 1)})`;
     entries.push({
       kind: "column",
       columnId: column.columnId,
       key: `column-filter-${column.columnId}`,
-      label: filters.map((filter) => describeActiveFilter(column, filter)).join(" AND "),
+      label: filters
+        .map((filter) => describeActiveFilter(column, filter, columnLabel))
+        .join(" AND "),
     });
   }
   return entries;
 }
 
-function describeActiveFilter(column: CompiledColumn, value: unknown): string {
+function createBrunoTableActiveFilterOpenStore(): {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly getSnapshot: () => boolean;
+  readonly setOpen: (open: boolean) => void;
+  readonly setHasEntries: (hasEntries: boolean) => void;
+} {
+  let open = false;
+  let hasEntries = false;
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => open,
+    setOpen: (nextOpen) => {
+      const next = nextOpen && hasEntries;
+      if (open === next) return;
+      open = next;
+      notify();
+    },
+    setHasEntries: (nextHasEntries) => {
+      hasEntries = nextHasEntries;
+      if (hasEntries || !open) return;
+      open = false;
+      notify();
+    },
+  };
+}
+
+function describeActiveFilter(
+  column: CompiledColumn,
+  value: unknown,
+  columnLabel = column.headerName,
+): string {
   if (Array.isArray(value)) {
-    return value.map((condition) => describeActiveFilter(column, condition)).join(" AND ");
+    return value
+      .map((condition) => describeActiveFilter(column, condition, columnLabel))
+      .join(" AND ");
   }
-  if (typeof value !== "object" || value === null) return column.headerName;
+  if (typeof value !== "object" || value === null) return columnLabel;
   const record = value as Readonly<Record<string, unknown>>;
   const type = typeof record["type"] === "string" ? record["type"] : "filter";
   if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
     const joiner = type === "AND" ? " AND " : " OR ";
-    return `${column.headerName}: (${record["conditions"].map((condition) => describeActiveFilter(column, condition)).join(joiner)})`;
+    return `${columnLabel}: (${record["conditions"].map((condition) => describeActiveFilter(column, condition, columnLabel)).join(joiner)})`;
   }
   if (type === "NOT" && record["condition"] !== undefined) {
-    return `${column.headerName}: NOT (${describeActiveFilter(column, record["condition"])})`;
+    return `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel)})`;
   }
   const operand = record["filter"];
-  if (type === "blank" || type === "notBlank") return `${column.headerName}: ${type}`;
+  if (type === "blank" || type === "notBlank") return `${columnLabel}: ${type}`;
   if (type === "inRange") {
-    return `${column.headerName}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`;
+    return `${columnLabel}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`;
   }
   const sensitivity = [
     record["caseSensitive"] === true ? "case-sensitive" : undefined,
     record["accentSensitive"] === true ? "accent-sensitive" : undefined,
   ].filter((value): value is string => value !== undefined);
   const sensitivityLabel = sensitivity.length > 0 ? ` (${sensitivity.join(", ")})` : "";
-  return `${column.headerName}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`;
+  return `${columnLabel}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`;
 }
 
 function formatActiveFilterOperand(
@@ -395,9 +457,17 @@ function formatActiveFilterOperand(
   if (operator === "in" && Array.isArray(value)) {
     return `[${value.map((item) => formatActiveFilterOperand(column, item, "equals")).join(", ")}]`;
   }
-  if (typeof value === "string") return JSON.stringify(value);
+  if (
+    operator === "contains" ||
+    operator === "notContains" ||
+    operator === "startsWith" ||
+    operator === "endsWith"
+  ) {
+    return typeof value === "string" ? JSON.stringify(value) : String(value);
+  }
   try {
-    return column.semantics.formatDisplay(value);
+    const display = column.semantics.formatDisplay(value);
+    return typeof value === "string" ? JSON.stringify(display) : display;
   } catch {
     return String(value);
   }

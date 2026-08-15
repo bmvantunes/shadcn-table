@@ -127,6 +127,36 @@ const filterRows = [
   },
 ] satisfies readonly [FilterRow, FilterRow];
 
+const oversizedQuantity = BigInt(`1${"0".repeat(1_024)}`);
+const oversizedFilterRows = [
+  ...filterRows,
+  {
+    id: "oversized",
+    name: "Oversized",
+    score: 1,
+    quantity: oversizedQuantity,
+    active: true,
+    status: "open",
+    symbol: "BIG",
+    description: "Oversized exact integer",
+  },
+] satisfies readonly FilterRow[];
+
+const duplicateHeaderFilterColumns = [
+  {
+    columnId: "COL_ID_DUPLICATE_NAME",
+    field: "name",
+    headerName: "Value",
+    valueType: "text",
+  },
+  {
+    columnId: "COL_ID_DUPLICATE_QUANTITY",
+    field: "quantity",
+    headerName: "Value",
+    valueType: "bigint",
+  },
+] satisfies BrunoTableColumns<FilterRow>;
+
 const columns = [
   {
     columnId: "COL_ID_NAME",
@@ -935,6 +965,12 @@ describe("BrunoTableClient browser surface", () => {
       "AND",
     );
     dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
     const firstNameValue = dialog.getByRole("textbox", {
       name: "Filter value for Name (condition 1)",
     });
@@ -994,6 +1030,52 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("dialog", { name: "Filter Name" }))
       .not.toBeInTheDocument();
     await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
+  });
+
+  test("preserves oversized native BigInt operands while changing operators", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_OVERSIZED_BIGINT"
+        columns={filterColumns}
+        initialFilters={[
+          {
+            columnId: "COL_ID_FILTER_QUANTITY",
+            type: "equals",
+            filter: oversizedQuantity,
+          },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource(oversizedFilterRows)}
+      />,
+    );
+
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Oversized", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+    await expect
+      .element(dialog.getByRole("textbox", { name: "Filter value for Quantity" }))
+      .toHaveValue(oversizedQuantity.toString());
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Quantity" }),
+      "notEqual",
+    );
+
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Oversized", exact: true }))
+      .not.toBeInTheDocument();
   });
 
   test("applies Quick Filter OR semantics to hidden fields and keeps it independent from Grid Filters", async () => {
@@ -1213,6 +1295,43 @@ describe("BrunoTableClient browser surface", () => {
       .element(
         review.getByRole("button", {
           name: "Remove Score: inRange 2 ≤ value < 4 (upper bound exclusive)",
+        }),
+      )
+      .toBeInTheDocument();
+  });
+
+  test("disambiguates active filters when columns share a header", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof duplicateHeaderFilterColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_DUPLICATE_HEADERS"
+        columns={duplicateHeaderFilterColumns}
+        initialFilters={[
+          { columnId: "COL_ID_DUPLICATE_NAME", type: "equals", filter: "Ada" },
+          {
+            columnId: "COL_ID_DUPLICATE_QUANTITY",
+            type: "equals",
+            filter: filterRows[0]!.quantity,
+          },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_DUPLICATE_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (2)" }));
+    const review = screen.getByRole("dialog", { name: "Active filters" });
+    await expect
+      .element(
+        review.getByRole("button", {
+          name: 'Remove Value (column 1): equals "Ada"',
+        }),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(
+        review.getByRole("button", {
+          name: `Remove Value (column 2): equals ${filterRows[0]!.quantity.toString()}`,
         }),
       )
       .toBeInTheDocument();
