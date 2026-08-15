@@ -933,6 +933,7 @@ function readOwnArrayIndexes(
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
         indexes.push(index);
+        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) return undefined;
       }
     }
     indexes.sort((left, right) => left - right);
@@ -964,6 +965,7 @@ const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES = 1_024;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS = 4_096;
+const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {

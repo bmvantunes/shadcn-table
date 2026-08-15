@@ -1137,6 +1137,25 @@ describe("Client row model", () => {
     expect(ownKeyReads).toBe(1);
   });
 
+  it("caps hostile root filter materialization without limiting ordinary root collections", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const hostileRoot = Array.from({ length: 16_385 }, (_, index) => ({
+      columnId: "COL_ID_NAME",
+      filter: String(index),
+      type: "equals",
+    }));
+
+    expect(sanitizeClientInitialFilters(hostileRoot, columns)).toEqual([]);
+    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1_025);
+  });
+
   it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
