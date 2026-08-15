@@ -504,6 +504,7 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
+    if (!isBoundedFilterOperandText(operand, context)) return undefined;
     const result = decode(operand);
     if (
       result._tag !== "Success" ||
@@ -512,7 +513,6 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    if (!isBoundedFilterOperandText(operand, context)) return undefined;
     return node(
       snapshotFilter(
         filter,

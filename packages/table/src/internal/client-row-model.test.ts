@@ -1302,6 +1302,22 @@ describe("Client row model", () => {
         { rejectOverBudget: true },
       ),
     ).toThrow();
+
+    const numericColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    expect(() =>
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_SCORE", filter: overlong, type: "equals" }],
+        numericColumns,
+        { rejectOverBudget: true },
+      ),
+    ).toThrow();
   });
 
   it("captures admitted dense operands without enumerating unrelated own properties", () => {
