@@ -200,6 +200,9 @@ export function normalizeBrunoTableFilterText(
 }
 
 export const BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH = 1_024;
+const BRUNO_TABLE_MAX_FILTER_OPERAND_OBJECTS = 64;
+const BRUNO_TABLE_MAX_FILTER_OPERAND_PROPERTIES = 256;
+const BRUNO_TABLE_MAX_FILTER_OPERAND_DEPTH = 16;
 
 export function boundBrunoTableFilterOperandText(text: string): string {
   return text.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH
@@ -462,7 +465,7 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    if (!captured.every((value) => isBoundedFilterOperandText(value, context))) return undefined;
+    if (!captured.every((value) => isBoundedFilterOperand(value, context))) return undefined;
     const decoded = captured.map(decode);
     const decodedValues = decoded.map((result) =>
       result._tag === "Success" ? result.value : undefined,
@@ -481,8 +484,8 @@ function sanitizeFilterRecord(
   if (type === "inRange") {
     if (column.semantics.filterFamily !== "numeric") return undefined;
     if (
-      !isBoundedFilterOperandText(operand, context) ||
-      !isBoundedFilterOperandText(filter["filterTo"], context)
+      !isBoundedFilterOperand(operand, context) ||
+      !isBoundedFilterOperand(filter["filterTo"], context)
     ) {
       return undefined;
     }
@@ -523,7 +526,7 @@ function sanitizeFilterRecord(
       if (exactOptionIndex !== -1) {
         configuredSelectValue = column.selectOptions[exactOptionIndex];
         isConfiguredSelectValue = true;
-      } else if (!isBoundedFilterOperandText(operand, context)) {
+      } else if (!isBoundedFilterOperand(operand, context)) {
         return undefined;
       } else {
         for (const option of column.selectOptions) {
@@ -539,7 +542,7 @@ function sanitizeFilterRecord(
         }
       }
     }
-    if (!isConfiguredSelectValue && !isBoundedFilterOperandText(operand, context)) return undefined;
+    if (!isConfiguredSelectValue && !isBoundedFilterOperand(operand, context)) return undefined;
     // Compiled Select options are already canonical. Reuse the admitted option
     // so a long trusted option never re-enters a consumer decoder.
     const result = isConfiguredSelectValue
@@ -572,7 +575,7 @@ function sanitizeFilterRecord(
     const textOperand = typeof operand === "string" ? operand : undefined;
     return column.semantics.filterFamily === "text" &&
       textOperand !== undefined &&
-      isBoundedFilterOperandText(textOperand, context) &&
+      isBoundedFilterOperand(textOperand, context) &&
       validSensitivity
       ? node(
           snapshotFilter(
@@ -632,6 +635,7 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
 type CompiledFilterOperandPlan = Readonly<{
   readonly normalizedOperand?: string | undefined;
   readonly normalizedOperands?: readonly (string | undefined)[] | undefined;
+  readonly membershipKeys?: ReadonlySet<string> | undefined;
   readonly normalizedSubstringOperand?: string | undefined;
 }>;
 
@@ -664,12 +668,13 @@ function compileFilterOperandPlans(
           ),
         });
       } else if (type === "in" && Array.isArray(operand)) {
+        const normalizedOperands = operand.map((item) =>
+          normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive),
+        );
+        const membershipKeys = compileFilterMembershipKeys(column, operand, normalizedOperands);
         plans.set(candidate, {
-          normalizedOperands: Object.freeze(
-            operand.map((item) =>
-              normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive),
-            ),
-          ),
+          normalizedOperands: Object.freeze(normalizedOperands),
+          ...(membershipKeys === undefined ? {} : { membershipKeys }),
         });
       } else if (
         (type === "contains" ||
@@ -711,6 +716,39 @@ function normalizeCanonicalTextOperand(
   } catch {
     return undefined;
   }
+}
+
+function compileFilterMembershipKeys(
+  column: CompiledColumn,
+  operands: readonly unknown[],
+  normalizedOperands: readonly (string | undefined)[],
+): ReadonlySet<string> | undefined {
+  const keys = new Set<string>();
+  for (let index = 0; index < operands.length; index += 1) {
+    const key = filterMembershipKey(column, operands[index], normalizedOperands[index]);
+    if (key === undefined) return undefined;
+    keys.add(key);
+  }
+  return keys;
+}
+
+function filterMembershipKey(
+  column: CompiledColumn,
+  value: unknown,
+  normalizedText?: string,
+): string | undefined {
+  if (column.semantics.filterFamily === "text") {
+    return normalizedText === undefined ? undefined : `text:${normalizedText}`;
+  }
+  if (column.semantics.editorFamily === "number") {
+    return typeof value === "number" && Number.isFinite(value)
+      ? `number:${String(value)}`
+      : undefined;
+  }
+  if (column.semantics.editorFamily === "bigint") {
+    return typeof value === "bigint" ? `bigint:${value.toString(10)}` : undefined;
+  }
+  return undefined;
 }
 
 function evaluateFilter(
@@ -815,6 +853,16 @@ function evaluateFilterRecord(
     );
   }
   if (filter["type"] === "in") {
+    if (plan?.membershipKeys !== undefined) {
+      const key = filterMembershipKey(
+        column,
+        value,
+        column.semantics.filterFamily === "text"
+          ? normalizeCanonicalTextOperand(column, value, caseSensitive, accentSensitive)
+          : undefined,
+      );
+      return key !== undefined && plan.membershipKeys.has(key);
+    }
     return (
       Array.isArray(operand) &&
       operand.some((item, index) =>
@@ -1026,12 +1074,62 @@ type FilterSanitizationContext = {
   remainingNodes: number;
 };
 
-function isBoundedFilterOperandText(value: unknown, context: FilterSanitizationContext): boolean {
-  if (typeof value !== "string" || value.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) {
+function isBoundedFilterOperand(value: unknown, context: FilterSanitizationContext): boolean {
+  const visited = new WeakSet<object>();
+  let objectCount = 0;
+  let propertyCount = 0;
+
+  const visit = (candidate: unknown, depth: number): boolean => {
+    if (typeof candidate === "string") {
+      if (candidate.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) return true;
+      context.overBudget = true;
+      return false;
+    }
+    if (
+      candidate === null ||
+      candidate === undefined ||
+      typeof candidate === "boolean" ||
+      typeof candidate === "number" ||
+      typeof candidate === "bigint"
+    ) {
+      return true;
+    }
+    if (typeof candidate !== "object" || depth > BRUNO_TABLE_MAX_FILTER_OPERAND_DEPTH) {
+      if (depth > BRUNO_TABLE_MAX_FILTER_OPERAND_DEPTH) context.overBudget = true;
+      return false;
+    }
+    if (visited.has(candidate)) return true;
+    visited.add(candidate);
+    objectCount += 1;
+    if (objectCount > BRUNO_TABLE_MAX_FILTER_OPERAND_OBJECTS) {
+      context.overBudget = true;
+      return false;
+    }
+    let keys: readonly PropertyKey[];
+    try {
+      keys = Reflect.ownKeys(candidate);
+    } catch {
+      return false;
+    }
+    propertyCount += keys.length;
+    if (propertyCount > BRUNO_TABLE_MAX_FILTER_OPERAND_PROPERTIES) {
+      context.overBudget = true;
+      return false;
+    }
+    for (const key of keys) {
+      let descriptor: PropertyDescriptor | undefined;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      } catch {
+        return false;
+      }
+      if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return false;
+      if (!visit(descriptor.value, depth + 1)) return false;
+    }
     return true;
-  }
-  context.overBudget = true;
-  return false;
+  };
+
+  return visit(value, 0);
 }
 
 type CapturedFilterArray = {

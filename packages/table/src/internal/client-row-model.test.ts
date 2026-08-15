@@ -1392,6 +1392,97 @@ describe("Client row model", () => {
     expect(decodeRuntime).not.toHaveBeenCalled();
   });
 
+  it("rejects unreadable custom object operands before invoking the decoder", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const valueType = {
+      codecId: "test/unreadable-object",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const unreadable = new Proxy(
+      { value: "Ada" },
+      {
+        ownKeys() {
+          throw new Error("unreadable operand");
+        },
+      },
+    );
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_VALUE", filter: unreadable, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
+    expect(decodeRuntime).not.toHaveBeenCalled();
+  });
+
+  it("indexes large built-in text in operands before evaluating rows", () => {
+    const formatCanonicalText = vi.fn((value: string) => value);
+    const valueType = {
+      codecId: "test/indexed-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+      equivalent: (left: string, right: string) => left === right,
+      compare: () => 0,
+      formatCanonicalText,
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: string) => value,
+      encodePersisted: (value: string) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const operands = Array.from({ length: 4_096 }, (_, index) => `value-${index}`);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", filter: operands, type: "in" }],
+      columns,
+    );
+    formatCanonicalText.mockClear();
+
+    expect(filterClientRows([{ value: "value-4095" }], columns, filters)).toEqual([
+      { value: "value-4095" },
+    ]);
+    expect(formatCanonicalText).toHaveBeenCalledTimes(operands.length + 1);
+  });
+
   it("admits configured Select values beyond the authored text bound", () => {
     const status = "x".repeat(1_025);
     const selectColumn = Reflect.apply(BrunoTableSelectColumn, undefined, [

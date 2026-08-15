@@ -1531,6 +1531,20 @@ function sameFilterCollection(
     return true;
   }
   if (!unordered) return false;
+  const nextCounts = new Map<string, number>();
+  const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
+  if (nextKeys.every((key): key is string => key !== undefined)) {
+    for (const key of nextKeys) nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1);
+    for (const value of previous) {
+      const key = filterValueComparisonKey(value, columnsById);
+      if (key === undefined) break;
+      const count = nextCounts.get(key) ?? 0;
+      if (count === 0) break;
+      if (count === 1) nextCounts.delete(key);
+      else nextCounts.set(key, count - 1);
+    }
+    if (nextCounts.size === 0) return true;
+  }
   const matched = new Set<number>();
   return previous.every((value) => {
     for (let index = 0; index < next.length; index += 1) {
@@ -1541,6 +1555,102 @@ function sameFilterCollection(
     }
     return false;
   });
+}
+
+function filterValueComparisonKey(
+  value: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  seen: WeakMap<object, string | undefined> = new WeakMap(),
+): string | undefined {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return `string:${JSON.stringify(value)}`;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? `number:${String(value)}` : undefined;
+  if (typeof value === "bigint") return `bigint:${value.toString(10)}`;
+  if (typeof value === "boolean") return `boolean:${String(value)}`;
+  if (typeof value !== "object") return undefined;
+  const existing = seen.get(value);
+  if (existing !== undefined || seen.has(value)) return existing;
+  seen.set(value, undefined);
+  if (Array.isArray(value)) {
+    const keys = value.map((item) => filterValueComparisonKey(item, columnsById, seen));
+    if (keys.some((key) => key === undefined)) return undefined;
+    const result = `array:[${keys.join(",")}]`;
+    seen.set(value, result);
+    return result;
+  }
+  if (!isPlainFilterRecord(value)) return undefined;
+  const record = value as Readonly<Record<PropertyKey, unknown>>;
+  const columnId = record["columnId"];
+  const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
+  const type = typeof record["type"] === "string" ? record["type"] : undefined;
+  const keys = Reflect.ownKeys(record)
+    .filter((key) => !isImplicitFalseTextSensitivity(record, key))
+    .sort((left, right) => {
+      const leftText = String(left);
+      const rightText = String(right);
+      return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
+    });
+  const parts: string[] = [];
+  for (const key of keys) {
+    const child = record[key];
+    if ((key === "filter" || key === "filterTo") && column !== undefined) {
+      if (key === "filter" && type === "in" && Array.isArray(child)) {
+        const operands = child.map((operand) =>
+          filterOperandComparisonKey(operand, column, {
+            accentSensitive: record["accentSensitive"] === true,
+            caseSensitive: record["caseSensitive"] === true,
+            raw: false,
+            text: column.semantics.filterFamily === "text",
+            unordered: true,
+          }),
+        );
+        if (operands.some((operand) => operand === undefined)) return undefined;
+        parts.push(`${key}:[${(operands as string[]).sort(compareStringValues).join(",")}]`);
+      } else {
+        const operand = filterOperandComparisonKey(child, column, {
+          accentSensitive: record["accentSensitive"] === true,
+          caseSensitive: record["caseSensitive"] === true,
+          raw:
+            type === "contains" ||
+            type === "notContains" ||
+            type === "startsWith" ||
+            type === "endsWith",
+          text:
+            type === "equals" ||
+            type === "notEqual" ||
+            type === "in" ||
+            type === "contains" ||
+            type === "notContains" ||
+            type === "startsWith" ||
+            type === "endsWith",
+          unordered: false,
+        });
+        if (operand === undefined) return undefined;
+        parts.push(`${key}:${operand}`);
+      }
+      continue;
+    }
+    if (key === "conditions" && (type === "AND" || type === "OR") && Array.isArray(child)) {
+      const conditions = child.map((condition) =>
+        filterValueComparisonKey(condition, columnsById, seen),
+      );
+      if (conditions.some((condition) => condition === undefined)) return undefined;
+      parts.push(`${key}:[${(conditions as string[]).sort(compareStringValues).join(",")}]`);
+      continue;
+    }
+    const childKey = filterValueComparisonKey(child, columnsById, seen);
+    if (childKey === undefined) return undefined;
+    parts.push(`${String(key)}:${childKey}`);
+  }
+  const result = `record:{${parts.join("|")}}`;
+  seen.set(value, result);
+  return result;
+}
+
+function compareStringValues(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function sameFilterValue(
@@ -1770,7 +1880,15 @@ function filterOperandComparisonKey(
     case "boolean":
       return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
     default:
-      return undefined;
+      try {
+        return `canonical:${normalizeBrunoTableFilterText(
+          column.semantics.formatCanonicalText(value),
+          options.caseSensitive,
+          options.accentSensitive,
+        )}`;
+      } catch {
+        return undefined;
+      }
   }
 }
 
