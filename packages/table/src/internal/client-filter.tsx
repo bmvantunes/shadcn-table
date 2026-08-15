@@ -880,7 +880,7 @@ function FilterOperand({
                       return Object.freeze({
                         ...current,
                         first: nextValues[0] ?? "",
-                        firstAuthored: true,
+                        firstAuthored: nextValuesAuthored[0] === true,
                         inValues: Object.freeze(nextValues),
                         inValuesAuthored: Object.freeze(nextValuesAuthored),
                         inValuesExplicit: true,
@@ -904,7 +904,7 @@ function FilterOperand({
                       Object.freeze({
                         ...draft,
                         first: nextValues[0] ?? "",
-                        firstAuthored: true,
+                        firstAuthored: nextValuesAuthored[0] === true,
                         inValues: Object.freeze(nextValues),
                         inValuesAuthored: Object.freeze(nextValuesAuthored),
                         inValuesExplicit: true,
