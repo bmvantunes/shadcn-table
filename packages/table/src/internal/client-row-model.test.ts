@@ -1153,6 +1153,9 @@ describe("Client row model", () => {
     }));
 
     expect(sanitizeClientInitialFilters(hostileRoot, columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(hostileRoot, columns, { rejectOverBudget: true }),
+    ).toThrow(/root contains more than 16384 entries/u);
     expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1_025);
   });
 

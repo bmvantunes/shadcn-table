@@ -73,7 +73,9 @@ export function sanitizeClientOrderBy(
   columns: readonly CompiledColumn[],
 ): ClientOrderBy {
   const candidates = snapshotRootEntries(orderBy);
-  if (candidates === undefined) return EMPTY_ORDER_BY;
+  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) {
+    return EMPTY_ORDER_BY;
+  }
   const sortable = new Set<string>(
     columns.filter((column) => column.enableSorting !== false).map((column) => column.columnId),
   );
@@ -101,6 +103,14 @@ export function sanitizeClientInitialFilters(
   options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
 ): readonly unknown[] {
   const candidates = snapshotRootEntries(filters);
+  if (candidates === ROOT_ENTRIES_OVER_BUDGET) {
+    if (options?.rejectOverBudget === true) {
+      throw new TypeError(
+        `BrunoTable initialFilters root contains more than ${BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES} entries.`,
+      );
+    }
+    return EMPTY_FILTERS;
+  }
   if (candidates === undefined) return EMPTY_FILTERS;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
@@ -901,13 +911,15 @@ function snapshotDenseArray(values: unknown, length: number): readonly unknown[]
   }
 }
 
-function snapshotRootEntries(values: unknown): readonly unknown[] | undefined {
+function snapshotRootEntries(
+  values: unknown,
+): readonly unknown[] | undefined | typeof ROOT_ENTRIES_OVER_BUDGET {
   try {
     if (!Array.isArray(values)) return undefined;
     const length = values.length;
     if (!Number.isSafeInteger(length) || length < 0) return undefined;
     const indexes = readOwnArrayIndexes(values, length);
-    if (indexes === undefined) return undefined;
+    if (indexes === undefined || indexes === ROOT_ENTRIES_OVER_BUDGET) return indexes;
     const snapshot: unknown[] = [];
     for (const index of indexes) {
       try {
@@ -925,7 +937,7 @@ function snapshotRootEntries(values: unknown): readonly unknown[] | undefined {
 function readOwnArrayIndexes(
   values: readonly unknown[],
   length: number,
-): readonly number[] | undefined {
+): readonly number[] | undefined | typeof ROOT_ENTRIES_OVER_BUDGET {
   try {
     const indexes: number[] = [];
     for (const key of Reflect.ownKeys(values)) {
@@ -933,7 +945,9 @@ function readOwnArrayIndexes(
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
         indexes.push(index);
-        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) return undefined;
+        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) {
+          return ROOT_ENTRIES_OVER_BUDGET;
+        }
       }
     }
     indexes.sort((left, right) => left - right);
@@ -966,6 +980,7 @@ export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES = 1_024;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS = 4_096;
 const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
+const ROOT_ENTRIES_OVER_BUDGET = Symbol("BrunoTable root filter entries over budget");
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {
