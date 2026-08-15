@@ -154,6 +154,62 @@ describe("BrunoTable filter runtime primitives", () => {
     ).toEqual([{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }]);
   });
 
+  it("does not publish an equivalent text filter when sensitivity defaults are omitted", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: {
+        columnId: "COL_ID_NAME",
+        type: "equals",
+        filter: "Ada",
+        caseSensitive: false,
+        accentSensitive: false,
+      },
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("drops filter versions for columns removed during replacement", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
+    });
+    expect(runtime.getColumnFilterVersionSnapshot("COL_ID_NAME")).toBe(1);
+
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    runtime.configure((row) => row.id, replacementColumns);
+
+    expect(runtime.getColumnFilterVersionSnapshot("COL_ID_NAME")).toBe(0);
+  });
+
   it("publishes one generation for a committed Quick Filter without changing Grid Filters", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([{ id: "first", name: "Ada" }]),

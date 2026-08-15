@@ -21,12 +21,14 @@ import {
 import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientCellRenderListenerForTable,
+  installBrunoTableClientColumnFilterRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientRowOrderPlanningListener,
   installBrunoTableClientQuickFilterRenderListener,
   installBrunoTableClientRowRenderListenerForTable,
   installBrunoTableClientViewRenderListener,
+  installBrunoTableClientViewRenderListenerForTable,
 } from "./internal/render-instrumentation";
 import {
   BrunoTableToolbarStore,
@@ -39,6 +41,7 @@ import { installBrunoTableClientQueryValueReadListener } from "./internal/client
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
+import { installBrunoTableColumnFilterSubscriptionListener } from "./internal/grid-subscription-instrumentation";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import {
   BrunoTableGridRuntime,
@@ -409,7 +412,12 @@ describe("BrunoTableClient browser surface", () => {
           initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
           getRowId={(row) => row.id}
           clientSource={readyFilterSource()}
-        />,
+          quickFilterFields={["name"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
       );
 
       await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
@@ -448,6 +456,24 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const outsideDialog = screen.getByRole("dialog", { name: "Filter Name" });
+      await userEvent.fill(
+        outsideDialog.getByRole("textbox", { name: "Filter value for Name" }),
+        "Ada",
+      );
+      await userEvent.click(screen.getByRole("searchbox", { name: "Quick Filter" }));
+      await expect
+        .element(screen.getByRole("dialog", { name: "Filter Name" }))
+        .not.toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
       await userEvent.fill(
         screen.getByRole("dialog", { name: "Filter Name" }).getByRole("textbox", {
           name: "Filter value for Name",
@@ -477,6 +503,103 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
     } finally {
       removeCommandListener();
+    }
+  });
+
+  test("isolates Client column filter subscriptions and local drafts", async () => {
+    const tableId = "TABLE_ID_FILTER_SUBSCRIPTIONS";
+    const filterSubscriptions: Array<{
+      readonly columnId: string;
+      readonly listenerCount: number;
+    }> = [];
+    const filterRenders = vi.fn();
+    const viewRenders = vi.fn();
+    const rowRenders = vi.fn();
+    const removeFilterSubscriptionListener = installBrunoTableColumnFilterSubscriptionListener(
+      tableId,
+      (event) => filterSubscriptions.push(event),
+    );
+    const removeFilterRenderListener = installBrunoTableClientColumnFilterRenderListener(
+      (columnId) => filterRenders(columnId),
+    );
+    const removeViewRenderListener = installBrunoTableClientViewRenderListenerForTable(
+      tableId,
+      viewRenders,
+    );
+    const removeRowRenderListener = installBrunoTableClientRowRenderListenerForTable(
+      tableId,
+      rowRenders,
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId={tableId}
+          columns={filterColumns}
+          initialFilters={[{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+
+      filterSubscriptions.length = 0;
+      filterRenders.mockClear();
+      viewRenders.mockClear();
+      rowRenders.mockClear();
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      expect(filterRenders).toHaveBeenCalledWith("COL_ID_FILTER_NAME");
+      const rendersAfterOpen = filterRenders.mock.calls.length;
+      filterSubscriptions.length = 0;
+      viewRenders.mockClear();
+      rowRenders.mockClear();
+
+      await userEvent.fill(dialog.getByRole("textbox", { name: "Filter value for Name" }), "Grace");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(viewRenders).not.toHaveBeenCalled();
+      expect(rowRenders).not.toHaveBeenCalled();
+      expect(filterSubscriptions).toHaveLength(0);
+      expect(filterRenders.mock.calls.length).toBe(rendersAfterOpen);
+
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      expect(filterSubscriptions.filter((event) => event.listenerCount > 0)).toEqual([
+        { tableId, columnId: "COL_ID_FILTER_NAME", listenerCount: 1 },
+      ]);
+      expect(
+        filterSubscriptions.some(
+          (event) => event.columnId === "COL_ID_FILTER_SCORE" && event.listenerCount === 0,
+        ),
+      ).toBe(true);
+
+      await userEvent.keyboard("{Escape}");
+      await expect
+        .element(screen.getByRole("dialog", { name: "Filter Name" }))
+        .not.toBeInTheDocument();
+      filterSubscriptions.length = 0;
+      filterRenders.mockClear();
+
+      await userEvent.click(screen.getByRole("button", { name: "Clear filter for Name" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      expect(
+        filterSubscriptions.some(
+          (event) => event.columnId === "COL_ID_FILTER_NAME" && event.listenerCount === 0,
+        ),
+      ).toBe(true);
+      expect(filterRenders).not.toHaveBeenCalled();
+    } finally {
+      removeRowRenderListener();
+      removeViewRenderListener();
+      removeFilterRenderListener();
+      removeFilterSubscriptionListener();
     }
   });
 

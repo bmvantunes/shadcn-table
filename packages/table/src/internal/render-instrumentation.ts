@@ -3,6 +3,7 @@ import { BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL } from "./test-diagnosti
 
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
+type ColumnFilterRenderListener = (columnId: string) => void;
 type RowRenderListener = (rowId: string) => void;
 type ColumnPreviewStyleWriteListener = (property: string) => void;
 type RowOrderPlanningListener = (tableId: string) => void;
@@ -41,6 +42,7 @@ let clientGridSurfaceRenderListener: Listener | undefined;
 let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientQuickFilterRenderListener: Listener | undefined;
+let clientColumnFilterRenderListener: ColumnFilterRenderListener | undefined;
 let clientCellRenderListener: CellListener | undefined;
 let clientColumnResizeFrameListener: Listener | undefined;
 let clientColumnReorderFrameListener: Listener | undefined;
@@ -68,6 +70,7 @@ let hasGlobalRowOrderPlanningListener = false;
 let hasGlobalCellRenderListener = false;
 let hasGlobalViewRenderListener = false;
 let hasGlobalQuickFilterRenderListener = false;
+let hasGlobalColumnFilterRenderListener = false;
 let hasGlobalGridSurfaceRenderListener = false;
 let hasGlobalHeaderRenderListener = false;
 
@@ -291,6 +294,30 @@ export function installBrunoTableClientQuickFilterRenderListener(listener: Liste
     if (clientQuickFilterRenderListener === listener) {
       clientQuickFilterRenderListener = undefined;
       hasGlobalQuickFilterRenderListener = false;
+    }
+  };
+}
+
+export function recordBrunoTableClientColumnFilterRender(columnId: string): void {
+  if (!hasGlobalColumnFilterRenderListener) return;
+  if (clientColumnFilterRenderListener !== undefined) {
+    try {
+      clientColumnFilterRenderListener(columnId);
+    } catch {
+      // Diagnostics are observational and must never alter runtime behavior.
+    }
+  }
+}
+
+export function installBrunoTableClientColumnFilterRenderListener(
+  listener: ColumnFilterRenderListener,
+): () => void {
+  clientColumnFilterRenderListener = listener;
+  hasGlobalColumnFilterRenderListener = true;
+  return () => {
+    if (clientColumnFilterRenderListener === listener) {
+      clientColumnFilterRenderListener = undefined;
+      hasGlobalColumnFilterRenderListener = false;
     }
   };
 }

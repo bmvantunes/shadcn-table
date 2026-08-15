@@ -23,7 +23,10 @@ import {
   sanitizeBrunoTableFilters,
 } from "./grid-query";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
-import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
+import {
+  recordBrunoTableColumnCommandSubscriptionNotification,
+  recordBrunoTableColumnFilterSubscriptionNotification,
+} from "./grid-subscription-instrumentation";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
@@ -907,7 +910,18 @@ export class BrunoTableGridRuntime<TRow> {
       ...this.columnFilterSnapshots.keys(),
       ...this.columnFilterListeners.keys(),
     ]);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      for (const column of this.columns) filterColumnIds.add(column.columnId);
+    }
     for (const columnId of filterColumnIds) {
+      const listeners = this.columnFilterListeners.get(columnId);
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableColumnFilterSubscriptionNotification(
+          this.tableId,
+          columnId,
+          listeners?.size ?? 0,
+        );
+      }
       if (
         Object.is(
           transition.previousColumnFilters.get(columnId),
@@ -916,7 +930,6 @@ export class BrunoTableGridRuntime<TRow> {
       ) {
         continue;
       }
-      const listeners = this.columnFilterListeners.get(columnId);
       if (listeners !== undefined) {
         firstError = firstListenerError(firstError, notify(listeners));
       }
@@ -936,6 +949,10 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnFilterVersions.set(columnId, (this.columnFilterVersions.get(columnId) ?? 0) + 1);
     }
     this.columnFilterSnapshots = next;
+    const currentColumnIds = new Set<string>(this.columns.map((column) => column.columnId));
+    for (const columnId of this.columnFilterVersions.keys()) {
+      if (!currentColumnIds.has(columnId)) this.columnFilterVersions.delete(columnId);
+    }
   }
 
   private notifyColumnLayoutTransition(
@@ -1372,8 +1389,12 @@ function sameFilterValue(
     seen.set(previous, next);
     if (Object.getPrototypeOf(previous) !== Object.getPrototypeOf(next)) return false;
     if (!isPlainFilterRecord(previous) || !isPlainFilterRecord(next)) return false;
-    const previousKeys = Reflect.ownKeys(previous);
-    const nextKeys = Reflect.ownKeys(next);
+    const previousKeys = Reflect.ownKeys(previous).filter(
+      (key) => !isImplicitFalseTextSensitivity(previousRecord, key),
+    );
+    const nextKeys = Reflect.ownKeys(next).filter(
+      (key) => !isImplicitFalseTextSensitivity(nextRecord, key),
+    );
     if (previousKeys.length !== nextKeys.length) return false;
     return previousKeys.every((key) => {
       if (!nextKeys.includes(key)) return false;
@@ -1387,6 +1408,13 @@ function sameFilterValue(
   } catch {
     return false;
   }
+}
+
+function isImplicitFalseTextSensitivity(
+  record: Readonly<Record<PropertyKey, unknown>>,
+  key: PropertyKey,
+): boolean {
+  return (key === "caseSensitive" || key === "accentSensitive") && record[key] === false;
 }
 
 function sameFilterOperand(previous: unknown, next: unknown, column: CompiledColumn): boolean {

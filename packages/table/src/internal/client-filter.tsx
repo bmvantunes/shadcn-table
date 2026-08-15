@@ -28,6 +28,7 @@ import type { NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableColumnCommandSnapshot, BrunoTableRuntimeView } from "./grid-runtime";
+import { recordBrunoTableClientColumnFilterRender } from "./render-instrumentation";
 
 type FilterOperator =
   | "equals"
@@ -186,6 +187,9 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
   readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
+  if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+    recordBrunoTableClientColumnFilterRender(column.columnId);
+  }
   const subscribe = useCallback(
     (listener: () => void) => runtime.subscribeColumnFilter(column.columnId, listener),
     [column.columnId, runtime],
