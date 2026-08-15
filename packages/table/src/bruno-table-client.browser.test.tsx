@@ -7,14 +7,17 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import {
-  BrunoTableActiveFilters,
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
   BrunoTableSelectColumn,
   BrunoTableToolbar,
 } from "./index";
-import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
+import type {
+  BrunoTableColumns,
+  BrunoTableFilterExpressions,
+  BrunoTableValueType,
+} from "./public-types";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -753,6 +756,69 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("does not recompute or transition for invalid Number and BigInt drafts", async () => {
+    const queryTransitions = vi.fn();
+    const rowOrderPlans = vi.fn();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeQueryTransitionListener =
+      installBrunoTableClientQueryTransitionListener(queryTransitions);
+    const removePlanningListener = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_INVALID_INSTRUMENTED",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_INVALID_INSTRUMENTED"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      queryTransitions.mockClear();
+      rowOrderPlans.mockClear();
+      commands.length = 0;
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Score" }));
+      const scoreDialog = screen.getByRole("dialog", { name: "Filter Score" });
+      const scoreInput = scoreDialog.getByRole("spinbutton", { name: "Filter value for Score" });
+      await userEvent.click(scoreInput);
+      await userEvent.keyboard("1e");
+      await expect
+        .element(scoreDialog.getByRole("alert"))
+        .toHaveTextContent("Enter a valid value.");
+      expect(commands).toHaveLength(0);
+      expect(queryTransitions).not.toHaveBeenCalled();
+      expect(rowOrderPlans).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Escape}");
+
+      queryTransitions.mockClear();
+      rowOrderPlans.mockClear();
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Quantity" }));
+      const quantityDialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+      await userEvent.fill(
+        quantityDialog.getByRole("textbox", { name: "Filter value for Quantity" }),
+        "1.5",
+      );
+      await expect
+        .element(quantityDialog.getByRole("alert"))
+        .toHaveTextContent("Expected signed base-10 integer digits.");
+      expect(commands).toHaveLength(0);
+      expect(queryTransitions).not.toHaveBeenCalled();
+      expect(rowOrderPlans).not.toHaveBeenCalled();
+    } finally {
+      removeCommandListener();
+      removePlanningListener();
+      removeQueryTransitionListener();
+    }
+  });
+
   test("applies exact numeric families, immediate choices, and same-column compounds", async () => {
     const screen = await render(
       <BrunoTableClient<FilterRow, typeof filterColumns>
@@ -1015,7 +1081,6 @@ describe("BrunoTableClient browser surface", () => {
         quickFilterFields={["symbol", "description"]}
       >
         <BrunoTableToolbar>
-          <BrunoTableActiveFilters />
           <BrunoTableQuickFilter />
         </BrunoTableToolbar>
       </BrunoTableClient>,
@@ -1036,6 +1101,11 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("button", { name: "Active filters (2)" }))
       .toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        review.getByRole("button", { name: "Remove Score: equals 4" }).element(),
+      ),
+    );
 
     await userEvent.click(review.getByRole("button", { name: "Clear all Grid Filters" }));
     await expect
@@ -1049,11 +1119,116 @@ describe("BrunoTableClient browser surface", () => {
       review.getByRole("button", { name: 'Remove Quick Filter contains "apple"' }),
     );
     await expect
-      .element(screen.getByRole("button", { name: /Active filters/ }))
-      .not.toBeInTheDocument();
+      .element(screen.getByRole("button", { name: "Active filters (0)" }))
+      .toBeInTheDocument();
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
+  });
+
+  test("reviews half-open ranges and text sensitivity in the global filter rail", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_DETAILS"
+        columns={filterColumns}
+        initialFilters={[
+          {
+            columnId: "COL_ID_FILTER_NAME",
+            type: "equals",
+            filter: "Ada",
+            caseSensitive: true,
+            accentSensitive: true,
+          },
+          { columnId: "COL_ID_FILTER_SCORE", type: "inRange", filter: 2, filterTo: 4 },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (2)" }));
+    const review = screen.getByRole("dialog", { name: "Active filters" });
+    await expect
+      .element(
+        review.getByRole("button", {
+          name: 'Remove Name: equals (case-sensitive, accent-sensitive) "Ada"',
+        }),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(
+        review.getByRole("button", {
+          name: "Remove Score: inRange 2 ≤ value < 4 (upper bound exclusive)",
+        }),
+      )
+      .toBeInTheDocument();
+  });
+
+  test("keeps the sanitized initial filter baseline when the prop changes later", async () => {
+    const clientSource = readyFilterSource();
+    const renderTable = (
+      initialFilters: BrunoTableFilterExpressions<FilterRow, typeof filterColumns>,
+    ) => (
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_BASELINE_PROPS"
+        columns={filterColumns}
+        initialFilters={initialFilters}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={clientSource}
+      />
+    );
+    const screen = await render(
+      renderTable([{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]),
+    );
+
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await screen.getByRole("button", { name: "Clear filter for Name" }).click();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+
+    await screen.rerender(
+      renderTable([{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Grace" }]),
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+
+    await screen.getByRole("button", { name: "Reset filter for Name" }).click();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  test("keeps editor focus after a debounced filter commit", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_PACER_FOCUS"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
+    await userEvent.fill(input, "Ada");
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect.element(input).toHaveFocus();
   });
 
   test("coalesces rapid Quick Filter input through the trailing 150 ms Pacer commit", async () => {
@@ -1168,6 +1343,14 @@ describe("BrunoTableClient browser surface", () => {
         </BrunoTableClient>,
       );
       const mountedRenders = quickFilterRenders.mock.calls.length;
+      await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "apple");
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      await vi.waitFor(() =>
+        expect(quickFilterRenders.mock.calls.length).toBeGreaterThan(mountedRenders),
+      );
+      const committedRenders = quickFilterRenders.mock.calls.length;
       await screen.rerender(
         <BrunoTableClient<FilterRow, typeof filterColumns>
           tableId="TABLE_ID_QUICK_FILTER_SUBSCRIPTIONS"
@@ -1187,8 +1370,28 @@ describe("BrunoTableClient browser surface", () => {
       );
       await expect
         .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
-        .toBeInTheDocument();
-      expect(quickFilterRenders).toHaveBeenCalledTimes(mountedRenders);
+        .not.toBeInTheDocument();
+      for (let version = 3; version <= 22; version += 1) {
+        await screen.rerender(
+          <BrunoTableClient<FilterRow, typeof filterColumns>
+            tableId="TABLE_ID_QUICK_FILTER_SUBSCRIPTIONS"
+            columns={filterColumns}
+            initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+            getRowId={(row) => row.id}
+            clientSource={{
+              rows: [filterRows[0], filterRows[1]],
+              totalRows: filterRows.length,
+              version,
+              status: "ready",
+            }}
+            quickFilterFields={["symbol", "description"]}
+          >
+            {toolbar}
+          </BrunoTableClient>,
+        );
+      }
+      expect(quickFilterRenders).toHaveBeenCalledTimes(committedRenders);
+      expect(committedRenders).toBeGreaterThanOrEqual(mountedRenders);
     } finally {
       removeRenderListener();
     }

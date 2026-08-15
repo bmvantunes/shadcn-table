@@ -49,6 +49,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
 
   useLayoutEffect(() => {
     const publication = rowPipelineAdapter.reconcile(
@@ -82,6 +83,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
         rowPipeline={BrunoTableClientRowPipeline}
         rowPipelineAdapter={rowPipelineAdapter}
         renderColumnFilter={renderBrunoTableClientColumnFilter}
+        gridOwnedControls={gridOwnedControls}
       />
     </BrunoTableClientFilterProvider>
   );

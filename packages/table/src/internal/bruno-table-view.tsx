@@ -375,6 +375,8 @@ export type BrunoTableViewProps<
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
   readonly rowPipelineAdapter: TAdapter;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  /** Private capability seam for controls that belong to every variant's grid-owned rail. */
+  readonly gridOwnedControls?: ReactNode;
 };
 
 export type BrunoTableColumnFilterRendererProps = {
@@ -440,6 +442,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   rowPipeline,
   rowPipelineAdapter,
   renderColumnFilter,
+  gridOwnedControls,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
@@ -459,6 +462,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       ) : null}
       <BrunoTableSortPanel columns={compiledColumns} runtime={runtime} tableId={tableId} />
       <ToolbarOutlet toolbar={toolbar} />
+      <GridOwnedToolRail controls={gridOwnedControls} />
       <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
       <BrunoTableGridBody
         runtime={runtime}
@@ -498,6 +502,22 @@ const ToolbarOutlet = memo(function ToolbarOutlet({
       {snapshot.children}
     </div>
   ) : null;
+});
+
+const GridOwnedToolRail = memo(function GridOwnedToolRail({
+  controls,
+}: {
+  readonly controls: ReactNode;
+}): ReactElement | null {
+  if (controls === undefined || controls === null) return null;
+  return (
+    <aside
+      aria-label="Grid tools"
+      className="flex min-h-10 items-center justify-end border-b px-2 py-1"
+    >
+      {controls}
+    </aside>
+  );
 });
 
 const BrunoTableSortPanel = memo(function BrunoTableSortPanel({

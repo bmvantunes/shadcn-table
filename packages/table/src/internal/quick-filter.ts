@@ -1,6 +1,15 @@
 import type { CompiledColumn } from "./compile-columns";
 import { createClientFilterPredicate, normalizeBrunoTableFilterText } from "./grid-query";
 
+/** Internal safety boundary for pasted Quick Filter candidates. */
+export const BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH = 1_024;
+
+export function boundBrunoTableQuickFilterText(text: string): string {
+  return text.length <= BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH
+    ? text
+    : text.slice(0, BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
+}
+
 export type BrunoTableClientQuickFilterFieldReader<TRow> = (row: TRow, field: string) => unknown;
 
 /**

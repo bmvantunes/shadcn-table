@@ -29,6 +29,7 @@ import {
   recordBrunoTableColumnFilterSubscriptionEvent,
 } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
+import { boundBrunoTableQuickFilterText } from "./quick-filter";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
@@ -121,6 +122,8 @@ export type BrunoTableRuntimeView = {
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly getColumnFilterSnapshot: (columnId: string) => unknown;
   readonly getColumnFilterVersionSnapshot: (columnId: string) => number;
+  /** Invalidates queued editor candidates even when a Clear/Reset command is a semantic no-op. */
+  readonly getColumnFilterCommandEpochSnapshot: (columnId: string) => number;
   readonly getQuickFilterSnapshot: () => string;
   readonly getQuickFilterFieldsSnapshot: () => readonly string[];
   readonly getSortingSnapshot: () => BrunoTableOrderBy;
@@ -296,6 +299,7 @@ export class BrunoTableGridRuntime<TRow> {
   private filterSnapshot: BrunoTableFilterSnapshot;
   private columnFilterSnapshots: ReadonlyMap<string, unknown>;
   private readonly columnFilterVersions = new Map<string, number>();
+  private readonly columnFilterCommandEpochs = new Map<string, number>();
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -335,6 +339,7 @@ export class BrunoTableGridRuntime<TRow> {
     this.columnFilterSnapshots = createColumnFilterSnapshots(this.query.filters, columns);
     for (const columnId of this.columnFilterSnapshots.keys()) {
       this.columnFilterVersions.set(columnId, 0);
+      this.columnFilterCommandEpochs.set(columnId, 0);
     }
     this.columnLayout = createBrunoTableColumnLayout(columns);
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
@@ -368,6 +373,7 @@ export class BrunoTableGridRuntime<TRow> {
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
         getColumnFilterSnapshot: this.getColumnFilterSnapshot,
         getColumnFilterVersionSnapshot: this.getColumnFilterVersionSnapshot,
+        getColumnFilterCommandEpochSnapshot: this.getColumnFilterCommandEpochSnapshot,
         getSortingSnapshot: this.getSortingSnapshot,
         getColumnLayoutSnapshot: this.getColumnLayoutSnapshot,
         getColumnStructureSnapshot: this.getColumnStructureSnapshot,
@@ -538,6 +544,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getColumnFilterVersionSnapshot = (columnId: string): number =>
     this.columnFilterVersions.get(columnId) ?? 0;
 
+  public readonly getColumnFilterCommandEpochSnapshot = (columnId: string): number =>
+    this.columnFilterCommandEpochs.get(columnId) ?? 0;
+
   public readonly getColumnLayoutSnapshot = (): BrunoTableColumnLayoutSnapshot =>
     this.columnLayoutSnapshot;
 
@@ -696,14 +705,17 @@ export class BrunoTableGridRuntime<TRow> {
       return;
     }
     if (command.type === "column.filter.clear") {
+      this.invalidateColumnFilterCommand(command.columnId);
       this.clearColumnFiltersImpl(command.columnId);
       return;
     }
     if (command.type === "column.filters.clear") {
+      for (const column of this.columns) this.invalidateColumnFilterCommand(column.columnId);
       this.clearAllColumnFiltersImpl();
       return;
     }
     if (command.type === "column.filter.reset") {
+      this.invalidateColumnFilterCommand(command.columnId);
       this.resetColumnFiltersImpl(command.columnId);
       return;
     }
@@ -712,7 +724,11 @@ export class BrunoTableGridRuntime<TRow> {
       return;
     }
     if (command.type === "quick-filter.replace") {
-      this.publishQuery(this.query.filters, this.query.orderBy, command.text);
+      this.publishQuery(
+        this.query.filters,
+        this.query.orderBy,
+        boundBrunoTableQuickFilterText(command.text),
+      );
       return;
     }
     if (!isBrunoTableColumnLayoutCommand(command)) return;
@@ -747,6 +763,13 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly clearAllColumnFiltersImpl = (): void => {
     if (this.query.filters.length === 0) return;
     this.publishQuery(Object.freeze([]), this.query.orderBy);
+  };
+
+  private readonly invalidateColumnFilterCommand = (columnId: string): void => {
+    this.columnFilterCommandEpochs.set(
+      columnId,
+      (this.columnFilterCommandEpochs.get(columnId) ?? 0) + 1,
+    );
   };
 
   private readonly clearColumnFiltersImpl = (columnId: string): void => {
@@ -833,6 +856,8 @@ export class BrunoTableGridRuntime<TRow> {
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
   ): ColumnConfiguration {
+    for (const column of this.columns) this.invalidateColumnFilterCommand(column.columnId);
+    for (const column of columns) this.invalidateColumnFilterCommand(column.columnId);
     const baselineFilters = queryConfiguration.baselineFilters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
     const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
@@ -1027,7 +1052,15 @@ export class BrunoTableGridRuntime<TRow> {
     this.columnFilterSnapshots = next;
     const currentColumnIds = new Set<string>(this.columns.map((column) => column.columnId));
     for (const columnId of this.columnFilterVersions.keys()) {
-      if (!currentColumnIds.has(columnId)) this.columnFilterVersions.delete(columnId);
+      if (!currentColumnIds.has(columnId)) {
+        this.columnFilterVersions.delete(columnId);
+        this.columnFilterCommandEpochs.delete(columnId);
+      }
+    }
+    for (const columnId of currentColumnIds) {
+      if (!this.columnFilterCommandEpochs.has(columnId)) {
+        this.columnFilterCommandEpochs.set(columnId, 0);
+      }
     }
   }
 

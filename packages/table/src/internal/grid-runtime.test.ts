@@ -11,6 +11,7 @@ import {
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import { sanitizeClientInitialFilters } from "./grid-query";
+import { BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH } from "./quick-filter";
 import type { BrunoTableValueType } from "../public-types";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
@@ -212,6 +213,41 @@ describe("BrunoTable filter runtime primitives", () => {
 
     expect(runtime.getQuerySnapshot()).toBe(query);
     expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("invalidates filter editor candidates for no-op Clear and Reset commands", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const view = runtime.getView();
+    const before = view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME");
+
+    view.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" });
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(before + 1);
+    view.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" });
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(before + 2);
+    view.dispatchGridCommand({ type: "column.filters.clear" });
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(before + 3);
+  });
+
+  it("bounds Quick Filter text at the command boundary", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const view = runtime.getView();
+    view.dispatchGridCommand({
+      type: "quick-filter.replace",
+      text: "x".repeat(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH + 50),
+    });
+    expect(view.getQuickFilterSnapshot()).toHaveLength(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
   });
 
   it("compares scalar array operands through their Value Semantics", () => {

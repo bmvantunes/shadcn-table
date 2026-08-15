@@ -264,17 +264,19 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const errorId = useId();
+  const commandEpoch = runtime.getColumnFilterCommandEpochSnapshot(column.columnId);
 
   const dispatchCandidate = useCallback(
     (candidate: FilterCandidate): void => {
       if (candidate.filter === undefined) return;
+      if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== commandEpoch) return;
       runtime.dispatchGridCommand({
         type: "column.filter.replace",
         columnId: column.columnId,
         filter: candidate.filter,
       });
     },
-    [column.columnId, runtime],
+    [column.columnId, commandEpoch, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
@@ -475,7 +477,8 @@ function FilterExpressionEditor({
                   continuous={isContinuous}
                 />
               )}
-              {column.semantics.filterFamily === "text" ? (
+              {column.semantics.filterFamily === "text" &&
+              supportsTextSensitivity(leaf.operator) ? (
                 <div className="flex flex-col gap-2 text-sm">
                   <label className="flex items-center gap-2" htmlFor={`${errorId}-${path}-case`}>
                     <Checkbox
@@ -1025,7 +1028,10 @@ function draftFromNode(
     inValuesExplicit: operator === "in" && Array.isArray(rawFilter),
     selectIndex:
       column.semantics.filterFamily === "select"
-        ? findSelectOptionIndex(column, rawFilter)
+        ? findSelectOptionIndex(
+            column,
+            operator === "in" && Array.isArray(rawFilter) ? rawFilter[0] : rawFilter,
+          )
         : undefined,
     caseSensitive: record["caseSensitive"] === true,
     accentSensitive: record["accentSensitive"] === true,
@@ -1191,6 +1197,15 @@ function isSubstringFilterOperator(operator: FilterOperator): boolean {
     operator === "notContains" ||
     operator === "startsWith" ||
     operator === "endsWith"
+  );
+}
+
+function supportsTextSensitivity(operator: FilterOperator): boolean {
+  return (
+    operator === "equals" ||
+    operator === "notEqual" ||
+    operator === "in" ||
+    isSubstringFilterOperator(operator)
   );
 }
 

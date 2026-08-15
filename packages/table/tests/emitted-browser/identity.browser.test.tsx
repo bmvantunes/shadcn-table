@@ -5,7 +5,12 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server.browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "../../dist/index.mjs";
+import {
+  BrunoTableActiveFilters,
+  BrunoTableClient,
+  BrunoTableQuickFilter,
+  BrunoTableToolbar,
+} from "../../dist/index.mjs";
 
 type Row = Readonly<{ id: string; name: string; score: number }>;
 type FilterRow = Readonly<{ id: string; name: string; symbol: string }>;
@@ -26,6 +31,8 @@ const filterSource = Object.freeze({
   version: 1,
   status: "ready" as const,
 });
+
+void BrunoTableActiveFilters;
 
 afterEach(async () => {
   await cleanup();
@@ -63,6 +70,18 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await expect
     .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
     .not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Active filters (1)" }));
+  const review = screen.getByRole("dialog", { name: "Active filters" });
+  await expect
+    .element(review.getByRole("button", { name: 'Remove Quick Filter contains "msft"' }))
+    .toBeInTheDocument();
+  await userEvent.click(
+    review.getByRole("button", { name: 'Remove Quick Filter contains "msft"' }),
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Active filters (0)" }))
+    .toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
   const dialog = screen.getByRole("dialog", { name: "Filter Name" });

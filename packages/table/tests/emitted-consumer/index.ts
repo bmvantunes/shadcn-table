@@ -1,6 +1,7 @@
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
+  BrunoTableActiveFilters,
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
@@ -132,9 +133,11 @@ type EmittedQuickField = Expect<
 >;
 const emittedQuickFieldCheck: EmittedQuickField = true;
 const emittedQuickFilter = BrunoTableQuickFilter;
+const emittedActiveFilters = BrunoTableActiveFilters;
 void emittedQuickFieldCheck;
 void emittedQuickFields;
 void emittedQuickFilter;
+void emittedActiveFilters;
 const emittedInvalidQuickFields = {
   ...emittedClientProps,
   // @ts-expect-error Emitted Quick Filter fields reject numeric source fields.

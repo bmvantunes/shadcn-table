@@ -31,6 +31,10 @@ import type {
   BrunoTableRowPipelineRuntimeView,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
+import {
+  boundBrunoTableQuickFilterText,
+  BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH,
+} from "./quick-filter";
 import { recordBrunoTableClientQuickFilterRender } from "./render-instrumentation";
 
 const BrunoTableClientFilterRuntimeContext = createContext<
@@ -127,12 +131,13 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     <div className="flex min-w-56 items-center gap-1">
       <Input
         aria-label="Quick Filter"
+        maxLength={BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH}
         placeholder="Quick Filter"
         ref={inputRef}
         type="search"
         value={draft}
         onChange={(event) => {
-          const text = event.currentTarget.value;
+          const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           draftRef.current = text;
           setDraft(text);
           debouncer.maybeExecute(text);
@@ -163,7 +168,7 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
   runtime,
 }: {
   readonly runtime: BrunoTableRowPipelineRuntimeView;
-}): ReactElement | null {
+}): ReactElement {
   const filters = useSyncExternalStore(
     runtime.subscribeFilter,
     runtime.getFilterSnapshot,
@@ -171,16 +176,76 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
   );
   const entries = activeFilterEntries(filters);
   const [open, setOpen] = useState(false);
-  if (entries.length === 0) return null;
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const removeButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const focusFrame = useRef<number | null>(null);
+  const cancelScheduledFocus = useCallback(() => {
+    if (focusFrame.current === null || typeof cancelAnimationFrame !== "function") return;
+    cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = null;
+  }, []);
+  const focusAfterMutation = useCallback(
+    (nextKey: string | undefined) => {
+      cancelScheduledFocus();
+      const focus = () => {
+        focusFrame.current = null;
+        (nextKey === undefined ? undefined : removeButtonRefs.current.get(nextKey))?.focus({
+          preventScroll: true,
+        });
+        if (document.activeElement !== document.body) return;
+        triggerRef.current?.focus({ preventScroll: true });
+      };
+      if (typeof requestAnimationFrame === "function") {
+        focusFrame.current = requestAnimationFrame(() => {
+          focusFrame.current = requestAnimationFrame(focus);
+        });
+      } else {
+        focus();
+      }
+    },
+    [cancelScheduledFocus],
+  );
+  useEffect(
+    () => () => {
+      cancelScheduledFocus();
+      removeButtonRefs.current.clear();
+    },
+    [cancelScheduledFocus],
+  );
+  const removeEntry = useCallback(
+    (entry: BrunoTableActiveFilterEntry): void => {
+      const index = entries.findIndex((candidate) => candidate.key === entry.key);
+      const nextKey = entries[index + 1]?.key ?? entries[index - 1]?.key;
+      if (nextKey === undefined) setOpen(false);
+      if (entry.kind === "quick") {
+        runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
+      } else {
+        runtime.dispatchGridCommand({
+          type: "column.filter.clear",
+          columnId: entry.columnId,
+        });
+      }
+      focusAfterMutation(nextKey);
+    },
+    [entries, focusAfterMutation, runtime],
+  );
+
+  const trigger = (
+    <Button
+      ref={triggerRef}
+      aria-label={`Active filters (${String(entries.length)})`}
+      aria-disabled={entries.length === 0 ? "true" : undefined}
+      size="sm"
+      tabIndex={entries.length === 0 ? -1 : undefined}
+      type="button"
+    >
+      Filters {entries.length}
+    </Button>
+  );
+  if (entries.length === 0) return trigger;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button aria-label={`Active filters (${String(entries.length)})`} size="sm" type="button">
-            Filters {entries.length}
-          </Button>
-        }
-      />
+      <PopoverTrigger render={trigger} />
       <PopoverContent aria-label="Active filters" className="w-96" role="dialog">
         <PopoverHeader>
           <PopoverTitle>Active filters</PopoverTitle>
@@ -191,20 +256,15 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
             <div className="flex items-center justify-between gap-2 text-sm" key={entry.key}>
               <span>{entry.label}</span>
               <Button
+                ref={(element) => {
+                  if (element === null) removeButtonRefs.current.delete(entry.key);
+                  else removeButtonRefs.current.set(entry.key, element);
+                }}
                 aria-label={`Remove ${entry.label}`}
                 size="icon-xs"
                 type="button"
                 variant="ghost"
-                onClick={() => {
-                  if (entry.kind === "quick") {
-                    runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
-                  } else {
-                    runtime.dispatchGridCommand({
-                      type: "column.filter.clear",
-                      columnId: entry.columnId,
-                    });
-                  }
-                }}
+                onClick={() => removeEntry(entry)}
               >
                 ×
               </Button>
@@ -216,7 +276,10 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
               size="sm"
               type="button"
               variant="outline"
-              onClick={() => runtime.dispatchGridCommand({ type: "column.filters.clear" })}
+              onClick={() => {
+                runtime.dispatchGridCommand({ type: "column.filters.clear" });
+                focusAfterMutation(undefined);
+              }}
             >
               Clear all Grid Filters
             </Button>
@@ -278,12 +341,24 @@ function describeActiveFilter(column: CompiledColumn, value: unknown): string {
   }
   const operand = record["filter"];
   if (type === "blank" || type === "notBlank") return `${column.headerName}: ${type}`;
-  return `${column.headerName}: ${type} ${formatActiveFilterOperand(column, operand)}`;
+  if (type === "inRange") {
+    return `${column.headerName}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`;
+  }
+  const sensitivity = [
+    record["caseSensitive"] === true ? "case-sensitive" : undefined,
+    record["accentSensitive"] === true ? "accent-sensitive" : undefined,
+  ].filter((value): value is string => value !== undefined);
+  const sensitivityLabel = sensitivity.length > 0 ? ` (${sensitivity.join(", ")})` : "";
+  return `${column.headerName}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`;
 }
 
-function formatActiveFilterOperand(column: CompiledColumn, value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => formatActiveFilterOperand(column, item)).join(", ")}]`;
+function formatActiveFilterOperand(
+  column: CompiledColumn,
+  value: unknown,
+  operator?: string,
+): string {
+  if (operator === "in" && Array.isArray(value)) {
+    return `[${value.map((item) => formatActiveFilterOperand(column, item, "equals")).join(", ")}]`;
   }
   if (typeof value === "string") return JSON.stringify(value);
   try {
