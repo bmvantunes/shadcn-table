@@ -152,10 +152,18 @@ export type BrunoTableRuntimeView = {
 };
 
 export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
+  readonly getFilterSnapshot: () => BrunoTableFilterSnapshot;
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
+  readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
+
+export type BrunoTableFilterSnapshot = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly filters: readonly unknown[];
+  readonly quickFilter: string;
+}>;
 
 export type BrunoTableQuerySnapshot = Readonly<{
   readonly columns: readonly CompiledColumn[];
@@ -164,6 +172,14 @@ export type BrunoTableQuerySnapshot = Readonly<{
   readonly orderBy: BrunoTableOrderBy;
   readonly generation: number;
 }>;
+
+function createFilterSnapshot(query: BrunoTableQuerySnapshot): BrunoTableFilterSnapshot {
+  return Object.freeze({
+    columns: query.columns,
+    filters: query.filters,
+    quickFilter: query.quickFilter,
+  });
+}
 
 export type BrunoTableQueryConfiguration = Readonly<{
   readonly baselineFilters: readonly unknown[];
@@ -228,6 +244,7 @@ const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 
 type QueryTransition = Readonly<{
+  readonly filterChanged: boolean;
   readonly queryChanged: boolean;
   readonly quickFilterChanged: boolean;
   readonly sortingChanged: boolean;
@@ -260,6 +277,7 @@ export class BrunoTableGridRuntime<TRow> {
     Readonly<{ rowId: BrunoTableRowId; columnId: string }>
   >();
   private readonly queryListeners = new Set<Listener>();
+  private readonly filterListeners = new Set<Listener>();
   private readonly quickFilterListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
@@ -275,6 +293,7 @@ export class BrunoTableGridRuntime<TRow> {
   private baselineOrderBy: BrunoTableOrderBy;
   private readonly quickFilterFields: readonly string[];
   private query: BrunoTableQuerySnapshot;
+  private filterSnapshot: BrunoTableFilterSnapshot;
   private columnFilterSnapshots: ReadonlyMap<string, unknown>;
   private readonly columnFilterVersions = new Map<string, number>();
   private columnLayout: BrunoTableColumnLayoutState;
@@ -312,6 +331,7 @@ export class BrunoTableGridRuntime<TRow> {
       orderBy: this.baselineOrderBy,
       generation: 0,
     });
+    this.filterSnapshot = createFilterSnapshot(this.query);
     this.columnFilterSnapshots = createColumnFilterSnapshots(this.query.filters, columns);
     for (const columnId of this.columnFilterSnapshots.keys()) {
       this.columnFilterVersions.set(columnId, 0);
@@ -342,6 +362,7 @@ export class BrunoTableGridRuntime<TRow> {
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
+        getFilterSnapshot: this.getFilterSnapshot,
         getQuickFilterSnapshot: this.getQuickFilterSnapshot,
         getQuickFilterFieldsSnapshot: this.getQuickFilterFieldsSnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
@@ -358,6 +379,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeRow: this.subscribeRow,
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
+        subscribeFilter: this.subscribeFilter,
         subscribeQuickFilter: this.subscribeQuickFilter,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
@@ -410,6 +432,9 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineFilters = configuration.baselineFilters;
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
+      if (configuration.transition.filterChanged) {
+        this.filterSnapshot = createFilterSnapshot(this.query);
+      }
       this.updateColumnFilterSnapshots();
       this.columnLayout = configuration.columnLayout;
       this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
@@ -495,6 +520,8 @@ export class BrunoTableGridRuntime<TRow> {
     this.currentCellSnapshot(rowId, columnId).value;
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
+
+  public readonly getFilterSnapshot = (): BrunoTableFilterSnapshot => this.filterSnapshot;
 
   public readonly getQuickFilterSnapshot = (): string => this.query.quickFilter;
 
@@ -586,6 +613,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeQuery = (listener: Listener): (() => void) =>
     subscribe(this.queryListeners, listener);
 
+  public readonly subscribeFilter = (listener: Listener): (() => void) =>
+    subscribe(this.filterListeners, listener);
+
   public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterListeners, listener);
 
@@ -669,6 +699,10 @@ export class BrunoTableGridRuntime<TRow> {
       this.clearColumnFiltersImpl(command.columnId);
       return;
     }
+    if (command.type === "column.filters.clear") {
+      this.clearAllColumnFiltersImpl();
+      return;
+    }
     if (command.type === "column.filter.reset") {
       this.resetColumnFiltersImpl(command.columnId);
       return;
@@ -708,6 +742,11 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly clearColumnFilters = (columnId: string): void => {
     this.dispatchGridCommand({ type: "column.filter.clear", columnId });
+  };
+
+  private readonly clearAllColumnFiltersImpl = (): void => {
+    if (this.query.filters.length === 0) return;
+    this.publishQuery(Object.freeze([]), this.query.orderBy);
   };
 
   private readonly clearColumnFiltersImpl = (columnId: string): void => {
@@ -831,6 +870,10 @@ export class BrunoTableGridRuntime<TRow> {
       columnCommands,
       columnLayout,
       transition: Object.freeze({
+        filterChanged:
+          this.columns !== columns ||
+          !sameReferences(this.query.filters, nextFilters) ||
+          this.query.quickFilter !== nextQuickFilter,
         queryChanged: true,
         quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
@@ -865,6 +908,7 @@ export class BrunoTableGridRuntime<TRow> {
       normalizeBrunoTableFilterText(quickFilter);
     const queryChanged =
       !sameReferences(this.query.filters, filters) || sortingChanged || quickFilterSemanticsChanged;
+    const filterChanged = !sameReferences(this.query.filters, filters) || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
@@ -880,6 +924,7 @@ export class BrunoTableGridRuntime<TRow> {
     } else if (quickFilterChanged) {
       this.query = Object.freeze({ ...this.query, quickFilter });
     }
+    if (filterChanged) this.filterSnapshot = createFilterSnapshot(this.query);
     this.columnCommands = createColumnCommandSnapshots(
       this.columns,
       this.query,
@@ -888,6 +933,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnLayoutSnapshot,
     );
     return Object.freeze({
+      filterChanged,
       queryChanged,
       quickFilterChanged,
       sortingChanged,
@@ -901,6 +947,9 @@ export class BrunoTableGridRuntime<TRow> {
       recordBrunoTableClientQueryTransition(this.tableId, this.query.generation);
     }
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
+    if (transition.filterChanged) {
+      firstError = firstListenerError(firstError, notify(this.filterListeners));
+    }
     if (transition.quickFilterChanged) {
       firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
     }
@@ -1504,25 +1553,17 @@ function sameFilterOperand(
   }>,
 ): boolean {
   if (Object.is(previous, next)) return true;
-  if (Array.isArray(previous) && Array.isArray(next)) {
-    if (options.unordered) {
-      return (
-        previous.every((value) =>
-          next.some((candidate) =>
-            sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-          ),
-        ) &&
-        next.every((value) =>
-          previous.some((candidate) =>
-            sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-          ),
-        )
-      );
-    }
+  if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
     return (
-      previous.length === next.length &&
-      previous.every((value, index) =>
-        sameFilterOperand(value, next[index], column, { ...options, unordered: false }),
+      previous.every((value) =>
+        next.some((candidate) =>
+          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+        ),
+      ) &&
+      next.every((value) =>
+        previous.some((candidate) =>
+          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+        ),
       )
     );
   }

@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
 
 import {
+  BrunoTableActiveFilters,
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
   BrunoTableClient,
@@ -398,6 +399,7 @@ describe("BrunoTable public types", () => {
     expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
     expectTypeOf(BrunoTableQuickFilter).toExtend<() => ReactNode>();
     expectTypeOf(BrunoTableQuickFilter).toEqualTypeOf<() => ReactElement | null>();
+    expectTypeOf(BrunoTableActiveFilters).toEqualTypeOf<() => ReactElement | null>();
 
     const validQuickFilterFields = [
       "symbol",

@@ -7,6 +7,7 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 import {
+  BrunoTableActiveFilters,
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
@@ -865,7 +866,10 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
-    await screen.getByRole("button", { name: "Clear filter for Active" }).click();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
 
     await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
     dialog = screen.getByRole("dialog", { name: "Filter Status" });
@@ -994,6 +998,62 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("reviews and clears Grid Filters and Quick Filter through the active-filter control", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_REVIEW"
+        columns={filterColumns}
+        initialFilters={[
+          { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+          { columnId: "COL_ID_FILTER_SCORE", type: "equals", filter: 4 },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+        quickFilterFields={["symbol", "description"]}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableActiveFilters />
+          <BrunoTableQuickFilter />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+
+    const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+    await userEvent.fill(quickFilter, "apple");
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (3)" }))
+      .toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (3)" }));
+    const review = screen.getByRole("dialog", { name: "Active filters" });
+    await expect
+      .element(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }))
+      .toBeInTheDocument();
+    await userEvent.click(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }));
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (2)" }))
+      .toBeInTheDocument();
+
+    await userEvent.click(review.getByRole("button", { name: "Clear all Grid Filters" }));
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (1)" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+
+    await userEvent.click(
+      review.getByRole("button", { name: 'Remove Quick Filter contains "apple"' }),
+    );
+    await expect
+      .element(screen.getByRole("button", { name: /Active filters/ }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
   });
 
   test("coalesces rapid Quick Filter input through the trailing 150 ms Pacer commit", async () => {

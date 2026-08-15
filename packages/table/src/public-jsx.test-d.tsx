@@ -1,4 +1,5 @@
 import {
+  BrunoTableActiveFilters,
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
@@ -97,6 +98,7 @@ const validClient = (
   >
     <BrunoTableToolbar>
       <BrunoTableQuickFilter />
+      <BrunoTableActiveFilters />
     </BrunoTableToolbar>
   </BrunoTableClient>
 );

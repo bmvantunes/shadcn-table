@@ -129,6 +129,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
               setDirection(readBrunoTableFilterDirection(triggerRef.current));
             } else if (
               eventDetails.reason === "escape-key" ||
+              eventDetails.reason === "trigger-press" ||
               closeReasonRef.current === "escape-key"
             ) {
               escapeFocusFrameRef.current = requestAnimationFrame(() => {
@@ -306,7 +307,17 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
 
   const commitDraft = useCallback(
-    (nextDraft: FilterDraft, mode: "continuous" | "immediate", badInput = false): void => {
+    (
+      nextDraft: FilterDraft,
+      mode: "continuous" | "immediate" | "clear",
+      badInput = false,
+    ): void => {
+      if (mode === "clear") {
+        debouncer.cancel();
+        setLocalState({ column, version, draft: nextDraft, error: undefined });
+        runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: column.columnId });
+        return;
+      }
       const candidate =
         mode === "continuous"
           ? badInput
@@ -317,7 +328,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       if (mode === "continuous") commitContinuous(candidate);
       else commitImmediately(candidate);
     },
-    [column, commitContinuous, commitImmediately, version],
+    [column, commitContinuous, commitImmediately, debouncer, runtime, version],
   );
 
   return (
@@ -371,7 +382,7 @@ function FilterExpressionEditor({
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly onChange: (
     draft: FilterDraft,
-    mode: "continuous" | "immediate",
+    mode: "continuous" | "immediate" | "clear",
     badInput?: boolean,
   ) => void;
   readonly path?: string;
@@ -388,7 +399,7 @@ function FilterExpressionEditor({
   const operatorOptions = filterOperators(column);
   const updateLeaf = (
     nextLeaf: FilterLeafDraft,
-    mode: "continuous" | "immediate",
+    mode: "continuous" | "immediate" | "clear",
     badInput = false,
   ) => onChange(nextLeaf, mode, badInput);
 
@@ -532,7 +543,7 @@ function FilterExpressionEditor({
                 }}
                 path={`${path}-${String(index)}`}
               />
-              {draft.conditions.length > 2 ? (
+              {draft.conditions.length > 1 ? (
                 <Button
                   aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}`}
                   size="xs"
@@ -543,13 +554,15 @@ function FilterExpressionEditor({
                       (_, candidate) => candidate !== index,
                     );
                     onChange(
-                      Object.freeze({
-                        ...draft,
-                        conditions: Object.freeze(conditions) as readonly [
-                          FilterDraft,
-                          ...FilterDraft[],
-                        ],
-                      }),
+                      conditions.length === 1
+                        ? conditions[0]!
+                        : Object.freeze({
+                            ...draft,
+                            conditions: Object.freeze(conditions) as readonly [
+                              FilterDraft,
+                              ...FilterDraft[],
+                            ],
+                          }),
                       "immediate",
                     );
                   }}
@@ -603,7 +616,7 @@ function FilterOperand({
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly onChange: (
     draft: FilterLeafDraft,
-    mode: "continuous" | "immediate",
+    mode: "continuous" | "immediate" | "clear",
     badInput?: boolean,
   ) => void;
   readonly path: string;
@@ -616,6 +629,7 @@ function FilterOperand({
       <DiscreteInFilterOperand
         column={column}
         draft={draft}
+        errorId={errorId}
         onChange={onChange}
         options={[true, false]}
         path={path}
@@ -628,6 +642,7 @@ function FilterOperand({
       <DiscreteInFilterOperand
         column={column}
         draft={draft}
+        errorId={errorId}
         onChange={onChange}
         options={column.selectOptions}
         path={path}
@@ -837,15 +852,17 @@ function FilterOperand({
 function DiscreteInFilterOperand({
   column,
   draft,
+  errorId,
   onChange,
   options,
   path,
 }: {
   readonly column: CompiledColumn;
   readonly draft: FilterLeafDraft;
+  readonly errorId: string;
   readonly onChange: (
     draft: FilterLeafDraft,
-    mode: "continuous" | "immediate",
+    mode: "continuous" | "immediate" | "clear",
     badInput?: boolean,
   ) => void;
   readonly options: readonly unknown[];
@@ -865,7 +882,7 @@ function DiscreteInFilterOperand({
           canonical = String(index);
         }
         const checked = draft.inValues.includes(canonical);
-        const inputId = `${column.columnId}-${path}-in-${String(index)}`;
+        const inputId = `${errorId}-${column.columnId}-${path}-in-${String(index)}`;
         return (
           <label className="flex items-center gap-2 text-sm" htmlFor={inputId} key={inputId}>
             <Checkbox
@@ -875,19 +892,26 @@ function DiscreteInFilterOperand({
               onCheckedChange={(nextChecked) => {
                 const nextValues = draft.inValues.filter((value) => value !== canonical);
                 if (nextChecked === true) nextValues.push(canonical);
-                onChange(
-                  Object.freeze({
-                    ...draft,
-                    first: nextValues[0] ?? "",
-                    inValues: Object.freeze(nextValues),
-                    inValuesExplicit: true,
-                    selectIndex:
-                      column.semantics.filterFamily === "select"
-                        ? findSelectOptionIndexFromText(column, nextValues[0] ?? "")
-                        : draft.selectIndex,
-                  }),
-                  "immediate",
-                );
+                const nextDraft = Object.freeze({
+                  ...draft,
+                  first: nextValues[0] ?? "",
+                  inValues: Object.freeze(nextValues),
+                  inValuesExplicit: true,
+                  selectIndex:
+                    column.semantics.filterFamily === "select"
+                      ? findSelectOptionIndexFromText(column, nextValues[0] ?? "")
+                      : draft.selectIndex,
+                });
+                const selectsAllValues =
+                  options.length > 0 &&
+                  options.every((candidate) => {
+                    try {
+                      return nextValues.includes(column.semantics.formatCanonicalText(candidate));
+                    } catch {
+                      return false;
+                    }
+                  });
+                onChange(nextDraft, selectsAllValues ? "clear" : "immediate");
               }}
             />
             {column.semantics.formatDisplay(option)}

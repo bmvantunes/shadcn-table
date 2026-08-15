@@ -11,6 +11,7 @@ import {
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import {
   BrunoTableClientFilterProvider,
+  BrunoTableActiveFilters,
   BrunoTableQuickFilter,
   renderBrunoTableClientColumnFilter,
 } from "./internal/client-filter-controls";
@@ -19,7 +20,7 @@ import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 
-export { BrunoTableQuickFilter, BrunoTableToolbar };
+export { BrunoTableActiveFilters, BrunoTableQuickFilter, BrunoTableToolbar };
 
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientProps<TRow, TColumns>,

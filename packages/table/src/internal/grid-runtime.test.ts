@@ -11,6 +11,7 @@ import {
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import { sanitizeClientInitialFilters } from "./grid-query";
+import type { BrunoTableValueType } from "../public-types";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
 
@@ -213,6 +214,75 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
+  it("compares scalar array operands through their Value Semantics", () => {
+    type Vector = readonly string[];
+    type VectorRow = Readonly<{ readonly id: string; readonly vector: Vector }>;
+    const vectorValueType: BrunoTableValueType<Vector, "equality", "text"> = {
+      codecId: "test/vector",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        Array.isArray(input) && input.every((value) => typeof value === "string")
+          ? { _tag: "Success", value: Object.freeze([...input]) }
+          : { _tag: "Failure", message: "Expected a string vector." },
+      equivalent: (left, right) =>
+        left.length === right.length && left.every((value, index) => value === right[index]),
+      compare: () => 0,
+      formatCanonicalText: (value) => value.join(","),
+      parseCanonicalText: (text) => ({ _tag: "Success", value: Object.freeze(text.split(",")) }),
+      formatDisplay: (value) => value.join(","),
+      encodePersisted: (value) => [...value],
+      decodePersisted: (input) =>
+        Array.isArray(input) && input.every((value) => typeof value === "string")
+          ? { _tag: "Success", value: Object.freeze([...input]) }
+          : { _tag: "Failure", message: "Expected a persisted string vector." },
+    };
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VECTOR",
+        field: "vector",
+        headerName: "Vector",
+        valueType: vectorValueType,
+      },
+    ]);
+    const initialVector = Object.freeze(["a", "b"]);
+    const adapter = new BrunoTableClientRowPipelineAdapter<VectorRow>(
+      {
+        rows: [{ id: "first", vector: initialVector }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      },
+      (row) => row.id,
+      columns,
+      [{ columnId: "COL_ID_VECTOR", type: "equals", filter: initialVector }],
+      [{ columnId: "COL_ID_VECTOR", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_VECTOR_FILTER_RUNTIME",
+    );
+    const view = runtime.getView();
+    const query = view.getQuerySnapshot();
+    const queryListener = vi.fn();
+    view.subscribeQuery(queryListener);
+
+    view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_VECTOR",
+      filter: { columnId: "COL_ID_VECTOR", type: "equals", filter: ["a", "b"] },
+    });
+
+    expect(view.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
   it("compares same-column compound conditions as an unordered set", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
@@ -294,9 +364,11 @@ describe("BrunoTable filter runtime primitives", () => {
     );
     const view = runtime.getView();
     const queryListener = vi.fn();
+    const filterListener = vi.fn();
     const quickFilterListener = vi.fn();
     const columnFilterListener = vi.fn();
     view.subscribeQuery(queryListener);
+    view.subscribeFilter(filterListener);
     view.subscribeQuickFilter(quickFilterListener);
     view.subscribeColumnFilter("COL_ID_NAME", columnFilterListener);
     const before = view.getQuerySnapshot();
@@ -310,21 +382,26 @@ describe("BrunoTable filter runtime primitives", () => {
     });
     expect(view.getQuerySnapshot().filters).toBe(before.filters);
     expect(queryListener).toHaveBeenCalledOnce();
+    expect(filterListener).toHaveBeenCalledOnce();
     expect(quickFilterListener).toHaveBeenCalledOnce();
     expect(columnFilterListener).not.toHaveBeenCalled();
 
     const committedGeneration = view.getQuerySnapshot().generation;
     queryListener.mockClear();
+    filterListener.mockClear();
     quickFilterListener.mockClear();
     view.dispatchGridCommand({ type: "quick-filter.replace", text: "ADA" });
     expect(view.getQuerySnapshot().quickFilter).toBe("ADA");
     expect(view.getQuerySnapshot().generation).toBe(committedGeneration);
     expect(queryListener).not.toHaveBeenCalled();
+    expect(filterListener).toHaveBeenCalledOnce();
     expect(quickFilterListener).toHaveBeenCalledOnce();
 
-    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ADA" });
-    expect(queryListener).not.toHaveBeenCalled();
-    expect(quickFilterListener).toHaveBeenCalledOnce();
+    filterListener.mockClear();
+    queryListener.mockClear();
+    view.dispatchGridCommand({ type: "column.sort.toggle", columnId: "COL_ID_NAME", multi: false });
+    expect(filterListener).not.toHaveBeenCalled();
+    expect(queryListener).toHaveBeenCalledOnce();
   });
 
   it("does not publish a new generation when Reset already matches its baseline", () => {
