@@ -1157,6 +1157,18 @@ describe("Client row model", () => {
       sanitizeClientInitialFilters(hostileRoot, columns, { rejectOverBudget: true }),
     ).toThrow(/root contains more than 16384 entries/u);
     expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1_025);
+
+    const metadataRoot: unknown[] = [];
+    for (let index = 0; index < 16_385; index += 1) {
+      Object.defineProperty(metadataRoot, `metadata-${index}`, {
+        configurable: true,
+        value: index,
+      });
+    }
+    expect(sanitizeClientInitialFilters(metadataRoot, columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(metadataRoot, columns, { rejectOverBudget: true }),
+    ).toThrow(/root contains more than 16384 entries/u);
   });
 
   it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
@@ -1341,6 +1353,43 @@ describe("Client row model", () => {
         { rejectOverBudget: true },
       ),
     ).toThrow();
+  });
+
+  it("rejects overlong custom operands before invoking the decoder", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const customTextValueType = {
+      codecId: "test/bounded-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_TEXT",
+        field: "value",
+        headerName: "Value",
+        valueType: customTextValueType,
+      },
+    ]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_CUSTOM_TEXT", filter: "x".repeat(1_025), type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
+    expect(decodeRuntime).not.toHaveBeenCalled();
   });
 
   it("admits configured Select values beyond the authored text bound", () => {

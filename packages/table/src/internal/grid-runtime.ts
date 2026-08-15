@@ -1267,16 +1267,20 @@ function createColumnFilterSnapshots(
   previousSnapshots?: ReadonlyMap<string, unknown>,
 ): ReadonlyMap<string, unknown> {
   const entries = new Map<string, unknown[]>();
+  const columnsById: ReadonlyMap<string, CompiledColumn> = new Map(
+    columns.map((column) => [column.columnId, column]),
+  );
   for (const filter of filters) {
-    for (const column of columns) {
-      if (!brunoTableFilterReferencesColumn(filter, column.columnId)) continue;
-      const values = entries.get(column.columnId);
-      if (values === undefined) entries.set(column.columnId, [filter]);
+    const filterColumnIds = new Set<string>();
+    collectClientFilterColumnIds(filter, filterColumnIds);
+    for (const columnId of filterColumnIds) {
+      if (!columnsById.has(columnId)) continue;
+      const values = entries.get(columnId);
+      if (values === undefined) entries.set(columnId, [filter]);
       else values.push(filter);
     }
   }
   const snapshots = new Map<string, unknown>();
-  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   for (const [columnId, values] of entries) {
     if (values.length === 1) {
       snapshots.set(columnId, values[0]);
@@ -1294,6 +1298,12 @@ function createColumnFilterSnapshots(
     }
   }
   return snapshots;
+}
+
+function collectFilterColumnIds(filters: readonly unknown[]): ReadonlySet<string> {
+  const columnIds = new Set<string>();
+  for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
+  return columnIds;
 }
 
 function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
@@ -1427,6 +1437,8 @@ function createColumnCommandSnapshots(
   layout?: BrunoTableColumnLayoutSnapshot,
 ): Map<string, BrunoTableColumnCommandSnapshot> {
   const snapshots = new Map<string, BrunoTableColumnCommandSnapshot>();
+  const activeFilterColumnIds = collectFilterColumnIds(query.filters);
+  const baselineFilterColumnIds = collectFilterColumnIds(baselineFilters);
   const layoutById = new Map(
     (layout?.allColumns ?? columns).map((column) => [column.columnId, column]),
   );
@@ -1446,12 +1458,8 @@ function createColumnCommandSnapshots(
     const next = Object.freeze({
       sortable: column.enableSorting !== false,
       ...(sort === undefined ? {} : { sortDirection: sort.direction, sortPriority: sortIndex + 1 }),
-      filterActive: query.filters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
-      ),
-      filterBaselineAvailable: baselineFilters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
-      ),
+      filterActive: activeFilterColumnIds.has(column.columnId),
+      filterBaselineAvailable: baselineFilterColumnIds.has(column.columnId),
       visible: visibleIds.has(column.columnId),
       ...(layoutColumn?.pinned === undefined ? {} : { pinned: layoutColumn.pinned }),
       width: layoutColumn?.semantics.width ?? column.semantics.width,

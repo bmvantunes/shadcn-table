@@ -514,10 +514,11 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    const result = decode(operand);
     const isConfiguredSelectValue =
-      column.semantics.filterFamily === "select" && result._tag === "Success";
+      column.semantics.filterFamily === "select" &&
+      column.selectOptions?.some((option) => Object.is(option, operand)) === true;
     if (!isConfiguredSelectValue && !isBoundedFilterOperandText(operand, context)) return undefined;
+    const result = decode(operand);
     if (result._tag !== "Success") return undefined;
     if (
       (type === "equals" || type === "notEqual") &&
@@ -940,7 +941,14 @@ function readOwnArrayIndexes(
 ): readonly number[] | undefined | typeof ROOT_ENTRIES_OVER_BUDGET {
   try {
     const indexes: number[] = [];
-    for (const key of Reflect.ownKeys(values)) {
+    const ownKeys = Reflect.ownKeys(values);
+    // An Array always owns its non-data `length` key. Count every other own
+    // key, including symbols and non-index properties, before inspecting any
+    // indexed values so hostile metadata cannot bypass the root budget.
+    if (ownKeys.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES + 1) {
+      return ROOT_ENTRIES_OVER_BUDGET;
+    }
+    for (const key of ownKeys) {
       if (typeof key !== "string" || key === "length") continue;
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
