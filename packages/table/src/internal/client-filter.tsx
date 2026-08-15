@@ -82,6 +82,7 @@ export type BrunoTableColumnFilterProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
+  readonly focusFallback: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
@@ -91,12 +92,14 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     command,
     runtime,
     activateHeaderCommand,
+    focusFallback,
     registerColumnFilterOpener,
   }: BrunoTableColumnFilterProps): ReactElement {
     const [open, setOpen] = useState(false);
     const [direction, setDirection] = useState<"ltr" | "rtl">("ltr");
     const closeReasonRef = useRef<string | null>(null);
     const escapeFocusFrameRef = useRef<number | null>(null);
+    const wasOpenRef = useRef(false);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
     const label = `Filter ${column.headerName}`;
     const openFilter = useCallback((): void => {
@@ -108,13 +111,29 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
       () => registerColumnFilterOpener(column.columnId, openFilter),
       [column.columnId, openFilter, registerColumnFilterOpener],
     );
+    useLayoutEffect(() => {
+      wasOpenRef.current = open;
+    }, [open]);
     useEffect(
       () => () => {
         if (escapeFocusFrameRef.current !== null) {
           cancelAnimationFrame(escapeFocusFrameRef.current);
         }
+        if (!wasOpenRef.current || typeof document === "undefined") return;
+        const active = document.activeElement;
+        const overlay =
+          active instanceof HTMLElement
+            ? active.closest<HTMLElement>("[data-bruno-filter-overlay]")
+            : null;
+        if (
+          active !== triggerRef.current &&
+          overlay?.dataset["brunoFilterOverlay"] !== column.columnId
+        ) {
+          return;
+        }
+        focusFallback(column.columnId);
       },
-      [],
+      [column.columnId, focusFallback],
     );
     return (
       <DirectionProvider direction={direction}>
@@ -352,6 +371,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         if (event.key === "Escape") onEscape();
       }}
       role="dialog"
+      data-bruno-filter-overlay={column.columnId}
     >
       <PopoverHeader>
         <PopoverTitle>{`Filter ${column.headerName}`}</PopoverTitle>
@@ -385,6 +405,7 @@ function FilterExpressionEditor({
   inputRef,
   onChange,
   path = "root",
+  rootSelectRef,
   selectRef,
 }: {
   readonly column: CompiledColumn;
@@ -397,6 +418,7 @@ function FilterExpressionEditor({
     badInput?: boolean,
   ) => void;
   readonly path?: string;
+  readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
 }): ReactElement {
   const expressionMode =
@@ -408,6 +430,29 @@ function FilterExpressionEditor({
     column.semantics.editorFamily === "bigint" ||
     column.semantics.editorFamily === "bigdecimal";
   const operatorOptions = filterOperators(column);
+  const removeConditionRefs = useRef(new Map<number, HTMLButtonElement>());
+  const focusFrameRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
+    },
+    [],
+  );
+  const focusAfterConditionRemoval = (nextIndex: number): void => {
+    if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
+    const focus = () => {
+      focusFrameRef.current = null;
+      const target =
+        (nextIndex < 0 ? undefined : removeConditionRefs.current.get(nextIndex)) ??
+        rootSelectRef?.current ??
+        selectRef?.current ??
+        inputRef?.current;
+      target?.focus({ preventScroll: true });
+    };
+    focusFrameRef.current = requestAnimationFrame(() => {
+      focusFrameRef.current = requestAnimationFrame(focus);
+    });
+  };
   const updateLeaf = (
     nextLeaf: FilterLeafDraft,
     mode: "continuous" | "immediate" | "clear",
@@ -532,6 +577,7 @@ function FilterExpressionEditor({
             onChange(Object.freeze({ ...draft, condition }), mode, badInput)
           }
           path={`${path}-not`}
+          rootSelectRef={rootSelectRef ?? selectRef}
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -554,9 +600,14 @@ function FilterExpressionEditor({
                   );
                 }}
                 path={`${path}-${String(index)}`}
+                rootSelectRef={rootSelectRef ?? selectRef}
               />
               {draft.conditions.length > 1 ? (
                 <Button
+                  ref={(element) => {
+                    if (element === null) removeConditionRefs.current.delete(index);
+                    else removeConditionRefs.current.set(index, element);
+                  }}
                   aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}`}
                   size="xs"
                   type="button"
@@ -576,6 +627,13 @@ function FilterExpressionEditor({
                             ],
                           }),
                       "immediate",
+                    );
+                    focusAfterConditionRemoval(
+                      conditions.length === 1
+                        ? -1
+                        : index < draft.conditions.length - 1
+                          ? index
+                          : index - 1,
                     );
                   }}
                 >
@@ -989,10 +1047,10 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
     return { filter: Object.freeze({ ...base, filter: draft.first }) };
   }
   if (draft.operator === "in") {
-    const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
-    if (column.semantics.filterFamily !== "text" && values.some((value) => value.length === 0)) {
+    if (!draft.inValuesExplicit && draft.first.length === 0) {
       return { filter: undefined, error: "Enter one or more valid values." };
     }
+    const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
     const decoded = values.map((value) => column.semantics.parseCanonicalText(value));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };

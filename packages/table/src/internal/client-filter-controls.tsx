@@ -175,6 +175,29 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
     runtime.getFilterSnapshot,
   );
   const entries = activeFilterEntries(filters);
+  if (entries.length === 0) {
+    return (
+      <Button
+        aria-label="Active filters (0)"
+        aria-disabled="true"
+        size="sm"
+        tabIndex={-1}
+        type="button"
+      >
+        Filters 0
+      </Button>
+    );
+  }
+  return <BrunoTableActiveFiltersReview entries={entries} runtime={runtime} />;
+});
+
+const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersReview({
+  entries,
+  runtime,
+}: {
+  readonly entries: readonly BrunoTableActiveFilterEntry[];
+  readonly runtime: BrunoTableRowPipelineRuntimeView;
+}): ReactElement {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const removeButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -242,7 +265,6 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
       Filters {entries.length}
     </Button>
   );
-  if (entries.length === 0) return trigger;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={trigger} />

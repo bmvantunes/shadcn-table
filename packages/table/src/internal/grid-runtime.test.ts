@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { compileColumns, type CompiledColumn } from "./compile-columns";
+import { BrunoTableSelectColumn } from "../column-helpers";
 import {
   BrunoTableClientRowPipelineAdapter,
   type BrunoTableClientReconciliationEvent,
@@ -154,6 +155,36 @@ describe("BrunoTable filter runtime primitives", () => {
         columns,
       ),
     ).toEqual([{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }]);
+  });
+
+  it("defers Boolean and Select in operands to Set Filter semantics", () => {
+    const selectColumn = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_ACTIVE",
+        field: "active",
+        headerName: "Active",
+        valueType: "boolean",
+      },
+      selectColumn,
+    ]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [
+          { columnId: "COL_ID_ACTIVE", type: "in", filter: [true] },
+          { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+        ],
+        columns,
+      ),
+    ).toEqual([]);
   });
 
   it("does not publish an equivalent text filter when sensitivity defaults are omitted", () => {

@@ -384,6 +384,7 @@ export type BrunoTableColumnFilterRendererProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
+  readonly focusFallback: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
@@ -2982,6 +2983,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               activateHeaderCommand,
               column,
               command,
+              focusFallback: restoreColumnFocus,
               runtime,
               registerColumnFilterOpener,
             })

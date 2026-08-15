@@ -847,11 +847,13 @@ type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue, TFilterFamily>
       readonly type: "equals" | "notEqual";
       readonly filter: ScalarFilterValue<TValue>;
     } & TextSensitivity<TFilterFamily>)
-  | ({
-      readonly columnId: TColumnId;
-      readonly type: "in";
-      readonly filter: readonly ScalarFilterValue<TValue>[];
-    } & TextSensitivity<TFilterFamily>);
+  | (TFilterFamily extends "boolean" | "select"
+      ? never
+      : {
+          readonly columnId: TColumnId;
+          readonly type: "in";
+          readonly filter: readonly ScalarFilterValue<TValue>[];
+        } & TextSensitivity<TFilterFamily>);
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TFilterFamily> = TFilterFamily extends "text"
   ? {

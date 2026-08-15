@@ -941,6 +941,12 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Remove condition 1 for Name" }));
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Filter expression for Name" }).element(),
+      ),
+    );
     await userEvent.selectOptions(
       dialog.getByRole("combobox", { name: "Filter expression for Name" }).nth(0),
       "NOT",
@@ -1077,8 +1083,69 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("button", { name: "Active filters (0)" }))
       .toBeInTheDocument();
     await expect
+      .element(screen.getByRole("dialog", { name: "Active filters" }))
+      .not.toBeInTheDocument();
+    await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    const nameFilter = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.fill(nameFilter.getByRole("textbox", { name: "Filter value for Name" }), "Ada");
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (1)" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("dialog", { name: "Active filters" }))
+      .not.toBeInTheDocument();
+  });
+
+  test("restores grid focus when an open filter owner is removed", async () => {
+    const replacementColumns = [
+      {
+        columnId: "COL_ID_FILTER_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_FILTER_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+      },
+    ] as const satisfies BrunoTableColumns<FilterRow>;
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_OWNER_UNMOUNT"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Score" }));
+    await expect.element(screen.getByRole("dialog", { name: "Filter Score" })).toBeInTheDocument();
+
+    await screen.rerender(
+      <BrunoTableClient<FilterRow, typeof replacementColumns>
+        tableId="TABLE_ID_FILTER_OWNER_UNMOUNT"
+        columns={replacementColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("grid", { name: "Data for TABLE_ID_FILTER_OWNER_UNMOUNT" }).element(),
+      ),
+    );
+    await expect
+      .element(screen.getByRole("dialog", { name: "Filter Score" }))
+      .not.toBeInTheDocument();
   });
 
   test("reviews half-open ranges and text sensitivity in the global filter rail", async () => {

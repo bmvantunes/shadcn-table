@@ -406,6 +406,11 @@ function sanitizeFilterRecord(
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
   if (type === "in") {
+    // Boolean and Select filters intentionally remain exact equality surfaces
+    // until issue #13 owns Set Filter inclusion semantics and its live facets.
+    if (column.semantics.filterFamily === "boolean" || column.semantics.filterFamily === "select") {
+      return undefined;
+    }
     const captured = captureDenseFilterArray(operand, context, false);
     if (
       captured === undefined ||

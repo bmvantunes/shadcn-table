@@ -1051,6 +1051,16 @@ const invalidBooleanSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
+const invalidBooleanSetFilter = [
+  // @ts-expect-error Boolean Set Filter inclusion is deferred to issue #13.
+  { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
+
+const invalidSelectSetFilter = [
+  // @ts-expect-error Select Set Filter inclusion is deferred to issue #13.
+  { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
+
 const invalidComputedFilter = [
   // @ts-expect-error computed columns have no automatic filter mapping.
   { columnId: "COL_ID_DOUBLE_QUANTITY", type: "greaterThan", filter: 10n },
@@ -1503,6 +1513,8 @@ void invalidEmptyComputedDependencies;
 void invalidNumericFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
+void invalidBooleanSetFilter;
+void invalidSelectSetFilter;
 void invalidComputedFilter;
 void invalidOptedOutFilter;
 void invalidMixedColumnCompoundFilter;
