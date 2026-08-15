@@ -2663,6 +2663,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
     const previousQuery = runtime.getQuerySnapshot();
+    const previousCommandEpoch = runtime.getColumnFilterCommandEpochSnapshot("COL_ID_NAME");
     const queryListener = vi.fn();
     runtime.subscribeQuery(queryListener);
     const replacementColumns = compileColumns([
@@ -2684,6 +2685,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       orderBy: previousQuery.orderBy,
       generation: previousQuery.generation,
     });
+    expect(runtime.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(previousCommandEpoch);
     expect(queryListener).toHaveBeenCalledOnce();
   });
 

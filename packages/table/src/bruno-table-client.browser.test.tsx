@@ -1552,7 +1552,7 @@ describe("BrunoTableClient browser surface", () => {
             getRowId={(row) => row.id}
             clientSource={{
               rows: [filterRows[0], filterRows[1]],
-              totalRows: filterRows.length,
+              totalRows: 2,
               version,
               status: "ready",
             }}

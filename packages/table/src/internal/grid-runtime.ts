@@ -899,10 +899,28 @@ export class BrunoTableGridRuntime<TRow> {
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
   ): ColumnConfiguration {
-    for (const column of this.columns) this.invalidateColumnFilterCommand(column.columnId);
-    for (const column of columns) this.invalidateColumnFilterCommand(column.columnId);
     const baselineFilters = queryConfiguration.baselineFilters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
+    const baselineChanged =
+      this.baselineFilters !== baselineFilters &&
+      !sameFilterCollection(this.baselineFilters, baselineFilters, this.columnsById);
+    const nextColumnsById = indexColumns(columns);
+    const invalidatedColumnIds = new Set<string>();
+    for (const column of this.columns) {
+      const next = nextColumnsById.get(column.columnId);
+      if (next === undefined || !sameFilterCommandSemantics(column, next) || baselineChanged) {
+        invalidatedColumnIds.add(column.columnId);
+      }
+    }
+    for (const column of columns) {
+      const previous = this.columnsById.get(column.columnId);
+      if (previous === undefined || !sameFilterCommandSemantics(previous, column)) {
+        invalidatedColumnIds.add(column.columnId);
+      }
+    }
+    for (const columnId of invalidatedColumnIds) {
+      this.invalidateColumnFilterCommand(columnId);
+    }
     const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
     const nextQuickFilter = this.query.quickFilter;
@@ -974,9 +992,9 @@ export class BrunoTableGridRuntime<TRow> {
     const quickFilterSemanticsChanged =
       normalizeBrunoTableFilterText(this.query.quickFilter) !==
       normalizeBrunoTableFilterText(quickFilter);
-    const queryChanged =
-      !sameReferences(this.query.filters, filters) || sortingChanged || quickFilterSemanticsChanged;
-    const filterChanged = !sameReferences(this.query.filters, filters) || quickFilterChanged;
+    const filterCollectionChanged = !sameReferences(this.query.filters, filters);
+    const queryChanged = filterCollectionChanged || sortingChanged || quickFilterSemanticsChanged;
+    const filterChanged = filterCollectionChanged || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
@@ -993,13 +1011,16 @@ export class BrunoTableGridRuntime<TRow> {
       this.query = Object.freeze({ ...this.query, quickFilter });
     }
     if (filterChanged) this.filterSnapshot = createFilterSnapshot(this.query);
-    this.columnCommands = createColumnCommandSnapshots(
-      this.columns,
-      this.query,
-      this.baselineFilters,
-      previousCommands,
-      this.columnLayoutSnapshot,
-    );
+    this.columnCommands =
+      quickFilterChanged && !filterCollectionChanged && !sortingChanged && !forceColumnRefresh
+        ? previousCommands
+        : createColumnCommandSnapshots(
+            this.columns,
+            this.query,
+            this.baselineFilters,
+            previousCommands,
+            this.columnLayoutSnapshot,
+          );
     return Object.freeze({
       filterChanged,
       queryChanged,
@@ -1734,6 +1755,28 @@ function activeQuerySemanticsChanged(
     if (!sameQuerySemantics(previous, next)) return true;
   }
   return false;
+}
+
+function sameFilterCommandSemantics(previous: CompiledColumn, next: CompiledColumn): boolean {
+  if (
+    previous.columnId !== next.columnId ||
+    previous.enableFilter !== next.enableFilter ||
+    previous.semantics.editorFamily !== next.semantics.editorFamily
+  ) {
+    return false;
+  }
+  if (!sameQuerySemantics(previous, next)) return false;
+  if (previous.selectOptions === undefined || next.selectOptions === undefined) {
+    return previous.selectOptions === next.selectOptions;
+  }
+  if (previous.selectOptions.length !== next.selectOptions.length) return false;
+  try {
+    return previous.selectOptions.every((value, index) =>
+      next.semantics.equivalent(value, next.selectOptions?.[index]),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sameQuerySemantics(previous: CompiledColumn, next: CompiledColumn): boolean {

@@ -252,7 +252,7 @@ test("applies emitted numeric, BigInt, discrete, range, and compound filters", a
   );
   await userEvent.selectOptions(
     dialog.getByRole("combobox", { name: "Filter value for Status" }),
-    "bruno-select-option-1",
+    "closed",
   );
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
@@ -269,9 +269,14 @@ test("applies emitted numeric, BigInt, discrete, range, and compound filters", a
     "OR",
   );
   dialog = screen.getByRole("dialog", { name: "Filter Name" });
-  const names = dialog.getByRole("textbox", { name: "Filter value for Name" });
-  await userEvent.fill(names.nth(0), "Ada");
-  await userEvent.fill(names.nth(1), "Grace");
+  await userEvent.fill(
+    dialog.getByRole("textbox", { name: "Filter value for Name (condition 1)" }),
+    "Ada",
+  );
+  await userEvent.fill(
+    dialog.getByRole("textbox", { name: "Filter value for Name (condition 2)" }),
+    "Grace",
+  );
   await expect
     .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
     .toBeInTheDocument();

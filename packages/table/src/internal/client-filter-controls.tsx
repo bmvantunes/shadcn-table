@@ -26,7 +26,7 @@ import type { ReactElement, ReactNode } from "react";
 import { BrunoTableColumnFilter } from "./client-filter";
 import type { BrunoTableColumnFilterRendererProps } from "./bruno-table-view";
 import type { CompiledColumn } from "./compile-columns";
-import { brunoTableFilterReferencesColumn, normalizeBrunoTableFilterText } from "./grid-query";
+import { collectClientFilterColumnIds, normalizeBrunoTableFilterText } from "./grid-query";
 import type {
   BrunoTableFilterSnapshot,
   BrunoTableRowPipelineRuntimeView,
@@ -241,8 +241,8 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
   const removeButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const focusFrame = useRef<number | null>(null);
   const cancelScheduledFocus = useCallback(() => {
-    if (focusFrame.current === null || typeof cancelAnimationFrame !== "function") return;
-    cancelAnimationFrame(focusFrame.current);
+    if (focusFrame.current === null) return;
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(focusFrame.current);
     focusFrame.current = null;
   }, []);
   const focusAfterMutation = useCallback(
@@ -384,17 +384,25 @@ function activeFilterEntries(
     entries.push({
       kind: "quick",
       key: "quick-filter",
-      label: `Quick Filter contains ${JSON.stringify(query.quickFilter)}`,
+      label: `Quick Filter contains ${truncateActiveFilterSummary(JSON.stringify(query.quickFilter))}`,
     });
+  }
+  const filtersByColumn = new Map<string, unknown[]>();
+  for (const filter of query.filters) {
+    const columnIds = new Set<string>();
+    collectClientFilterColumnIds(filter, columnIds);
+    for (const columnId of columnIds) {
+      const filters = filtersByColumn.get(columnId);
+      if (filters === undefined) filtersByColumn.set(columnId, [filter]);
+      else filters.push(filter);
+    }
   }
   const headerCounts = new Map<string, number>();
   for (const column of query.columns) {
     headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
   }
   for (const [columnIndex, column] of query.columns.entries()) {
-    const filters = query.filters.filter((filter) =>
-      brunoTableFilterReferencesColumn(filter, column.columnId),
-    );
+    const filters = filtersByColumn.get(column.columnId) ?? [];
     if (filters.length === 0) continue;
     const columnLabel =
       headerCounts.get(column.headerName) === 1
@@ -404,9 +412,9 @@ function activeFilterEntries(
       kind: "column",
       columnId: column.columnId,
       key: `column-filter-${column.columnId}`,
-      label: filters
-        .map((filter) => describeActiveFilter(column, filter, columnLabel))
-        .join(" AND "),
+      label: joinActiveFilterSummaries(filters, " AND ", (filter) =>
+        describeActiveFilter(column, filter, columnLabel),
+      ),
     });
   }
   return entries;
@@ -451,31 +459,41 @@ function describeActiveFilter(
   columnLabel = column.headerName,
 ): string {
   if (Array.isArray(value)) {
-    return value
-      .map((condition) => describeActiveFilter(column, condition, columnLabel))
-      .join(" AND ");
+    return joinActiveFilterSummaries(value, " AND ", (condition) =>
+      describeActiveFilter(column, condition, columnLabel),
+    );
   }
   if (typeof value !== "object" || value === null) return columnLabel;
   const record = value as Readonly<Record<string, unknown>>;
   const type = typeof record["type"] === "string" ? record["type"] : "filter";
   if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
     const joiner = type === "AND" ? " AND " : " OR ";
-    return `${columnLabel}: (${record["conditions"].map((condition) => describeActiveFilter(column, condition, columnLabel)).join(joiner)})`;
+    return truncateActiveFilterSummary(
+      `${columnLabel}: (${joinActiveFilterSummaries(record["conditions"], joiner, (condition) =>
+        describeActiveFilter(column, condition, columnLabel),
+      )})`,
+    );
   }
   if (type === "NOT" && record["condition"] !== undefined) {
-    return `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel)})`;
+    return truncateActiveFilterSummary(
+      `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel)})`,
+    );
   }
   const operand = record["filter"];
   if (type === "blank" || type === "notBlank") return `${columnLabel}: ${type}`;
   if (type === "inRange") {
-    return `${columnLabel}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`;
+    return truncateActiveFilterSummary(
+      `${columnLabel}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`,
+    );
   }
   const sensitivity = [
     record["caseSensitive"] === true ? "case-sensitive" : undefined,
     record["accentSensitive"] === true ? "accent-sensitive" : undefined,
   ].filter((value): value is string => value !== undefined);
   const sensitivityLabel = sensitivity.length > 0 ? ` (${sensitivity.join(", ")})` : "";
-  return `${columnLabel}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`;
+  return truncateActiveFilterSummary(
+    `${columnLabel}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`,
+  );
 }
 
 function formatActiveFilterOperand(
@@ -484,7 +502,9 @@ function formatActiveFilterOperand(
   operator?: string,
 ): string {
   if (operator === "in" && Array.isArray(value)) {
-    return `[${value.map((item) => formatActiveFilterOperand(column, item, "equals")).join(", ")}]`;
+    return `[${joinActiveFilterSummaries(value, ", ", (item) =>
+      formatActiveFilterOperand(column, item, "equals"),
+    )}]`;
   }
   if (
     operator === "contains" ||
@@ -492,12 +512,35 @@ function formatActiveFilterOperand(
     operator === "startsWith" ||
     operator === "endsWith"
   ) {
-    return typeof value === "string" ? JSON.stringify(value) : String(value);
+    return truncateActiveFilterSummary(
+      typeof value === "string" ? JSON.stringify(value) : String(value),
+    );
   }
   try {
     const display = column.semantics.formatDisplay(value);
-    return typeof value === "string" ? JSON.stringify(display) : display;
+    return truncateActiveFilterSummary(
+      typeof value === "string" ? JSON.stringify(display) : display,
+    );
   } catch {
-    return String(value);
+    return truncateActiveFilterSummary(String(value));
   }
+}
+
+const ACTIVE_FILTER_SUMMARY_ITEM_LIMIT = 8;
+const ACTIVE_FILTER_SUMMARY_LENGTH_LIMIT = 512;
+
+function joinActiveFilterSummaries(
+  values: readonly unknown[],
+  separator: string,
+  render: (value: unknown) => string,
+): string {
+  const visible = values.slice(0, ACTIVE_FILTER_SUMMARY_ITEM_LIMIT).map((value) => render(value));
+  const omitted = values.length - visible.length;
+  if (omitted > 0) visible.push(`… ${String(omitted)} more`);
+  return truncateActiveFilterSummary(visible.join(separator));
+}
+
+function truncateActiveFilterSummary(value: string): string {
+  if (value.length <= ACTIVE_FILTER_SUMMARY_LENGTH_LIMIT) return value;
+  return `${value.slice(0, ACTIVE_FILTER_SUMMARY_LENGTH_LIMIT - 1)}…`;
 }

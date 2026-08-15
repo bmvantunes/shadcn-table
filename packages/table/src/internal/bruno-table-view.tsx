@@ -467,6 +467,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
         runtime={runtime}
         tableId={tableId}
       />
+      <GridOwnedToolRail controls={gridOwnedControls} />
       <div className="min-w-0">
         <ToolbarOutlet
           reserveEndSpace={gridOwnedControls !== undefined && gridOwnedControls !== null}
@@ -483,7 +484,6 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           renderColumnFilter={renderColumnFilter}
         />
       </div>
-      <GridOwnedToolRail controls={gridOwnedControls} />
     </section>
   );
 }
