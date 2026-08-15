@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import type { ColumnDef, Row, RowData, Table } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
+import type { ClientFilterPlan } from "./grid-query";
 import {
   getBrunoTableLogicalColumnOrder,
   type BrunoTableColumnLayoutSnapshot,
@@ -60,6 +61,7 @@ export function useClientRowIds(
   columnLayout?: BrunoTableColumnLayoutSnapshot,
   quickFilterText = "",
   quickFilterFields: readonly string[] = EMPTY_QUICK_FILTER_FIELDS,
+  filterPlan?: ClientFilterPlan,
 ): BrunoTableClientRowModelResult {
   // Layout state supplies controlled TanStack inputs. The returned `logicalColumns` below is the
   // only Client logical order consumed by rendering and navigation.
@@ -83,8 +85,9 @@ export function useClientRowIds(
       quickFilterFields,
       (column, row) => row.getValue(column.columnId),
       (row, field) => readClientQuickFilterField(row.original.raw, field),
+      filterPlan,
     );
-  }, [compiledColumns, filters, quickFilterFields, quickFilterText]);
+  }, [compiledColumns, filterPlan, filters, quickFilterFields, quickFilterText]);
   const rowComparator = useMemo(
     () =>
       createBrunoTableClientRowComparator<ClientRow>(

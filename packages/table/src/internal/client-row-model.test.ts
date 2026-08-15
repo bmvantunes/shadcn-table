@@ -11,6 +11,7 @@ import {
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
 } from "./client-row-model";
+import { compileClientFilterPlan } from "./grid-query";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -123,6 +124,35 @@ describe("Client row model", () => {
     expect(normalize).toHaveBeenCalledTimes(1);
     expect(rows.filter(predicate!)).toEqual([{ name: "Ada" }, { name: "ADA" }]);
     expect(normalize).toHaveBeenCalledTimes(rows.length + 1);
+  });
+
+  it("shares compiled filter operands across Client row adapters", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const filters = [{ columnId: "COL_ID_NAME", type: "equals", filter: "ada" }];
+    const normalize = vi.spyOn(String.prototype, "normalize");
+    const plan = compileClientFilterPlan(columns, filters);
+
+    createClientFilterPredicate(
+      columns,
+      filters,
+      (_column, row: { name: string }) => row.name,
+      plan,
+    );
+    createClientFilterPredicate(
+      columns,
+      filters,
+      (_column, row: { name: string }) => row.name,
+      plan,
+    );
+
+    expect(normalize).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes canonically equivalent accent-sensitive text", () => {

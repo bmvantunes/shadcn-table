@@ -135,20 +135,45 @@ export function filterClientRows<TRow>(
   return predicate === undefined ? rows : rows.filter(predicate);
 }
 
+export type ClientFilterPlan = Readonly<{
+  readonly columnsById: ReadonlyMap<string, CompiledColumn>;
+  readonly compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>;
+  readonly hasSharedNodes: boolean;
+}>;
+
+/**
+ * Compiles immutable filter evidence once for the query consumers that use different row
+ * adapters. The plan deliberately contains no row reader, so it can be shared by TanStack's
+ * row model and the source row-order detector without crossing either adapter seam.
+ */
+export function compileClientFilterPlan(
+  columns: readonly CompiledColumn[],
+  filters: readonly unknown[] | undefined,
+): ClientFilterPlan | undefined {
+  if (filters === undefined || filters.length === 0) return undefined;
+  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  return Object.freeze({
+    columnsById,
+    compiledOperands: compileFilterOperandPlans(filters, columnsById),
+    hasSharedNodes: containsSharedFilterNodes(filters),
+  });
+}
+
 export function createClientFilterPredicate<TRow>(
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
   readValue: (column: CompiledColumn, row: TRow) => unknown = readCompiledColumnValue,
+  filterPlan?: ClientFilterPlan,
 ): ((row: TRow) => boolean) | undefined {
   if (filters === undefined || filters.length === 0) return undefined;
-  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  const plan = filterPlan ?? compileClientFilterPlan(columns, filters);
+  if (plan === undefined) return undefined;
+  const columnsById = plan.columnsById;
   const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
-  const compiledOperands = compileFilterOperandPlans(filters, columnsById);
-  const hasSharedNodes = containsSharedFilterNodes(filters);
   return (row) => {
-    const completed = hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
+    const completed = plan.hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
     return filters.every((filter) =>
-      evaluateFilter(filter, row, columnsById, readUnknown, compiledOperands, completed),
+      evaluateFilter(filter, row, columnsById, readUnknown, plan.compiledOperands, completed),
     );
   };
 }

@@ -2,6 +2,7 @@ import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
+import { compileClientFilterPlan, type ClientFilterPlan } from "./grid-query";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type {
   BrunoTableInvalidCellValue,
@@ -96,28 +97,23 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   queryGeneration,
   columnLayout,
 }: ClientResolvedRowOrderProps) {
-  const rowsStore = useMemo(
-    () =>
-      rowPipelineAdapter.createRowsStore(runtime, () =>
-        createRowOrderChangeDetector(
-          tableId,
-          columns,
-          filters,
-          quickFilter,
-          quickFilterFields,
-          orderBy,
-        ),
+  const filterPlan = useMemo(() => compileClientFilterPlan(columns, filters), [columns, filters]);
+  const createDetector = useMemo(
+    () => () =>
+      createRowOrderChangeDetector(
+        tableId,
+        columns,
+        filters,
+        quickFilter,
+        quickFilterFields,
+        orderBy,
+        filterPlan,
       ),
-    [
-      columns,
-      filters,
-      orderBy,
-      quickFilter,
-      quickFilterFields,
-      rowPipelineAdapter,
-      runtime,
-      tableId,
-    ],
+    [columns, filterPlan, filters, orderBy, quickFilter, quickFilterFields, tableId],
+  );
+  const rowsStore = useMemo(
+    () => rowPipelineAdapter.createRowsStore(runtime, createDetector),
+    [createDetector, rowPipelineAdapter, runtime],
   );
   const rows = useSyncExternalStore(
     rowsStore.subscribe,
@@ -133,6 +129,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     columnLayout,
     quickFilter,
     quickFilterFields,
+    filterPlan,
   );
   const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
   const nextRowIds =
@@ -177,6 +174,7 @@ function createRowOrderChangeDetector(
   quickFilter: string,
   quickFilterFields: readonly string[],
   orderBy: ClientResolvedRowOrderProps["orderBy"],
+  filterPlan: ClientFilterPlan | undefined,
 ): BrunoTableClientRowOrderChangeDetector {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
     recordBrunoTableClientRowOrderPlanning(tableId);
@@ -194,6 +192,7 @@ function createRowOrderChangeDetector(
       return value;
     },
     (row, field) => readClientQuickFilterField(row.raw, field),
+    filterPlan,
   );
   return (previousRows, nextRows, change) =>
     rowOrderChanged(previousRows, nextRows, change, orderedColumns, filterPredicate);

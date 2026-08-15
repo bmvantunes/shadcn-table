@@ -1,5 +1,9 @@
 import type { CompiledColumn } from "./compile-columns";
-import { createClientFilterPredicate, normalizeBrunoTableFilterText } from "./grid-query";
+import {
+  createClientFilterPredicate,
+  normalizeBrunoTableFilterText,
+  type ClientFilterPlan,
+} from "./grid-query";
 
 /** Internal safety boundary for pasted Quick Filter candidates. */
 export const BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH = 1_024;
@@ -46,8 +50,9 @@ export function createClientQueryPredicate<TRow>(
   quickFilterFields: readonly string[] | undefined,
   readValue: (column: CompiledColumn, row: TRow) => unknown,
   readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
+  filterPlan?: ClientFilterPlan,
 ): ((row: TRow) => boolean) | undefined {
-  const gridPredicate = createClientFilterPredicate(columns, filters, readValue);
+  const gridPredicate = createClientFilterPredicate(columns, filters, readValue, filterPlan);
   const quickPredicate = createClientQuickFilterPredicate(
     quickFilterText,
     quickFilterFields,
