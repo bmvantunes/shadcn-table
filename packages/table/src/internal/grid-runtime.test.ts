@@ -195,7 +195,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(quickFilterListener).toHaveBeenCalledOnce();
   });
 
-  it("keeps Quick Filter field snapshots stable for equivalent configuration changes", () => {
+  it("snapshots Quick Filter fields as immutable table configuration", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([{ id: "first", name: "Ada" }]),
       (row) => row.id,
@@ -211,31 +211,9 @@ describe("BrunoTable filter runtime primitives", () => {
       "TABLE_ID_QUICK_FILTER_FIELDS_RUNTIME",
     );
     const view = runtime.getView();
-    const fieldsListener = vi.fn();
-    view.subscribeQuickFilterFields(fieldsListener);
-    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
-
-    adapter.configureQuickFilterFields(["name"]);
-    runtime.reconcile(
-      adapter.getPublication(),
-      runtimeColumns,
-      adapter.getQueryConfiguration(runtimeColumns),
-    );
-    expect(fieldsListener).not.toHaveBeenCalled();
-    expect(view.getQuickFilterFieldsSnapshot()).toBe(
-      adapter.getQueryConfiguration(runtimeColumns).quickFilterFields,
-    );
-    expect(view.getQuerySnapshot().quickFilter).toBe("ada");
-
-    adapter.configureQuickFilterFields(["id"]);
-    runtime.reconcile(
-      adapter.getPublication(),
-      runtimeColumns,
-      adapter.getQueryConfiguration(runtimeColumns),
-    );
-    expect(fieldsListener).toHaveBeenCalledOnce();
-    expect(view.getQuickFilterFieldsSnapshot()).toEqual(["id"]);
-    expect(view.getQuerySnapshot().quickFilter).toBe("");
+    const configuration = adapter.getQueryConfiguration(runtimeColumns);
+    expect(view.getQuickFilterFieldsSnapshot()).toBe(configuration.quickFilterFields);
+    expect(adapter.getQueryConfiguration(runtimeColumns)).toBe(configuration);
   });
 
   it("uses Value Semantics for opaque cyclic filter operands", () => {

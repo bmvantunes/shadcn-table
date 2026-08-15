@@ -50,7 +50,6 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    rowPipelineAdapter.configureQuickFilterFields(props.quickFilterFields);
     const publication = rowPipelineAdapter.reconcile(
       props.clientSource,
       props.getRowId,
@@ -58,14 +57,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
     );
     const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
     runtime.reconcile(publication, compiledColumns, queryConfiguration);
-  }, [
-    compiledColumns,
-    props.clientSource,
-    props.getRowId,
-    props.quickFilterFields,
-    rowPipelineAdapter,
-    runtime,
-  ]);
+  }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);

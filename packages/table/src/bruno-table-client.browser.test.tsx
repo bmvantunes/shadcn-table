@@ -556,12 +556,51 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
     await screen.getByRole("button", { name: "Clear filter for Active" }).click();
 
+    await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
+    dialog = screen.getByRole("dialog", { name: "Filter Active" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Active" }),
+      "in",
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.click(
+      dialog.getByRole("checkbox", { name: "Include false in filter for Active" }),
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await screen.getByRole("button", { name: "Clear filter for Active" }).click();
+
     await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
     dialog = screen.getByRole("dialog", { name: "Filter Status" });
     await userEvent.selectOptions(
       dialog.getByRole("combobox", { name: "Filter value for Status" }),
       "bruno-select-option-1",
     );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+    await screen.getByRole("button", { name: "Clear filter for Status" }).click();
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
+    dialog = screen.getByRole("dialog", { name: "Filter Status" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Status" }),
+      "in",
+    );
+    const closedStatus = dialog.getByRole("checkbox", {
+      name: "Include closed in filter for Status",
+    });
+    await userEvent.click(closedStatus);
+    await expect.element(closedStatus).toBeChecked();
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
@@ -641,6 +680,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
 
     await screen.getByRole("button", { name: "Clear Quick Filter" }).click();
+    await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .toBeInTheDocument();

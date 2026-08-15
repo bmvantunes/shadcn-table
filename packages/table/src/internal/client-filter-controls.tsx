@@ -57,11 +57,7 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement | null {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientQuickFilterRender();
-  const fields = useSyncExternalStore(
-    runtime.subscribeQuickFilterFields,
-    runtime.getQuickFilterFieldsSnapshot,
-    runtime.getQuickFilterFieldsSnapshot,
-  );
+  const fields = runtime.getQuickFilterFieldsSnapshot();
   const committed = useSyncExternalStore(
     runtime.subscribeQuickFilter,
     runtime.getQuickFilterSnapshot,
@@ -88,6 +84,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   const [draft, setDraft] = useState(initialValue);
   const draftRef = useRef(initialValue);
   const lastCommittedRef = useRef(initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const publish = useCallback(
     (text: string): void => {
       runtime.dispatchGridCommand({ type: "quick-filter.replace", text });
@@ -109,6 +106,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
       <Input
         aria-label="Quick Filter"
         placeholder="Quick Filter"
+        ref={inputRef}
         type="search"
         value={draft}
         onChange={(event) => {
@@ -129,6 +127,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
             draftRef.current = "";
             setDraft("");
             publish("");
+            inputRef.current?.focus({ preventScroll: true });
           }}
         >
           ×

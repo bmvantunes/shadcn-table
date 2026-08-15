@@ -61,7 +61,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private acceptedCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private readonly initialFilters: readonly unknown[];
   private readonly initialOrderBy: ClientOrderBy;
-  private quickFilterFields: readonly string[];
+  private readonly quickFilterFields: readonly string[];
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
@@ -135,16 +135,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       quickFilterFields: this.quickFilterFields,
     });
     return this.queryConfiguration;
-  };
-
-  public readonly configureQuickFilterFields = (fields: readonly string[] | undefined): void => {
-    const nextFields = snapshotQuickFilterFields(fields);
-    if (sameStringArray(this.quickFilterFields, nextFields)) return;
-    this.quickFilterFields = nextFields;
-    this.queryConfiguration = Object.freeze({
-      ...this.queryConfiguration,
-      quickFilterFields: nextFields,
-    });
   };
 
   public readonly reconcile = (
@@ -1554,8 +1544,4 @@ function snapshotQuickFilterFields(fields: readonly string[] | undefined): reado
     throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
   }
   return Object.freeze(Array.from(fields));
-}
-
-function sameStringArray(previous: readonly string[], next: readonly string[]): boolean {
-  return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }

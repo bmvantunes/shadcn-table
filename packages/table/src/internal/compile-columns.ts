@@ -126,7 +126,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   }
   semantics = nullableSafeSemantics(semantics);
   let selectOptions: readonly unknown[] | undefined;
-  if (semantics.filterFamily === "select") {
+  if (semantics.filterFamily === "select" && Object.hasOwn(candidate, "options")) {
     const options = candidate["options"];
     if (!Array.isArray(options) || options.length === 0) {
       throw new ColumnConfigurationError(

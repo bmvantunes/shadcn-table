@@ -51,6 +51,7 @@ type FilterLeafDraft = Readonly<{
   readonly first: string;
   readonly second: string;
   readonly inValues: readonly string[];
+  readonly inValuesExplicit: boolean;
   readonly selectIndex: number | undefined;
   readonly caseSensitive: boolean;
   readonly accentSensitive: boolean;
@@ -61,7 +62,7 @@ type FilterDraft =
   | Readonly<{
       readonly kind: "compound";
       readonly operator: "AND" | "OR";
-      readonly conditions: readonly [FilterDraft, FilterDraft, ...FilterDraft[]];
+      readonly conditions: readonly [FilterDraft, ...FilterDraft[]];
     }>
   | Readonly<{
       readonly kind: "not";
@@ -91,15 +92,23 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
   }: BrunoTableColumnFilterProps): ReactElement {
     const [open, setOpen] = useState(false);
     const [direction, setDirection] = useState<"ltr" | "rtl">("ltr");
+    const closeReasonRef = useRef<string | null>(null);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
     const label = `Filter ${column.headerName}`;
     return (
       <DirectionProvider direction={direction}>
         <Popover
           open={open}
-          onOpenChange={(nextOpen) => {
+          onOpenChange={(nextOpen, eventDetails) => {
             if (nextOpen) setDirection(readBrunoTableFilterDirection(triggerRef.current));
+            else closeReasonRef.current = eventDetails.reason;
             setOpen(nextOpen);
+          }}
+          onOpenChangeComplete={(nextOpen) => {
+            if (!nextOpen && closeReasonRef.current === "escapeKey") {
+              activateHeaderCommand(column.columnId);
+            }
+            if (!nextOpen) closeReasonRef.current = null;
           }}
         >
           <PopoverTrigger
@@ -107,8 +116,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
               <Button
                 data-bruno-filter-column={column.columnId}
                 ref={triggerRef}
-                aria-label={label}
-                aria-pressed={command.filterActive}
+                aria-label={command.filterActive ? `${label} (active)` : label}
                 size="xs"
                 tabIndex={-1}
                 type="button"
@@ -177,6 +185,7 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
 });
 
 type LocalFilterDraftState = Readonly<{
+  readonly column: CompiledColumn;
   readonly version: number;
   readonly draft: FilterDraft;
   readonly error: string | undefined;
@@ -196,14 +205,16 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   readonly version: number;
 }): ReactElement {
   const [localState, setLocalState] = useState<LocalFilterDraftState>(() => ({
+    column,
     version,
     draft: draftFromCommitted(column, committed),
     error: undefined,
   }));
   const currentState =
-    localState.version === version
+    localState.column === column && localState.version === version
       ? localState
       : {
+          column,
           version,
           draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
           error: undefined,
@@ -228,8 +239,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
   useLayoutEffect(() => {
-    if (localState.version !== version) debouncer.cancel();
-  }, [debouncer, localState.version, version]);
+    if (localState.column !== column || localState.version !== version) debouncer.cancel();
+  }, [column, debouncer, localState.column, localState.version, version]);
 
   useEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
@@ -263,7 +274,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
             ? { filter: undefined, error: "Enter a valid value." }
             : buildFilterCandidate(column, nextDraft)
           : buildFilterCandidate(column, nextDraft);
-      setLocalState({ version, draft: nextDraft, error: candidate.error });
+      setLocalState({ column, version, draft: nextDraft, error: candidate.error });
       if (mode === "continuous") commitContinuous(candidate);
       else commitImmediately(candidate);
     },
@@ -328,7 +339,10 @@ function FilterExpressionEditor({
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
   const modeLabel = `Filter expression for ${column.headerName}`;
   const isContinuous =
-    column.semantics.filterFamily === "text" || column.semantics.filterFamily === "numeric";
+    column.semantics.editorFamily === "text" ||
+    column.semantics.editorFamily === "number" ||
+    column.semantics.editorFamily === "bigint" ||
+    column.semantics.editorFamily === "bigdecimal";
   const operatorOptions = filterOperators(column);
   const updateLeaf = (
     nextLeaf: FilterLeafDraft,
@@ -378,8 +392,11 @@ function FilterExpressionEditor({
                         operator,
                         inValues:
                           operator === "in" && leaf.inValues.length === 0
-                            ? Object.freeze([leaf.first])
+                            ? leaf.first.length > 0
+                              ? Object.freeze([leaf.first])
+                              : Object.freeze([])
                             : leaf.inValues,
+                        inValuesExplicit: operator === "in" ? leaf.inValuesExplicit : false,
                       }),
                       "immediate",
                     );
@@ -463,11 +480,7 @@ function FilterExpressionEditor({
                 draft={condition}
                 errorId={errorId}
                 onChange={(nextCondition, mode, badInput) => {
-                  const conditions = draft.conditions.slice() as [
-                    FilterDraft,
-                    FilterDraft,
-                    ...FilterDraft[],
-                  ];
+                  const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
                   conditions[index] = nextCondition;
                   onChange(
                     Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
@@ -491,7 +504,6 @@ function FilterExpressionEditor({
                       Object.freeze({
                         ...draft,
                         conditions: Object.freeze(conditions) as readonly [
-                          FilterDraft,
                           FilterDraft,
                           ...FilterDraft[],
                         ],
@@ -517,7 +529,7 @@ function FilterExpressionEditor({
                   conditions: Object.freeze([
                     ...draft.conditions,
                     createDefaultLeaf(column),
-                  ]) as readonly [FilterDraft, FilterDraft, ...FilterDraft[]],
+                  ]) as readonly [FilterDraft, ...FilterDraft[]],
                 }),
                 "immediate",
               )
@@ -556,6 +568,29 @@ function FilterOperand({
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly continuous: boolean;
 }): ReactElement {
+  const isIn = draft.operator === "in";
+  if (isIn && column.semantics.filterFamily === "boolean") {
+    return (
+      <DiscreteInFilterOperand
+        column={column}
+        draft={draft}
+        onChange={onChange}
+        options={[true, false]}
+      />
+    );
+  }
+
+  if (isIn && column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
+    return (
+      <DiscreteInFilterOperand
+        column={column}
+        draft={draft}
+        onChange={onChange}
+        options={column.selectOptions}
+      />
+    );
+  }
+
   if (column.semantics.filterFamily === "boolean") {
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
@@ -611,7 +646,6 @@ function FilterOperand({
   }
 
   const isRange = draft.operator === "inRange";
-  const isIn = draft.operator === "in";
   const isBigInt = column.semantics.editorFamily === "bigint";
   const isNumber = column.semantics.editorFamily === "number";
   const type = isNumber ? "number" : "text";
@@ -620,7 +654,7 @@ function FilterOperand({
     : column.semantics.editorFamily === "bigdecimal"
       ? "decimal"
       : undefined;
-  const values = isIn && draft.inValues.length > 0 ? draft.inValues : [draft.first];
+  const values = isIn && draft.inValuesExplicit ? draft.inValues : [draft.first];
   return (
     <div className="flex flex-col gap-2">
       {isIn ? (
@@ -657,6 +691,7 @@ function FilterOperand({
                         ...draft,
                         first: nextValues[0] ?? "",
                         inValues: Object.freeze(nextValues),
+                        inValuesExplicit: true,
                       }),
                       continuous ? "continuous" : "immediate",
                       isNumber && event.currentTarget.validity.badInput,
@@ -677,6 +712,7 @@ function FilterOperand({
                         ...draft,
                         first: nextValues[0] ?? "",
                         inValues: Object.freeze(nextValues),
+                        inValuesExplicit: true,
                       }),
                       continuous ? "continuous" : "immediate",
                     );
@@ -697,6 +733,7 @@ function FilterOperand({
                 Object.freeze({
                   ...draft,
                   inValues: Object.freeze([...values, ""]),
+                  inValuesExplicit: true,
                 }),
                 continuous ? "continuous" : "immediate",
               )
@@ -752,6 +789,72 @@ function FilterOperand({
   );
 }
 
+function DiscreteInFilterOperand({
+  column,
+  draft,
+  onChange,
+  options,
+}: {
+  readonly column: CompiledColumn;
+  readonly draft: FilterLeafDraft;
+  readonly onChange: (
+    draft: FilterLeafDraft,
+    mode: "continuous" | "immediate",
+    badInput?: boolean,
+  ) => void;
+  readonly options: readonly unknown[];
+}): ReactElement {
+  return (
+    <div
+      aria-label={`Filter values for ${column.headerName}`}
+      className="flex flex-col gap-2"
+      role="group"
+    >
+      {options.map((option, index) => {
+        let canonical: string;
+        try {
+          canonical = column.semantics.formatCanonicalText(option);
+        } catch {
+          canonical = String(index);
+        }
+        const checked = draft.inValues.includes(canonical);
+        return (
+          <label
+            className="flex items-center gap-2 text-sm"
+            htmlFor={`${column.columnId}-in-${String(index)}`}
+            key={`${column.columnId}-in-${String(index)}`}
+          >
+            <Checkbox
+              checked={checked}
+              id={`${column.columnId}-in-${String(index)}`}
+              aria-label={`Include ${column.semantics.formatDisplay(option)} in filter for ${column.headerName}`}
+              onCheckedChange={(nextChecked) => {
+                const nextValues = draft.inValues.filter((value) => value !== canonical);
+                if (nextChecked === true) nextValues.push(canonical);
+                onChange(
+                  Object.freeze({
+                    ...draft,
+                    first: nextValues[0] ?? "",
+                    inValues: Object.freeze(nextValues),
+                    inValuesExplicit: true,
+                    selectIndex:
+                      column.semantics.filterFamily === "select"
+                        ? findSelectOptionIndexFromText(column, nextValues[0] ?? "")
+                        : draft.selectIndex,
+                  }),
+                  "immediate",
+                );
+              }}
+            />
+            {column.semantics.formatDisplay(option)}
+          </label>
+        );
+      })}
+      {options.length === 0 ? <span className="text-sm">No values available.</span> : null}
+    </div>
+  );
+}
+
 function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
   switch (column.semantics.filterFamily) {
     case "text":
@@ -781,7 +884,7 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
       ]);
     case "boolean":
     case "select":
-      return Object.freeze(["equals", "notEqual", "blank", "notBlank"]);
+      return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
     case "equality":
       return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
     default:
@@ -817,7 +920,7 @@ function draftFromNode(
     const conditions = record["conditions"].map((condition) =>
       draftFromNode(column, asRecord(condition)),
     );
-    if (conditions.length >= 2) {
+    if (conditions.length >= 1) {
       return Object.freeze({
         kind: "compound",
         operator: type,
@@ -844,13 +947,14 @@ function draftFromNode(
   const first =
     operator === "in"
       ? (inValues[0] ?? "")
-      : (formatOperand(column, rawFilter) ?? defaultOperand(column));
+      : (formatFilterDraftOperand(column, operator, rawFilter) ?? defaultOperand(column));
   return Object.freeze({
     kind: "leaf",
     operator,
     first,
     second: formatOperand(column, record["filterTo"]) ?? "",
     inValues,
+    inValuesExplicit: operator === "in" && Array.isArray(rawFilter),
     selectIndex:
       column.semantics.filterFamily === "select"
         ? findSelectOptionIndex(column, rawFilter)
@@ -898,18 +1002,12 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
   if (draft.operator === "blank" || draft.operator === "notBlank") {
     return { filter: Object.freeze(base) };
   }
-  if (column.semantics.filterFamily === "select") {
-    const option =
-      draft.selectIndex === undefined ? undefined : column.selectOptions?.[draft.selectIndex];
-    if (option === undefined) return { filter: undefined, error: "Choose a value." };
-    return { filter: Object.freeze({ ...base, filter: option }) };
+  if (isSubstringFilterOperator(draft.operator)) {
+    return { filter: Object.freeze({ ...base, filter: draft.first }) };
   }
   if (draft.operator === "in") {
-    const values = draft.inValues.length > 0 ? draft.inValues : [draft.first];
-    if (
-      values.length === 0 ||
-      (column.semantics.filterFamily !== "text" && values.some((value) => value.length === 0))
-    ) {
+    const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
+    if (column.semantics.filterFamily !== "text" && values.some((value) => value.length === 0)) {
       return { filter: undefined, error: "Enter one or more valid values." };
     }
     const decoded = values.map((value) => column.semantics.parseCanonicalText(value));
@@ -923,6 +1021,12 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
         ),
       }),
     };
+  }
+  if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
+    const option =
+      draft.selectIndex === undefined ? undefined : column.selectOptions?.[draft.selectIndex];
+    if (option === undefined) return { filter: undefined, error: "Choose a value." };
+    return { filter: Object.freeze({ ...base, filter: option }) };
   }
   const first = column.semantics.parseCanonicalText(draft.first);
   if (first._tag === "Failure") return { filter: undefined, error: first.message };
@@ -943,8 +1047,7 @@ function changeExpressionMode(
 ): FilterDraft {
   if (mode === "leaf") {
     if (draft.kind === "leaf") return draft;
-    if (draft.kind === "not") return draft.condition;
-    return draft.conditions[0];
+    return firstFilterLeaf(draft);
   }
   if (mode === "NOT") {
     return draft.kind === "not"
@@ -976,6 +1079,12 @@ function changeExpressionMode(
   });
 }
 
+function firstFilterLeaf(draft: FilterDraft): FilterLeafDraft {
+  if (draft.kind === "leaf") return draft;
+  if (draft.kind === "not") return firstFilterLeaf(draft.condition);
+  return firstFilterLeaf(draft.conditions[0]);
+}
+
 function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
   return Object.freeze({
     kind: "leaf",
@@ -983,6 +1092,7 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
     first: defaultOperand(column),
     second: "",
     inValues: Object.freeze([]),
+    inValuesExplicit: false,
     selectIndex: undefined,
     caseSensitive: false,
     accentSensitive: false,
@@ -998,6 +1108,24 @@ function formatOperand(column: CompiledColumn, value: unknown): string | undefin
   }
 }
 
+function formatFilterDraftOperand(
+  column: CompiledColumn,
+  operator: FilterOperator,
+  value: unknown,
+): string | undefined {
+  if (isSubstringFilterOperator(operator) && typeof value === "string") return value;
+  return formatOperand(column, value);
+}
+
+function isSubstringFilterOperator(operator: FilterOperator): boolean {
+  return (
+    operator === "contains" ||
+    operator === "notContains" ||
+    operator === "startsWith" ||
+    operator === "endsWith"
+  );
+}
+
 function findSelectOptionIndex(column: CompiledColumn, value: unknown): number | undefined {
   if (value === undefined || column.selectOptions === undefined) return undefined;
   const index = column.selectOptions.findIndex((option) => {
@@ -1008,6 +1136,11 @@ function findSelectOptionIndex(column: CompiledColumn, value: unknown): number |
     }
   });
   return index === -1 ? undefined : index;
+}
+
+function findSelectOptionIndexFromText(column: CompiledColumn, text: string): number | undefined {
+  const parsed = column.semantics.parseCanonicalText(text);
+  return parsed._tag === "Success" ? findSelectOptionIndex(column, parsed.value) : undefined;
 }
 
 function defaultFilterOperator(column: CompiledColumn): FilterOperator {

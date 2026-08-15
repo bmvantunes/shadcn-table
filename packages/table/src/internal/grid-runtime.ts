@@ -136,7 +136,6 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
   readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
-  readonly subscribeQuickFilterFields: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
@@ -226,7 +225,6 @@ const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 type QueryTransition = Readonly<{
   readonly queryChanged: boolean;
   readonly quickFilterChanged: boolean;
-  readonly quickFilterFieldsChanged: boolean;
   readonly sortingChanged: boolean;
   readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
   readonly previousColumnFilters: ReadonlyMap<string, unknown>;
@@ -236,7 +234,6 @@ type ColumnConfiguration = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly baselineFilters: readonly unknown[];
   readonly baselineOrderBy: BrunoTableOrderBy;
-  readonly quickFilterFields: readonly string[];
   readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly columnLayout: BrunoTableColumnLayoutState;
@@ -259,7 +256,6 @@ export class BrunoTableGridRuntime<TRow> {
   >();
   private readonly queryListeners = new Set<Listener>();
   private readonly quickFilterListeners = new Set<Listener>();
-  private readonly quickFilterFieldsListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
@@ -272,7 +268,7 @@ export class BrunoTableGridRuntime<TRow> {
   private columnsById: ReadonlyMap<string, CompiledColumn>;
   private baselineFilters: readonly unknown[];
   private baselineOrderBy: BrunoTableOrderBy;
-  private quickFilterFields: readonly string[];
+  private readonly quickFilterFields: readonly string[];
   private query: BrunoTableQuerySnapshot;
   private columnFilterSnapshots: ReadonlyMap<string, unknown>;
   private readonly columnFilterVersions = new Map<string, number>();
@@ -358,7 +354,6 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
         subscribeQuickFilter: this.subscribeQuickFilter,
-        subscribeQuickFilterFields: this.subscribeQuickFilterFields,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
         subscribeColumnFilter: this.subscribeColumnFilter,
@@ -399,11 +394,7 @@ export class BrunoTableGridRuntime<TRow> {
     const configuration =
       this.columns === columns &&
       this.baselineFilters === queryConfiguration.baselineFilters &&
-      this.baselineOrderBy === queryConfiguration.baselineOrderBy &&
-      sameStringArray(
-        this.quickFilterFields,
-        queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS,
-      )
+      this.baselineOrderBy === queryConfiguration.baselineOrderBy
         ? undefined
         : this.stageColumns(columns, queryConfiguration);
     const next = this.createState(publication);
@@ -413,7 +404,6 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnsById = indexColumns(configuration.columns);
       this.baselineFilters = configuration.baselineFilters;
       this.baselineOrderBy = configuration.baselineOrderBy;
-      this.quickFilterFields = configuration.quickFilterFields;
       this.query = configuration.query;
       this.updateColumnFilterSnapshots();
       this.columnLayout = configuration.columnLayout;
@@ -593,9 +583,6 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterListeners, listener);
-
-  public readonly subscribeQuickFilterFields = (listener: Listener): (() => void) =>
-    subscribe(this.quickFilterFieldsListeners, listener);
 
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);
@@ -786,15 +773,9 @@ export class BrunoTableGridRuntime<TRow> {
   ): ColumnConfiguration {
     const baselineFilters = queryConfiguration.baselineFilters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
-    const requestedQuickFilterFields =
-      queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
-    const quickFilterFields = sameStringArray(this.quickFilterFields, requestedQuickFilterFields)
-      ? this.quickFilterFields
-      : requestedQuickFilterFields;
     const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
-    const quickFilterFieldsChanged = this.quickFilterFields !== quickFilterFields;
-    const nextQuickFilter = quickFilterFieldsChanged ? "" : this.query.quickFilter;
+    const nextQuickFilter = this.query.quickFilter;
     const semanticsChanged =
       !sameReferences(this.query.filters, nextFilters) ||
       !sameOrderBy(this.query.orderBy, nextOrderBy) ||
@@ -823,14 +804,12 @@ export class BrunoTableGridRuntime<TRow> {
       columns,
       baselineFilters,
       baselineOrderBy,
-      quickFilterFields,
       query,
       columnCommands,
       columnLayout,
       transition: Object.freeze({
         queryChanged: true,
         quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
-        quickFilterFieldsChanged,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         previousCommands: this.columnCommands,
         previousColumnFilters: this.columnFilterSnapshots,
@@ -883,7 +862,6 @@ export class BrunoTableGridRuntime<TRow> {
     return Object.freeze({
       queryChanged,
       quickFilterChanged,
-      quickFilterFieldsChanged: false,
       sortingChanged,
       previousCommands,
       previousColumnFilters,
@@ -892,9 +870,6 @@ export class BrunoTableGridRuntime<TRow> {
 
   private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
-    if (transition.quickFilterFieldsChanged) {
-      firstError = firstListenerError(firstError, notify(this.quickFilterFieldsListeners));
-    }
     if (transition.quickFilterChanged) {
       firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
     }
