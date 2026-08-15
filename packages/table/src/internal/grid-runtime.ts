@@ -266,6 +266,7 @@ type ColumnConfiguration = Readonly<{
   readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly columnLayout: BrunoTableColumnLayoutState;
+  readonly invalidatedColumnIds: readonly string[];
   readonly transition: QueryTransition;
 }>;
 
@@ -459,6 +460,15 @@ export class BrunoTableGridRuntime<TRow> {
     this.publication = publication;
     const installed = stabilizeRuntimeState(previous, next);
     this.state = installed;
+    let configurationError: ListenerError | undefined;
+    if (configuration !== undefined) {
+      for (const columnId of configuration.invalidatedColumnIds) {
+        configurationError = firstListenerError(
+          configurationError,
+          this.invalidateColumnFilterCommand(columnId),
+        );
+      }
+    }
     const transitionError =
       configuration === undefined
         ? undefined
@@ -470,7 +480,10 @@ export class BrunoTableGridRuntime<TRow> {
             this.notifyColumnStructureTransition(previousLayoutSnapshot),
           );
     const commitError = this.commitState(previous, installed);
-    const firstError = firstListenerError(transitionError, commitError);
+    const firstError = firstListenerError(
+      firstListenerError(configurationError, transitionError),
+      commitError,
+    );
     if (firstError !== undefined) throw firstError.value;
   };
 
@@ -926,9 +939,6 @@ export class BrunoTableGridRuntime<TRow> {
         invalidatedColumnIds.add(column.columnId);
       }
     }
-    for (const columnId of invalidatedColumnIds) {
-      this.invalidateColumnFilterCommand(columnId);
-    }
     const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
     const nextQuickFilter = this.query.quickFilter;
@@ -963,6 +973,7 @@ export class BrunoTableGridRuntime<TRow> {
       query,
       columnCommands,
       columnLayout,
+      invalidatedColumnIds: Object.freeze([...invalidatedColumnIds]),
       transition: Object.freeze({
         filterChanged:
           this.columns !== columns ||
@@ -1547,19 +1558,24 @@ function sameFilterCollection(
     return true;
   }
   if (!unordered) return false;
-  const nextCounts = new Map<string, number>();
-  const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
-  if (nextKeys.every((key): key is string => key !== undefined)) {
-    for (const key of nextKeys) nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1);
-    for (const value of previous) {
-      const key = filterValueComparisonKey(value, columnsById);
-      if (key === undefined) break;
-      const count = nextCounts.get(key) ?? 0;
-      if (count === 0) break;
-      if (count === 1) nextCounts.delete(key);
-      else nextCounts.set(key, count - 1);
+  if (
+    !containsSharedFilterNodesForComparison(previous) &&
+    !containsSharedFilterNodesForComparison(next)
+  ) {
+    const nextCounts = new Map<string, number>();
+    const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
+    if (nextKeys.every((key): key is string => key !== undefined)) {
+      for (const key of nextKeys) nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1);
+      for (const value of previous) {
+        const key = filterValueComparisonKey(value, columnsById);
+        if (key === undefined) break;
+        const count = nextCounts.get(key) ?? 0;
+        if (count === 0) break;
+        if (count === 1) nextCounts.delete(key);
+        else nextCounts.set(key, count - 1);
+      }
+      if (nextCounts.size === 0) return true;
     }
-    if (nextCounts.size === 0) return true;
   }
   const matched = new Set<number>();
   return previous.every((value) => {
@@ -1571,6 +1587,36 @@ function sameFilterCollection(
     }
     return false;
   });
+}
+
+function containsSharedFilterNodesForComparison(filters: readonly unknown[]): boolean {
+  const visited = new WeakSet<object>();
+  const pending = Array.from(filters);
+  let nodes = 0;
+  while (pending.length > 0) {
+    const candidate = pending.pop();
+    if (typeof candidate !== "object" || candidate === null) continue;
+    if (visited.has(candidate)) return true;
+    visited.add(candidate);
+    nodes += 1;
+    if (nodes > 1_024) return true;
+    if (Array.isArray(candidate)) {
+      for (const condition of candidate) pending.push(condition);
+      continue;
+    }
+    try {
+      const filter = candidate as Readonly<Record<string, unknown>>;
+      const type = filter["type"];
+      if ((type === "AND" || type === "OR") && Array.isArray(filter["conditions"])) {
+        pending.push(filter["conditions"]);
+      } else if (type === "NOT" && filter["condition"] !== undefined) {
+        pending.push(filter["condition"]);
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
 }
 
 function filterValueComparisonKey(
@@ -1592,7 +1638,7 @@ function filterValueComparisonKey(
   if (Array.isArray(value)) {
     const keys = value.map((item) => filterValueComparisonKey(item, columnsById, seen));
     if (keys.some((key) => key === undefined)) return undefined;
-    const result = `array:[${keys.join(",")}]`;
+    const result = `array:${JSON.stringify(keys)}`;
     seen.set(value, result);
     return result;
   }
@@ -1608,7 +1654,7 @@ function filterValueComparisonKey(
       const rightText = String(right);
       return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
     });
-  const parts: string[] = [];
+  const parts: Array<readonly [string, string]> = [];
   for (const key of keys) {
     const child = record[key];
     if ((key === "filter" || key === "filterTo") && column !== undefined) {
@@ -1623,9 +1669,10 @@ function filterValueComparisonKey(
           }),
         );
         if (operands.some((operand) => operand === undefined)) return undefined;
-        parts.push(
-          `${key}:[${[...new Set(operands as string[])].sort(compareStringValues).join(",")}]`,
-        );
+        parts.push([
+          String(key),
+          JSON.stringify([...new Set(operands as string[])].sort(compareStringValues)),
+        ]);
       } else {
         const operand = filterOperandComparisonKey(child, column, {
           accentSensitive: record["accentSensitive"] === true,
@@ -1646,7 +1693,7 @@ function filterValueComparisonKey(
           unordered: false,
         });
         if (operand === undefined) return undefined;
-        parts.push(`${key}:${operand}`);
+        parts.push([String(key), operand]);
       }
       continue;
     }
@@ -1655,14 +1702,14 @@ function filterValueComparisonKey(
         filterValueComparisonKey(condition, columnsById, seen),
       );
       if (conditions.some((condition) => condition === undefined)) return undefined;
-      parts.push(`${key}:[${(conditions as string[]).sort(compareStringValues).join(",")}]`);
+      parts.push([String(key), JSON.stringify((conditions as string[]).sort(compareStringValues))]);
       continue;
     }
     const childKey = filterValueComparisonKey(child, columnsById, seen);
     if (childKey === undefined) return undefined;
-    parts.push(`${String(key)}:${childKey}`);
+    parts.push([String(key), childKey]);
   }
-  const result = `record:{${parts.join("|")}}`;
+  const result = `record:${JSON.stringify(parts)}`;
   seen.set(value, result);
   return result;
 }
@@ -1881,21 +1928,16 @@ function filterOperandComparisonKey(
   }
   switch (column.semantics.editorFamily) {
     case "number":
+      if (column.valueType !== "number") return undefined;
       return typeof value === "number" ? `number:${String(value)}` : undefined;
     case "bigint":
+      if (column.valueType !== "bigint") return undefined;
       return typeof value === "bigint" ? `bigint:${value.toString()}` : undefined;
     case "boolean":
+      if (column.valueType !== "boolean") return undefined;
       return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
     default:
-      try {
-        return `canonical:${normalizeBrunoTableFilterText(
-          column.semantics.formatCanonicalText(value),
-          options.caseSensitive,
-          options.accentSensitive,
-        )}`;
-      } catch {
-        return undefined;
-      }
+      return undefined;
   }
 }
 

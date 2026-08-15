@@ -410,6 +410,102 @@ describe("Client row model", () => {
     ).toEqual(["low", "middle"]);
   });
 
+  it("does not apply built-in numeric membership keys to custom equality semantics", () => {
+    const valueType = {
+      codecId: "test/object-is-number",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "number",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected number." } as const),
+      equivalent: (left: number, right: number) => Object.is(left, right),
+      compare: (left: number, right: number) => (left < right ? -1 : left > right ? 1 : 0),
+      formatCanonicalText: (value: number) => String(value),
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Number(text),
+      }),
+      formatDisplay: (value: number) => String(value),
+      encodePersisted: (value: number) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected number." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", type: "in", filter: [-0] }],
+      columns,
+    );
+
+    expect(
+      filterClientRows(
+        [
+          { id: "negative-zero", value: -0 },
+          { id: "positive-zero", value: 0 },
+        ],
+        columns,
+        filters,
+      ).map((row) => row.id),
+    ).toEqual(["negative-zero"]);
+  });
+
+  it("admits symbol operands for custom value domains", () => {
+    const value = Symbol("value");
+    const valueType = {
+      codecId: "test/symbol",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "symbol"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected symbol." } as const),
+      equivalent: (left: symbol, right: symbol) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (input: symbol) => input.description ?? "",
+      parseCanonicalText: (text: string) => ({
+        _tag: "Failure" as const,
+        message: `Cannot parse symbol: ${text}`,
+      }),
+      formatDisplay: (input: symbol) => input.description ?? "",
+      encodePersisted: (input: symbol) => input.description ?? "",
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Symbols are not persisted." }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", type: "equals", filter: value }],
+      columns,
+    );
+
+    expect(filters).toHaveLength(1);
+    expect(filterClientRows([{ value }, { value: Symbol("other") }], columns, filters)).toEqual([
+      { value },
+    ]);
+  });
+
   it("retains empty ranges and strings while dropping invalid text operands and arrays", () => {
     const columns = compileColumns([
       {

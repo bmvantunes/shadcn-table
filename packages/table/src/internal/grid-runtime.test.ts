@@ -246,6 +246,28 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
+  it("does not collide when unordered in operands contain delimiters", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "a" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "in", filter: ["a", "b,text:c"] }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "in", filter: ["a,text:b", "c"] },
+    });
+
+    expect(runtime.getQuerySnapshot()).not.toBe(query);
+    expect(queryListener).toHaveBeenCalledOnce();
+  });
+
   it("compares large text in operands through bounded keyed matching", () => {
     const values = Array.from({ length: 4_096 }, (_, index) => `Name-${String(index)}`);
     const runtime = createClientRuntime(
@@ -476,6 +498,9 @@ describe("BrunoTable filter runtime primitives", () => {
       filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
     });
     expect(runtime.getColumnFilterVersionSnapshot("COL_ID_NAME")).toBe(1);
+    const view = runtime.getView();
+    const epochListener = vi.fn(() => view.getColumnFilterSnapshot("COL_ID_NAME"));
+    view.subscribeColumnFilterCommandEpoch("COL_ID_NAME", epochListener);
 
     const replacementColumns = compileColumns([
       {
@@ -488,6 +513,8 @@ describe("BrunoTable filter runtime primitives", () => {
     runtime.configure((row) => row.id, replacementColumns);
 
     expect(runtime.getColumnFilterVersionSnapshot("COL_ID_NAME")).toBe(0);
+    expect(epochListener).toHaveBeenCalledOnce();
+    expect(epochListener).toHaveReturnedWith(undefined);
   });
 
   it("publishes one generation for a committed Quick Filter without changing Grid Filters", () => {

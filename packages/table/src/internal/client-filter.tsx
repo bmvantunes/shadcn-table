@@ -395,7 +395,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     <PopoverContent
       align="start"
       aria-label={labelForContent(column)}
-      className="w-80"
+      className="max-h-[min(32rem,calc(100vh-1rem))] max-w-[calc(100vw-1rem)] overflow-y-auto w-80"
       dir={direction}
       onKeyDown={(event) => {
         if (event.key === "Escape") onEscape();

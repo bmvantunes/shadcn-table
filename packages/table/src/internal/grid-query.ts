@@ -743,12 +743,12 @@ function filterMembershipKey(
   if (column.semantics.filterFamily === "text") {
     return normalizedText === undefined ? undefined : `text:${normalizedText}`;
   }
-  if (column.semantics.editorFamily === "number") {
+  if (column.valueType === "number") {
     return typeof value === "number" && Number.isFinite(value)
       ? `number:${String(value)}`
       : undefined;
   }
-  if (column.semantics.editorFamily === "bigint") {
+  if (column.valueType === "bigint") {
     return typeof value === "bigint" ? `bigint:${value.toString(10)}` : undefined;
   }
   return undefined;
@@ -864,7 +864,7 @@ function evaluateFilterRecord(
           ? normalizeCanonicalTextOperand(column, value, caseSensitive, accentSensitive)
           : undefined,
       );
-      return key !== undefined && plan.membershipKeys.has(key);
+      if (key !== undefined) return plan.membershipKeys.has(key);
     }
     return (
       Array.isArray(operand) &&
@@ -1093,7 +1093,8 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
       candidate === undefined ||
       typeof candidate === "boolean" ||
       typeof candidate === "number" ||
-      typeof candidate === "bigint"
+      typeof candidate === "bigint" ||
+      typeof candidate === "symbol"
     ) {
       return true;
     }
