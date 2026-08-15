@@ -147,6 +147,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
   readonly subscribeColumnFilterCommandEpoch: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
+  readonly subscribeQuickFilterCommandEpoch: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
@@ -289,6 +290,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterCommandEpochListeners = new Map<string, Set<Listener>>();
+  private readonly quickFilterCommandEpochListeners = new Set<Listener>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
   private view: BrunoTableRowPipelineRuntimeView | undefined;
@@ -400,6 +402,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeSorting: this.subscribeSorting,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
+        subscribeQuickFilterCommandEpoch: this.subscribeQuickFilterCommandEpoch,
         dispatchGridCommand: this.dispatchGridCommand,
         toggleColumnSort: this.toggleColumnSort,
         clearColumnFilters: this.clearColumnFilters,
@@ -637,6 +640,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterListeners, listener);
 
+  public readonly subscribeQuickFilterCommandEpoch = (listener: Listener): (() => void) =>
+    subscribe(this.quickFilterCommandEpochListeners, listener);
+
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);
 
@@ -768,6 +774,8 @@ export class BrunoTableGridRuntime<TRow> {
         this.query.orderBy,
         boundBrunoTableQuickFilterText(command.text),
       );
+      const error = notify(this.quickFilterCommandEpochListeners);
+      if (error !== undefined) throw error.value;
       return;
     }
     if (!isBrunoTableColumnLayoutCommand(command)) return;
@@ -1304,7 +1312,15 @@ function createColumnFilterSnapshots(
   const snapshots = new Map<string, unknown>();
   for (const [columnId, values] of entries) {
     if (values.length === 1) {
-      snapshots.set(columnId, values[0]);
+      const previous = previousSnapshots?.get(columnId);
+      snapshots.set(
+        columnId,
+        previous !== undefined &&
+          !Array.isArray(previous) &&
+          sameFilterValue(previous, values[0], columnsById)
+          ? previous
+          : values[0],
+      );
       continue;
     }
     const previous = previousSnapshots?.get(columnId);
@@ -1607,7 +1623,9 @@ function filterValueComparisonKey(
           }),
         );
         if (operands.some((operand) => operand === undefined)) return undefined;
-        parts.push(`${key}:[${(operands as string[]).sort(compareStringValues).join(",")}]`);
+        parts.push(
+          `${key}:[${[...new Set(operands as string[])].sort(compareStringValues).join(",")}]`,
+        );
       } else {
         const operand = filterOperandComparisonKey(child, column, {
           accentSensitive: record["accentSensitive"] === true,
@@ -1774,7 +1792,6 @@ function sameFilterOperand(
 ): boolean {
   if (Object.is(previous, next)) return true;
   if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
-    if (previous.length !== next.length) return false;
     const previousKeys = previous.map((value) =>
       filterOperandComparisonKey(value, column, options),
     );
@@ -1783,32 +1800,22 @@ function sameFilterOperand(
       previousKeys.every((key) => key !== undefined) &&
       nextKeys.every((key) => key !== undefined)
     ) {
-      const counts = new Map<string, number>();
-      for (const key of nextKeys) {
-        const value = key as string;
-        counts.set(value, (counts.get(value) ?? 0) + 1);
-      }
-      for (const key of previousKeys) {
-        const value = key as string;
-        const count = counts.get(value) ?? 0;
-        if (count === 0) return false;
-        if (count === 1) counts.delete(value);
-        else counts.set(value, count - 1);
-      }
-      return counts.size === 0;
+      const nextSet = new Set(nextKeys as string[]);
+      const previousSet = new Set(previousKeys as string[]);
+      return previousSet.size === nextSet.size && [...previousSet].every((key) => nextSet.has(key));
     }
-    const matched = new Set<number>();
-    return previous.every((value) => {
-      for (let index = 0; index < next.length; index += 1) {
-        if (matched.has(index)) continue;
-        if (!sameFilterOperand(value, next[index], column, { ...options, unordered: false })) {
-          continue;
-        }
-        matched.add(index);
-        return true;
-      }
-      return false;
-    });
+    return (
+      previous.every((value) =>
+        next.some((candidate) =>
+          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+        ),
+      ) &&
+      next.every((value) =>
+        previous.some((candidate) =>
+          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+        ),
+      )
+    );
   }
   if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;

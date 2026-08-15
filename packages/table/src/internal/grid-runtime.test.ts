@@ -224,7 +224,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
-  it("compares in operands as an unordered semantic set", () => {
+  it("compares in operands as an unordered semantic set without duplicate members", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
       (row) => row.id,
@@ -239,7 +239,7 @@ describe("BrunoTable filter runtime primitives", () => {
     runtime.dispatchGridCommand({
       type: "column.filter.replace",
       columnId: "COL_ID_NAME",
-      filter: { columnId: "COL_ID_NAME", type: "in", filter: ["Grace", "Ada"] },
+      filter: { columnId: "COL_ID_NAME", type: "in", filter: ["Grace", "Ada", "Ada"] },
     });
 
     expect(runtime.getQuerySnapshot()).toBe(query);
@@ -347,11 +347,14 @@ describe("BrunoTable filter runtime primitives", () => {
     );
     const view = runtime.getView();
     const before = view.getQuickFilterCommandEpochSnapshot();
+    const epochListener = vi.fn();
+    view.subscribeQuickFilterCommandEpoch(epochListener);
 
     view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
     expect(view.getQuickFilterCommandEpochSnapshot()).toBe(before + 1);
     view.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
     expect(view.getQuickFilterCommandEpochSnapshot()).toBe(before + 2);
+    expect(epochListener).toHaveBeenCalledTimes(2);
   });
 
   it("compares scalar array operands through their Value Semantics", () => {

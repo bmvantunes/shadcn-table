@@ -2337,6 +2337,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               activateHeaderCommand={activateHeaderCommand}
               announce={setAnnouncement}
               allColumns={allColumns}
+              openHeaderFilter={openHeaderFilter}
               toggleHeaderFilter={toggleHeaderFilter}
               toggleHeaderSort={toggleHeaderSort}
               visibleColumnIds={visibleColumnIds}
@@ -2449,6 +2450,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           instanceId={instanceId}
           logicalColumns={logicalColumns}
           navigation={navigation}
+          openHeaderFilter={openHeaderFilter}
           renderColumnFilter={renderColumnFilter}
           restoreColumnFocus={restoreColumnFocus}
           runtime={runtime}
@@ -2563,6 +2565,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   instanceId,
   logicalColumns,
   navigation,
+  openHeaderFilter,
   renderColumnFilter,
   restoreColumnFocus,
   runtime,
@@ -2575,6 +2578,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   readonly instanceId: string;
   readonly logicalColumns: readonly CompiledColumn[];
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly openHeaderFilter: (columnId: string) => void;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly runtime: BrunoTableRuntimeView;
@@ -2606,6 +2610,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
         column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
         columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
         instanceId={instanceId}
+        openHeaderFilter={openHeaderFilter}
         renderColumnFilter={renderColumnFilter}
         restoreColumnFocus={restoreColumnFocus}
         runtime={runtime}
@@ -2634,6 +2639,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   column,
   columnIndex,
   instanceId,
+  openHeaderFilter,
   restoreColumnFocus,
   renderColumnFilter,
   runtime,
@@ -2646,6 +2652,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   readonly column: CompiledColumn | undefined;
   readonly columnIndex: number;
   readonly instanceId: string;
+  readonly openHeaderFilter: (columnId: string) => void;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly runtime: BrunoTableRuntimeView;
@@ -2707,7 +2714,9 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
               column={column}
               command={command}
               direction={menuDirection}
+              openHeaderFilter={openHeaderFilter}
               preventMenuFinalFocus
+              renderColumnFilter={renderColumnFilter}
               restoreColumnFocus={restoreColumnFocus}
               runtime={runtime}
               visibleColumnIds={visibleColumnIds}
@@ -2726,6 +2735,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   navigation,
   onColumnPointerDown,
   onColumnResizeKeyDown,
+  openHeaderFilter,
   restoreColumnFocus,
   toggleHeaderFilter,
   toggleHeaderSort,
@@ -2752,6 +2762,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
     event: ReactKeyboardEvent<HTMLElement>,
     column: CompiledColumn,
   ) => void;
+  readonly openHeaderFilter: (columnId: string) => void;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly toggleHeaderFilter: (columnId: string) => void;
   readonly toggleHeaderSort: (columnId: string, multi: boolean) => void;
@@ -2791,6 +2802,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             tableId={tableId}
             columnIndex={index}
             column={column}
+            openHeaderFilter={openHeaderFilter}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
             registerColumnFilterOpener={registerColumnFilterOpener}
@@ -2824,6 +2836,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             tableId={tableId}
             columnIndex={columnWindow.pinnedStart.length + columnWindow.centerStartIndex + index}
             column={column}
+            openHeaderFilter={openHeaderFilter}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
             registerColumnFilterOpener={registerColumnFilterOpener}
@@ -2867,6 +2880,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             tableId={tableId}
             columnIndex={columnWindow.pinnedStart.length + columnWindow.centerCount + index}
             column={column}
+            openHeaderFilter={openHeaderFilter}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
             registerColumnFilterOpener={registerColumnFilterOpener}
@@ -2902,6 +2916,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   column,
   pinned,
   navigation,
+  openHeaderFilter,
   runtime,
   renderColumnFilter,
   registerColumnFilterOpener,
@@ -2930,6 +2945,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   readonly column: CompiledColumn;
   readonly pinned?: "start" | "end";
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly openHeaderFilter: (columnId: string) => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
@@ -3072,6 +3088,8 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               column={column}
               command={command}
               direction={menuDirection}
+              openHeaderFilter={openHeaderFilter}
+              renderColumnFilter={renderColumnFilter}
               restoreColumnFocus={restoreColumnFocus}
               runtime={runtime}
               visibleColumnIds={visibleColumnIds}
@@ -3131,7 +3149,9 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   column,
   command,
   direction,
+  openHeaderFilter,
   preventMenuFinalFocus = false,
+  renderColumnFilter,
   restoreColumnFocus,
   runtime,
   visibleColumnIds,
@@ -3141,7 +3161,9 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   readonly column: CompiledColumn;
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly direction: "ltr" | "rtl";
+  readonly openHeaderFilter: (columnId: string) => void;
   readonly preventMenuFinalFocus?: boolean;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly visibleColumnIds: readonly string[];
@@ -3211,22 +3233,34 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           </DropdownMenuItem>
         </DropdownMenuGroup>
       ) : null}
-      {command.filterBaselineAvailable ? (
+      {supportsBrunoTableCustomColumnFilter(column, renderColumnFilter) ||
+      command.filterBaselineAvailable ? (
         <DropdownMenuGroup>
           <DropdownMenuLabel>Filter</DropdownMenuLabel>
-          <DropdownMenuItem
-            onClick={() => {
-              const action = command.filterActive ? "cleared" : "reset";
-              runtime.dispatchGridCommand({
-                type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
-                columnId: column.columnId,
-              });
-              announce(`${column.headerName} filter ${action}`);
-              restoreColumnFocus(column.columnId);
-            }}
-          >
-            {command.filterActive ? "Clear filter" : "Reset filter"}
-          </DropdownMenuItem>
+          {supportsBrunoTableCustomColumnFilter(column, renderColumnFilter) ? (
+            <DropdownMenuItem
+              onClick={() => {
+                openHeaderFilter(column.columnId);
+              }}
+            >
+              Open filter for {column.headerName}
+            </DropdownMenuItem>
+          ) : null}
+          {command.filterActive || command.filterBaselineAvailable ? (
+            <DropdownMenuItem
+              onClick={() => {
+                const action = command.filterActive ? "cleared" : "reset";
+                runtime.dispatchGridCommand({
+                  type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
+                  columnId: column.columnId,
+                });
+                announce(`${column.headerName} filter ${action}`);
+                restoreColumnFocus(column.columnId);
+              }}
+            >
+              {command.filterActive ? "Clear filter" : "Reset filter"}
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuGroup>
       ) : null}
       <DropdownMenuGroup>

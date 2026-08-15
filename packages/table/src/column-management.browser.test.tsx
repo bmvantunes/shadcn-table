@@ -1225,6 +1225,19 @@ describe("BrunoTable column management browser surface", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
   });
 
+  test("opens the typed filter editor from a column menu without an initial baseline", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Open filter for Name", exact: true }),
+    );
+    await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_COLUMN_MANAGEMENT" }))
+      .toHaveFocus();
+  });
+
   test("provides grouped layout menus for pinning, moving, visibility, and reset", async () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const menuTrigger = screen.getByRole("button", { name: "Column menu for Name" });

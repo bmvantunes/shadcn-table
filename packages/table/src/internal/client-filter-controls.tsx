@@ -129,14 +129,22 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     [runtime],
   );
   const debouncer = useDebouncer(publish, { wait: 150 });
+  const commandEpoch = useSyncExternalStore(
+    runtime.subscribeQuickFilterCommandEpoch,
+    runtime.getQuickFilterCommandEpochSnapshot,
+    runtime.getQuickFilterCommandEpochSnapshot,
+  );
+  const lastCommandEpochRef = useRef(commandEpoch);
   useEffect(() => {
     debouncer.cancel();
-    if (lastCommittedRef.current === initialValue) return;
+    const commandChanged = lastCommandEpochRef.current !== commandEpoch;
+    lastCommandEpochRef.current = commandEpoch;
+    if (!commandChanged && lastCommittedRef.current === initialValue) return;
     lastCommittedRef.current = initialValue;
     if (draftRef.current === initialValue) return;
     draftRef.current = initialValue;
     setDraft(initialValue);
-  }, [debouncer, initialValue]);
+  }, [commandEpoch, debouncer, initialValue]);
   useEffect(() => () => debouncer.cancel(), [debouncer]);
   return (
     <div className="flex min-w-56 items-center gap-1">
@@ -380,6 +388,7 @@ type BrunoTableActiveFilterEntry =
 function activeFilterEntries(
   query: BrunoTableFilterSnapshot,
 ): readonly BrunoTableActiveFilterEntry[] {
+  const descriptionState = createActiveFilterDescriptionState();
   const entries: BrunoTableActiveFilterEntry[] = [];
   if (normalizeBrunoTableFilterText(query.quickFilter).length > 0) {
     entries.push({
@@ -414,11 +423,29 @@ function activeFilterEntries(
       columnId: column.columnId,
       key: `column-filter-${column.columnId}`,
       label: joinActiveFilterSummaries(filters, " AND ", (filter) =>
-        describeActiveFilter(column, filter, columnLabel),
+        describeActiveFilter(column, filter, columnLabel, descriptionState),
       ),
     });
   }
   return entries;
+}
+
+type ActiveFilterDescriptionState = {
+  readonly seen: WeakSet<object>;
+  nodes: number;
+};
+
+function createActiveFilterDescriptionState(): ActiveFilterDescriptionState {
+  return { seen: new WeakSet<object>(), nodes: 0 };
+}
+
+const ACTIVE_FILTER_DESCRIPTION_NODE_LIMIT = 1_024;
+
+function enterActiveFilterDescription(value: object, state: ActiveFilterDescriptionState): boolean {
+  if (state.seen.has(value) || state.nodes >= ACTIVE_FILTER_DESCRIPTION_NODE_LIMIT) return false;
+  state.seen.add(value);
+  state.nodes += 1;
+  return true;
 }
 
 function createBrunoTableActiveFilterOpenStore(): {
@@ -458,26 +485,29 @@ function describeActiveFilter(
   column: CompiledColumn,
   value: unknown,
   columnLabel = column.headerName,
+  state: ActiveFilterDescriptionState = createActiveFilterDescriptionState(),
 ): string {
   if (Array.isArray(value)) {
+    if (!enterActiveFilterDescription(value, state)) return "…";
     return joinActiveFilterSummaries(value, " AND ", (condition) =>
-      describeActiveFilter(column, condition, columnLabel),
+      describeActiveFilter(column, condition, columnLabel, state),
     );
   }
   if (typeof value !== "object" || value === null) return columnLabel;
+  if (!enterActiveFilterDescription(value, state)) return "…";
   const record = value as Readonly<Record<string, unknown>>;
   const type = typeof record["type"] === "string" ? record["type"] : "filter";
   if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
     const joiner = type === "AND" ? " AND " : " OR ";
     return truncateActiveFilterSummary(
       `${columnLabel}: (${joinActiveFilterSummaries(record["conditions"], joiner, (condition) =>
-        describeActiveFilter(column, condition, columnLabel),
+        describeActiveFilter(column, condition, columnLabel, state),
       )})`,
     );
   }
   if (type === "NOT" && record["condition"] !== undefined) {
     return truncateActiveFilterSummary(
-      `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel)})`,
+      `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel, state)})`,
     );
   }
   const operand = record["filter"];

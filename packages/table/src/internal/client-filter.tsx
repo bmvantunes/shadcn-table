@@ -923,6 +923,16 @@ function FilterOperand({
                   variant="ghost"
                   onClick={() => {
                     const nextValues = values.filter((_, candidate) => candidate !== index);
+                    const nextValuesAuthored = Object.freeze(
+                      nextValues.map((_, candidate) => {
+                        const sourceIndex = candidate >= index ? candidate + 1 : candidate;
+                        return (
+                          (draft.inValuesAuthored.length > 0
+                            ? draft.inValuesAuthored
+                            : [draft.firstAuthored])[sourceIndex] ?? false
+                        );
+                      }),
+                    );
                     const nextFocusId =
                       nextValues.length === 0
                         ? `${errorId}-${path}-add-value`
@@ -931,19 +941,10 @@ function FilterOperand({
                       Object.freeze({
                         ...draft,
                         first: nextValues[0] ?? "",
-                        firstAuthored: nextValues.length > 0,
+                        firstAuthored: nextValuesAuthored[0] === true,
                         inValues: Object.freeze(nextValues),
                         inValuesExplicit: true,
-                        inValuesAuthored: Object.freeze(
-                          nextValues.map((_, candidate) => {
-                            const sourceIndex = candidate >= index ? candidate + 1 : candidate;
-                            return (
-                              (draft.inValuesAuthored.length > 0
-                                ? draft.inValuesAuthored
-                                : [draft.firstAuthored])[sourceIndex] ?? false
-                            );
-                          }),
-                        ),
+                        inValuesAuthored: nextValuesAuthored,
                       }),
                       continuous ? "continuous" : "immediate",
                     );
@@ -1083,9 +1084,22 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
   }
 }
 
+type FilterDraftMaterializationState = {
+  readonly memo: WeakMap<object, FilterDraft>;
+  readonly active: WeakSet<object>;
+  nodes: number;
+};
+
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
+  const state: FilterDraftMaterializationState = {
+    memo: new WeakMap<object, FilterDraft>(),
+    active: new WeakSet<object>(),
+    nodes: 0,
+  };
   if (Array.isArray(committed)) {
-    const conditions = committed.map((condition) => draftFromNode(column, asRecord(condition)));
+    const conditions = committed.map((condition) =>
+      draftFromNode(column, asRecord(condition), state, 0),
+    );
     if (conditions.length >= 2) {
       return Object.freeze({
         kind: "compound",
@@ -1099,72 +1113,95 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
     }
     return conditions[0] ?? createDefaultLeaf(column);
   }
-  return draftFromNode(column, asRecord(committed));
+  return draftFromNode(column, asRecord(committed), state, 0);
 }
 
 function draftFromNode(
   column: CompiledColumn,
   record: Readonly<Record<string, unknown>>,
+  state: FilterDraftMaterializationState,
+  depth: number,
 ): FilterDraft {
+  const cached = state.memo.get(record);
+  if (cached !== undefined) return cached;
+  if (
+    depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH ||
+    state.nodes >= BRUNO_TABLE_CLIENT_FILTER_MAX_NODES ||
+    state.active.has(record)
+  ) {
+    return createDefaultLeaf(column);
+  }
+  state.nodes += 1;
+  state.active.add(record);
   const type = record["type"];
-  if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
-    const conditions = record["conditions"].map((condition) =>
-      draftFromNode(column, asRecord(condition)),
-    );
-    if (conditions.length >= 1) {
-      return Object.freeze({
-        kind: "compound",
-        operator: type,
-        conditions: Object.freeze(conditions) as readonly [
-          FilterDraft,
-          FilterDraft,
-          ...FilterDraft[],
-        ],
-      });
+  try {
+    if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
+      const conditions = record["conditions"].map((condition) =>
+        draftFromNode(column, asRecord(condition), state, depth + 1),
+      );
+      if (conditions.length >= 1) {
+        const draft = Object.freeze({
+          kind: "compound",
+          operator: type,
+          conditions: Object.freeze(conditions) as readonly [
+            FilterDraft,
+            FilterDraft,
+            ...FilterDraft[],
+          ],
+        });
+        state.memo.set(record, draft);
+        return draft;
+      }
     }
-  }
-  if (type === "NOT" && record["condition"] !== undefined) {
-    return Object.freeze({
-      kind: "not",
-      condition: draftFromNode(column, asRecord(record["condition"])),
-    });
-  }
-  const operator = isFilterOperator(type) ? type : defaultFilterOperator(column);
-  const rawFilter = record["filter"];
-  const inValues =
-    operator === "in" && Array.isArray(rawFilter)
-      ? Object.freeze(rawFilter.map((value) => formatOperand(column, value) ?? ""))
-      : Object.freeze([]);
-  const first =
-    operator === "in"
-      ? (inValues[0] ?? "")
-      : (formatFilterDraftOperand(column, operator, rawFilter) ?? defaultOperand(column));
-  return Object.freeze({
-    kind: "leaf",
-    operator,
-    first,
-    firstAuthored:
+    if (type === "NOT" && record["condition"] !== undefined) {
+      const draft = Object.freeze({
+        kind: "not",
+        condition: draftFromNode(column, asRecord(record["condition"]), state, depth + 1),
+      });
+      state.memo.set(record, draft);
+      return draft;
+    }
+    const operator = isFilterOperator(type) ? type : defaultFilterOperator(column);
+    const rawFilter = record["filter"];
+    const inValues =
+      operator === "in" && Array.isArray(rawFilter)
+        ? Object.freeze(rawFilter.map((value) => formatOperand(column, value) ?? ""))
+        : Object.freeze([]);
+    const first =
       operator === "in"
-        ? inValues.length > 0
-        : rawFilter !== undefined &&
-          formatFilterDraftOperand(column, operator, rawFilter) !== undefined,
-    second: formatOperand(column, record["filterTo"]) ?? "",
-    secondAuthored: record["filterTo"] !== undefined,
-    inValues,
-    inValuesAuthored: Object.freeze(
-      operator === "in" && Array.isArray(rawFilter) ? rawFilter.map(() => true) : [],
-    ),
-    inValuesExplicit: operator === "in" && Array.isArray(rawFilter),
-    selectIndex:
-      column.semantics.filterFamily === "select"
-        ? findSelectOptionIndex(
-            column,
-            operator === "in" && Array.isArray(rawFilter) ? rawFilter[0] : rawFilter,
-          )
-        : undefined,
-    caseSensitive: record["caseSensitive"] === true,
-    accentSensitive: record["accentSensitive"] === true,
-  });
+        ? (inValues[0] ?? "")
+        : (formatFilterDraftOperand(column, operator, rawFilter) ?? defaultOperand(column));
+    const draft = Object.freeze({
+      kind: "leaf",
+      operator,
+      first,
+      firstAuthored:
+        operator === "in"
+          ? inValues.length > 0
+          : rawFilter !== undefined &&
+            formatFilterDraftOperand(column, operator, rawFilter) !== undefined,
+      second: formatOperand(column, record["filterTo"]) ?? "",
+      secondAuthored: record["filterTo"] !== undefined,
+      inValues,
+      inValuesAuthored: Object.freeze(
+        operator === "in" && Array.isArray(rawFilter) ? rawFilter.map(() => true) : [],
+      ),
+      inValuesExplicit: operator === "in" && Array.isArray(rawFilter),
+      selectIndex:
+        column.semantics.filterFamily === "select"
+          ? findSelectOptionIndex(
+              column,
+              operator === "in" && Array.isArray(rawFilter) ? rawFilter[0] : rawFilter,
+            )
+          : undefined,
+      caseSensitive: record["caseSensitive"] === true,
+      accentSensitive: record["accentSensitive"] === true,
+    });
+    state.memo.set(record, draft);
+    return draft;
+  } finally {
+    state.active.delete(record);
+  }
 }
 
 function buildFilterCandidate(column: CompiledColumn, draft: FilterDraft): FilterCandidate {
