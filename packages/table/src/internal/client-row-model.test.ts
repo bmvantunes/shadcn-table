@@ -1453,6 +1453,56 @@ describe("Client row model", () => {
     expect(decodeRuntime).toHaveBeenCalledTimes(compileDecodeCalls);
   });
 
+  it("canonicalizes semantically equal Select operands without decoding them", () => {
+    const configured = Object.freeze({ code: "open" });
+    const equivalentOperand = Object.freeze({ code: "open" });
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const selectValueType = {
+      codecId: "test/object-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(Reflect.get(value as object, "code")),
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_OBJECT_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options: [configured],
+      } as never,
+    ]);
+    const compileDecodeCalls = decodeRuntime.mock.calls.length;
+
+    const sanitized = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_OBJECT_SELECT", filter: equivalentOperand, type: "equals" }],
+      columns,
+    );
+
+    expect(sanitized[0]).toMatchObject({ columnId: "COL_ID_OBJECT_SELECT", type: "equals" });
+    expect((sanitized[0] as { readonly filter: unknown }).filter).toBe(configured);
+    expect(decodeRuntime).toHaveBeenCalledTimes(compileDecodeCalls);
+  });
+
   it("captures admitted dense operands without enumerating unrelated own properties", () => {
     const columns = compileColumns([
       {

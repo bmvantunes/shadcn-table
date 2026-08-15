@@ -514,11 +514,29 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    const configuredSelectValue =
-      column.semantics.filterFamily === "select"
-        ? column.selectOptions?.find((option) => Object.is(option, operand))
-        : undefined;
-    const isConfiguredSelectValue = configuredSelectValue !== undefined;
+    let configuredSelectValue: unknown;
+    let isConfiguredSelectValue = false;
+    if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
+      for (const option of column.selectOptions) {
+        if (Object.is(option, operand)) {
+          configuredSelectValue = option;
+          isConfiguredSelectValue = true;
+          break;
+        }
+        if (typeof operand === "string" && operand.length > BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) {
+          continue;
+        }
+        try {
+          if (!column.semantics.equivalent(option, operand)) continue;
+          configuredSelectValue = option;
+          isConfiguredSelectValue = true;
+          break;
+        } catch {
+          // Ignore an unreadable or invalid external operand and continue to
+          // the ordinary bounded decoder path below.
+        }
+      }
+    }
     if (!isConfiguredSelectValue && !isBoundedFilterOperandText(operand, context)) return undefined;
     // Compiled Select options are already canonical. Reuse the admitted option
     // so a long trusted option never re-enters a consumer decoder.
