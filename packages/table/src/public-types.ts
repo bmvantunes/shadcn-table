@@ -544,6 +544,23 @@ export type BrunoTableNonNullish<TValue> = NonNullish<TValue>;
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 export type BrunoTableNonEmptyFields<TRow> = NonEmptyFields<TRow>;
 
+type StringQueryField<TRow> = {
+  [TField in FieldKey<TRow>]: [NonNullish<TRow[TField]>] extends [never]
+    ? never
+    : [NonNullish<TRow[TField]>] extends [string]
+      ? TField
+      : never;
+}[FieldKey<TRow>];
+
+/** A string-valued source field eligible for the Client Quick Filter. */
+export type BrunoTableQuickFilterField<TRow> = StringQueryField<TRow>;
+
+/** Explicit, non-empty source-field configuration for the Client Quick Filter. */
+export type BrunoTableQuickFilterFields<TRow> = readonly [
+  BrunoTableQuickFilterField<TRow>,
+  ...BrunoTableQuickFilterField<TRow>[],
+];
+
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void]
   ? TColumn
@@ -1043,6 +1060,7 @@ export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
+    readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly viewportSource?: never;
   };
 

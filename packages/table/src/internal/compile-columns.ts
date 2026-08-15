@@ -18,6 +18,7 @@ type CompiledColumnBase = {
   readonly pinned?: "start" | "end";
   readonly valueType: unknown;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
+  readonly selectOptions?: readonly unknown[];
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
@@ -124,6 +125,10 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
   semantics = nullableSafeSemantics(semantics);
+  const selectOptions =
+    semantics.filterFamily === "select" && Array.isArray(candidate["options"])
+      ? Object.freeze(Array.from(candidate["options"] as readonly unknown[]))
+      : undefined;
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {
@@ -221,6 +226,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       ...(pinned === undefined ? {} : { pinned }),
       valueType,
       semantics,
+      ...(selectOptions === undefined ? {} : { selectOptions }),
       field,
       groupBy,
       enableFilter,
@@ -305,6 +311,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     ...(pinned === undefined ? {} : { pinned }),
     valueType,
     semantics,
+    ...(selectOptions === undefined ? {} : { selectOptions }),
     enableFilter: false,
     enableSorting: false,
     fields,

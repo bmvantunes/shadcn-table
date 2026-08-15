@@ -235,6 +235,38 @@ function readBrunoTableMenuDirection(element?: Element | null): "ltr" | "rtl" {
     : "ltr";
 }
 
+function tryOpenBrunoTableColumnFilter(
+  gridElement: Readonly<{ readonly current: HTMLDivElement | null }>,
+  columnId: string,
+): boolean {
+  const trigger = [
+    ...(gridElement.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+  ].find((candidate) => candidate.dataset["brunoFilterColumn"] === columnId);
+  if (trigger === undefined) return false;
+  trigger.click();
+  return true;
+}
+
+function revealAndOpenBrunoTableColumnFilter(
+  gridElement: Readonly<{ readonly current: HTMLDivElement | null }>,
+  revealCell: (
+    rowIndex: number,
+    columnId: string,
+    region?: "header" | "body",
+    rowId?: string,
+  ) => void,
+  columnId: string,
+): void {
+  revealCell(0, columnId, "header");
+  let attemptsRemaining = 4;
+  const retry = (): void => {
+    if (tryOpenBrunoTableColumnFilter(gridElement, columnId)) return;
+    attemptsRemaining -= 1;
+    if (attemptsRemaining > 0) requestAnimationFrame(retry);
+  };
+  requestAnimationFrame(retry);
+}
+
 function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
   grid.tabIndex = -1;
   setTimeout(() => {
@@ -373,7 +405,19 @@ export type BrunoTableViewProps<
   readonly toolbar: BrunoTableToolbarStore;
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
   readonly rowPipelineAdapter: TAdapter;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 };
+
+export type BrunoTableColumnFilterRendererProps = {
+  readonly column: CompiledColumn;
+  readonly command: BrunoTableColumnCommandSnapshot;
+  readonly runtime: BrunoTableRuntimeView;
+  readonly activateHeaderCommand: (columnId: string) => void;
+};
+
+export type BrunoTableColumnFilterRenderer = (
+  props: BrunoTableColumnFilterRendererProps,
+) => ReactElement;
 
 export type BrunoTableRowPipelineProps<
   TRuntime extends BrunoTableRuntimeView = BrunoTableRuntimeView,
@@ -416,6 +460,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   toolbar,
   rowPipeline,
   rowPipelineAdapter,
+  renderColumnFilter,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
@@ -443,6 +488,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
         focusFallback={focusFallback}
         rowPipeline={rowPipeline}
         rowPipelineAdapter={rowPipelineAdapter}
+        renderColumnFilter={renderColumnFilter}
       />
     </section>
   );
@@ -835,6 +881,7 @@ type BrunoTableGridBodyProps<TRuntime extends BrunoTableRuntimeView, TAdapter> =
   readonly focusFallback: () => void;
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
   readonly rowPipelineAdapter: TAdapter;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 };
 
 function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
@@ -844,6 +891,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   focusFallback,
   rowPipeline: RowPipeline,
   rowPipelineAdapter,
+  renderColumnFilter,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
@@ -896,6 +944,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             focusHandoff={focusHandoff}
             navigation={navigation}
             queryGeneration={snapshot.queryGeneration}
+            renderColumnFilter={renderColumnFilter}
           />
         )
       }
@@ -1033,6 +1082,7 @@ type BrunoTableViewportAdapterProps = {
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1045,6 +1095,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     focusHandoff,
     navigation,
     queryGeneration,
+    renderColumnFilter,
   }: BrunoTableViewportAdapterProps): ReactElement {
     "use no memo";
     const reactInstanceId = useId();
@@ -1191,6 +1242,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         focusHandoff={focusHandoff}
         navigation={navigation}
         revealCell={viewport.revealCell}
+        renderColumnFilter={renderColumnFilter}
       />
     );
   },
@@ -1220,6 +1272,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   focusHandoff,
   navigation,
   revealCell,
+  renderColumnFilter,
 }: {
   readonly instanceId: string;
   readonly tableId: string;
@@ -1249,6 +1302,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     region?: "header" | "body",
     rowId?: string,
   ) => void;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 }) {
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
@@ -1988,6 +2042,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       },
     [logicalColumns, runtime, setAnnouncement],
   );
+  const openHeaderFilter = useMemo(
+    () =>
+      (columnId: string): void => {
+        const column = logicalColumns.find((candidate) => candidate.columnId === columnId);
+        if (column === undefined) return;
+        if (tryOpenBrunoTableColumnFilter(gridElement, column.columnId)) return;
+        revealAndOpenBrunoTableColumnFilter(gridElement, revealCell, column.columnId);
+      },
+    [gridElement, logicalColumns, revealCell],
+  );
   useEffect(
     () => () => {
       if (interactionFrame.current !== null) cancelAnimationFrame(interactionFrame.current);
@@ -2133,13 +2197,30 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             }
             if (active?.region !== "header" || column === undefined || event.key === "F2") return;
             const command = runtime.getColumnCommandSnapshot(column.columnId);
-            if (event.altKey && event.key === "Enter" && command.filterBaselineAvailable) {
+            const filterable =
+              renderColumnFilter !== undefined &&
+              column.kind === "field" &&
+              column.enableFilter !== false;
+            const legacyFilterable = column.kind === "field" && column.enableFilter !== false;
+            if (event.altKey && event.key === "Enter" && filterable) {
+              event.preventDefault();
+              if (event.shiftKey && (command.filterActive || command.filterBaselineAvailable)) {
+                toggleHeaderFilter(column.columnId);
+              } else {
+                openHeaderFilter(column.columnId);
+              }
+            } else if (
+              event.altKey &&
+              event.key === "Enter" &&
+              legacyFilterable &&
+              command.filterBaselineAvailable
+            ) {
               event.preventDefault();
               toggleHeaderFilter(column.columnId);
             } else if (command.sortable) {
               event.preventDefault();
               toggleHeaderSort(column.columnId, event.shiftKey);
-            } else if (command.filterBaselineAvailable) {
+            } else if (filterable || legacyFilterable) {
               event.preventDefault();
               toggleHeaderFilter(column.columnId);
             }
@@ -2199,6 +2280,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               runtime={runtime}
               tableId={tableId}
               viewportFill={viewportFill}
+              renderColumnFilter={renderColumnFilter}
             />
             <tbody
               role="rowgroup"
@@ -2296,6 +2378,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           instanceId={instanceId}
           logicalColumns={logicalColumns}
           navigation={navigation}
+          renderColumnFilter={renderColumnFilter}
           restoreColumnFocus={restoreColumnFocus}
           runtime={runtime}
           tableId={tableId}
@@ -2409,6 +2492,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   instanceId,
   logicalColumns,
   navigation,
+  renderColumnFilter,
   restoreColumnFocus,
   runtime,
   tableId,
@@ -2420,6 +2504,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   readonly instanceId: string;
   readonly logicalColumns: readonly CompiledColumn[];
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly tableId: string;
@@ -2450,6 +2535,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
         column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
         columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
         instanceId={instanceId}
+        renderColumnFilter={renderColumnFilter}
         restoreColumnFocus={restoreColumnFocus}
         runtime={runtime}
         tableId={tableId}
@@ -2463,6 +2549,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
       column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
       columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
       instanceId={instanceId}
+      renderColumnFilter={renderColumnFilter}
       runtime={runtime}
       tableId={tableId}
     />
@@ -2477,6 +2564,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   columnIndex,
   instanceId,
   restoreColumnFocus,
+  renderColumnFilter,
   runtime,
   tableId,
   visibleColumnIds,
@@ -2488,6 +2576,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   readonly columnIndex: number;
   readonly instanceId: string;
   readonly restoreColumnFocus: (columnId: string) => void;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly runtime: BrunoTableRuntimeView;
   readonly tableId: string;
   readonly visibleColumnIds: readonly string[];
@@ -2512,6 +2601,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
         column={column}
         columnIndex={columnIndex}
         instanceId={instanceId}
+        renderColumnFilter={renderColumnFilter}
         runtime={runtime}
         tableId={tableId}
       />
@@ -2572,6 +2662,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   instanceId,
   renderedTableWidth,
   runtime,
+  renderColumnFilter,
   tableId,
   viewportFill,
   visibleColumnIds,
@@ -2596,6 +2687,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   readonly instanceId: string;
   readonly renderedTableWidth: number;
   readonly runtime: BrunoTableRuntimeView;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly tableId: string;
   readonly viewportFill: number;
   readonly visibleColumnIds: readonly string[];
@@ -2627,6 +2719,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             columnIndex={index}
             column={column}
             runtime={runtime}
+            renderColumnFilter={renderColumnFilter}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2658,6 +2751,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             columnIndex={columnWindow.pinnedStart.length + columnWindow.centerStartIndex + index}
             column={column}
             runtime={runtime}
+            renderColumnFilter={renderColumnFilter}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2699,6 +2793,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             columnIndex={columnWindow.pinnedStart.length + columnWindow.centerCount + index}
             column={column}
             runtime={runtime}
+            renderColumnFilter={renderColumnFilter}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2732,6 +2827,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   pinned,
   navigation,
   runtime,
+  renderColumnFilter,
   style,
   visibleColumnIds,
 }: {
@@ -2758,6 +2854,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   readonly pinned?: "start" | "end";
   readonly navigation: BrunoTableNavigationRuntime;
   readonly runtime: BrunoTableRuntimeView;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly style?: CSSProperties;
   readonly visibleColumnIds: readonly string[];
 }) {
@@ -2819,7 +2916,17 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         ) : (
           <span className="truncate">{column.headerName}</span>
         )}
-        {command.filterBaselineAvailable ? (
+        {renderColumnFilter !== undefined &&
+        column.kind === "field" &&
+        column.enableFilter !== false
+          ? renderColumnFilter({
+              activateHeaderCommand,
+              column,
+              command,
+              runtime,
+            })
+          : null}
+        {command.filterActive || command.filterBaselineAvailable ? (
           <Button
             aria-label={`${command.filterActive ? "Clear" : "Reset"} filter for ${column.headerName}`}
             tabIndex={-1}
@@ -2916,7 +3023,12 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     id: headerDomId(instanceId, tableId, column.columnId),
     "aria-label": `${presentation.label}, width ${String(command.width)} pixels, ${pinLabel}`,
     "aria-colindex": columnIndex + 1,
-    "aria-keyshortcuts": command.filterBaselineAvailable ? "Alt+Enter" : undefined,
+    "aria-keyshortcuts":
+      renderColumnFilter !== undefined && column.kind === "field" && column.enableFilter !== false
+        ? "Alt+Enter Alt+Shift+Enter"
+        : command.filterBaselineAvailable
+          ? "Alt+Enter"
+          : undefined,
     "aria-sort": presentation.ariaSort,
     role: "columnheader",
     style: {
@@ -3182,6 +3294,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   columnIndex,
   instanceId,
   runtime,
+  renderColumnFilter,
   tableId,
 }: {
   readonly activeCell: BrunoTableActiveCell;
@@ -3189,6 +3302,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   readonly columnIndex: number;
   readonly instanceId: string;
   readonly runtime: BrunoTableRuntimeView;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly tableId: string;
 }) {
   if (column === undefined || columnIndex < 0) return null;
@@ -3198,6 +3312,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
         column={column}
         columnIndex={columnIndex}
         instanceId={instanceId}
+        renderColumnFilter={renderColumnFilter}
         runtime={runtime}
         tableId={tableId}
       />
@@ -3219,12 +3334,14 @@ const ActiveHeaderDescendantProxy = memo(function ActiveHeaderDescendantProxy({
   column,
   columnIndex,
   instanceId,
+  renderColumnFilter,
   runtime,
   tableId,
 }: {
   readonly column: CompiledColumn;
   readonly columnIndex: number;
   readonly instanceId: string;
+  readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly runtime: BrunoTableRuntimeView;
   readonly tableId: string;
 }) {
@@ -3243,7 +3360,15 @@ const ActiveHeaderDescendantProxy = memo(function ActiveHeaderDescendantProxy({
       <div
         id={headerDomId(instanceId, tableId, column.columnId)}
         aria-colindex={columnIndex + 1}
-        aria-keyshortcuts={command.filterBaselineAvailable ? "Alt+Enter" : undefined}
+        aria-keyshortcuts={
+          renderColumnFilter !== undefined &&
+          column.kind === "field" &&
+          column.enableFilter !== false
+            ? "Alt+Enter Alt+Shift+Enter"
+            : command.filterBaselineAvailable
+              ? "Alt+Enter"
+              : undefined
+        }
         aria-label={presentation.label}
         aria-sort={presentation.ariaSort}
         role="columnheader"

@@ -40,6 +40,7 @@ type ColumnGestureFrameListener = (event: ColumnGestureFrameEvent) => void;
 let clientGridSurfaceRenderListener: Listener | undefined;
 let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
+let clientQuickFilterRenderListener: Listener | undefined;
 let clientCellRenderListener: CellListener | undefined;
 let clientColumnResizeFrameListener: Listener | undefined;
 let clientColumnReorderFrameListener: Listener | undefined;
@@ -66,6 +67,7 @@ let clientTableSortPanelRenderListenerCount = 0;
 let hasGlobalRowOrderPlanningListener = false;
 let hasGlobalCellRenderListener = false;
 let hasGlobalViewRenderListener = false;
+let hasGlobalQuickFilterRenderListener = false;
 let hasGlobalGridSurfaceRenderListener = false;
 let hasGlobalHeaderRenderListener = false;
 
@@ -269,6 +271,28 @@ export function recordBrunoTableClientViewRender(tableId?: string): void {
   if (tableId !== undefined) {
     notifySafely(clientTableViewRenderListeners.get(tableId) ?? [], (listener) => listener());
   }
+}
+
+export function recordBrunoTableClientQuickFilterRender(): void {
+  if (!hasGlobalQuickFilterRenderListener) return;
+  if (clientQuickFilterRenderListener !== undefined) {
+    try {
+      clientQuickFilterRenderListener();
+    } catch {
+      // Diagnostics are observational and must never alter runtime behavior.
+    }
+  }
+}
+
+export function installBrunoTableClientQuickFilterRenderListener(listener: Listener): () => void {
+  clientQuickFilterRenderListener = listener;
+  hasGlobalQuickFilterRenderListener = true;
+  return () => {
+    if (clientQuickFilterRenderListener === listener) {
+      clientQuickFilterRenderListener = undefined;
+      hasGlobalQuickFilterRenderListener = false;
+    }
+  };
 }
 
 export function installBrunoTableClientViewRenderListener(listener: Listener): () => void {

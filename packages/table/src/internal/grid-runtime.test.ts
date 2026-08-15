@@ -10,6 +10,7 @@ import {
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
+import { sanitizeClientInitialFilters } from "./grid-query";
 
 type Row = { readonly id: string; readonly name: string; readonly note?: string };
 
@@ -132,6 +133,102 @@ describe("BrunoTableGridRuntime sorting invariant", () => {
     expect(runtime.getView().getSortingSnapshot()).toEqual([
       { columnId: "COL_ID_NAME", direction: "asc" },
     ]);
+  });
+});
+
+describe("BrunoTable filter runtime primitives", () => {
+  it("sanitizes Boolean notEqual operands", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_ACTIVE",
+        field: "active",
+        headerName: "Active",
+        valueType: "boolean",
+      },
+    ]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }],
+        columns,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("publishes one generation for a committed Quick Filter without changing Grid Filters", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      ["name"],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_QUICK_FILTER_RUNTIME",
+    );
+    const view = runtime.getView();
+    const queryListener = vi.fn();
+    const quickFilterListener = vi.fn();
+    const columnFilterListener = vi.fn();
+    view.subscribeQuery(queryListener);
+    view.subscribeQuickFilter(quickFilterListener);
+    view.subscribeColumnFilter("COL_ID_NAME", columnFilterListener);
+    const before = view.getQuerySnapshot();
+
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+
+    expect(view.getQuerySnapshot()).toEqual({
+      ...before,
+      quickFilter: "ada",
+      generation: before.generation + 1,
+    });
+    expect(view.getQuerySnapshot().filters).toBe(before.filters);
+    expect(queryListener).toHaveBeenCalledOnce();
+    expect(quickFilterListener).toHaveBeenCalledOnce();
+    expect(columnFilterListener).not.toHaveBeenCalled();
+
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+    expect(queryListener).toHaveBeenCalledOnce();
+    expect(quickFilterListener).toHaveBeenCalledOnce();
+  });
+
+  it("rejects invalid filter replacements and preserves semantic no-ops", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_FILTER_REPLACEMENT_GUARDS",
+    );
+    const view = runtime.getView();
+    const queryListener = vi.fn();
+    view.subscribeQuery(queryListener);
+    const before = view.getQuerySnapshot();
+
+    view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "unsupported", filter: "Ada" },
+    });
+    expect(view.getQuerySnapshot()).toBe(before);
+    expect(queryListener).not.toHaveBeenCalled();
+
+    view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
+    });
+    expect(view.getQuerySnapshot()).toBe(before);
+    expect(queryListener).not.toHaveBeenCalled();
   });
 });
 
@@ -830,6 +927,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
         query: {
           columns: replacementColumns,
           filters: [],
+          quickFilter: "",
           orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
           generation: 1,
         },
@@ -2047,6 +2145,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getQuerySnapshot()).toEqual({
       columns: replacementColumns,
       filters: [],
+      quickFilter: "",
       orderBy: [{ columnId: "COL_ID_ALIAS", direction: "asc" }],
       generation: 1,
     });
@@ -2103,6 +2202,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getQuerySnapshot()).toEqual({
       columns: replacementColumns,
       filters: previousQuery.filters,
+      quickFilter: previousQuery.quickFilter,
       orderBy: previousQuery.orderBy,
       generation: previousQuery.generation,
     });
@@ -2134,6 +2234,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getQuerySnapshot()).toEqual({
       columns: replacementColumns,
       filters: previousQuery.filters,
+      quickFilter: previousQuery.quickFilter,
       orderBy: previousQuery.orderBy,
       generation: 1,
     });

@@ -8,6 +8,7 @@ import {
   BrunoTableBooleanColumn,
   BrunoTableClient,
   BrunoTableComputedColumn,
+  BrunoTableQuickFilter,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
@@ -28,6 +29,8 @@ import type {
   BrunoTableEditingCapability,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpressions,
+  BrunoTableQuickFilterField,
+  BrunoTableQuickFilterFields,
   BrunoTableFieldColumnDefinition,
   BrunoTableGroupKeyCellParams,
   BrunoTableSaveCellChange,
@@ -45,6 +48,7 @@ type Order = {
   readonly quantity: bigint;
   readonly status: "open" | "closed";
   readonly revision: bigint;
+  readonly hiddenLabel: string;
 };
 
 const columns = [
@@ -392,6 +396,43 @@ describe("BrunoTable public types", () => {
     expectTypeOf(rendered).toEqualTypeOf<ReactNode>();
     expectTypeOf(callableProps).toMatchTypeOf<BrunoTableClientProps<Order, Columns>>();
     expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
+    expectTypeOf(BrunoTableQuickFilter).toMatchTypeOf<() => ReactNode>();
+
+    const validQuickFilterFields = [
+      "symbol",
+      "status",
+      "hiddenLabel",
+    ] as const satisfies BrunoTableQuickFilterFields<Order>;
+    expectTypeOf(validQuickFilterFields).toEqualTypeOf<
+      readonly ["symbol", "status", "hiddenLabel"]
+    >();
+    expectTypeOf<BrunoTableQuickFilterField<Order>>().toEqualTypeOf<
+      "id" | "symbol" | "status" | "hiddenLabel"
+    >();
+    void BrunoTableClient({
+      ...props,
+      quickFilterFields: validQuickFilterFields,
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error Quick Filter fields must be a non-empty tuple.
+      quickFilterFields: [],
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error Numeric row fields are not Quick Filter fields.
+      quickFilterFields: ["price"],
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error Misspelled source fields are rejected.
+      quickFilterFields: ["descrption"],
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error Column Identities are not source fields.
+      quickFilterFields: ["COL_ID_SYMBOL"],
+    });
 
     const missingTableId = {
       columns,

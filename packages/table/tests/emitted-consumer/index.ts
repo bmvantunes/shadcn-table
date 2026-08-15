@@ -3,6 +3,7 @@ import {
   BrunoTableBooleanColumn,
   BrunoTableClient,
   BrunoTableComputedColumn,
+  BrunoTableQuickFilter,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
@@ -18,6 +19,8 @@ import {
   type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
+  type BrunoTableQuickFilterField,
+  type BrunoTableQuickFilterFields,
   type BrunoTableGroupKeyCellParams,
   type BrunoTableSaveCellChange,
   type BrunoTableSaveChangeSet,
@@ -52,6 +55,7 @@ type Order = {
   readonly active: boolean;
   readonly status: "open" | "closed";
   readonly multiplier: number;
+  readonly hiddenLabel: string;
 };
 
 const emittedInvalidWhitespaceHelperOptions = {
@@ -106,6 +110,7 @@ const emittedClientProps = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  quickFilterFields: ["symbol", "hiddenLabel"],
   getRowId: (row: Order) => row.id,
   clientSource: {
     rows: [] as readonly Order[],
@@ -118,6 +123,24 @@ const emittedCallableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[
   emittedClientProps;
 const emittedNamedProps: BrunoTableClientProps<Order, Columns> = emittedCallableProps;
 void BrunoTableClient(emittedNamedProps);
+const emittedQuickFields = [
+  "symbol",
+  "hiddenLabel",
+] as const satisfies BrunoTableQuickFilterFields<Order>;
+type EmittedQuickField = Expect<
+  Equal<BrunoTableQuickFilterField<Order>, "id" | "symbol" | "status" | "hiddenLabel">
+>;
+const emittedQuickFieldCheck: EmittedQuickField = true;
+const emittedQuickFilter = BrunoTableQuickFilter;
+void emittedQuickFieldCheck;
+void emittedQuickFields;
+void emittedQuickFilter;
+const emittedInvalidQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject numeric source fields.
+  quickFilterFields: ["price"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedInvalidQuickFields;
 
 const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
 const emittedViewServerClient = BrunoTableClient({

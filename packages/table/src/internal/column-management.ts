@@ -71,6 +71,15 @@ export type BrunoTableGridCommand =
   | Readonly<{
       readonly type: "column.filter.reset";
       readonly columnId: string;
+    }>
+  | Readonly<{
+      readonly type: "column.filter.replace";
+      readonly columnId: string;
+      readonly filter?: unknown;
+    }>
+  | Readonly<{
+      readonly type: "quick-filter.replace";
+      readonly text: string;
     }>;
 
 function assertNeverBrunoTableGridCommand(value: never): never {
@@ -98,6 +107,8 @@ export function isBrunoTableColumnLayoutCommand(
     case "sorting.reset":
     case "column.filter.clear":
     case "column.filter.reset":
+    case "column.filter.replace":
+    case "quick-filter.replace":
       return false;
     default:
       return assertNeverBrunoTableGridCommand(command);

@@ -291,6 +291,7 @@ const expectedRuntimeExports = [
   "BrunoTableClient",
   "BrunoTableComputedColumn",
   "BrunoTableNumberColumn",
+  "BrunoTableQuickFilter",
   "BrunoTableSelectColumn",
   "BrunoTableTextColumn",
   "BrunoTableToolbar",

@@ -20,6 +20,8 @@ import {
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 
+const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
+
 export type BrunoTableClientReconciliationEvent = Readonly<{
   readonly residentRows: number;
   readonly changedRows: number;
@@ -59,6 +61,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private acceptedCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private readonly initialFilters: readonly unknown[];
   private readonly initialOrderBy: ClientOrderBy;
+  private readonly quickFilterFields: readonly string[];
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
@@ -78,11 +81,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     columns: readonly CompiledColumn[],
     initialFilters: readonly unknown[] | undefined,
     initialOrderBy: ClientOrderBy | undefined,
+    quickFilterFields?: readonly string[],
   ) {
     this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns, {
       rejectOverBudget: true,
     });
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
+    this.quickFilterFields = snapshotQuickFilterFields(quickFilterFields);
     this.source = snapshotSource(source);
     this.observedRows =
       this.source.inputRows === undefined ? undefined : Array.from(this.source.rows.asArray());
@@ -104,6 +109,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.queryConfiguration = Object.freeze({
       baselineFilters: this.initialFilters,
       baselineOrderBy: this.initialOrderBy,
+      quickFilterFields: this.quickFilterFields,
     });
   }
 
@@ -123,7 +129,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       throw new TypeError("BrunoTableClient requires at least one sortable column.");
     }
     this.queryColumns = columns;
-    this.queryConfiguration = Object.freeze({ baselineFilters, baselineOrderBy });
+    this.queryConfiguration = Object.freeze({
+      baselineFilters,
+      baselineOrderBy,
+      quickFilterFields: this.quickFilterFields,
+    });
     return this.queryConfiguration;
   };
 
@@ -1523,4 +1533,15 @@ function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
     source.totalRows >= 0 &&
     source.rows.length === source.totalRows
   );
+}
+
+function snapshotQuickFilterFields(fields: readonly string[] | undefined): readonly string[] {
+  if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
+  if (!Array.isArray(fields) || fields.length === 0) {
+    throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
+  }
+  if (!fields.every((field) => typeof field === "string" && field.length > 0)) {
+    throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
+  }
+  return Object.freeze(Array.from(fields));
 }

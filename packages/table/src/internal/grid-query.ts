@@ -152,6 +152,17 @@ export function createClientFilterPredicate<TRow>(
   };
 }
 
+export function normalizeBrunoTableFilterText(
+  value: string,
+  caseSensitive = false,
+  accentSensitive = false,
+): string {
+  const withoutAccents = accentSensitive
+    ? value.normalize("NFC")
+    : value.normalize("NFD").replace(/\p{Mark}/gu, "");
+  return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
+}
+
 export function filterReferencesColumn(candidate: unknown, columnId: string): boolean {
   const columnIds = new Set<string>();
   collectClientFilterColumnIds(candidate, columnIds);
@@ -617,12 +628,12 @@ function evaluateFilterRecord(
   }
   if (typeof operand !== "string") return filter["type"] === "notContains";
   if (value === null || value === undefined) return filter["type"] === "notContains";
-  const left = normalizeText(
+  const left = normalizeBrunoTableFilterText(
     column.semantics.formatCanonicalText(value),
     caseSensitive,
     accentSensitive,
   );
-  const right = normalizeText(operand, caseSensitive, accentSensitive);
+  const right = normalizeBrunoTableFilterText(operand, caseSensitive, accentSensitive);
   if (filter["type"] === "contains") return left.includes(right);
   if (filter["type"] === "notContains") return !left.includes(right);
   if (filter["type"] === "startsWith") return left.startsWith(right);
@@ -662,18 +673,19 @@ function compareEquality(
   }
   if (column.semantics.filterFamily === "text") {
     return (
-      normalizeText(column.semantics.formatCanonicalText(value), caseSensitive, accentSensitive) ===
-      normalizeText(column.semantics.formatCanonicalText(operand), caseSensitive, accentSensitive)
+      normalizeBrunoTableFilterText(
+        column.semantics.formatCanonicalText(value),
+        caseSensitive,
+        accentSensitive,
+      ) ===
+      normalizeBrunoTableFilterText(
+        column.semantics.formatCanonicalText(operand),
+        caseSensitive,
+        accentSensitive,
+      )
     );
   }
   return column.semantics.equivalent(value, operand);
-}
-
-function normalizeText(value: string, caseSensitive: boolean, accentSensitive: boolean): string {
-  const withoutAccents = accentSensitive
-    ? value.normalize("NFC")
-    : value.normalize("NFD").replace(/\p{Mark}/gu, "");
-  return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
 }
 
 function hasValidTextSensitivity(

@@ -9,12 +9,17 @@ import {
   BrunoTableView,
 } from "./internal/bruno-table-view";
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import {
+  BrunoTableClientFilterProvider,
+  BrunoTableQuickFilter,
+  renderBrunoTableClientColumnFilter,
+} from "./internal/client-filter-controls";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 
-export { BrunoTableToolbar };
+export { BrunoTableQuickFilter, BrunoTableToolbar };
 
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientProps<TRow, TColumns>,
@@ -29,6 +34,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
         compiledColumns,
         props.initialFilters,
         props.initialOrderBy,
+        props.quickFilterFields,
       ),
   );
   const [runtime] = useState(
@@ -66,14 +72,17 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   );
 
   return (
-    <BrunoTableView
-      runtime={runtimeView}
-      tableId={tableId}
-      compiledColumns={compiledColumns}
-      toolbar={toolbar}
-      rowPipeline={BrunoTableClientRowPipeline}
-      rowPipelineAdapter={rowPipelineAdapter}
-    />
+    <BrunoTableClientFilterProvider runtime={runtimeView}>
+      <BrunoTableView
+        runtime={runtimeView}
+        tableId={tableId}
+        compiledColumns={compiledColumns}
+        toolbar={toolbar}
+        rowPipeline={BrunoTableClientRowPipeline}
+        rowPipelineAdapter={rowPipelineAdapter}
+        renderColumnFilter={renderBrunoTableClientColumnFilter}
+      />
+    </BrunoTableClientFilterProvider>
   );
 }
 
