@@ -19,14 +19,16 @@ import type { BrunoTableOrderBy } from "./grid-query";
 import {
   brunoTableFilterReferencesColumn,
   collectClientFilterColumnIds,
+  normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
   sanitizeBrunoTableFilters,
 } from "./grid-query";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
 import {
   recordBrunoTableColumnCommandSubscriptionNotification,
-  recordBrunoTableColumnFilterSubscriptionNotification,
+  recordBrunoTableColumnFilterSubscriptionEvent,
 } from "./grid-subscription-instrumentation";
+import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
@@ -617,12 +619,28 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnFilterListeners.set(columnId, listeners);
     }
     listeners.add(listener);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableColumnFilterSubscriptionEvent(
+        this.tableId,
+        columnId,
+        listeners.size,
+        "subscribe",
+      );
+    }
     let active = true;
     return () => {
       if (!active) return;
       active = false;
       if (this.columnFilterListeners.get(columnId) !== listeners) return;
       listeners.delete(listener);
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableColumnFilterSubscriptionEvent(
+          this.tableId,
+          columnId,
+          listeners.size,
+          "unsubscribe",
+        );
+      }
       if (listeners.size === 0) this.columnFilterListeners.delete(columnId);
     };
   };
@@ -842,9 +860,12 @@ export class BrunoTableGridRuntime<TRow> {
   ): QueryTransition | undefined {
     const sortingChanged = !sameOrderBy(this.query.orderBy, orderBy);
     const quickFilterChanged = this.query.quickFilter !== quickFilter;
+    const quickFilterSemanticsChanged =
+      normalizeBrunoTableFilterText(this.query.quickFilter) !==
+      normalizeBrunoTableFilterText(quickFilter);
     const queryChanged =
-      !sameReferences(this.query.filters, filters) || sortingChanged || quickFilterChanged;
-    if (!queryChanged && !forceColumnRefresh) return undefined;
+      !sameReferences(this.query.filters, filters) || sortingChanged || quickFilterSemanticsChanged;
+    if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
     if (queryChanged) {
@@ -856,6 +877,8 @@ export class BrunoTableGridRuntime<TRow> {
         generation: this.query.generation + 1,
       });
       this.updateColumnFilterSnapshots();
+    } else if (quickFilterChanged) {
+      this.query = Object.freeze({ ...this.query, quickFilter });
     }
     this.columnCommands = createColumnCommandSnapshots(
       this.columns,
@@ -874,6 +897,9 @@ export class BrunoTableGridRuntime<TRow> {
   }
 
   private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && transition.queryChanged) {
+      recordBrunoTableClientQueryTransition(this.tableId, this.query.generation);
+    }
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
     if (transition.quickFilterChanged) {
       firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
@@ -915,13 +941,6 @@ export class BrunoTableGridRuntime<TRow> {
     }
     for (const columnId of filterColumnIds) {
       const listeners = this.columnFilterListeners.get(columnId);
-      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
-        recordBrunoTableColumnFilterSubscriptionNotification(
-          this.tableId,
-          columnId,
-          listeners?.size ?? 0,
-        );
-      }
       if (
         Object.is(
           transition.previousColumnFilters.get(columnId),
@@ -929,6 +948,14 @@ export class BrunoTableGridRuntime<TRow> {
         )
       ) {
         continue;
+      }
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableColumnFilterSubscriptionEvent(
+          this.tableId,
+          columnId,
+          listeners?.size ?? 0,
+          "notify",
+        );
       }
       if (listeners !== undefined) {
         firstError = firstListenerError(firstError, notify(listeners));
@@ -1344,10 +1371,17 @@ function sameFilterCollection(
   next: readonly unknown[],
   columnsById: ReadonlyMap<string, CompiledColumn>,
 ): boolean {
-  return (
-    previous.length === next.length &&
-    previous.every((value, index) => sameFilterValue(value, next[index], columnsById))
-  );
+  if (previous.length !== next.length) return false;
+  const matched = new Set<number>();
+  return previous.every((value) => {
+    for (let index = 0; index < next.length; index += 1) {
+      if (matched.has(index)) continue;
+      if (!sameFilterValue(value, next[index], columnsById)) continue;
+      matched.add(index);
+      return true;
+    }
+    return false;
+  });
 }
 
 function sameFilterValue(
@@ -1396,12 +1430,45 @@ function sameFilterValue(
       (key) => !isImplicitFalseTextSensitivity(nextRecord, key),
     );
     if (previousKeys.length !== nextKeys.length) return false;
+    const operator =
+      previousRecord["type"] === nextRecord["type"] && typeof previousRecord["type"] === "string"
+        ? previousRecord["type"]
+        : undefined;
+    const textOperand =
+      valueColumn?.semantics.filterFamily === "text" &&
+      (operator === "equals" ||
+        operator === "notEqual" ||
+        operator === "in" ||
+        operator === "contains" ||
+        operator === "notContains" ||
+        operator === "startsWith" ||
+        operator === "endsWith");
+    const operandOptions = {
+      accentSensitive: previousRecord["accentSensitive"] === true,
+      caseSensitive: previousRecord["caseSensitive"] === true,
+      text: textOperand,
+    } as const;
     return previousKeys.every((key) => {
       if (!nextKeys.includes(key)) return false;
       const previousValue = previousRecord[key];
       const nextValue = nextRecord[key];
+      if (
+        key === "conditions" &&
+        (operator === "AND" || operator === "OR") &&
+        Array.isArray(previousValue) &&
+        Array.isArray(nextValue)
+      ) {
+        return sameFilterCollection(previousValue, nextValue, columnsById);
+      }
       if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
-        return sameFilterOperand(previousValue, nextValue, valueColumn);
+        return sameFilterOperand(
+          previousValue,
+          nextValue,
+          valueColumn,
+          key === "filter" && operator === "in"
+            ? { ...operandOptions, unordered: true }
+            : { ...operandOptions, unordered: false },
+        );
       }
       return sameFilterValue(previousValue, nextValue, columnsById, valueColumn, seen);
     });
@@ -1417,16 +1484,60 @@ function isImplicitFalseTextSensitivity(
   return (key === "caseSensitive" || key === "accentSensitive") && record[key] === false;
 }
 
-function sameFilterOperand(previous: unknown, next: unknown, column: CompiledColumn): boolean {
+function sameFilterOperand(
+  previous: unknown,
+  next: unknown,
+  column: CompiledColumn,
+  options: Readonly<{
+    readonly accentSensitive: boolean;
+    readonly caseSensitive: boolean;
+    readonly text: boolean;
+    readonly unordered: boolean;
+  }>,
+): boolean {
   if (Object.is(previous, next)) return true;
   if (Array.isArray(previous) && Array.isArray(next)) {
+    if (options.unordered) {
+      return (
+        previous.every((value) =>
+          next.some((candidate) =>
+            sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+          ),
+        ) &&
+        next.every((value) =>
+          previous.some((candidate) =>
+            sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
+          ),
+        )
+      );
+    }
     return (
       previous.length === next.length &&
-      previous.every((value, index) => sameFilterOperand(value, next[index], column))
+      previous.every((value, index) =>
+        sameFilterOperand(value, next[index], column, { ...options, unordered: false }),
+      )
     );
   }
   if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;
+  }
+  if (options.text) {
+    try {
+      return (
+        normalizeBrunoTableFilterText(
+          column.semantics.formatCanonicalText(previous),
+          options.caseSensitive,
+          options.accentSensitive,
+        ) ===
+        normalizeBrunoTableFilterText(
+          column.semantics.formatCanonicalText(next),
+          options.caseSensitive,
+          options.accentSensitive,
+        )
+      );
+    } catch {
+      return false;
+    }
   }
   try {
     return column.semantics.equivalent(previous, next);

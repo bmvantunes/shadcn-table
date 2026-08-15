@@ -4,6 +4,7 @@ import { BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL } from "./test-diagnosti
 type Listener = () => void;
 type CellListener = (rowId: string, columnId: string) => void;
 type ColumnFilterRenderListener = (columnId: string) => void;
+type QueryTransitionListener = (tableId: string, generation: number) => void;
 type RowRenderListener = (rowId: string) => void;
 type ColumnPreviewStyleWriteListener = (property: string) => void;
 type RowOrderPlanningListener = (tableId: string) => void;
@@ -43,6 +44,7 @@ let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientQuickFilterRenderListener: Listener | undefined;
 let clientColumnFilterRenderListener: ColumnFilterRenderListener | undefined;
+const clientQueryTransitionListeners = new Set<QueryTransitionListener>();
 let clientCellRenderListener: CellListener | undefined;
 let clientColumnResizeFrameListener: Listener | undefined;
 let clientColumnReorderFrameListener: Listener | undefined;
@@ -71,6 +73,7 @@ let hasGlobalCellRenderListener = false;
 let hasGlobalViewRenderListener = false;
 let hasGlobalQuickFilterRenderListener = false;
 let hasGlobalColumnFilterRenderListener = false;
+let hasGlobalQueryTransitionListener = false;
 let hasGlobalGridSurfaceRenderListener = false;
 let hasGlobalHeaderRenderListener = false;
 
@@ -319,6 +322,22 @@ export function installBrunoTableClientColumnFilterRenderListener(
       clientColumnFilterRenderListener = undefined;
       hasGlobalColumnFilterRenderListener = false;
     }
+  };
+}
+
+export function recordBrunoTableClientQueryTransition(tableId: string, generation: number): void {
+  if (!hasGlobalQueryTransitionListener) return;
+  notifySafely(clientQueryTransitionListeners, (listener) => listener(tableId, generation));
+}
+
+export function installBrunoTableClientQueryTransitionListener(
+  listener: QueryTransitionListener,
+): () => void {
+  clientQueryTransitionListeners.add(listener);
+  hasGlobalQueryTransitionListener = true;
+  return () => {
+    clientQueryTransitionListeners.delete(listener);
+    hasGlobalQueryTransitionListener = clientQueryTransitionListeners.size > 0;
   };
 }
 

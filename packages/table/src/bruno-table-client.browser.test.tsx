@@ -24,6 +24,7 @@ import {
   installBrunoTableClientColumnFilterRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientHeaderRenderListener,
+  installBrunoTableClientQueryTransitionListener,
   installBrunoTableClientRowOrderPlanningListener,
   installBrunoTableClientQuickFilterRenderListener,
   installBrunoTableClientRowRenderListenerForTable,
@@ -511,6 +512,7 @@ describe("BrunoTableClient browser surface", () => {
     const filterSubscriptions: Array<{
       readonly columnId: string;
       readonly listenerCount: number;
+      readonly phase: "subscribe" | "unsubscribe" | "notify";
     }> = [];
     const filterRenders = vi.fn();
     const viewRenders = vi.fn();
@@ -554,6 +556,12 @@ describe("BrunoTableClient browser surface", () => {
       await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
       const dialog = screen.getByRole("dialog", { name: "Filter Name" });
       expect(filterRenders).toHaveBeenCalledWith("COL_ID_FILTER_NAME");
+      expect(filterSubscriptions).toContainEqual({
+        tableId,
+        columnId: "COL_ID_FILTER_NAME",
+        listenerCount: 1,
+        phase: "subscribe",
+      });
       const rendersAfterOpen = filterRenders.mock.calls.length;
       filterSubscriptions.length = 0;
       viewRenders.mockClear();
@@ -569,19 +577,25 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
         .toBeInTheDocument();
-      expect(filterSubscriptions.filter((event) => event.listenerCount > 0)).toEqual([
-        { tableId, columnId: "COL_ID_FILTER_NAME", listenerCount: 1 },
-      ]);
+      expect(
+        filterSubscriptions.filter((event) => event.phase === "notify" && event.listenerCount > 0),
+      ).toEqual([{ tableId, columnId: "COL_ID_FILTER_NAME", listenerCount: 1, phase: "notify" }]);
       expect(
         filterSubscriptions.some(
-          (event) => event.columnId === "COL_ID_FILTER_SCORE" && event.listenerCount === 0,
+          (event) => event.columnId === "COL_ID_FILTER_SCORE" && event.phase === "notify",
         ),
-      ).toBe(true);
+      ).toBe(false);
 
       await userEvent.keyboard("{Escape}");
       await expect
         .element(screen.getByRole("dialog", { name: "Filter Name" }))
         .not.toBeInTheDocument();
+      expect(filterSubscriptions).toContainEqual({
+        tableId,
+        columnId: "COL_ID_FILTER_NAME",
+        listenerCount: 0,
+        phase: "unsubscribe",
+      });
       filterSubscriptions.length = 0;
       filterRenders.mockClear();
 
@@ -591,7 +605,10 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
       expect(
         filterSubscriptions.some(
-          (event) => event.columnId === "COL_ID_FILTER_NAME" && event.listenerCount === 0,
+          (event) =>
+            event.columnId === "COL_ID_FILTER_NAME" &&
+            event.listenerCount === 0 &&
+            event.phase === "notify",
         ),
       ).toBe(true);
       expect(filterRenders).not.toHaveBeenCalled();
@@ -600,6 +617,51 @@ describe("BrunoTableClient browser surface", () => {
       removeViewRenderListener();
       removeFilterRenderListener();
       removeFilterSubscriptionListener();
+    }
+  });
+
+  test("plans one query transition and row recomputation for one Grid Filter commit", async () => {
+    const tableId = "TABLE_ID_FILTER_PLAN";
+    const queryTransitions = vi.fn();
+    const rowOrderPlans = vi.fn();
+    const removeQueryTransitionListener =
+      installBrunoTableClientQueryTransitionListener(queryTransitions);
+    const removePlanningListener = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId={tableId}
+          columns={filterColumns}
+          initialFilters={[{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      queryTransitions.mockClear();
+      rowOrderPlans.mockClear();
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      await userEvent.fill(
+        screen
+          .getByRole("dialog", { name: "Filter Name" })
+          .getByRole("textbox", { name: "Filter value for Name" }),
+        "Grace",
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+
+      expect(queryTransitions).toHaveBeenCalledTimes(1);
+      expect(queryTransitions).toHaveBeenLastCalledWith(tableId, 1);
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+    } finally {
+      removePlanningListener();
+      removeQueryTransitionListener();
     }
   });
 

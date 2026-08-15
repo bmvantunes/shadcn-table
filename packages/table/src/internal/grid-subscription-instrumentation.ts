@@ -9,6 +9,7 @@ type ColumnFilterSubscriptionListener = (event: {
   readonly tableId: string;
   readonly columnId: string;
   readonly listenerCount: number;
+  readonly phase: "subscribe" | "unsubscribe" | "notify";
 }) => void;
 
 const columnCommandSubscriptionListenersByTableId = new Map<
@@ -61,10 +62,11 @@ export function installBrunoTableColumnCommandSubscriptionListener(
   );
 }
 
-export function recordBrunoTableColumnFilterSubscriptionNotification(
+export function recordBrunoTableColumnFilterSubscriptionEvent(
   tableId: string,
   columnId: string,
   subscribedColumnListenerCount: number,
+  phase: "subscribe" | "unsubscribe" | "notify",
 ): void {
   if (filterDiagnosticListenerCount === 0) return;
   const listeners = columnFilterSubscriptionListenersByTableId.get(tableId);
@@ -73,6 +75,7 @@ export function recordBrunoTableColumnFilterSubscriptionNotification(
     tableId,
     columnId,
     listenerCount: subscribedColumnListenerCount,
+    phase,
   });
   for (const listener of listeners) {
     try {

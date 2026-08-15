@@ -147,6 +147,18 @@ const emittedEmptyQuickFields = {
   quickFilterFields: [],
 } satisfies BrunoTableClientProps<Order, Columns>;
 void emittedEmptyQuickFields;
+const emittedMisspelledQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject misspelled source fields.
+  quickFilterFields: ["descrption"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedMisspelledQuickFields;
+const emittedColumnIdentityQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject Column Identity strings.
+  quickFilterFields: ["COL_ID_SYMBOL"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedColumnIdentityQuickFields;
 
 const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
 const emittedViewServerClient = BrunoTableClient({

@@ -82,7 +82,7 @@ if (
     (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
   ) ||
   /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
-  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender)|GridCommand|ColumnCommandSubscription)/u.test(
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription)/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
   /installTableScopedListener/u.test(rootRuntime) ||

@@ -180,6 +180,73 @@ describe("BrunoTable filter runtime primitives", () => {
 
     expect(runtime.getQuerySnapshot()).toBe(query);
     expect(queryListener).not.toHaveBeenCalled();
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "equals", filter: "ada" },
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("compares in operands as an unordered semantic set", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "in", filter: ["Ada", "Grace"] }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "in", filter: ["Grace", "Ada"] },
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("compares same-column compound conditions as an unordered set", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [
+        {
+          type: "AND",
+          conditions: [
+            { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_NAME", type: "contains", filter: "a" },
+          ],
+        },
+      ],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: {
+        type: "AND",
+        conditions: [
+          { columnId: "COL_ID_NAME", type: "contains", filter: "A" },
+          { columnId: "COL_ID_NAME", type: "equals", filter: "ada" },
+        ],
+      },
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
   });
 
   it("drops filter versions for columns removed during replacement", () => {
@@ -246,8 +313,17 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(quickFilterListener).toHaveBeenCalledOnce();
     expect(columnFilterListener).not.toHaveBeenCalled();
 
-    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
-    expect(queryListener).toHaveBeenCalledOnce();
+    const committedGeneration = view.getQuerySnapshot().generation;
+    queryListener.mockClear();
+    quickFilterListener.mockClear();
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ADA" });
+    expect(view.getQuerySnapshot().quickFilter).toBe("ADA");
+    expect(view.getQuerySnapshot().generation).toBe(committedGeneration);
+    expect(queryListener).not.toHaveBeenCalled();
+    expect(quickFilterListener).toHaveBeenCalledOnce();
+
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ADA" });
+    expect(queryListener).not.toHaveBeenCalled();
     expect(quickFilterListener).toHaveBeenCalledOnce();
   });
 
@@ -273,6 +349,43 @@ describe("BrunoTable filter runtime primitives", () => {
     view.resetColumnFilters("COL_ID_NAME");
 
     expect(view.getQuerySnapshot()).toBe(before);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("keeps Reset a no-op when another column filter changes root order", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada", note: "math" }]),
+      (row) => row.id,
+      columns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NOTE",
+      filter: { columnId: "COL_ID_NOTE", type: "equals", filter: "math" },
+    });
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.resetColumnFilters("COL_ID_NAME");
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
     expect(queryListener).not.toHaveBeenCalled();
   });
 
