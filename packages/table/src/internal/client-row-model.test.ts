@@ -1272,6 +1272,38 @@ describe("Client row model", () => {
     expect(ownKeys).not.toHaveBeenCalled();
   });
 
+  it("bounds text operands at the initial-filter boundary", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const overlong = "x".repeat(1_025);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: overlong, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: ["ok", overlong], type: "in" }],
+        columns,
+      ),
+    ).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: overlong, type: "contains" }],
+        columns,
+        { rejectOverBudget: true },
+      ),
+    ).toThrow();
+  });
+
   it("captures admitted dense operands without enumerating unrelated own properties", () => {
     const columns = compileColumns([
       {

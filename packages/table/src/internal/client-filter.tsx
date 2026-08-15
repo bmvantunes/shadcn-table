@@ -31,9 +31,16 @@ import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS,
+  BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
+  boundBrunoTableFilterOperandText,
 } from "./grid-query";
 import type { BrunoTableColumnCommandSnapshot, BrunoTableRuntimeView } from "./grid-runtime";
 import { recordBrunoTableClientColumnFilterRender } from "./render-instrumentation";
+
+export {
+  BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
+  boundBrunoTableFilterOperandText,
+} from "./grid-query";
 
 type FilterOperator =
   | "equals"
@@ -81,14 +88,6 @@ type FilterCandidate = Readonly<{
   readonly filter: FilterNode | undefined;
   readonly error?: string;
 }>;
-
-export const BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH = 1_024;
-
-export function boundBrunoTableFilterOperandText(text: string): string {
-  return text.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH
-    ? text
-    : text.slice(0, BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH);
-}
 
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;

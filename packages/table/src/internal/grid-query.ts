@@ -189,6 +189,14 @@ export function normalizeBrunoTableFilterText(
   return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
 }
 
+export const BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH = 1_024;
+
+export function boundBrunoTableFilterOperandText(text: string): string {
+  return text.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH
+    ? text
+    : text.slice(0, BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH);
+}
+
 export function filterReferencesColumn(candidate: unknown, columnId: string): boolean {
   const columnIds = new Set<string>();
   collectClientFilterColumnIds(candidate, columnIds);
@@ -444,6 +452,7 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
+    if (!captured.every((value) => isBoundedFilterOperandText(value, context))) return undefined;
     const decoded = captured.map(decode);
     const decodedValues = decoded.map((result) =>
       result._tag === "Success" ? result.value : undefined,
@@ -461,6 +470,12 @@ function sanitizeFilterRecord(
   }
   if (type === "inRange") {
     if (column.semantics.filterFamily !== "numeric") return undefined;
+    if (
+      !isBoundedFilterOperandText(operand, context) ||
+      !isBoundedFilterOperandText(filter["filterTo"], context)
+    ) {
+      return undefined;
+    }
     const from = decode(operand);
     const to = decode(filter["filterTo"]);
     return from._tag === "Success" && to._tag === "Success"
@@ -497,6 +512,7 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
+    if (!isBoundedFilterOperandText(operand, context)) return undefined;
     return node(
       snapshotFilter(
         filter,
@@ -515,7 +531,10 @@ function sanitizeFilterRecord(
   ) {
     const validSensitivity = hasValidTextSensitivity(filter, true);
     const textOperand = typeof operand === "string" ? operand : undefined;
-    return column.semantics.filterFamily === "text" && textOperand !== undefined && validSensitivity
+    return column.semantics.filterFamily === "text" &&
+      textOperand !== undefined &&
+      isBoundedFilterOperandText(textOperand, context) &&
+      validSensitivity
       ? node(
           snapshotFilter(
             filter,
@@ -953,6 +972,14 @@ type FilterSanitizationContext = {
   overBudget: boolean;
   remainingNodes: number;
 };
+
+function isBoundedFilterOperandText(value: unknown, context: FilterSanitizationContext): boolean {
+  if (typeof value !== "string" || value.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) {
+    return true;
+  }
+  context.overBudget = true;
+  return false;
+}
 
 type CapturedFilterArray = {
   attempted: boolean;
