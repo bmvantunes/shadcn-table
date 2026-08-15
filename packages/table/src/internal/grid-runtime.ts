@@ -728,7 +728,7 @@ export class BrunoTableGridRuntime<TRow> {
       candidate !== undefined &&
       replacement.length === 1 &&
       currentColumnFilters.length === 1 &&
-      sameFilterValue(currentColumnFilters[0], replacement[0])
+      sameFilterValue(currentColumnFilters[0], replacement[0], this.columnsById)
     ) {
       return;
     }
@@ -1130,6 +1130,7 @@ function createColumnFilterSnapshots(
     }
   }
   const snapshots = new Map<string, unknown>();
+  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   for (const [columnId, values] of entries) {
     if (values.length === 1) {
       snapshots.set(columnId, values[0]);
@@ -1139,7 +1140,7 @@ function createColumnFilterSnapshots(
     if (
       Array.isArray(previous) &&
       previous.length === values.length &&
-      values.every((value, index) => sameFilterValue(previous[index], value))
+      values.every((value, index) => sameFilterValue(previous[index], value, columnsById))
     ) {
       snapshots.set(columnId, previous);
     } else {
@@ -1344,33 +1345,83 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }
 
-function sameFilterValue(previous: unknown, next: unknown): boolean {
+function sameFilterValue(
+  previous: unknown,
+  next: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  column?: CompiledColumn,
+  seen: WeakMap<object, object> = new WeakMap(),
+): boolean {
+  try {
+    if (Object.is(previous, next)) return true;
+    if (Array.isArray(previous) && Array.isArray(next)) {
+      return (
+        previous.length === next.length &&
+        previous.every((value, index) =>
+          sameFilterValue(value, next[index], columnsById, column, seen),
+        )
+      );
+    }
+    if (
+      typeof previous !== "object" ||
+      previous === null ||
+      typeof next !== "object" ||
+      next === null
+    ) {
+      return false;
+    }
+    const previousRecord = previous as Readonly<Record<PropertyKey, unknown>>;
+    const nextRecord = next as Readonly<Record<PropertyKey, unknown>>;
+    const previousColumnId = previousRecord["columnId"];
+    const nextColumnId = nextRecord["columnId"];
+    const valueColumn =
+      column ??
+      (typeof previousColumnId === "string" && previousColumnId === nextColumnId
+        ? columnsById.get(previousColumnId)
+        : undefined);
+    const remembered = seen.get(previous);
+    if (remembered !== undefined) return remembered === next;
+    seen.set(previous, next);
+    if (Object.getPrototypeOf(previous) !== Object.getPrototypeOf(next)) return false;
+    if (!isPlainFilterRecord(previous) || !isPlainFilterRecord(next)) return false;
+    const previousKeys = Reflect.ownKeys(previous);
+    const nextKeys = Reflect.ownKeys(next);
+    if (previousKeys.length !== nextKeys.length) return false;
+    return previousKeys.every((key) => {
+      if (!nextKeys.includes(key)) return false;
+      const previousValue = previousRecord[key];
+      const nextValue = nextRecord[key];
+      if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
+        return sameFilterOperand(previousValue, nextValue, valueColumn);
+      }
+      return sameFilterValue(previousValue, nextValue, columnsById, valueColumn, seen);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function sameFilterOperand(previous: unknown, next: unknown, column: CompiledColumn): boolean {
   if (Object.is(previous, next)) return true;
   if (Array.isArray(previous) && Array.isArray(next)) {
     return (
       previous.length === next.length &&
-      previous.every((value, index) => sameFilterValue(value, next[index]))
+      previous.every((value, index) => sameFilterOperand(value, next[index], column))
     );
   }
-  if (
-    typeof previous !== "object" ||
-    previous === null ||
-    typeof next !== "object" ||
-    next === null
-  ) {
+  if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;
   }
-  const previousKeys = Reflect.ownKeys(previous);
-  const nextKeys = Reflect.ownKeys(next);
-  if (previousKeys.length !== nextKeys.length) return false;
-  return previousKeys.every(
-    (key) =>
-      nextKeys.includes(key) &&
-      sameFilterValue(
-        (previous as Readonly<Record<PropertyKey, unknown>>)[key],
-        (next as Readonly<Record<PropertyKey, unknown>>)[key],
-      ),
-  );
+  try {
+    return column.semantics.equivalent(previous, next);
+  } catch {
+    return false;
+  }
+}
+
+function isPlainFilterRecord(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function sameColumnProjection(

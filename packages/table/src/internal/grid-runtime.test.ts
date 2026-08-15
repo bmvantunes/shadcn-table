@@ -238,6 +238,75 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(view.getQuerySnapshot().quickFilter).toBe("");
   });
 
+  it("uses Value Semantics for opaque cyclic filter operands", () => {
+    type CyclicOperand = { normalized?: CyclicOperand };
+    const createCyclicOperand = (): CyclicOperand => {
+      const operand: CyclicOperand = {};
+      operand.normalized = operand;
+      return operand;
+    };
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CYCLIC",
+        field: "name",
+        headerName: "Cyclic",
+        valueType: {
+          codecId: "test/cyclic",
+          codecVersion: 1,
+          filterFamily: "equality",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 100,
+          decodeRuntime: (input: unknown) =>
+            typeof input === "object" && input !== null
+              ? { _tag: "Success", value: input as CyclicOperand }
+              : { _tag: "Failure", message: "Expected an object." },
+          equivalent: (left: unknown, right: unknown) => left === right,
+          compare: () => 0,
+          formatCanonicalText: () => "cyclic",
+          parseCanonicalText: () => ({ _tag: "Failure", message: "Not text." }),
+          formatDisplay: () => "cyclic",
+          encodePersisted: () => ({ value: "cyclic" }),
+          decodePersisted: () => ({ _tag: "Failure", message: "Not persisted." }),
+        },
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_CYCLIC", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_CYCLIC_FILTER_RUNTIME",
+    );
+    const view = runtime.getView();
+    const first = createCyclicOperand();
+    const second = createCyclicOperand();
+
+    expect(() =>
+      view.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_CYCLIC",
+        filter: { columnId: "COL_ID_CYCLIC", type: "equals", filter: first },
+      }),
+    ).not.toThrow();
+    const generation = view.getQuerySnapshot().generation;
+    expect(() =>
+      view.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_CYCLIC",
+        filter: { columnId: "COL_ID_CYCLIC", type: "equals", filter: second },
+      }),
+    ).not.toThrow();
+    expect(view.getQuerySnapshot().generation).toBe(generation + 1);
+  });
+
   it("rejects invalid filter replacements and preserves semantic no-ops", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([{ id: "first", name: "Ada" }]),

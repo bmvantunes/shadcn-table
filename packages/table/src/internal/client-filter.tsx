@@ -782,6 +782,8 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
     case "boolean":
     case "select":
       return Object.freeze(["equals", "notEqual", "blank", "notBlank"]);
+    case "equality":
+      return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
     default:
       return Object.freeze(["equals", "notEqual"]);
   }
