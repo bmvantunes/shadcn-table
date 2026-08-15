@@ -145,6 +145,13 @@ const readySource = (nextRows: readonly Row[] = rows) => ({
   status: "ready" as const,
 });
 
+const readyFilterSource = (nextRows: readonly FilterRow[] = filterRows) => ({
+  rows: nextRows,
+  totalRows: nextRows.length,
+  version: 1,
+  status: "ready" as const,
+});
+
 const encodeExpectedDomIdSegment = (value: string): string =>
   Array.from(value, (character) => character.charCodeAt(0).toString(16).padStart(4, "0")).join("");
 
@@ -355,6 +362,7 @@ describe("BrunoTableClient browser surface", () => {
         .dispatchEvent(new KeyboardEvent("keydown", { altKey: true, bubbles: true, key: "Enter" }));
       await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
+      await expect.element(grid).toHaveFocus();
 
       for (const headerName of ["Name", "Score", "Quantity", "Active", "Status"]) {
         await userEvent.click(screen.getByRole("button", { name: `Filter ${headerName}` }));
@@ -362,6 +370,7 @@ describe("BrunoTableClient browser surface", () => {
           .element(screen.getByRole("dialog", { name: `Filter ${headerName}` }))
           .toBeInTheDocument();
         await userEvent.keyboard("{Escape}");
+        await expect.element(grid).toHaveFocus();
       }
 
       await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
@@ -379,6 +388,92 @@ describe("BrunoTableClient browser surface", () => {
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
       );
+    } finally {
+      removeCommandListener();
+    }
+  });
+
+  test("uses a trailing 150 ms Pacer commit and cancels pending filter drafts", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PACER",
+      (command) => commands.push(command),
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PACER"
+          columns={filterColumns}
+          initialFilters={[{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
+      const startedAt = performance.now();
+      await userEvent.fill(input, "G");
+      await userEvent.fill(input, "Grace");
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        0,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        0,
+      );
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(120);
+      expect(commands.at(-1)).toMatchObject({
+        type: "column.filter.replace",
+        columnId: "COL_ID_FILTER_NAME",
+      });
+
+      await userEvent.fill(input, "Ada");
+      await userEvent.keyboard("{Escape}");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      await userEvent.fill(
+        screen.getByRole("dialog", { name: "Filter Name" }).getByRole("textbox", {
+          name: "Filter value for Name",
+        }),
+        "Ada",
+      );
+      await screen.getByRole("button", { name: "Clear filter for Name" }).click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+      await userEvent.fill(
+        screen.getByRole("dialog", { name: "Filter Name" }).getByRole("textbox", {
+          name: "Filter value for Name",
+        }),
+        "Grace",
+      );
+      await screen.getByRole("button", { name: "Reset filter for Name" }).click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
     } finally {
       removeCommandListener();
     }
@@ -406,6 +501,10 @@ describe("BrunoTableClient browser surface", () => {
     const dialog = screen.getByRole("dialog", { name: "Filter Name" });
     await expect.element(dialog).toBeInTheDocument();
     expect(getComputedStyle(dialog.element()).direction).toBe("rtl");
+    await userEvent.keyboard("{Escape}");
+    await expect
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_FILTER_RTL" }))
+      .toHaveFocus();
   });
 
   test("keeps invalid numeric drafts local and preserves Clear versus Reset", async () => {
@@ -703,6 +802,51 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("plans one row-order recomputation for one committed Quick Filter", async () => {
+    const rowOrderPlans = vi.fn();
+    const commands: BrunoTableGridCommand[] = [];
+    const removePlanningListener = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_QUICK_FILTER_PLAN",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_QUICK_FILTER_PLAN"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+          quickFilterFields={["symbol", "description"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      rowOrderPlans.mockClear();
+      commands.length = 0;
+
+      await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+      expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(1);
+    } finally {
+      removeCommandListener();
+      removePlanningListener();
+    }
   });
 
   test("does not rerender the mounted Quick Filter for a passive source publication", async () => {

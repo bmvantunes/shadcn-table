@@ -5,9 +5,10 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server.browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { BrunoTableClient } from "../../dist/index.mjs";
+import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "../../dist/index.mjs";
 
 type Row = Readonly<{ id: string; name: string; score: number }>;
+type FilterRow = Readonly<{ id: string; name: string; symbol: string }>;
 
 const source = Object.freeze({
   rows: Object.freeze([{ id: "row", name: "Ada", score: 1_234.5 }]) satisfies readonly Row[],
@@ -16,9 +17,64 @@ const source = Object.freeze({
   status: "ready" as const,
 });
 
+const filterSource = Object.freeze({
+  rows: Object.freeze([
+    { id: "ada", name: "Ada", symbol: "AAPL" },
+    { id: "grace", name: "Grace", symbol: "MSFT" },
+  ]) satisfies readonly FilterRow[],
+  totalRows: 2,
+  version: 1,
+  status: "ready" as const,
+});
+
 afterEach(async () => {
   await cleanup();
   vi.restoreAllMocks();
+});
+
+test("applies emitted Quick Filter and column filter interactions", async () => {
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_FILTER_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+    },
+  ] as const;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_FILTERS"
+      getRowId={(row: FilterRow) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_FILTER_NAME", direction: "asc" }]}
+      quickFilterFields={["symbol"]}
+      clientSource={filterSource}
+    >
+      <BrunoTableToolbar>
+        <BrunoTableQuickFilter />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+
+  await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+  const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+  await expect.element(dialog).toBeInTheDocument();
+  await userEvent.fill(dialog.getByRole("textbox", { name: "Filter value for Name" }), "Grace");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
+    .toHaveFocus();
 });
 
 test("reports incompatible Table Identity reuse from the emitted browser runtime", async () => {

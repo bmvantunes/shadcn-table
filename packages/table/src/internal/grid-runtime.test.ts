@@ -195,6 +195,31 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(quickFilterListener).toHaveBeenCalledOnce();
   });
 
+  it("does not publish a new generation when Reset already matches its baseline", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_FILTER_RESET_NOOP",
+    );
+    const view = runtime.getView();
+    const queryListener = vi.fn();
+    view.subscribeQuery(queryListener);
+    const before = view.getQuerySnapshot();
+
+    view.resetColumnFilters("COL_ID_NAME");
+
+    expect(view.getQuerySnapshot()).toBe(before);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
   it("snapshots Quick Filter fields as immutable table configuration", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([{ id: "first", name: "Ada" }]),

@@ -93,22 +93,39 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     const [open, setOpen] = useState(false);
     const [direction, setDirection] = useState<"ltr" | "rtl">("ltr");
     const closeReasonRef = useRef<string | null>(null);
+    const escapeFocusFrameRef = useRef<number | null>(null);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
     const label = `Filter ${column.headerName}`;
+    useEffect(
+      () => () => {
+        if (escapeFocusFrameRef.current !== null) {
+          cancelAnimationFrame(escapeFocusFrameRef.current);
+        }
+      },
+      [],
+    );
     return (
       <DirectionProvider direction={direction}>
         <Popover
           open={open}
           onOpenChange={(nextOpen, eventDetails) => {
-            if (nextOpen) setDirection(readBrunoTableFilterDirection(triggerRef.current));
-            else closeReasonRef.current = eventDetails.reason;
-            setOpen(nextOpen);
-          }}
-          onOpenChangeComplete={(nextOpen) => {
-            if (!nextOpen && closeReasonRef.current === "escapeKey") {
-              activateHeaderCommand(column.columnId);
+            if (nextOpen) {
+              if (escapeFocusFrameRef.current !== null) {
+                cancelAnimationFrame(escapeFocusFrameRef.current);
+                escapeFocusFrameRef.current = null;
+              }
+              setDirection(readBrunoTableFilterDirection(triggerRef.current));
+            } else if (
+              eventDetails.reason === "escape-key" ||
+              closeReasonRef.current === "escape-key"
+            ) {
+              escapeFocusFrameRef.current = requestAnimationFrame(() => {
+                escapeFocusFrameRef.current = null;
+                activateHeaderCommand(column.columnId);
+              });
             }
             if (!nextOpen) closeReasonRef.current = null;
+            setOpen(nextOpen);
           }}
         >
           <PopoverTrigger
@@ -136,6 +153,9 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
             <BrunoTableColumnFilterContent
               column={column}
               direction={direction}
+              onEscape={() => {
+                closeReasonRef.current = "escape-key";
+              }}
               runtime={runtime}
             />
           ) : null}
@@ -158,10 +178,12 @@ function readBrunoTableFilterDirection(element?: Element | null): "ltr" | "rtl" 
 const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterContent({
   column,
   direction,
+  onEscape,
   runtime,
 }: {
   readonly column: CompiledColumn;
   readonly direction: "ltr" | "rtl";
+  readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
   const subscribe = useCallback(
@@ -178,6 +200,7 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
       column={column}
       committed={runtime.getColumnFilterSnapshot(column.columnId)}
       direction={direction}
+      onEscape={onEscape}
       runtime={runtime}
       version={version}
     />
@@ -195,12 +218,14 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   column,
   committed,
   direction,
+  onEscape,
   runtime,
   version,
 }: {
   readonly column: CompiledColumn;
   readonly committed: unknown;
   readonly direction: "ltr" | "rtl";
+  readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly version: number;
 }): ReactElement {
@@ -287,6 +312,9 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       aria-label={labelForContent(column)}
       className="w-80"
       dir={direction}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onEscape();
+      }}
       role="dialog"
     >
       <PopoverHeader>

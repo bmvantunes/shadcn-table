@@ -737,7 +737,9 @@ export class BrunoTableGridRuntime<TRow> {
     const baseline = this.baselineFilters.filter((filter) =>
       brunoTableFilterReferencesColumn(filter, columnId),
     );
-    this.publishQuery(Object.freeze([...withoutColumn, ...baseline]), this.query.orderBy);
+    const next = Object.freeze([...withoutColumn, ...baseline]);
+    if (sameFilterCollection(this.query.filters, next, this.columnsById)) return;
+    this.publishQuery(next, this.query.orderBy);
   };
 
   public readonly retry = (): void => {
@@ -1318,6 +1320,17 @@ function sameColumnCommand(
 
 function sameReferences(previous: readonly unknown[], next: readonly unknown[]): boolean {
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
+}
+
+function sameFilterCollection(
+  previous: readonly unknown[],
+  next: readonly unknown[],
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((value, index) => sameFilterValue(value, next[index], columnsById))
+  );
 }
 
 function sameFilterValue(

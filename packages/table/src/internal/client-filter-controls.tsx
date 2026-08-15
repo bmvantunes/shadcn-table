@@ -93,10 +93,10 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   );
   const debouncer = useDebouncer(publish, { wait: 150 });
   useEffect(() => {
+    debouncer.cancel();
     if (lastCommittedRef.current === initialValue) return;
     lastCommittedRef.current = initialValue;
     if (draftRef.current === initialValue) return;
-    debouncer.cancel();
     draftRef.current = initialValue;
     setDraft(initialValue);
   }, [debouncer, initialValue]);
