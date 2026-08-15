@@ -136,6 +136,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
   readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
+  readonly subscribeQuickFilterFields: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
@@ -225,6 +226,7 @@ const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 type QueryTransition = Readonly<{
   readonly queryChanged: boolean;
   readonly quickFilterChanged: boolean;
+  readonly quickFilterFieldsChanged: boolean;
   readonly sortingChanged: boolean;
   readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
   readonly previousColumnFilters: ReadonlyMap<string, unknown>;
@@ -257,6 +259,7 @@ export class BrunoTableGridRuntime<TRow> {
   >();
   private readonly queryListeners = new Set<Listener>();
   private readonly quickFilterListeners = new Set<Listener>();
+  private readonly quickFilterFieldsListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
@@ -355,6 +358,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
         subscribeQuickFilter: this.subscribeQuickFilter,
+        subscribeQuickFilterFields: this.subscribeQuickFilterFields,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
         subscribeColumnFilter: this.subscribeColumnFilter,
@@ -396,7 +400,10 @@ export class BrunoTableGridRuntime<TRow> {
       this.columns === columns &&
       this.baselineFilters === queryConfiguration.baselineFilters &&
       this.baselineOrderBy === queryConfiguration.baselineOrderBy &&
-      this.quickFilterFields === (queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS)
+      sameStringArray(
+        this.quickFilterFields,
+        queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS,
+      )
         ? undefined
         : this.stageColumns(columns, queryConfiguration);
     const next = this.createState(publication);
@@ -587,6 +594,9 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterListeners, listener);
 
+  public readonly subscribeQuickFilterFields = (listener: Listener): (() => void) =>
+    subscribe(this.quickFilterFieldsListeners, listener);
+
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);
 
@@ -776,7 +786,11 @@ export class BrunoTableGridRuntime<TRow> {
   ): ColumnConfiguration {
     const baselineFilters = queryConfiguration.baselineFilters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
-    const quickFilterFields = queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
+    const requestedQuickFilterFields =
+      queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
+    const quickFilterFields = sameStringArray(this.quickFilterFields, requestedQuickFilterFields)
+      ? this.quickFilterFields
+      : requestedQuickFilterFields;
     const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
     const quickFilterFieldsChanged = this.quickFilterFields !== quickFilterFields;
@@ -816,6 +830,7 @@ export class BrunoTableGridRuntime<TRow> {
       transition: Object.freeze({
         queryChanged: true,
         quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
+        quickFilterFieldsChanged,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         previousCommands: this.columnCommands,
         previousColumnFilters: this.columnFilterSnapshots,
@@ -868,6 +883,7 @@ export class BrunoTableGridRuntime<TRow> {
     return Object.freeze({
       queryChanged,
       quickFilterChanged,
+      quickFilterFieldsChanged: false,
       sortingChanged,
       previousCommands,
       previousColumnFilters,
@@ -876,6 +892,9 @@ export class BrunoTableGridRuntime<TRow> {
 
   private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
+    if (transition.quickFilterFieldsChanged) {
+      firstError = firstListenerError(firstError, notify(this.quickFilterFieldsListeners));
+    }
     if (transition.quickFilterChanged) {
       firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
     }
@@ -929,7 +948,11 @@ export class BrunoTableGridRuntime<TRow> {
   }
 
   private updateColumnFilterSnapshots(): void {
-    const next = createColumnFilterSnapshots(this.query.filters, this.columns);
+    const next = createColumnFilterSnapshots(
+      this.query.filters,
+      this.columns,
+      this.columnFilterSnapshots,
+    );
     const columnIds = new Set([...this.columnFilterSnapshots.keys(), ...next.keys()]);
     for (const columnId of columnIds) {
       if (Object.is(this.columnFilterSnapshots.get(columnId), next.get(columnId))) continue;
@@ -1095,6 +1118,7 @@ function indexColumns(columns: readonly CompiledColumn[]): ReadonlyMap<string, C
 function createColumnFilterSnapshots(
   filters: readonly unknown[],
   columns: readonly CompiledColumn[],
+  previousSnapshots?: ReadonlyMap<string, unknown>,
 ): ReadonlyMap<string, unknown> {
   const entries = new Map<string, unknown[]>();
   for (const filter of filters) {
@@ -1107,7 +1131,20 @@ function createColumnFilterSnapshots(
   }
   const snapshots = new Map<string, unknown>();
   for (const [columnId, values] of entries) {
-    snapshots.set(columnId, values.length === 1 ? values[0] : Object.freeze(Array.from(values)));
+    if (values.length === 1) {
+      snapshots.set(columnId, values[0]);
+      continue;
+    }
+    const previous = previousSnapshots?.get(columnId);
+    if (
+      Array.isArray(previous) &&
+      previous.length === values.length &&
+      values.every((value, index) => sameFilterValue(previous[index], value))
+    ) {
+      snapshots.set(columnId, previous);
+    } else {
+      snapshots.set(columnId, Object.freeze(Array.from(values)));
+    }
   }
   return snapshots;
 }

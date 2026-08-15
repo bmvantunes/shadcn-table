@@ -398,6 +398,7 @@ function FilterExpressionEditor({
                   draft={leaf}
                   errorId={errorId}
                   inputRef={inputRef}
+                  path={path}
                   selectRef={selectRef}
                   inputLabel={`Filter value for ${column.headerName}`}
                   onChange={updateLeaf}
@@ -537,6 +538,7 @@ function FilterOperand({
   inputLabel,
   inputRef,
   onChange,
+  path,
   selectRef,
   continuous,
 }: {
@@ -550,16 +552,17 @@ function FilterOperand({
     mode: "continuous" | "immediate",
     badInput?: boolean,
   ) => void;
+  readonly path: string;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly continuous: boolean;
 }): ReactElement {
   if (column.semantics.filterFamily === "boolean") {
     return (
-      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-value`}>
+      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
         Value
         <NativeSelect
           ref={selectRef}
-          id={`${errorId}-value`}
+          id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
           value={draft.first}
           onChange={(event) =>
@@ -575,11 +578,11 @@ function FilterOperand({
 
   if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
     return (
-      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-value`}>
+      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
         Value
         <NativeSelect
           ref={selectRef}
-          id={`${errorId}-value`}
+          id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
           value={draft.selectIndex === undefined ? "" : selectOptionToken(draft.selectIndex)}
           onChange={(event) => {
@@ -630,12 +633,12 @@ function FilterOperand({
             <div key={String(index)} className="flex items-end gap-1">
               <label
                 className="flex min-w-0 flex-1 flex-col gap-1 text-sm"
-                htmlFor={`${errorId}-value-${String(index)}`}
+                htmlFor={`${errorId}-${path}-value-${String(index)}`}
               >
                 {index === 0 ? "Value" : `Value ${String(index + 1)}`}
                 <Input
                   ref={index === 0 ? inputRef : undefined}
-                  id={`${errorId}-value-${String(index)}`}
+                  id={`${errorId}-${path}-value-${String(index)}`}
                   aria-describedby={errorId}
                   aria-label={
                     index === 0
@@ -703,11 +706,11 @@ function FilterOperand({
           </Button>
         </div>
       ) : (
-        <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-value`}>
+        <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
           Value
           <Input
             ref={inputRef}
-            id={`${errorId}-value`}
+            id={`${errorId}-${path}-value`}
             aria-describedby={errorId}
             aria-label={inputLabel}
             inputMode={inputMode}
@@ -725,10 +728,10 @@ function FilterOperand({
         </label>
       )}
       {isRange ? (
-        <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-value-to`}>
+        <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value-to`}>
           Less than
           <Input
-            id={`${errorId}-value-to`}
+            id={`${errorId}-${path}-value-to`}
             aria-describedby={errorId}
             aria-label={`Filter upper bound for ${column.headerName}`}
             inputMode={inputMode}

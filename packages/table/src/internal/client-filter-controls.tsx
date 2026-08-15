@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -56,7 +57,11 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement | null {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientQuickFilterRender();
-  const fields = runtime.getQuickFilterFieldsSnapshot();
+  const fields = useSyncExternalStore(
+    runtime.subscribeQuickFilterFields,
+    runtime.getQuickFilterFieldsSnapshot,
+    runtime.getQuickFilterFieldsSnapshot,
+  );
   const committed = useSyncExternalStore(
     runtime.subscribeQuickFilter,
     runtime.getQuickFilterSnapshot,
@@ -70,7 +75,7 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
     }
     return null;
   }
-  return <BrunoTableQuickFilterInput key={committed} initialValue={committed} runtime={runtime} />;
+  return <BrunoTableQuickFilterInput initialValue={committed} runtime={runtime} />;
 });
 
 const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
@@ -81,6 +86,8 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
   const [draft, setDraft] = useState(initialValue);
+  const draftRef = useRef(initialValue);
+  const lastCommittedRef = useRef(initialValue);
   const publish = useCallback(
     (text: string): void => {
       runtime.dispatchGridCommand({ type: "quick-filter.replace", text });
@@ -88,6 +95,14 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     [runtime],
   );
   const debouncer = useDebouncer(publish, { wait: 150 });
+  useEffect(() => {
+    if (lastCommittedRef.current === initialValue) return;
+    lastCommittedRef.current = initialValue;
+    if (draftRef.current === initialValue) return;
+    debouncer.cancel();
+    draftRef.current = initialValue;
+    setDraft(initialValue);
+  }, [debouncer, initialValue]);
   useEffect(() => () => debouncer.cancel(), [debouncer]);
   return (
     <div className="flex min-w-56 items-center gap-1">
@@ -98,6 +113,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         value={draft}
         onChange={(event) => {
           const text = event.currentTarget.value;
+          draftRef.current = text;
           setDraft(text);
           debouncer.maybeExecute(text);
         }}
@@ -110,6 +126,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           variant="ghost"
           onClick={() => {
             debouncer.cancel();
+            draftRef.current = "";
             setDraft("");
             publish("");
           }}

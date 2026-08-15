@@ -82,5 +82,8 @@ describe("BrunoTable Client Quick Filter", () => {
     });
 
     expect(predicate?.({})).toBe(false);
+
+    const nonStringPredicate = createClientQuickFilterPredicate("1", ["price"], () => 1);
+    expect(nonStringPredicate?.({})).toBe(false);
   });
 });

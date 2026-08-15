@@ -125,10 +125,16 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
   semantics = nullableSafeSemantics(semantics);
-  const selectOptions =
-    semantics.filterFamily === "select" && Array.isArray(candidate["options"])
-      ? Object.freeze(Array.from(candidate["options"] as readonly unknown[]))
-      : undefined;
+  let selectOptions: readonly unknown[] | undefined;
+  if (semantics.filterFamily === "select") {
+    const options = candidate["options"];
+    if (!Array.isArray(options) || options.length === 0) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must be a non-empty array: ${columnId}`,
+      );
+    }
+    selectOptions = Object.freeze(Array.from(options));
+  }
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {

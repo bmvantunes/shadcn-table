@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "vitest";
 
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
 
 import {
@@ -396,7 +396,8 @@ describe("BrunoTable public types", () => {
     expectTypeOf(rendered).toEqualTypeOf<ReactNode>();
     expectTypeOf(callableProps).toMatchTypeOf<BrunoTableClientProps<Order, Columns>>();
     expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
-    expectTypeOf(BrunoTableQuickFilter).toMatchTypeOf<() => ReactNode>();
+    expectTypeOf(BrunoTableQuickFilter).toExtend<() => ReactNode>();
+    expectTypeOf(BrunoTableQuickFilter).toEqualTypeOf<() => ReactElement | null>();
 
     const validQuickFilterFields = [
       "symbol",

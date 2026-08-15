@@ -419,6 +419,15 @@ export type BrunoTableColumnFilterRenderer = (
   props: BrunoTableColumnFilterRendererProps,
 ) => ReactElement;
 
+function supportsBrunoTableCustomColumnFilter(
+  column: CompiledColumn,
+  renderColumnFilter: BrunoTableColumnFilterRenderer | undefined,
+): boolean {
+  return (
+    renderColumnFilter !== undefined && column.kind === "field" && column.enableFilter !== false
+  );
+}
+
 export type BrunoTableRowPipelineProps<
   TRuntime extends BrunoTableRuntimeView = BrunoTableRuntimeView,
   TAdapter = unknown,
@@ -2197,10 +2206,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             }
             if (active?.region !== "header" || column === undefined || event.key === "F2") return;
             const command = runtime.getColumnCommandSnapshot(column.columnId);
-            const filterable =
-              renderColumnFilter !== undefined &&
-              column.kind === "field" &&
-              column.enableFilter !== false;
+            const filterable = supportsBrunoTableCustomColumnFilter(column, renderColumnFilter);
             const legacyFilterable = column.kind === "field" && column.enableFilter !== false;
             if (event.altKey && event.key === "Enter" && filterable) {
               event.preventDefault();
@@ -2220,9 +2226,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             } else if (command.sortable) {
               event.preventDefault();
               toggleHeaderSort(column.columnId, event.shiftKey);
-            } else if (filterable || legacyFilterable) {
+            } else if (command.filterActive || command.filterBaselineAvailable) {
               event.preventDefault();
               toggleHeaderFilter(column.columnId);
+            } else if (filterable) {
+              event.preventDefault();
+              openHeaderFilter(column.columnId);
             }
             return;
           }
@@ -2916,10 +2925,8 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         ) : (
           <span className="truncate">{column.headerName}</span>
         )}
-        {renderColumnFilter !== undefined &&
-        column.kind === "field" &&
-        column.enableFilter !== false
-          ? renderColumnFilter({
+        {supportsBrunoTableCustomColumnFilter(column, renderColumnFilter)
+          ? renderColumnFilter?.({
               activateHeaderCommand,
               column,
               command,
@@ -3023,12 +3030,11 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     id: headerDomId(instanceId, tableId, column.columnId),
     "aria-label": `${presentation.label}, width ${String(command.width)} pixels, ${pinLabel}`,
     "aria-colindex": columnIndex + 1,
-    "aria-keyshortcuts":
-      renderColumnFilter !== undefined && column.kind === "field" && column.enableFilter !== false
-        ? "Alt+Enter Alt+Shift+Enter"
-        : command.filterBaselineAvailable
-          ? "Alt+Enter"
-          : undefined,
+    "aria-keyshortcuts": supportsBrunoTableCustomColumnFilter(column, renderColumnFilter)
+      ? "Alt+Enter Alt+Shift+Enter"
+      : command.filterBaselineAvailable
+        ? "Alt+Enter"
+        : undefined,
     "aria-sort": presentation.ariaSort,
     role: "columnheader",
     style: {
@@ -3361,9 +3367,7 @@ const ActiveHeaderDescendantProxy = memo(function ActiveHeaderDescendantProxy({
         id={headerDomId(instanceId, tableId, column.columnId)}
         aria-colindex={columnIndex + 1}
         aria-keyshortcuts={
-          renderColumnFilter !== undefined &&
-          column.kind === "field" &&
-          column.enableFilter !== false
+          supportsBrunoTableCustomColumnFilter(column, renderColumnFilter)
             ? "Alt+Enter Alt+Shift+Enter"
             : command.filterBaselineAvailable
               ? "Alt+Enter"

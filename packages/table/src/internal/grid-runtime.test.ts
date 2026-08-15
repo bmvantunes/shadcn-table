@@ -151,7 +151,7 @@ describe("BrunoTable filter runtime primitives", () => {
         [{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }],
         columns,
       ),
-    ).toHaveLength(1);
+    ).toEqual([{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }]);
   });
 
   it("publishes one generation for a committed Quick Filter without changing Grid Filters", () => {
@@ -193,6 +193,49 @@ describe("BrunoTable filter runtime primitives", () => {
     view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
     expect(queryListener).toHaveBeenCalledOnce();
     expect(quickFilterListener).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Quick Filter field snapshots stable for equivalent configuration changes", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      ["name"],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_QUICK_FILTER_FIELDS_RUNTIME",
+    );
+    const view = runtime.getView();
+    const fieldsListener = vi.fn();
+    view.subscribeQuickFilterFields(fieldsListener);
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+
+    adapter.configureQuickFilterFields(["name"]);
+    runtime.reconcile(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+    );
+    expect(fieldsListener).not.toHaveBeenCalled();
+    expect(view.getQuickFilterFieldsSnapshot()).toBe(
+      adapter.getQueryConfiguration(runtimeColumns).quickFilterFields,
+    );
+    expect(view.getQuerySnapshot().quickFilter).toBe("ada");
+
+    adapter.configureQuickFilterFields(["id"]);
+    runtime.reconcile(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+    );
+    expect(fieldsListener).toHaveBeenCalledOnce();
+    expect(view.getQuickFilterFieldsSnapshot()).toEqual(["id"]);
+    expect(view.getQuerySnapshot().quickFilter).toBe("");
   });
 
   it("rejects invalid filter replacements and preserves semantic no-ops", () => {

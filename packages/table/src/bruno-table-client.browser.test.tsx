@@ -638,6 +638,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .not.toBeInTheDocument();
+    await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
 
     await screen.getByRole("button", { name: "Clear Quick Filter" }).click();
     await expect

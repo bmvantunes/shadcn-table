@@ -50,14 +50,22 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   const runtimeView = runtime.getView();
 
   useLayoutEffect(() => {
-    const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
+    rowPipelineAdapter.configureQuickFilterFields(props.quickFilterFields);
     const publication = rowPipelineAdapter.reconcile(
       props.clientSource,
       props.getRowId,
       compiledColumns,
     );
+    const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
     runtime.reconcile(publication, compiledColumns, queryConfiguration);
-  }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
+  }, [
+    compiledColumns,
+    props.clientSource,
+    props.getRowId,
+    props.quickFilterFields,
+    rowPipelineAdapter,
+    runtime,
+  ]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);
