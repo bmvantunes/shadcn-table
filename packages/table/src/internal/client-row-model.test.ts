@@ -1413,6 +1413,46 @@ describe("Client row model", () => {
     ).toEqual([{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }]);
   });
 
+  it("does not re-decode an already compiled long Select option", () => {
+    const status = "x".repeat(1_025);
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const selectValueType = {
+      codecId: "test/select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options: [status],
+      } as never,
+    ]);
+    const compileDecodeCalls = decodeRuntime.mock.calls.length;
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_CUSTOM_SELECT", filter: status, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_CUSTOM_SELECT", filter: status, type: "equals" }]);
+    expect(decodeRuntime).toHaveBeenCalledTimes(compileDecodeCalls);
+  });
+
   it("captures admitted dense operands without enumerating unrelated own properties", () => {
     const columns = compileColumns([
       {

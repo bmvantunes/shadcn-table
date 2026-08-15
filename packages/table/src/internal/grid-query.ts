@@ -514,11 +514,17 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    const isConfiguredSelectValue =
-      column.semantics.filterFamily === "select" &&
-      column.selectOptions?.some((option) => Object.is(option, operand)) === true;
+    const configuredSelectValue =
+      column.semantics.filterFamily === "select"
+        ? column.selectOptions?.find((option) => Object.is(option, operand))
+        : undefined;
+    const isConfiguredSelectValue = configuredSelectValue !== undefined;
     if (!isConfiguredSelectValue && !isBoundedFilterOperandText(operand, context)) return undefined;
-    const result = decode(operand);
+    // Compiled Select options are already canonical. Reuse the admitted option
+    // so a long trusted option never re-enters a consumer decoder.
+    const result = isConfiguredSelectValue
+      ? ({ _tag: "Success", value: configuredSelectValue } as const)
+      : decode(operand);
     if (result._tag !== "Success") return undefined;
     if (
       (type === "equals" || type === "notEqual") &&
