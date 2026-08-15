@@ -20,7 +20,7 @@ import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 
-export { BrunoTableActiveFilters, BrunoTableQuickFilter, BrunoTableToolbar };
+export { BrunoTableQuickFilter, BrunoTableToolbar };
 
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientProps<TRow, TColumns>,

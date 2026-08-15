@@ -8,7 +8,6 @@ import { cleanup, render } from "vitest-browser-react";
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
-  BrunoTableActiveFilters,
   BrunoTableClient,
   BrunoTableNumberColumn,
   BrunoTableQuickFilter,
@@ -44,8 +43,6 @@ const filterSource = Object.freeze({
   version: 1,
   status: "ready" as const,
 });
-
-void BrunoTableActiveFilters;
 
 afterEach(async () => {
   await cleanup();

@@ -286,7 +286,6 @@ const actualRuntimeExports = Object.keys(publicModule).toSorted((left, right) =>
   left.localeCompare(right),
 );
 const expectedRuntimeExports = [
-  "BrunoTableActiveFilters",
   "BrunoTableBigIntColumn",
   "BrunoTableBooleanColumn",
   "BrunoTableClient",

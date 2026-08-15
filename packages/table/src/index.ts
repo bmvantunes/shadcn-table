@@ -1,9 +1,4 @@
-export {
-  BrunoTableActiveFilters,
-  BrunoTableClient,
-  BrunoTableQuickFilter,
-  BrunoTableToolbar,
-} from "./bruno-table-client";
+export { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "./bruno-table-client";
 export { BrunoTableComputedColumn } from "./public-types";
 export {
   BrunoTableBigIntColumn,
