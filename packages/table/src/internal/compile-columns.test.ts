@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
 
 describe("compileColumns", () => {
@@ -273,6 +274,30 @@ describe("compileColumns", () => {
         },
       ]);
     }).toThrow(ColumnConfigurationError);
+  });
+
+  it("rejects select options outside the compiled value domain", () => {
+    const select = BrunoTableSelectColumn<
+      { status: "open" | "closed" },
+      readonly ["open", "closed"],
+      "status",
+      "COL_ID_STATUS",
+      {
+        readonly columnId: "COL_ID_STATUS";
+        readonly field: "status";
+        readonly headerName: "Status";
+        readonly options: readonly ["open", "closed"];
+      }
+    >({
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", "closed"],
+    }) as unknown as Readonly<Record<string, unknown>>;
+    const widened = { ...select, options: ["pending"] };
+
+    expect(() => compileColumns([widened])).toThrow(ColumnConfigurationError);
+    expect(() => compileColumns([widened])).toThrow(/option at index 0 is invalid/u);
   });
 
   it("rejects malformed widened Field Columns", () => {

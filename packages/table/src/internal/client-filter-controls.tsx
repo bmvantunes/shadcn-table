@@ -113,6 +113,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   const lastCommittedRef = useRef(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const draftEpochRef = useRef(0);
+  const composingRef = useRef(false);
   const publish = useCallback(
     (
       candidate: Readonly<{
@@ -146,12 +147,31 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         ref={inputRef}
         type="search"
         value={draft}
+        onCompositionEnd={(event) => {
+          composingRef.current = false;
+          const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
+          const draftEpoch = draftEpochRef.current + 1;
+          draftEpochRef.current = draftEpoch;
+          draftRef.current = text;
+          setDraft(text);
+          debouncer.maybeExecute({
+            text,
+            commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
+            draftEpoch,
+          });
+        }}
+        onCompositionStart={() => {
+          composingRef.current = true;
+          draftEpochRef.current += 1;
+          debouncer.cancel();
+        }}
         onChange={(event) => {
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           const draftEpoch = draftEpochRef.current + 1;
           draftEpochRef.current = draftEpoch;
           draftRef.current = text;
           setDraft(text);
+          if (composingRef.current) return;
           debouncer.maybeExecute({
             text,
             commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
@@ -166,6 +186,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           type="button"
           variant="ghost"
           onClick={() => {
+            composingRef.current = false;
             debouncer.cancel();
             const draftEpoch = draftEpochRef.current + 1;
             draftEpochRef.current = draftEpoch;
@@ -290,7 +311,11 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     >
       <PopoverTrigger render={trigger} />
       {entries.length > 0 ? (
-        <PopoverContent aria-label="Active filters" className="w-96" role="dialog">
+        <PopoverContent
+          aria-label="Active filters"
+          className="w-96 max-w-[calc(100vw-1rem)]"
+          role="dialog"
+        >
           <PopoverHeader>
             <PopoverTitle>Active filters</PopoverTitle>
             <PopoverDescription>
@@ -299,8 +324,11 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
           </PopoverHeader>
           <div className="flex flex-col gap-2">
             {entries.map((entry) => (
-              <div className="flex items-center justify-between gap-2 text-sm" key={entry.key}>
-                <span>{entry.label}</span>
+              <div
+                className="flex min-w-0 items-center justify-between gap-2 text-sm"
+                key={entry.key}
+              >
+                <span className="min-w-0 flex-1 break-all">{entry.label}</span>
                 <Button
                   ref={(element) => {
                     if (element === null) removeButtonRefs.current.delete(entry.key);
@@ -308,6 +336,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                   }}
                   aria-label={`Remove ${entry.label}`}
                   size="icon-xs"
+                  className="shrink-0"
                   type="button"
                   variant="ghost"
                   onClick={() => removeEntry(entry)}

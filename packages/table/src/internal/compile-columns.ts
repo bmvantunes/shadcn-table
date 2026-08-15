@@ -133,7 +133,16 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         `BrunoTable Select column options must be a non-empty array: ${columnId}`,
       );
     }
-    selectOptions = Object.freeze(Array.from(options));
+    const decodedOptions = options.map((option, optionIndex) => {
+      const decoded = semantics.decodeRuntime(option);
+      if (decoded._tag === "Failure") {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: ${decoded.message}`,
+        );
+      }
+      return decoded.value;
+    });
+    selectOptions = Object.freeze(decodedOptions);
   }
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;

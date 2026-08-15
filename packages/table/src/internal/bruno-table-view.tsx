@@ -461,7 +461,12 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableViewCommitDiagnosticProbe commitEvidence={compiledColumns} tableId={tableId} />
       ) : null}
-      <BrunoTableSortPanel columns={compiledColumns} runtime={runtime} tableId={tableId} />
+      <BrunoTableSortPanel
+        columns={compiledColumns}
+        reserveEndSpace={gridOwnedControls !== undefined && gridOwnedControls !== null}
+        runtime={runtime}
+        tableId={tableId}
+      />
       <div className="min-w-0">
         <ToolbarOutlet
           reserveEndSpace={gridOwnedControls !== undefined && gridOwnedControls !== null}
@@ -530,10 +535,12 @@ const GridOwnedToolRail = memo(function GridOwnedToolRail({
 
 const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
   columns,
+  reserveEndSpace,
   runtime,
   tableId,
 }: {
   readonly columns: readonly CompiledColumn[];
+  readonly reserveEndSpace: boolean;
   readonly runtime: BrunoTableRuntimeView;
   readonly tableId: string;
 }) {
@@ -587,7 +594,11 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
     direction === "asc" ? "ascending" : "descending";
 
   return (
-    <div aria-label="Sorting controls" className="flex items-center py-1" role="region">
+    <div
+      aria-label="Sorting controls"
+      className={reserveEndSpace ? "flex items-center py-1 pe-28" : "flex items-center py-1"}
+      role="region"
+    >
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableSortPanelCommitDiagnosticProbe commitEvidence={orderBy} tableId={tableId} />
       ) : null}

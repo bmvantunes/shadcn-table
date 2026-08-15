@@ -73,6 +73,8 @@ type FilterLeafDraft = Readonly<{
   readonly accentSensitive: boolean;
 }>;
 
+type FilterChangeMode = "continuous" | "immediate" | "clear" | "local";
+
 type FilterDraft =
   | FilterLeafDraft
   | Readonly<{
@@ -352,15 +354,16 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
 
   const commitDraft = useCallback(
-    (
-      nextDraft: FilterDraft,
-      mode: "continuous" | "immediate" | "clear",
-      badInput = false,
-    ): void => {
+    (nextDraft: FilterDraft, mode: FilterChangeMode, badInput = false): void => {
       if (mode === "clear") {
         debouncer.cancel();
         setLocalState({ column, version, draft: nextDraft, error: undefined });
         runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: column.columnId });
+        return;
+      }
+      if (mode === "local") {
+        debouncer.cancel();
+        setLocalState({ column, version, draft: nextDraft, error: undefined });
         return;
       }
       if (!isFilterDraftWithinBudget(nextDraft)) {
@@ -437,11 +440,7 @@ function FilterExpressionEditor({
   readonly draft: FilterDraft;
   readonly errorId: string;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
-  readonly onChange: (
-    draft: FilterDraft,
-    mode: "continuous" | "immediate" | "clear",
-    badInput?: boolean,
-  ) => void;
+  readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path?: string;
   readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
@@ -489,11 +488,8 @@ function FilterExpressionEditor({
   const focusAddedControl = (controlId: string): void => {
     scheduleFocus(() => document.getElementById(controlId));
   };
-  const updateLeaf = (
-    nextLeaf: FilterLeafDraft,
-    mode: "continuous" | "immediate" | "clear",
-    badInput = false,
-  ) => onChange(nextLeaf, mode, badInput);
+  const updateLeaf = (nextLeaf: FilterLeafDraft, mode: FilterChangeMode, badInput = false) =>
+    onChange(nextLeaf, mode, badInput);
 
   return (
     <div className="flex flex-col gap-3">
@@ -737,16 +733,27 @@ function FilterOperand({
   readonly inputLabel: string;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly focusAddedControl: (controlId: string) => void;
-  readonly onChange: (
-    draft: FilterLeafDraft,
-    mode: "continuous" | "immediate" | "clear",
-    badInput?: boolean,
-  ) => void;
+  readonly onChange: (draft: FilterLeafDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path: string;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly continuous: boolean;
 }): ReactElement {
   const isIn = draft.operator === "in";
+  const composingRef = useRef(false);
+  const latestDraftRef = useRef(draft);
+  useEffect(() => {
+    latestDraftRef.current = draft;
+  }, [draft]);
+  const beginComposition = (): void => {
+    composingRef.current = true;
+    onChange(latestDraftRef.current, "local");
+  };
+  const finishComposition = (): void => {
+    composingRef.current = false;
+    onChange(latestDraftRef.current, continuous ? "continuous" : "immediate");
+  };
+  const changeMode = (): FilterChangeMode =>
+    composingRef.current ? "local" : continuous ? "continuous" : "immediate";
   const pathLabel = filterExpressionPathLabel(path);
   const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
   if (isBuiltInBooleanColumn(column)) {
@@ -848,6 +855,8 @@ function FilterOperand({
                   }
                   inputMode={inputMode}
                   maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
+                  onCompositionEnd={finishComposition}
+                  onCompositionStart={beginComposition}
                   step={isNumber ? "any" : undefined}
                   type={type}
                   value={value}
@@ -869,7 +878,7 @@ function FilterOperand({
                         inValuesAuthored: Object.freeze(nextValuesAuthored),
                         inValuesExplicit: true,
                       }),
-                      continuous ? "continuous" : "immediate",
+                      changeMode(),
                       isNumber && event.currentTarget.validity.badInput,
                     );
                   }}
@@ -953,6 +962,8 @@ function FilterOperand({
             aria-label={inputLabel}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
+            onCompositionEnd={finishComposition}
+            onCompositionStart={beginComposition}
             step={isNumber ? "any" : undefined}
             type={type}
             value={draft.first}
@@ -960,7 +971,7 @@ function FilterOperand({
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
                 Object.freeze({ ...draft, first: value, firstAuthored: true }),
-                continuous ? "continuous" : "immediate",
+                changeMode(),
                 isNumber && event.currentTarget.validity.badInput,
               );
             }}
@@ -976,6 +987,8 @@ function FilterOperand({
             aria-label={`Filter upper bound for ${column.headerName}${labelSuffix}`}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
+            onCompositionEnd={finishComposition}
+            onCompositionStart={beginComposition}
             step={isNumber ? "any" : undefined}
             type={type}
             value={draft.second}
@@ -983,7 +996,7 @@ function FilterOperand({
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
                 Object.freeze({ ...draft, second: value, secondAuthored: true }),
-                continuous ? "continuous" : "immediate",
+                changeMode(),
                 isNumber && event.currentTarget.validity.badInput,
               );
             }}
