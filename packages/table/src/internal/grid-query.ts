@@ -691,6 +691,9 @@ function compileFilterOperandPlans(
           ),
         });
       }
+    } else if (column !== undefined && type === "in" && Array.isArray(operand)) {
+      const membershipKeys = compileFilterMembershipKeys(column, operand, []);
+      if (membershipKeys !== undefined) plans.set(candidate, { membershipKeys });
     }
     const conditions = filter["conditions"];
     if (Array.isArray(conditions)) {
