@@ -430,10 +430,11 @@ describe("BrunoTableClient browser surface", () => {
           1,
         ),
       );
-      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(120);
+      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(140);
       expect(commands.at(-1)).toMatchObject({
         type: "column.filter.replace",
         columnId: "COL_ID_FILTER_NAME",
+        filter: { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Grace" },
       });
 
       await userEvent.fill(input, "Ada");

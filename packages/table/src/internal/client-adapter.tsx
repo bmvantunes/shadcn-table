@@ -23,7 +23,7 @@ import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { ClientOrderBy } from "./client-row-model";
 import { createBrunoTableClientRowComparator } from "./client-row-model";
-import { createClientQueryPredicate } from "./quick-filter";
+import { createClientQueryPredicate, readClientQuickFilterField } from "./quick-filter";
 
 const clientFeatures = tableFeatures({
   columnOrderingFeature,
@@ -82,7 +82,7 @@ export function useClientRowIds(
       quickFilterText,
       quickFilterFields,
       (column, row) => row.getValue(column.columnId),
-      (row, field) => Reflect.get(Object(row.original.raw), field),
+      (row, field) => readClientQuickFilterField(row.original.raw, field),
     );
   }, [compiledColumns, filters, quickFilterFields, quickFilterText]);
   const rowComparator = useMemo(

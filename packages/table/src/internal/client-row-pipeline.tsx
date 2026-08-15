@@ -16,7 +16,7 @@ import type {
   BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
-import { createClientQueryPredicate } from "./quick-filter";
+import { createClientQueryPredicate, readClientQuickFilterField } from "./quick-filter";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
@@ -193,7 +193,7 @@ function createRowOrderChangeDetector(
       if (isBrunoTableInvalidCellValue(value)) throw FILTER_VALUE_INVALID;
       return value;
     },
-    (row, field) => Reflect.get(Object(row.raw), field),
+    (row, field) => readClientQuickFilterField(row.raw, field),
   );
   return (previousRows, nextRows, change) =>
     rowOrderChanged(previousRows, nextRows, change, orderedColumns, filterPredicate);

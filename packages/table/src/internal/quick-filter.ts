@@ -10,7 +10,7 @@ export type BrunoTableClientQuickFilterFieldReader<TRow> = (row: TRow, field: st
 export function createClientQuickFilterPredicate<TRow>(
   text: string | undefined,
   fields: readonly string[] | undefined,
-  readField: BrunoTableClientQuickFilterFieldReader<TRow> = readQuickFilterField,
+  readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
 ): ((row: TRow) => boolean) | undefined {
   if (text === undefined || text.length === 0) return undefined;
   const normalizedQuery = normalizeBrunoTableFilterText(text);
@@ -36,7 +36,7 @@ export function createClientQueryPredicate<TRow>(
   quickFilterText: string | undefined,
   quickFilterFields: readonly string[] | undefined,
   readValue: (column: CompiledColumn, row: TRow) => unknown,
-  readField: BrunoTableClientQuickFilterFieldReader<TRow> = readQuickFilterField,
+  readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
 ): ((row: TRow) => boolean) | undefined {
   const gridPredicate = createClientFilterPredicate(columns, filters, readValue);
   const quickPredicate = createClientQuickFilterPredicate(
@@ -49,7 +49,8 @@ export function createClientQueryPredicate<TRow>(
   return (row) => gridPredicate(row) && quickPredicate(row);
 }
 
-function readQuickFilterField(row: unknown, field: string): unknown {
+/** Internal field access policy shared by every Client Quick Filter evaluation path. */
+export function readClientQuickFilterField(row: unknown, field: string): unknown {
   if (row === null || row === undefined) throw new TypeError("Quick Filter row is nullish.");
   return Reflect.get(Object(row), field);
 }

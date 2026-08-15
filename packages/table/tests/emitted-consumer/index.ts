@@ -141,6 +141,12 @@ const emittedInvalidQuickFields = {
   quickFilterFields: ["price"],
 } satisfies BrunoTableClientProps<Order, Columns>;
 void emittedInvalidQuickFields;
+const emittedEmptyQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields require a non-empty tuple.
+  quickFilterFields: [],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedEmptyQuickFields;
 
 const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
 const emittedViewServerClient = BrunoTableClient({
