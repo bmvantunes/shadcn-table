@@ -504,12 +504,14 @@ function sanitizeFilterRecord(
     ) {
       return undefined;
     }
-    if (!isBoundedFilterOperandText(operand, context)) return undefined;
     const result = decode(operand);
+    const isConfiguredSelectValue =
+      column.semantics.filterFamily === "select" && result._tag === "Success";
+    if (!isConfiguredSelectValue && !isBoundedFilterOperandText(operand, context)) return undefined;
+    if (result._tag !== "Success") return undefined;
     if (
-      result._tag !== "Success" ||
-      ((type === "equals" || type === "notEqual") &&
-        !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text"))
+      (type === "equals" || type === "notEqual") &&
+      !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
     ) {
       return undefined;
     }

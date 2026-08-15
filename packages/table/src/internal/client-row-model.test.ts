@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
 import { compileColumns } from "./compile-columns";
 import {
   createBrunoTableClientRowComparator,
@@ -1318,6 +1319,27 @@ describe("Client row model", () => {
         { rejectOverBudget: true },
       ),
     ).toThrow();
+  });
+
+  it("admits configured Select values beyond the authored text bound", () => {
+    const status = "x".repeat(1_025);
+    const selectColumn = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: [status],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const columns = compileColumns([selectColumn]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }],
+        columns,
+        { rejectOverBudget: true },
+      ),
+    ).toEqual([{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }]);
   });
 
   it("captures admitted dense operands without enumerating unrelated own properties", () => {

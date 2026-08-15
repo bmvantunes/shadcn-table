@@ -576,7 +576,7 @@ function FilterExpressionEditor({
                   <label className="flex items-center gap-2" htmlFor={`${errorId}-${path}-case`}>
                     <Checkbox
                       id={`${errorId}-${path}-case`}
-                      aria-label={`Case-sensitive filter for ${column.headerName}`}
+                      aria-label={`Case-sensitive filter for ${column.headerName}${labelSuffix}`}
                       checked={leaf.caseSensitive}
                       onCheckedChange={(checked) =>
                         updateLeaf(
@@ -590,7 +590,7 @@ function FilterExpressionEditor({
                   <label className="flex items-center gap-2" htmlFor={`${errorId}-${path}-accent`}>
                     <Checkbox
                       id={`${errorId}-${path}-accent`}
-                      aria-label={`Accent-sensitive filter for ${column.headerName}`}
+                      aria-label={`Accent-sensitive filter for ${column.headerName}${labelSuffix}`}
                       checked={leaf.accentSensitive}
                       onCheckedChange={(checked) =>
                         updateLeaf(
@@ -652,7 +652,7 @@ function FilterExpressionEditor({
                       if (element === null) removeConditionRefs.current.delete(index);
                       else removeConditionRefs.current.set(index, element);
                     }}
-                    aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}`}
+                    aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
                     size="xs"
                     type="button"
                     variant="ghost"
@@ -688,7 +688,7 @@ function FilterExpressionEditor({
             );
           })}
           <Button
-            aria-label={`Add condition for ${column.headerName}`}
+            aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
             size="xs"
             type="button"
             variant="outline"
@@ -886,7 +886,7 @@ function FilterOperand({
               </label>
               {values.length > 1 ? (
                 <Button
-                  aria-label={`Remove filter value ${String(index + 1)} for ${column.headerName}`}
+                  aria-label={`Remove filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
                   size="icon-xs"
                   type="button"
                   variant="ghost"
@@ -925,7 +925,7 @@ function FilterOperand({
             </div>
           ))}
           <Button
-            aria-label={`Add filter value for ${column.headerName}`}
+            aria-label={`Add filter value for ${column.headerName}${labelSuffix}`}
             id={`${errorId}-${path}-add-value`}
             size="xs"
             type="button"
