@@ -77,7 +77,7 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
-  it("clears the active row when a query projection removes its identity", () => {
+  it("falls back to the prior display position when a query projection removes its identity", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -91,9 +91,13 @@ describe("BrunoTableNavigationRuntime", () => {
     navigation.move("down");
 
     navigation.reconcileForQuery(["first"], columns);
-    navigation.setShape(["replacement"], columns);
 
-    expect(navigation.getSnapshot()).toBeUndefined();
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "first",
+      columnId: "COL_ID_NAME",
+    });
   });
 
   it("moves through the coherent header/body space and preserves row identity across reorder", () => {

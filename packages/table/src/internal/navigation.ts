@@ -40,6 +40,7 @@ export class BrunoTableNavigationRuntime {
   private columns: readonly CompiledColumn[] = [];
   private activeCell: BrunoTableActiveCell | undefined;
   private bodyInitializationBlocked = false;
+  private pendingQueryFallbackRowIndex: number | undefined;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
 
@@ -66,11 +67,13 @@ export class BrunoTableNavigationRuntime {
   };
 
   public readonly reset = (): void => {
+    this.pendingQueryFallbackRowIndex = undefined;
     this.bodyInitializationBlocked = false;
     this.setActive(undefined);
   };
 
   public readonly clearForQuery = (): void => {
+    this.pendingQueryFallbackRowIndex = undefined;
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
   };
@@ -81,6 +84,7 @@ export class BrunoTableNavigationRuntime {
   ): void => {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
     const activeCell = this.activeCell;
+    this.pendingQueryFallbackRowIndex = undefined;
     const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
     this.rowSpace = rowSpace;
     this.columns = columns;
@@ -105,6 +109,24 @@ export class BrunoTableNavigationRuntime {
         columnId: column.columnId,
       });
       return;
+    }
+    if (activeCell?.region === "body") {
+      const fallbackRowIndex = Math.max(
+        0,
+        Math.min(Math.max(0, rowSpace.totalRows - 1), activeCell.rowIndex),
+      );
+      const fallbackRowId = rowSpace.getRowId(fallbackRowIndex);
+      if (fallbackRowId !== undefined) {
+        this.bodyInitializationBlocked = false;
+        this.setActive({
+          region: "body",
+          rowIndex: fallbackRowIndex,
+          rowId: fallbackRowId,
+          columnId: column.columnId,
+        });
+        return;
+      }
+      this.pendingQueryFallbackRowIndex = fallbackRowIndex;
     }
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
@@ -171,7 +193,22 @@ export class BrunoTableNavigationRuntime {
       this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
       return;
     }
-    if (this.bodyInitializationBlocked) return;
+    if (this.bodyInitializationBlocked) {
+      const pendingRowIndex = this.pendingQueryFallbackRowIndex;
+      if (pendingRowIndex === undefined || rowSpace.totalRows === 0) return;
+      const fallbackRowIndex = Math.max(0, Math.min(rowSpace.totalRows - 1, pendingRowIndex));
+      const fallbackRowId = rowSpace.getRowId(fallbackRowIndex);
+      if (fallbackRowId === undefined) return;
+      this.pendingQueryFallbackRowIndex = undefined;
+      this.bodyInitializationBlocked = false;
+      this.setActive({
+        region: "body",
+        rowIndex: fallbackRowIndex,
+        rowId: fallbackRowId,
+        columnId: column.columnId,
+      });
+      return;
+    }
     if (rowSpace.totalRows === 0) {
       if (this.activeCell?.region === "body") this.bodyInitializationBlocked = true;
       this.setActive(undefined);

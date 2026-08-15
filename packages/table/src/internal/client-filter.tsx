@@ -100,6 +100,32 @@ type FilterParseResult = ReturnType<CompiledColumn["semantics"]["parseCanonicalT
 type FilterParseCache = Map<string, FilterParseResult>;
 
 const FILTER_IN_VISIBLE_OPERANDS = 64;
+const FILTER_COMPOUND_VISIBLE_CONDITIONS = 64;
+
+function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn): boolean {
+  if (
+    previous.columnId !== next.columnId ||
+    previous.kind !== next.kind ||
+    previous.valueType !== next.valueType ||
+    previous.semantics.codecId !== next.semantics.codecId ||
+    previous.semantics.codecVersion !== next.semantics.codecVersion ||
+    previous.semantics.filterFamily !== next.semantics.filterFamily ||
+    previous.semantics.editorFamily !== next.semantics.editorFamily
+  ) {
+    return false;
+  }
+  if (previous.kind === "field" && next.kind === "field") {
+    return previous.field === next.field;
+  }
+  if (previous.kind === "computed" && next.kind === "computed") {
+    return (
+      previous.fields.length === next.fields.length &&
+      previous.fields.every((field, index) => field === next.fields[index]) &&
+      previous.valueGetter === next.valueGetter
+    );
+  }
+  return false;
+}
 
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
@@ -262,8 +288,10 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
     [column.columnId, runtime],
   );
   const version = useSyncExternalStore(subscribe, getVersion, getVersion);
+  const commandEpoch = runtime.getColumnFilterCommandEpochSnapshot(column.columnId);
   return (
     <BrunoTableColumnFilterEditor
+      key={`${column.columnId}:${String(commandEpoch)}`}
       column={column}
       committed={runtime.getColumnFilterSnapshot(column.columnId)}
       direction={direction}
@@ -303,7 +331,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     error: undefined,
   }));
   const currentState =
-    localState.column.columnId === column.columnId && localState.version === version
+    sameFilterEditorColumn(localState.column, column) && localState.version === version
       ? localState
       : {
           column,
@@ -313,11 +341,26 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         };
   const draft = currentState.draft;
   const error = currentState.error;
-  const parseCache = useMemo<FilterParseCache>(() => new Map(), []);
+  const parseCache = useMemo(
+    () => createFilterParseCache(column.semantics, version),
+    [column.semantics, version],
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const errorId = useId();
-  const commandEpoch = runtime.getColumnFilterCommandEpochSnapshot(column.columnId);
+  const subscribeCommandEpoch = useCallback(
+    (listener: () => void) => runtime.subscribeColumnFilterCommandEpoch(column.columnId, listener),
+    [column.columnId, runtime],
+  );
+  const getCommandEpoch = useCallback(
+    () => runtime.getColumnFilterCommandEpochSnapshot(column.columnId),
+    [column.columnId, runtime],
+  );
+  const commandEpoch = useSyncExternalStore(
+    subscribeCommandEpoch,
+    getCommandEpoch,
+    getCommandEpoch,
+  );
 
   const dispatchCandidate = useCallback(
     (candidate: FilterCandidate): void => {
@@ -329,15 +372,15 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         filter: candidate.filter,
       });
     },
-    [column.columnId, commandEpoch, runtime],
+    [column, commandEpoch, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
   useLayoutEffect(() => {
-    if (localState.column.columnId !== column.columnId || localState.version !== version) {
+    if (!sameFilterEditorColumn(localState.column, column) || localState.version !== version) {
       debouncer.cancel();
     }
-  }, [column.columnId, debouncer, localState.column.columnId, localState.version, version]);
+  }, [column, debouncer, localState.column, localState.version, version]);
 
   useEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
@@ -468,6 +511,14 @@ function FilterExpressionEditor({
   const operatorOptions = filterOperators(column);
   const removeConditionRefs = useRef(new Map<number, HTMLButtonElement>());
   const focusFrameRef = useRef<number | null>(null);
+  const [conditionWindowStart, setConditionWindowStart] = useState(0);
+  const conditionCount = draft.kind === "compound" ? draft.conditions.length : 0;
+  const maxConditionWindowStart = Math.max(0, conditionCount - FILTER_COMPOUND_VISIBLE_CONDITIONS);
+  const visibleConditionWindowStart = Math.min(conditionWindowStart, maxConditionWindowStart);
+  const visibleConditionWindowEnd = Math.min(
+    conditionCount,
+    visibleConditionWindowStart + FILTER_COMPOUND_VISIBLE_CONDITIONS,
+  );
   useEffect(
     () => () => {
       if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
@@ -630,73 +681,119 @@ function FilterExpressionEditor({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {draft.conditions.map((condition, index) => {
-            const conditionPath = `${path}-${String(index)}`;
-            const conditionLabel = filterExpressionPathLabel(conditionPath);
-            return (
-              <div
-                key={conditionPath}
-                className="flex flex-col gap-2 rounded-md border p-2"
-                role="group"
-                aria-label={`Filter ${conditionLabel ?? "condition"} for ${column.headerName}`}
-              >
-                <FilterExpressionEditor
-                  column={column}
-                  draft={condition}
-                  errorId={errorId}
-                  onChange={(nextCondition, mode, badInput) => {
-                    const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
-                    conditions[index] = nextCondition;
-                    onChange(
-                      Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
-                      mode,
-                      badInput,
-                    );
-                  }}
-                  path={conditionPath}
-                  rootSelectRef={rootSelectRef ?? selectRef}
-                />
-                {draft.conditions.length > 1 ? (
-                  <Button
-                    ref={(element) => {
-                      if (element === null) removeConditionRefs.current.delete(index);
-                      else removeConditionRefs.current.set(index, element);
-                    }}
-                    aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
-                    size="xs"
-                    type="button"
-                    variant="ghost"
-                    onClick={() => {
-                      const conditions = draft.conditions.filter(
-                        (_, candidate) => candidate !== index,
-                      );
-                      onChange(
-                        conditions.length === 1
-                          ? conditions[0]!
-                          : Object.freeze({
-                              ...draft,
-                              conditions: Object.freeze(conditions) as readonly [
-                                FilterDraft,
-                                ...FilterDraft[],
-                              ],
-                            }),
-                        "immediate",
-                      );
-                      focusAfterConditionRemoval(
-                        conditions.length === 1
-                          ? -1
-                          : index < draft.conditions.length - 1
-                            ? index
-                            : index - 1,
-                      );
-                    }}
-                  >
-                    Remove condition
-                  </Button>
-                ) : null}
+          {conditionCount > FILTER_COMPOUND_VISIBLE_CONDITIONS ? (
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span aria-live="polite" role="status">
+                {`Showing conditions ${String(visibleConditionWindowStart + 1)}–${String(visibleConditionWindowEnd)} of ${conditionCount.toLocaleString("en-US")}`}
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  aria-label={`Previous filter conditions for ${column.headerName}`}
+                  disabled={visibleConditionWindowStart === 0}
+                  size="xs"
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setConditionWindowStart(
+                      Math.max(0, visibleConditionWindowStart - FILTER_COMPOUND_VISIBLE_CONDITIONS),
+                    )
+                  }
+                >
+                  Previous
+                </Button>
+                <Button
+                  aria-label={`Next filter conditions for ${column.headerName}`}
+                  disabled={visibleConditionWindowEnd === conditionCount}
+                  size="xs"
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setConditionWindowStart(
+                      Math.min(
+                        maxConditionWindowStart,
+                        visibleConditionWindowStart + FILTER_COMPOUND_VISIBLE_CONDITIONS,
+                      ),
+                    )
+                  }
+                >
+                  Next
+                </Button>
               </div>
-            );
-          })}
+            </div>
+          ) : null}
+          {draft.conditions
+            .slice(visibleConditionWindowStart, visibleConditionWindowEnd)
+            .map((condition, offset) => {
+              const index = visibleConditionWindowStart + offset;
+              const conditionPath = `${path}-${String(index)}`;
+              const conditionLabel = filterExpressionPathLabel(conditionPath);
+              return (
+                <div
+                  key={conditionPath}
+                  className="flex flex-col gap-2 rounded-md border p-2"
+                  role="group"
+                  aria-label={`Filter ${conditionLabel ?? "condition"} for ${column.headerName}`}
+                >
+                  <FilterExpressionEditor
+                    column={column}
+                    draft={condition}
+                    errorId={errorId}
+                    onChange={(nextCondition, mode, badInput) => {
+                      const conditions = draft.conditions.slice() as [
+                        FilterDraft,
+                        ...FilterDraft[],
+                      ];
+                      conditions[index] = nextCondition;
+                      onChange(
+                        Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
+                        mode,
+                        badInput,
+                      );
+                    }}
+                    path={conditionPath}
+                    rootSelectRef={rootSelectRef ?? selectRef}
+                  />
+                  {draft.conditions.length > 1 ? (
+                    <Button
+                      ref={(element) => {
+                        if (element === null) removeConditionRefs.current.delete(index);
+                        else removeConditionRefs.current.set(index, element);
+                      }}
+                      aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
+                      size="xs"
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        const conditions = draft.conditions.filter(
+                          (_, candidate) => candidate !== index,
+                        );
+                        onChange(
+                          conditions.length === 1
+                            ? conditions[0]!
+                            : Object.freeze({
+                                ...draft,
+                                conditions: Object.freeze(conditions) as readonly [
+                                  FilterDraft,
+                                  ...FilterDraft[],
+                                ],
+                              }),
+                          "immediate",
+                        );
+                        focusAfterConditionRemoval(
+                          conditions.length === 1
+                            ? -1
+                            : index < draft.conditions.length - 1
+                              ? index
+                              : index - 1,
+                        );
+                      }}
+                    >
+                      Remove condition
+                    </Button>
+                  ) : null}
+                </div>
+              );
+            })}
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
             size="xs"
@@ -704,6 +801,9 @@ function FilterExpressionEditor({
             variant="outline"
             onClick={() => {
               const nextIndex = draft.conditions.length;
+              setConditionWindowStart(
+                Math.max(0, nextIndex - FILTER_COMPOUND_VISIBLE_CONDITIONS + 1),
+              );
               onChange(
                 Object.freeze({
                   ...draft,
@@ -723,6 +823,15 @@ function FilterExpressionEditor({
       )}
     </div>
   );
+}
+
+function createFilterParseCache(
+  semantics: CompiledColumn["semantics"],
+  version: number,
+): FilterParseCache {
+  void semantics;
+  void version;
+  return new Map();
 }
 
 function FilterOperand({
@@ -1151,14 +1260,9 @@ type FilterDraftMaterializationState = {
 };
 
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
-  const state: FilterDraftMaterializationState = {
-    memo: new WeakMap<object, FilterDraft>(),
-    active: new WeakSet<object>(),
-    nodes: 0,
-  };
   if (Array.isArray(committed)) {
     const conditions = committed.map((condition) =>
-      draftFromNode(column, asRecord(condition), state, 0),
+      draftFromNode(column, asRecord(condition), createFilterDraftMaterializationState(), 0),
     );
     if (conditions.length >= 2) {
       return Object.freeze({
@@ -1174,7 +1278,15 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
     }
     return conditions[0] ?? createDefaultLeaf(column);
   }
-  return draftFromNode(column, asRecord(committed), state, 0);
+  return draftFromNode(column, asRecord(committed), createFilterDraftMaterializationState(), 0);
+}
+
+function createFilterDraftMaterializationState(): FilterDraftMaterializationState {
+  return {
+    memo: new WeakMap<object, FilterDraft>(),
+    active: new WeakSet<object>(),
+    nodes: 0,
+  };
 }
 
 function draftFromNode(
@@ -1447,7 +1559,7 @@ function changeExpressionMode(
     return Object.freeze({
       kind: "compound",
       operator: mode,
-      conditions: Object.freeze([draft.condition, createDefaultLeaf(column)]) as readonly [
+      conditions: Object.freeze([draft, createDefaultLeaf(column)]) as readonly [
         FilterDraft,
         FilterDraft,
       ],

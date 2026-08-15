@@ -1198,7 +1198,10 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       });
       const activeCell = navigation.getSnapshot();
       if (activeCell?.region !== "header") {
-        if (preserveActiveCellOnQueryChange) {
+        const shouldReconcileActiveCell =
+          preserveActiveCellOnQueryChange ||
+          runtime.getPreserveActiveCellOnQueryChangeSnapshot?.() === true;
+        if (shouldReconcileActiveCell) {
           navigation.reconcileForQuery(rowSpace, logicalColumns);
         } else {
           navigation.clearForQuery();
@@ -1213,6 +1216,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       preserveActiveCellOnQueryChange,
       queryGeneration,
       rowSpace,
+      runtime,
       viewport,
     ]);
     useLayoutEffect(() => {

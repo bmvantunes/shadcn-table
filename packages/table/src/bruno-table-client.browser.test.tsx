@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
-import { act, Suspense, useEffect } from "react";
+import { act, Suspense, useEffect, useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
@@ -544,6 +544,54 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("rejects a queued filter candidate after an external Clear command", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PACER_EXTERNAL_CLEAR",
+      (command) => commands.push(command),
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PACER_EXTERNAL_CLEAR"
+          columns={filterColumns}
+          initialFilters={[{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const filterDialog = screen.getByRole("dialog", { name: "Filter Name" });
+      await userEvent.fill(
+        filterDialog.getByRole("textbox", { name: "Filter value for Name" }),
+        "Grace",
+      );
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        0,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Active filters (1)" }));
+      const review = screen.getByRole("dialog", { name: "Active filters" });
+      await userEvent.click(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        0,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+    }
+  });
+
   test("isolates Client column filter subscriptions and local drafts", async () => {
     const tableId = "TABLE_ID_FILTER_SUBSCRIPTIONS";
     const filterSubscriptions: Array<{
@@ -961,7 +1009,7 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
     dialog = screen.getByRole("dialog", { name: "Filter Name" });
     await userEvent.selectOptions(
-      dialog.getByRole("combobox", { name: "Filter expression for Name" }),
+      dialog.getByRole("combobox", { name: "Filter expression for Name", exact: true }),
       "AND",
     );
     dialog = screen.getByRole("dialog", { name: "Filter Name" });
@@ -1030,6 +1078,223 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("dialog", { name: "Filter Name" }))
       .not.toBeInTheDocument();
     await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
+  });
+
+  test("bounds the mounted window for a large root filter collection", async () => {
+    const leaf = { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" } as const;
+    const initialFilters = Array.from({ length: 2_048 }, () => leaf);
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_LARGE_ROOT_EDITOR"
+        columns={filterColumns}
+        initialFilters={initialFilters as never}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: filterRows,
+          totalRows: filterRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing conditions 1–64 of 2,048");
+    expect(dialog.getByRole("group").all()).toHaveLength(64);
+    await userEvent.click(dialog.getByRole("button", { name: "Next filter conditions for Name" }));
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing conditions 65–128 of 2,048");
+    expect(dialog.getByRole("group").all()).toHaveLength(64);
+    const nextConditions = dialog.getByRole("button", {
+      name: "Next filter conditions for Name",
+    });
+    for (let pageIndex = 2; pageIndex < 32; pageIndex += 1) {
+      await userEvent.click(nextConditions);
+    }
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing conditions 1985–2048 of 2,048");
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value for Name (condition 2048)" }),
+      "Grace",
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  test("preserves a NOT subtree when changing to a same-column compound", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_NOT_COMPOUND_TRANSITION"
+        columns={filterColumns}
+        initialFilters={[
+          {
+            type: "NOT",
+            condition: { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+          },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: filterRows,
+          totalRows: filterRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+    let dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter expression for Name", exact: true }),
+      "OR",
+    );
+    dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value for Name (condition 2)" }),
+      "Grace",
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  test("invalidates an open filter parser when compiled value semantics change", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PARSER_CACHE",
+      (command) => commands.push(command),
+    );
+    const makeValueType = (acceptsNew: boolean): BrunoTableValueType<string, "text", "text"> => ({
+      codecId: "test/filter-parser-cache",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) =>
+        (acceptsNew ? text === "new" || text === "old" : text === "old")
+          ? { _tag: "Success", value: text }
+          : { _tag: "Failure", message: acceptsNew ? "Expected text." : "Old parser rejects." },
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    });
+    const oldColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: makeValueType(false),
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const newColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: makeValueType(true),
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const clientSource = readySource([
+      { id: "new", name: "new", score: 1 },
+      { id: "old", name: "old", score: 2 },
+    ]);
+    function ReconfigurableParserTable({
+      oldColumns: initialColumns,
+      newColumns: replacementColumns,
+      clientSource: source,
+    }: {
+      readonly oldColumns: typeof oldColumns;
+      readonly newColumns: typeof newColumns;
+      readonly clientSource: ReturnType<typeof readySource>;
+    }) {
+      const [useReplacement, setUseReplacement] = useState(false);
+      return (
+        <div
+          onKeyDown={(event) => {
+            if (event.key === "F9") {
+              event.preventDefault();
+              setUseReplacement(true);
+            }
+          }}
+        >
+          <BrunoTableClient
+            tableId="TABLE_ID_FILTER_PARSER_CACHE"
+            columns={useReplacement ? replacementColumns : initialColumns}
+            getRowId={(row: Row) => row.id}
+            initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "old" }]}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={source}
+          />
+        </div>
+      );
+    }
+    try {
+      const screen = await render(
+        <ReconfigurableParserTable
+          oldColumns={oldColumns}
+          newColumns={newColumns}
+          clientSource={clientSource}
+        />,
+      );
+
+      await expect
+        .element(screen.getByRole("gridcell", { name: "old", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "new", exact: true }))
+        .not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+      let dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
+      await userEvent.fill(input, "new");
+      await expect.element(dialog.getByRole("alert")).toHaveTextContent("Old parser rejects.");
+      await userEvent.keyboard("{F9}");
+      dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      await expect.element(dialog).toBeInTheDocument();
+      await userEvent.fill(dialog.getByRole("textbox", { name: "Filter value for Name" }), "old");
+      await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
+      await userEvent.fill(dialog.getByRole("textbox", { name: "Filter value for Name" }), "new");
+      await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(commands.some((command) => command.type === "column.filter.replace")).toBe(true);
+      await expect
+        .element(screen.getByRole("gridcell", { name: "new", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "old", exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+    }
   });
 
   test("preserves oversized native BigInt operands while changing operators", async () => {
@@ -1699,9 +1964,7 @@ describe("BrunoTableClient browser surface", () => {
     await vi.waitFor(() => {
       expect(grid.element().scrollTop).toBe(0);
       const nextActiveCell = activeCell();
-      expect(nextActiveCell === undefined || nextActiveCell.element().textContent === "Row 0").toBe(
-        true,
-      );
+      expect(nextActiveCell?.element().textContent).toBe("Row 0");
     });
     expect(grid.element().scrollLeft).toBe(horizontalScroll);
     expect(document.activeElement).toBe(quickFilter.element());

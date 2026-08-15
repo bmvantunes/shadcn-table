@@ -124,6 +124,8 @@ export type BrunoTableRuntimeView = {
   readonly getColumnFilterVersionSnapshot: (columnId: string) => number;
   /** Invalidates queued editor candidates even when a Clear/Reset command is a semantic no-op. */
   readonly getColumnFilterCommandEpochSnapshot: (columnId: string) => number;
+  /** Optional query-transition policy used by Client navigation reconciliation. */
+  readonly getPreserveActiveCellOnQueryChangeSnapshot?: () => boolean;
   readonly getQuickFilterSnapshot: () => string;
   /** Invalidates queued Quick Filter candidates when any Quick Filter command commits. */
   readonly getQuickFilterCommandEpochSnapshot: () => number;
@@ -1019,7 +1021,10 @@ export class BrunoTableGridRuntime<TRow> {
     const filterChanged = filterCollectionChanged || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
     this.preserveActiveCellOnQueryChange =
-      quickFilterChanged && !filterCollectionChanged && !sortingChanged && !forceColumnRefresh;
+      queryChanged &&
+      !sortingChanged &&
+      !forceColumnRefresh &&
+      (filterCollectionChanged || quickFilterSemanticsChanged);
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
     if (queryChanged) {

@@ -21,6 +21,8 @@ import {
 } from "./grid-query";
 
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
+// Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
+const BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS = 256;
 
 export type BrunoTableClientReconciliationEvent = Readonly<{
   readonly residentRows: number;
@@ -1537,11 +1539,21 @@ function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
 
 function snapshotQuickFilterFields(fields: readonly string[] | undefined): readonly string[] {
   if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
-  if (!Array.isArray(fields) || fields.length === 0) {
+  if (!Array.isArray(fields)) {
     throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
   }
+  const length = fields.length;
+  if (
+    !Number.isSafeInteger(length) ||
+    length <= 0 ||
+    length > BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS
+  ) {
+    throw new TypeError(
+      `BrunoTable quickFilterFields must contain between 1 and ${String(BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS)} fields.`,
+    );
+  }
   const snapshot: string[] = [];
-  for (let index = 0; index < fields.length; index += 1) {
+  for (let index = 0; index < length; index += 1) {
     if (!Object.hasOwn(fields, index)) {
       throw new TypeError("BrunoTable quickFilterFields must be dense.");
     }

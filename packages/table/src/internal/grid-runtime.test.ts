@@ -45,6 +45,33 @@ const runtimeColumns = compileColumns([
   },
 ]);
 
+const parserValueType = (acceptsNew: boolean): BrunoTableValueType<string, "text", "text"> => ({
+  codecId: "test/filter-parser-cache",
+  codecVersion: 1,
+  filterFamily: "text",
+  editorFamily: "text",
+  cellAlign: "start",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input) =>
+    typeof input === "string"
+      ? { _tag: "Success", value: input }
+      : { _tag: "Failure", message: "Expected text." },
+  equivalent: (left, right) => left === right,
+  compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+  formatCanonicalText: (value) => value,
+  parseCanonicalText: (text) =>
+    acceptsNew && text === "new"
+      ? { _tag: "Success", value: text }
+      : { _tag: "Failure", message: "Parser rejected." },
+  formatDisplay: (value) => value,
+  encodePersisted: (value) => value,
+  decodePersisted: (input) =>
+    typeof input === "string"
+      ? { _tag: "Success", value: input }
+      : { _tag: "Failure", message: "Expected persisted text." },
+});
+
 const rawRows = (admitted: readonly BrunoTableClientAdmittedRow[]): readonly unknown[] =>
   admitted.map((row) => row.raw);
 
@@ -738,6 +765,42 @@ describe("BrunoTable filter runtime primitives", () => {
           sparseFields,
         ),
     ).toThrow(TypeError);
+  });
+
+  it("captures Quick Filter field length once and bounds hostile field tuples", () => {
+    let lengthReads = 0;
+    const growingFields = new Proxy(["name"] as readonly string[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          return lengthReads === 1 ? 1 : Number.MAX_SAFE_INTEGER;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      growingFields,
+    );
+
+    expect(lengthReads).toBe(1);
+    expect(adapter.getQueryConfiguration(runtimeColumns).quickFilterFields).toEqual(["name"]);
+    expect(
+      () =>
+        new BrunoTableClientRowPipelineAdapter(
+          source([{ id: "first", name: "Ada" }]),
+          (row) => row.id,
+          runtimeColumns,
+          undefined,
+          [{ columnId: "COL_ID_NAME", direction: "asc" }],
+          Array.from({ length: 257 }, () => "name"),
+        ),
+    ).toThrow(/between 1 and 256/);
   });
 
   it("uses Value Semantics for opaque cyclic filter operands", () => {
@@ -2651,6 +2714,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.clearColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toEqual([]);
+    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(true);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME")).toMatchObject({
       filterActive: false,
       filterBaselineAvailable: true,
@@ -2659,6 +2723,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.resetColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toHaveLength(1);
+    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(true);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME").filterActive).toBe(true);
     expect(runtime.getQuerySnapshot().generation).toBe(3);
     expect(queryListener).toHaveBeenCalledTimes(3);
@@ -2823,6 +2888,37 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     });
     expect(runtime.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(previousCommandEpoch);
     expect(queryListener).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates filter editor epochs when a custom parser changes", () => {
+    const initialColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: parserValueType(false),
+      },
+    ]);
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: parserValueType(true),
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "new" }]),
+      (row) => row.id,
+      initialColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const previousEpoch = runtime.getColumnFilterCommandEpochSnapshot("COL_ID_NAME");
+
+    runtime.configure((row) => row.id, replacementColumns);
+
+    expect(runtime.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(previousEpoch + 1);
   });
 
   it("advances query generation when an active column changes query semantics", () => {
