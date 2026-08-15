@@ -82,6 +82,7 @@ export type BrunoTableColumnFilterProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
+  readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
 export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilterProps> = memo(
@@ -90,6 +91,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     command,
     runtime,
     activateHeaderCommand,
+    registerColumnFilterOpener,
   }: BrunoTableColumnFilterProps): ReactElement {
     const [open, setOpen] = useState(false);
     const [direction, setDirection] = useState<"ltr" | "rtl">("ltr");
@@ -97,6 +99,15 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     const escapeFocusFrameRef = useRef<number | null>(null);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
     const label = `Filter ${column.headerName}`;
+    const openFilter = useCallback((): void => {
+      setDirection(readBrunoTableFilterDirection(triggerRef.current));
+      activateHeaderCommand(column.columnId);
+      setOpen(true);
+    }, [activateHeaderCommand, column.columnId]);
+    useLayoutEffect(
+      () => registerColumnFilterOpener(column.columnId, openFilter),
+      [column.columnId, openFilter, registerColumnFilterOpener],
+    );
     useEffect(
       () => () => {
         if (escapeFocusFrameRef.current !== null) {
@@ -132,7 +143,6 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
           <PopoverTrigger
             render={
               <Button
-                data-bruno-filter-column={column.columnId}
                 ref={triggerRef}
                 aria-label={command.filterActive ? `${label} (active)` : label}
                 size="xs"
@@ -601,13 +611,14 @@ function FilterOperand({
   readonly continuous: boolean;
 }): ReactElement {
   const isIn = draft.operator === "in";
-  if (isIn && column.semantics.filterFamily === "boolean") {
+  if (isIn && isBuiltInBooleanColumn(column)) {
     return (
       <DiscreteInFilterOperand
         column={column}
         draft={draft}
         onChange={onChange}
         options={[true, false]}
+        path={path}
       />
     );
   }
@@ -619,11 +630,12 @@ function FilterOperand({
         draft={draft}
         onChange={onChange}
         options={column.selectOptions}
+        path={path}
       />
     );
   }
 
-  if (column.semantics.filterFamily === "boolean") {
+  if (isBuiltInBooleanColumn(column)) {
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
         Value
@@ -636,6 +648,7 @@ function FilterOperand({
             onChange(Object.freeze({ ...draft, first: event.currentTarget.value }), "immediate")
           }
         >
+          <NativeSelectOption value="">Choose a value</NativeSelectOption>
           <NativeSelectOption value="true">True</NativeSelectOption>
           <NativeSelectOption value="false">False</NativeSelectOption>
         </NativeSelect>
@@ -826,6 +839,7 @@ function DiscreteInFilterOperand({
   draft,
   onChange,
   options,
+  path,
 }: {
   readonly column: CompiledColumn;
   readonly draft: FilterLeafDraft;
@@ -835,6 +849,7 @@ function DiscreteInFilterOperand({
     badInput?: boolean,
   ) => void;
   readonly options: readonly unknown[];
+  readonly path: string;
 }): ReactElement {
   return (
     <div
@@ -850,15 +865,12 @@ function DiscreteInFilterOperand({
           canonical = String(index);
         }
         const checked = draft.inValues.includes(canonical);
+        const inputId = `${column.columnId}-${path}-in-${String(index)}`;
         return (
-          <label
-            className="flex items-center gap-2 text-sm"
-            htmlFor={`${column.columnId}-in-${String(index)}`}
-            key={`${column.columnId}-in-${String(index)}`}
-          >
+          <label className="flex items-center gap-2 text-sm" htmlFor={inputId} key={inputId}>
             <Checkbox
               checked={checked}
-              id={`${column.columnId}-in-${String(index)}`}
+              id={inputId}
               aria-label={`Include ${column.semantics.formatDisplay(option)} in filter for ${column.headerName}`}
               onCheckedChange={(nextChecked) => {
                 const nextValues = draft.inValues.filter((value) => value !== canonical);
@@ -1179,9 +1191,12 @@ function defaultFilterOperator(column: CompiledColumn): FilterOperator {
   return filterOperators(column)[0] ?? "equals";
 }
 
-function defaultOperand(column: CompiledColumn): string {
-  if (column.semantics.filterFamily === "boolean") return "true";
+function defaultOperand(_column: CompiledColumn): string {
   return "";
+}
+
+function isBuiltInBooleanColumn(column: CompiledColumn): boolean {
+  return column.valueType === "boolean";
 }
 
 function isFilterOperator(value: unknown): value is FilterOperator {

@@ -817,6 +817,9 @@ describe("BrunoTableClient browser surface", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
     dialog = screen.getByRole("dialog", { name: "Filter Active" });
+    await expect
+      .element(dialog.getByRole("combobox", { name: "Filter value for Active" }))
+      .toHaveValue("");
     await userEvent.selectOptions(
       dialog.getByRole("combobox", { name: "Filter operator for Active" }),
       "notEqual",
@@ -846,6 +849,9 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.selectOptions(
       dialog.getByRole("combobox", { name: "Filter operator for Active" }),
       "in",
+    );
+    await userEvent.click(
+      dialog.getByRole("checkbox", { name: "Include true in filter for Active" }),
     );
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
@@ -988,6 +994,45 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("coalesces rapid Quick Filter input through the trailing 150 ms Pacer commit", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_QUICK_FILTER_PACER",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_QUICK_FILTER_PACER"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+          quickFilterFields={["symbol", "description"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+      await userEvent.fill(quickFilter, "m");
+      await userEvent.fill(quickFilter, "ms");
+      await userEvent.fill(quickFilter, "msft");
+      expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      expect(commands.at(-1)).toEqual({ type: "quick-filter.replace", text: "msft" });
+    } finally {
+      removeCommandListener();
+    }
   });
 
   test("plans one row-order recomputation for one committed Quick Filter", async () => {

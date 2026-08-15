@@ -46,6 +46,7 @@ import {
   Children,
   Fragment,
   isValidElement,
+  useCallback,
   memo,
   useEffect,
   useId,
@@ -235,38 +236,6 @@ function readBrunoTableMenuDirection(element?: Element | null): "ltr" | "rtl" {
     : "ltr";
 }
 
-function tryOpenBrunoTableColumnFilter(
-  gridElement: Readonly<{ readonly current: HTMLDivElement | null }>,
-  columnId: string,
-): boolean {
-  const trigger = [
-    ...(gridElement.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-  ].find((candidate) => candidate.dataset["brunoFilterColumn"] === columnId);
-  if (trigger === undefined) return false;
-  trigger.click();
-  return true;
-}
-
-function revealAndOpenBrunoTableColumnFilter(
-  gridElement: Readonly<{ readonly current: HTMLDivElement | null }>,
-  revealCell: (
-    rowIndex: number,
-    columnId: string,
-    region?: "header" | "body",
-    rowId?: string,
-  ) => void,
-  columnId: string,
-): void {
-  revealCell(0, columnId, "header");
-  let attemptsRemaining = 4;
-  const retry = (): void => {
-    if (tryOpenBrunoTableColumnFilter(gridElement, columnId)) return;
-    attemptsRemaining -= 1;
-    if (attemptsRemaining > 0) requestAnimationFrame(retry);
-  };
-  requestAnimationFrame(retry);
-}
-
 function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
   grid.tabIndex = -1;
   setTimeout(() => {
@@ -413,6 +382,7 @@ export type BrunoTableColumnFilterRendererProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
+  readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
 export type BrunoTableColumnFilterRenderer = (
@@ -1347,6 +1317,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const gridElement = useRef<HTMLDivElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
   const focusRestoreFrame = useRef<number | null>(null);
+  const filterOpenFrame = useRef<number | null>(null);
+  const filterOpenToken = useRef(0);
+  const filterOpenRetry = useRef<() => void>(() => undefined);
+  const columnFilterOpeners = useRef(new Map<string, () => void>());
   const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
   const gestureCancel = useRef<() => void>(() => undefined);
   const columnPointerDownHandler = useRef<BrunoTableColumnPointerDownHandler>(() => undefined);
@@ -2025,6 +1999,31 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     },
     [navigation],
   );
+  const registerColumnFilterOpener = useCallback(
+    (columnId: string, open: () => void): (() => void) => {
+      columnFilterOpeners.current.set(columnId, open);
+      return () => {
+        if (columnFilterOpeners.current.get(columnId) === open) {
+          columnFilterOpeners.current.delete(columnId);
+        }
+      };
+    },
+    [],
+  );
+  const requestColumnFilterOpen = useCallback((columnId: string): boolean => {
+    const open = columnFilterOpeners.current.get(columnId);
+    if (open === undefined) return false;
+    open();
+    return true;
+  }, []);
+  const cancelFilterOpenRetry = useCallback((): void => {
+    filterOpenToken.current += 1;
+    filterOpenRetry.current = () => undefined;
+    if (filterOpenFrame.current !== null) {
+      cancelAnimationFrame(filterOpenFrame.current);
+      filterOpenFrame.current = null;
+    }
+  }, []);
   const toggleHeaderSort = useMemo(
     () =>
       (columnId: string, multi: boolean): void => {
@@ -2056,19 +2055,42 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       (columnId: string): void => {
         const column = logicalColumns.find((candidate) => candidate.columnId === columnId);
         if (column === undefined) return;
-        if (tryOpenBrunoTableColumnFilter(gridElement, column.columnId)) return;
-        revealAndOpenBrunoTableColumnFilter(gridElement, revealCell, column.columnId);
+        cancelFilterOpenRetry();
+        if (requestColumnFilterOpen(column.columnId)) return;
+        revealCell(0, column.columnId, "header");
+        const token = filterOpenToken.current;
+        let attemptsRemaining = 4;
+        filterOpenRetry.current = (): void => {
+          filterOpenFrame.current = null;
+          const active = navigation.getSnapshot();
+          if (
+            token !== filterOpenToken.current ||
+            active?.region !== "header" ||
+            active.columnId !== column.columnId ||
+            !logicalColumns.some((candidate) => candidate.columnId === column.columnId)
+          ) {
+            return;
+          }
+          if (requestColumnFilterOpen(column.columnId)) return;
+          attemptsRemaining -= 1;
+          if (attemptsRemaining > 0) {
+            filterOpenFrame.current = requestAnimationFrame(filterOpenRetry.current);
+          }
+        };
+        filterOpenFrame.current = requestAnimationFrame(filterOpenRetry.current);
       },
-    [gridElement, logicalColumns, revealCell],
+    [cancelFilterOpenRetry, logicalColumns, navigation, requestColumnFilterOpen, revealCell],
   );
   useEffect(
     () => () => {
       if (interactionFrame.current !== null) cancelAnimationFrame(interactionFrame.current);
       if (focusRestoreFrame.current !== null) cancelAnimationFrame(focusRestoreFrame.current);
+      cancelFilterOpenRetry();
+      columnFilterOpeners.current.clear();
       focusRestoreFrame.current = null;
       gestureCancel.current();
     },
-    [],
+    [cancelFilterOpenRetry],
   );
 
   const enterInteractiveCell = (active: BrunoTableActiveCell, column: CompiledColumn): boolean => {
@@ -2290,6 +2312,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               tableId={tableId}
               viewportFill={viewportFill}
               renderColumnFilter={renderColumnFilter}
+              registerColumnFilterOpener={registerColumnFilterOpener}
             />
             <tbody
               role="rowgroup"
@@ -2672,6 +2695,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   renderedTableWidth,
   runtime,
   renderColumnFilter,
+  registerColumnFilterOpener,
   tableId,
   viewportFill,
   visibleColumnIds,
@@ -2697,6 +2721,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   readonly renderedTableWidth: number;
   readonly runtime: BrunoTableRuntimeView;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
   readonly tableId: string;
   readonly viewportFill: number;
   readonly visibleColumnIds: readonly string[];
@@ -2729,6 +2754,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             column={column}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
+            registerColumnFilterOpener={registerColumnFilterOpener}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2761,6 +2787,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             column={column}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
+            registerColumnFilterOpener={registerColumnFilterOpener}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2803,6 +2830,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             column={column}
             runtime={runtime}
             renderColumnFilter={renderColumnFilter}
+            registerColumnFilterOpener={registerColumnFilterOpener}
             announce={announce}
             activateHeaderCommand={activateHeaderCommand}
             toggleHeaderFilter={toggleHeaderFilter}
@@ -2837,6 +2865,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   navigation,
   runtime,
   renderColumnFilter,
+  registerColumnFilterOpener,
   style,
   visibleColumnIds,
 }: {
@@ -2864,6 +2893,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly runtime: BrunoTableRuntimeView;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
   readonly style?: CSSProperties;
   readonly visibleColumnIds: readonly string[];
 }) {
@@ -2931,6 +2961,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               column,
               command,
               runtime,
+              registerColumnFilterOpener,
             })
           : null}
         {command.filterActive || command.filterBaselineAvailable ? (

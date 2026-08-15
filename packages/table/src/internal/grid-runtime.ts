@@ -1434,6 +1434,12 @@ function sameFilterValue(
       previousRecord["type"] === nextRecord["type"] && typeof previousRecord["type"] === "string"
         ? previousRecord["type"]
         : undefined;
+    const rawTextOperand =
+      valueColumn?.semantics.filterFamily === "text" &&
+      (operator === "contains" ||
+        operator === "notContains" ||
+        operator === "startsWith" ||
+        operator === "endsWith");
     const textOperand =
       valueColumn?.semantics.filterFamily === "text" &&
       (operator === "equals" ||
@@ -1446,6 +1452,7 @@ function sameFilterValue(
     const operandOptions = {
       accentSensitive: previousRecord["accentSensitive"] === true,
       caseSensitive: previousRecord["caseSensitive"] === true,
+      raw: rawTextOperand,
       text: textOperand,
     } as const;
     return previousKeys.every((key) => {
@@ -1491,6 +1498,7 @@ function sameFilterOperand(
   options: Readonly<{
     readonly accentSensitive: boolean;
     readonly caseSensitive: boolean;
+    readonly raw: boolean;
     readonly text: boolean;
     readonly unordered: boolean;
   }>,
@@ -1520,6 +1528,13 @@ function sameFilterOperand(
   }
   if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;
+  }
+  if (options.raw) {
+    if (typeof previous !== "string" || typeof next !== "string") return false;
+    return (
+      normalizeBrunoTableFilterText(previous, options.caseSensitive, options.accentSensitive) ===
+      normalizeBrunoTableFilterText(next, options.caseSensitive, options.accentSensitive)
+    );
   }
   if (options.text) {
     try {
