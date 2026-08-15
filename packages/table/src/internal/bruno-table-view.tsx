@@ -418,6 +418,7 @@ export type BrunoTableRowPipelineSnapshot =
       readonly columns: readonly CompiledColumn[];
       readonly rowSpace: BrunoTableLogicalRowSpace;
       readonly queryGeneration: number;
+      readonly preserveActiveCellOnQueryChange?: boolean;
     }>
   | Readonly<{
       readonly kind: "invalid";
@@ -962,6 +963,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             focusHandoff={focusHandoff}
             navigation={navigation}
             queryGeneration={snapshot.queryGeneration}
+            preserveActiveCellOnQueryChange={snapshot.preserveActiveCellOnQueryChange === true}
             renderColumnFilter={renderColumnFilter}
           />
         )
@@ -1100,6 +1102,7 @@ type BrunoTableViewportAdapterProps = {
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
+  readonly preserveActiveCellOnQueryChange: boolean;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 };
 
@@ -1113,6 +1116,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     focusHandoff,
     navigation,
     queryGeneration,
+    preserveActiveCellOnQueryChange,
     renderColumnFilter,
   }: BrunoTableViewportAdapterProps): ReactElement {
     "use no memo";
@@ -1192,9 +1196,25 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         start: resetWindow.rowStart,
         end: resetWindow.rowEnd,
       });
-      if (navigation.getSnapshot()?.region !== "header") navigation.clearForQuery();
-      navigation.setShape(rowSpace, logicalColumns);
-    }, [logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
+      const activeCell = navigation.getSnapshot();
+      if (activeCell?.region !== "header") {
+        if (preserveActiveCellOnQueryChange) {
+          navigation.reconcileForQuery(rowSpace, logicalColumns);
+        } else {
+          navigation.clearForQuery();
+          navigation.setShape(rowSpace, logicalColumns);
+        }
+      } else {
+        navigation.setShape(rowSpace, logicalColumns);
+      }
+    }, [
+      logicalColumns,
+      navigation,
+      preserveActiveCellOnQueryChange,
+      queryGeneration,
+      rowSpace,
+      viewport,
+    ]);
     useLayoutEffect(() => {
       const columnsChanged =
         appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;

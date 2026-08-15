@@ -53,6 +53,49 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("reconciles a surviving active row across a query projection", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move("down");
+    navigation.move("down");
+
+    navigation.reconcileForQuery(["first", "third"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 1,
+      rowId: "third",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("clears the active row when a query projection removes its identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("down");
+
+    navigation.reconcileForQuery(["first"], columns);
+    navigation.setShape(["replacement"], columns);
+
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
   it("moves through the coherent header/body space and preserves row identity across reorder", () => {
     const columns = compileColumns([
       {

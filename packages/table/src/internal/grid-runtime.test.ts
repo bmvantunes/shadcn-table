@@ -368,6 +368,48 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("invalidates only columns whose filter baseline changed during reconciliation", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const baseline = [{ columnId: "COL_ID_NOTE", type: "equals", filter: "first" }] as const;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada", note: "first" }]),
+      (row) => row.id,
+      columns,
+      baseline,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_BASELINE_INVALIDATION_SCOPE",
+    );
+    const view = runtime.getView();
+    const nameEpoch = view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME");
+    const noteEpoch = view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE");
+
+    runtime.reconcile(adapter.getPublication(), columns, {
+      baselineFilters: [],
+      baselineOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    });
+
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(nameEpoch);
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE")).toBe(noteEpoch + 1);
+  });
+
   it("bounds Quick Filter text at the command boundary", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),

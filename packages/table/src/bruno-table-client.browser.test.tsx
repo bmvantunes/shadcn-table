@@ -1139,6 +1139,45 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("reconciles a surviving active cell after a Quick Filter query", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_QUICK_FILTER_ACTIVE_CELL"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+        quickFilterFields={["name"]}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableQuickFilter />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+    const grid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_QUICK_FILTER_ACTIVE_CELL",
+    });
+    grid.element().focus();
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeId).toBe(
+        screen.getByRole("gridcell", { name: "Grace", exact: true }).element().id,
+      );
+    });
+    const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+
+    await userEvent.fill(quickFilter, "ra");
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeInTheDocument();
+    await vi.waitFor(() => {
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Grace", exact: true }).element().id,
+      );
+    });
+  });
+
   test("reviews and clears Grid Filters and Quick Filter through the active-filter control", async () => {
     const screen = await render(
       <BrunoTableClient<FilterRow, typeof filterColumns>

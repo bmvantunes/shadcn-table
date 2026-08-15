@@ -75,6 +75,41 @@ export class BrunoTableNavigationRuntime {
     this.setActive(undefined);
   };
 
+  public readonly reconcileForQuery = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const activeCell = this.activeCell;
+    const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    if (column === undefined) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    if (activeCell?.region === "header") {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    const rowId = activeCell?.rowId;
+    const rowIndex = rowId === undefined ? undefined : rowSpace.findRowIndex(rowId);
+    if (activeCell?.region === "body" && rowId !== undefined && rowIndex !== undefined) {
+      this.bodyInitializationBlocked = false;
+      this.setActive({
+        region: "body",
+        rowIndex,
+        rowId,
+        columnId: column.columnId,
+      });
+      return;
+    }
+    this.bodyInitializationBlocked = true;
+    this.setActive(undefined);
+  };
+
   public readonly activateForFocus = (): void => {
     if (this.activeCell !== undefined) return;
     const firstColumn = this.columns[0];

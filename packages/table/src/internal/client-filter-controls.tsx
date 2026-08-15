@@ -323,7 +323,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
       {entries.length > 0 ? (
         <PopoverContent
           aria-label="Active filters"
-          className="w-96 max-w-[calc(100vw-1rem)]"
+          className="max-h-[calc(100vh-1rem)] w-96 max-w-[calc(100vw-1rem)] overflow-y-auto"
           role="dialog"
         >
           <PopoverHeader>

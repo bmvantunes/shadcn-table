@@ -161,6 +161,8 @@ export type BrunoTableRuntimeView = {
 export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   readonly getFilterSnapshot: () => BrunoTableFilterSnapshot;
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
+  /** The next query-generation transition may reconcile a surviving active row. */
+  readonly getPreserveActiveCellOnQueryChangeSnapshot: () => boolean;
   readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
@@ -249,6 +251,7 @@ export type BrunoTableCellSnapshot = Readonly<{
 
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
+const EMPTY_FILTERS: readonly unknown[] = Object.freeze([]);
 
 type QueryTransition = Readonly<{
   readonly filterChanged: boolean;
@@ -308,6 +311,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnFilterVersions = new Map<string, number>();
   private readonly columnFilterCommandEpochs = new Map<string, number>();
   private quickFilterCommandEpoch = 0;
+  private preserveActiveCellOnQueryChange = false;
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -375,6 +379,7 @@ export class BrunoTableGridRuntime<TRow> {
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
+        getPreserveActiveCellOnQueryChangeSnapshot: this.getPreserveActiveCellOnQueryChangeSnapshot,
         getFilterSnapshot: this.getFilterSnapshot,
         getQuickFilterSnapshot: this.getQuickFilterSnapshot,
         getQuickFilterFieldsSnapshot: this.getQuickFilterFieldsSnapshot,
@@ -449,6 +454,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineFilters = configuration.baselineFilters;
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
+      this.preserveActiveCellOnQueryChange = false;
       if (configuration.transition.filterChanged) {
         this.filterSnapshot = createFilterSnapshot(this.query);
       }
@@ -549,6 +555,9 @@ export class BrunoTableGridRuntime<TRow> {
     this.currentCellSnapshot(rowId, columnId).value;
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
+
+  public readonly getPreserveActiveCellOnQueryChangeSnapshot = (): boolean =>
+    this.preserveActiveCellOnQueryChange;
 
   public readonly getFilterSnapshot = (): BrunoTableFilterSnapshot => this.filterSnapshot;
 
@@ -911,14 +920,19 @@ export class BrunoTableGridRuntime<TRow> {
   ): ColumnConfiguration {
     const baselineFilters = queryConfiguration.baselineFilters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
-    const baselineChanged =
-      this.baselineFilters !== baselineFilters &&
-      !sameFilterCollection(this.baselineFilters, baselineFilters, this.columnsById);
     const nextColumnsById = indexColumns(columns);
+    const previousBaselineByColumn = indexFilterCollections(this.baselineFilters);
+    const nextBaselineByColumn = indexFilterCollections(baselineFilters);
     const invalidatedColumnIds = new Set<string>();
     for (const column of this.columns) {
       const next = nextColumnsById.get(column.columnId);
-      if (next === undefined || !sameFilterCommandSemantics(column, next) || baselineChanged) {
+      const previousBaseline = previousBaselineByColumn.get(column.columnId) ?? EMPTY_FILTERS;
+      const nextBaseline = nextBaselineByColumn.get(column.columnId) ?? EMPTY_FILTERS;
+      if (
+        next === undefined ||
+        !sameFilterCommandSemantics(column, next) ||
+        !sameFilterCollection(previousBaseline, nextBaseline, this.columnsById)
+      ) {
         invalidatedColumnIds.add(column.columnId);
       }
     }
@@ -1004,6 +1018,8 @@ export class BrunoTableGridRuntime<TRow> {
     const queryChanged = filterCollectionChanged || sortingChanged || quickFilterSemanticsChanged;
     const filterChanged = filterCollectionChanged || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
+    this.preserveActiveCellOnQueryChange =
+      quickFilterChanged && !filterCollectionChanged && !sortingChanged && !forceColumnRefresh;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
     if (queryChanged) {
@@ -1341,6 +1357,22 @@ function collectFilterColumnIds(filters: readonly unknown[]): ReadonlySet<string
   const columnIds = new Set<string>();
   for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
   return columnIds;
+}
+
+function indexFilterCollections(
+  filters: readonly unknown[],
+): ReadonlyMap<string, readonly unknown[]> {
+  const filtersByColumn = new Map<string, unknown[]>();
+  for (const filter of filters) {
+    const columnIds = new Set<string>();
+    collectClientFilterColumnIds(filter, columnIds);
+    for (const columnId of columnIds) {
+      const columnFilters = filtersByColumn.get(columnId);
+      if (columnFilters === undefined) filtersByColumn.set(columnId, [filter]);
+      else columnFilters.push(filter);
+    }
+  }
+  return filtersByColumn;
 }
 
 function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
