@@ -133,15 +133,22 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         `BrunoTable Select column options must be a non-empty array: ${columnId}`,
       );
     }
-    const decodedOptions = options.map((option, optionIndex) => {
+    const decodedOptions: unknown[] = [];
+    for (let optionIndex = 0; optionIndex < options.length; optionIndex += 1) {
+      if (!Object.hasOwn(options, optionIndex)) {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column options must be dense: ${columnId}`,
+        );
+      }
+      const option = options[optionIndex];
       const decoded = semantics.decodeRuntime(option);
       if (decoded._tag === "Failure") {
         throw new ColumnConfigurationError(
           `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: ${decoded.message}`,
         );
       }
-      return decoded.value;
-    });
+      decodedOptions.push(decoded.value);
+    }
     selectOptions = Object.freeze(decodedOptions);
   }
 

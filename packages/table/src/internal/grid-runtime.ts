@@ -1524,8 +1524,13 @@ function sameFilterCollection(
   previous: readonly unknown[],
   next: readonly unknown[],
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  unordered = true,
 ): boolean {
   if (previous.length !== next.length) return false;
+  if (previous.every((value, index) => sameFilterValue(value, next[index], columnsById))) {
+    return true;
+  }
+  if (!unordered) return false;
   const matched = new Set<number>();
   return previous.every((value) => {
     for (let index = 0; index < next.length; index += 1) {
@@ -1619,7 +1624,7 @@ function sameFilterValue(
         Array.isArray(previousValue) &&
         Array.isArray(nextValue)
       ) {
-        return sameFilterCollection(previousValue, nextValue, columnsById);
+        return sameFilterCollection(previousValue, nextValue, columnsById, true);
       }
       if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
         return sameFilterOperand(

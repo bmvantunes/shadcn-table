@@ -300,6 +300,25 @@ describe("compileColumns", () => {
     expect(() => compileColumns([widened])).toThrow(/option at index 0 is invalid/u);
   });
 
+  it("rejects sparse Select option arrays", () => {
+    const select = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const sparseOptions = Array(2) as unknown[];
+
+    expect(() => compileColumns([{ ...select, options: sparseOptions }])).toThrow(
+      ColumnConfigurationError,
+    );
+    expect(() => compileColumns([{ ...select, options: sparseOptions }])).toThrow(
+      /options must be dense/u,
+    );
+  });
+
   it("rejects malformed widened Field Columns", () => {
     for (const column of [
       null,

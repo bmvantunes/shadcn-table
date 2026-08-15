@@ -24,7 +24,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { NamedExoticComponent, ReactElement } from "react";
+import type { CompositionEvent, NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
 import {
@@ -748,9 +748,17 @@ function FilterOperand({
     composingRef.current = true;
     onChange(latestDraftRef.current, "local");
   };
-  const finishComposition = (): void => {
+  const finishComposition = (
+    event: CompositionEvent<HTMLInputElement>,
+    updateDraft: (current: FilterLeafDraft, value: string) => FilterLeafDraft,
+  ): void => {
     composingRef.current = false;
-    onChange(latestDraftRef.current, continuous ? "continuous" : "immediate");
+    const nextDraft = updateDraft(
+      latestDraftRef.current,
+      boundBrunoTableFilterOperandText(event.currentTarget.value),
+    );
+    latestDraftRef.current = nextDraft;
+    onChange(nextDraft, "local");
   };
   const changeMode = (): FilterChangeMode =>
     composingRef.current ? "local" : continuous ? "continuous" : "immediate";
@@ -855,7 +863,28 @@ function FilterOperand({
                   }
                   inputMode={inputMode}
                   maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
-                  onCompositionEnd={finishComposition}
+                  onCompositionEnd={(event) =>
+                    finishComposition(event, (current, nextValue) => {
+                      const currentValues =
+                        current.inValues.length > 0 ? current.inValues : [current.first];
+                      const nextValues = currentValues.slice();
+                      nextValues[index] = nextValue;
+                      const currentValuesAuthored =
+                        current.inValuesAuthored.length > 0
+                          ? current.inValuesAuthored
+                          : [current.firstAuthored];
+                      const nextValuesAuthored = currentValuesAuthored.slice() as boolean[];
+                      nextValuesAuthored[index] = true;
+                      return Object.freeze({
+                        ...current,
+                        first: nextValues[0] ?? "",
+                        firstAuthored: true,
+                        inValues: Object.freeze(nextValues),
+                        inValuesAuthored: Object.freeze(nextValuesAuthored),
+                        inValuesExplicit: true,
+                      });
+                    })
+                  }
                   onCompositionStart={beginComposition}
                   step={isNumber ? "any" : undefined}
                   type={type}
@@ -962,7 +991,11 @@ function FilterOperand({
             aria-label={inputLabel}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
-            onCompositionEnd={finishComposition}
+            onCompositionEnd={(event) =>
+              finishComposition(event, (current, nextValue) =>
+                Object.freeze({ ...current, first: nextValue, firstAuthored: true }),
+              )
+            }
             onCompositionStart={beginComposition}
             step={isNumber ? "any" : undefined}
             type={type}
@@ -987,7 +1020,11 @@ function FilterOperand({
             aria-label={`Filter upper bound for ${column.headerName}${labelSuffix}`}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
-            onCompositionEnd={finishComposition}
+            onCompositionEnd={(event) =>
+              finishComposition(event, (current, nextValue) =>
+                Object.freeze({ ...current, second: nextValue, secondAuthored: true }),
+              )
+            }
             onCompositionStart={beginComposition}
             step={isNumber ? "any" : undefined}
             type={type}
