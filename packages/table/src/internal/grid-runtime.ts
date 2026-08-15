@@ -143,6 +143,7 @@ export type BrunoTableRuntimeView = {
   ) => () => void;
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
   readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
+  readonly subscribeColumnFilterCommandEpoch: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
@@ -285,6 +286,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
+  private readonly columnFilterCommandEpochListeners = new Map<string, Set<Listener>>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
   private view: BrunoTableRowPipelineRuntimeView | undefined;
@@ -390,6 +392,7 @@ export class BrunoTableGridRuntime<TRow> {
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
         subscribeColumnFilter: this.subscribeColumnFilter,
+        subscribeColumnFilterCommandEpoch: this.subscribeColumnFilterCommandEpoch,
         subscribeSorting: this.subscribeSorting,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
@@ -684,6 +687,26 @@ export class BrunoTableGridRuntime<TRow> {
     };
   };
 
+  public readonly subscribeColumnFilterCommandEpoch = (
+    columnId: string,
+    listener: Listener,
+  ): (() => void) => {
+    let listeners = this.columnFilterCommandEpochListeners.get(columnId);
+    if (listeners === undefined) {
+      listeners = new Set<Listener>();
+      this.columnFilterCommandEpochListeners.set(columnId, listeners);
+    }
+    listeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.columnFilterCommandEpochListeners.get(columnId) !== listeners) return;
+      listeners.delete(listener);
+      if (listeners.size === 0) this.columnFilterCommandEpochListeners.delete(columnId);
+    };
+  };
+
   public readonly subscribeColumnLayout = (listener: Listener): (() => void) =>
     subscribe(this.columnLayoutListeners, listener);
 
@@ -705,18 +728,27 @@ export class BrunoTableGridRuntime<TRow> {
       return;
     }
     if (command.type === "column.filter.clear") {
-      this.invalidateColumnFilterCommand(command.columnId);
+      const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
       this.clearColumnFiltersImpl(command.columnId);
+      if (invalidationError !== undefined) throw invalidationError.value;
       return;
     }
     if (command.type === "column.filters.clear") {
-      for (const column of this.columns) this.invalidateColumnFilterCommand(column.columnId);
+      let invalidationError: ListenerError | undefined;
+      for (const column of this.columns) {
+        invalidationError = firstListenerError(
+          invalidationError,
+          this.invalidateColumnFilterCommand(column.columnId),
+        );
+      }
       this.clearAllColumnFiltersImpl();
+      if (invalidationError !== undefined) throw invalidationError.value;
       return;
     }
     if (command.type === "column.filter.reset") {
-      this.invalidateColumnFilterCommand(command.columnId);
+      const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
       this.resetColumnFiltersImpl(command.columnId);
+      if (invalidationError !== undefined) throw invalidationError.value;
       return;
     }
     if (command.type === "column.filter.replace") {
@@ -765,11 +797,15 @@ export class BrunoTableGridRuntime<TRow> {
     this.publishQuery(Object.freeze([]), this.query.orderBy);
   };
 
-  private readonly invalidateColumnFilterCommand = (columnId: string): void => {
+  private readonly invalidateColumnFilterCommand = (
+    columnId: string,
+  ): ListenerError | undefined => {
     this.columnFilterCommandEpochs.set(
       columnId,
       (this.columnFilterCommandEpochs.get(columnId) ?? 0) + 1,
     );
+    const listeners = this.columnFilterCommandEpochListeners.get(columnId);
+    return listeners === undefined ? undefined : notify(listeners);
   };
 
   private readonly clearColumnFiltersImpl = (columnId: string): void => {

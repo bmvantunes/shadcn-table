@@ -911,57 +911,12 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
     await screen.getByRole("button", { name: "Clear filter for Active" }).click();
 
-    await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
-    dialog = screen.getByRole("dialog", { name: "Filter Active" });
-    await userEvent.selectOptions(
-      dialog.getByRole("combobox", { name: "Filter operator for Active" }),
-      "in",
-    );
-    await userEvent.click(
-      dialog.getByRole("checkbox", { name: "Include true in filter for Active" }),
-    );
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
-      .toBeInTheDocument();
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
-      .not.toBeInTheDocument();
-    await userEvent.click(
-      dialog.getByRole("checkbox", { name: "Include false in filter for Active" }),
-    );
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
-      .toBeInTheDocument();
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
-      .toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-
     await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
     dialog = screen.getByRole("dialog", { name: "Filter Status" });
     await userEvent.selectOptions(
       dialog.getByRole("combobox", { name: "Filter value for Status" }),
       "bruno-select-option-1",
     );
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
-      .toBeInTheDocument();
-    await expect
-      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
-      .not.toBeInTheDocument();
-    await screen.getByRole("button", { name: "Clear filter for Status" }).click();
-
-    await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
-    dialog = screen.getByRole("dialog", { name: "Filter Status" });
-    await userEvent.selectOptions(
-      dialog.getByRole("combobox", { name: "Filter operator for Status" }),
-      "in",
-    );
-    const closedStatus = dialog.getByRole("checkbox", {
-      name: "Include closed in filter for Status",
-    });
-    await userEvent.click(closedStatus);
-    await expect.element(closedStatus).toBeChecked();
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
@@ -1426,12 +1381,71 @@ describe("BrunoTableClient browser surface", () => {
     });
     const horizontalScroll = grid.element().scrollLeft;
 
-    await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "Row 0");
+    const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+    await userEvent.fill(quickFilter, "Row 0");
     await expect
-      .element(screen.getByRole("gridcell", { name: "Row 0", exact: true }))
+      .element(screen.getByRole("gridcell", { name: "Row 0", exact: true }).nth(0))
       .toBeInTheDocument();
     await vi.waitFor(() => expect(grid.element().scrollTop).toBe(0));
     expect(grid.element().scrollLeft).toBe(horizontalScroll);
+  });
+
+  test("reconciles a hidden active cell when a filter query resets the body", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `active-filter-row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient<Row, typeof wideColumns>
+        tableId="TABLE_ID_FILTER_ACTIVE_CELL"
+        columns={wideColumns}
+        initialOrderBy={[{ columnId: "COL_ID_WIDE_01", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        quickFilterFields={["name"]}
+        clientSource={readySource(largeRows)}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableQuickFilter />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_FILTER_ACTIVE_CELL" });
+    const activeCell = () => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      return screen
+        .getByRole("gridcell")
+        .all()
+        .find((cell) => cell.element().id === activeId);
+    };
+
+    grid.element().focus();
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" }));
+    await vi.waitFor(() =>
+      expect(activeCell()?.element().textContent).toMatch(/^Row [1-9][0-9]*$/),
+    );
+
+    await grid.wheel({ delta: { x: 1200, y: 1200 } });
+    await vi.waitFor(() => {
+      expect(grid.element().scrollTop).toBeGreaterThan(0);
+      expect(grid.element().scrollLeft).toBeGreaterThan(0);
+    });
+    const horizontalScroll = grid.element().scrollLeft;
+
+    const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+    await userEvent.fill(quickFilter, "Row 0");
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Row 0", exact: true }).nth(0))
+      .toBeInTheDocument();
+    await vi.waitFor(() => {
+      expect(grid.element().scrollTop).toBe(0);
+      const nextActiveCell = activeCell();
+      expect(nextActiveCell === undefined || nextActiveCell.element().textContent === "Row 0").toBe(
+        true,
+      );
+    });
+    expect(grid.element().scrollLeft).toBe(horizontalScroll);
+    expect(document.activeElement).toBe(quickFilter.element());
   });
 
   test("keeps narrow header and body cells on identical fixed column geometry", async () => {

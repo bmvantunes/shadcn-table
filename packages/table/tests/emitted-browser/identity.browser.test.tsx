@@ -6,14 +6,27 @@ import { renderToString } from "react-dom/server.browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import {
+  BrunoTableBigIntColumn,
+  BrunoTableBooleanColumn,
   BrunoTableActiveFilters,
   BrunoTableClient,
+  BrunoTableNumberColumn,
   BrunoTableQuickFilter,
+  BrunoTableSelectColumn,
   BrunoTableToolbar,
 } from "../../dist/index.mjs";
+import type { BrunoTableColumns } from "../../dist/index.mjs";
 
 type Row = Readonly<{ id: string; name: string; score: number }>;
 type FilterRow = Readonly<{ id: string; name: string; symbol: string }>;
+type EmittedFilterRow = Readonly<{
+  id: string;
+  name: string;
+  score: number;
+  quantity: bigint;
+  active: boolean;
+  status: "open" | "closed";
+}>;
 
 const source = Object.freeze({
   rows: Object.freeze([{ id: "row", name: "Ada", score: 1_234.5 }]) satisfies readonly Row[],
@@ -47,7 +60,7 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
       headerName: "Name",
       valueType: "text",
     },
-  ] as const;
+  ] satisfies BrunoTableColumns<FilterRow>;
   const screen = await render(
     <BrunoTableClient
       tableId="TABLE_ID_EMITTED_FILTERS"
@@ -94,6 +107,183 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
     .toHaveFocus();
+});
+
+test("applies emitted numeric, BigInt, discrete, range, and compound filters", async () => {
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_FILTER_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+    },
+    BrunoTableNumberColumn({
+      columnId: "COL_ID_EMITTED_FILTER_SCORE",
+      field: "score",
+      headerName: "Score",
+    }),
+    BrunoTableBigIntColumn({
+      columnId: "COL_ID_EMITTED_FILTER_QUANTITY",
+      field: "quantity",
+      headerName: "Quantity",
+    }),
+    BrunoTableBooleanColumn({
+      columnId: "COL_ID_EMITTED_FILTER_ACTIVE",
+      field: "active",
+      headerName: "Active",
+    }),
+    BrunoTableSelectColumn({
+      columnId: "COL_ID_EMITTED_FILTER_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", "closed"],
+    }),
+  ] satisfies BrunoTableColumns<EmittedFilterRow>;
+  const rows = [
+    {
+      id: "ada",
+      name: "Ada",
+      score: 1.5,
+      quantity: 9_007_199_254_740_993n,
+      active: true,
+      status: "open",
+    },
+    {
+      id: "grace",
+      name: "Grace",
+      score: 2.5,
+      quantity: 9_007_199_254_740_994n,
+      active: false,
+      status: "closed",
+    },
+    {
+      id: "linus",
+      name: "Linus",
+      score: 4.5,
+      quantity: 9_007_199_254_740_995n,
+      active: true,
+      status: "open",
+    },
+  ] satisfies readonly EmittedFilterRow[];
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_FILTER_FAMILIES"
+      getRowId={(row: EmittedFilterRow) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_FILTER_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Score" }));
+  let dialog = screen.getByRole("dialog", { name: "Filter Score" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter operator for Score" }),
+    "equals",
+  );
+  dialog = screen.getByRole("dialog", { name: "Filter Score" });
+  await userEvent.fill(dialog.getByRole("spinbutton", { name: "Filter value for Score" }), "2.5");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Clear filter for Score" }).click();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Quantity" }));
+  dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter operator for Quantity" }),
+    "greaterThan",
+  );
+  dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+  await userEvent.fill(
+    dialog.getByRole("textbox", { name: "Filter value for Quantity" }),
+    "9007199254740993",
+  );
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Clear filter for Quantity" }).click();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Score" }));
+  dialog = screen.getByRole("dialog", { name: "Filter Score" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter operator for Score" }),
+    "inRange",
+  );
+  dialog = screen.getByRole("dialog", { name: "Filter Score" });
+  await userEvent.fill(dialog.getByRole("spinbutton", { name: "Filter value for Score" }), "1.5");
+  await userEvent.fill(
+    dialog.getByRole("spinbutton", { name: "Filter upper bound for Score" }),
+    "4.5",
+  );
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Linus", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Clear filter for Score" }).click();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
+  dialog = screen.getByRole("dialog", { name: "Filter Active" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter value for Active" }),
+    "true",
+  );
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Clear filter for Active" }).click();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
+  dialog = screen.getByRole("dialog", { name: "Filter Status" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter operator for Status" }),
+    "equals",
+  );
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter value for Status" }),
+    "bruno-select-option-1",
+  );
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Clear filter for Status" }).click();
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+  dialog = screen.getByRole("dialog", { name: "Filter Name" });
+  await userEvent.selectOptions(
+    dialog.getByRole("combobox", { name: "Filter expression for Name" }),
+    "OR",
+  );
+  dialog = screen.getByRole("dialog", { name: "Filter Name" });
+  const names = dialog.getByRole("textbox", { name: "Filter value for Name" });
+  await userEvent.fill(names.nth(0), "Ada");
+  await userEvent.fill(names.nth(1), "Grace");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Linus", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 test("reports incompatible Table Identity reuse from the emitted browser runtime", async () => {

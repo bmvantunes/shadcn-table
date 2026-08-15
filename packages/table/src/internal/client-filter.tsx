@@ -202,11 +202,20 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
     recordBrunoTableClientColumnFilterRender(column.columnId);
   }
   const subscribe = useCallback(
-    (listener: () => void) => runtime.subscribeColumnFilter(column.columnId, listener),
+    (listener: () => void) => {
+      const unsubscribeFilter = runtime.subscribeColumnFilter(column.columnId, listener);
+      const unsubscribeEpoch = runtime.subscribeColumnFilterCommandEpoch(column.columnId, listener);
+      return () => {
+        unsubscribeEpoch();
+        unsubscribeFilter();
+      };
+    },
     [column.columnId, runtime],
   );
   const getVersion = useCallback(
-    () => runtime.getColumnFilterVersionSnapshot(column.columnId),
+    () =>
+      runtime.getColumnFilterVersionSnapshot(column.columnId) +
+      runtime.getColumnFilterCommandEpochSnapshot(column.columnId),
     [column.columnId, runtime],
   );
   const version = useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -627,32 +636,6 @@ function FilterOperand({
   readonly continuous: boolean;
 }): ReactElement {
   const isIn = draft.operator === "in";
-  if (isIn && isBuiltInBooleanColumn(column)) {
-    return (
-      <DiscreteInFilterOperand
-        column={column}
-        draft={draft}
-        errorId={errorId}
-        onChange={onChange}
-        options={[true, false]}
-        path={path}
-      />
-    );
-  }
-
-  if (isIn && column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
-    return (
-      <DiscreteInFilterOperand
-        column={column}
-        draft={draft}
-        errorId={errorId}
-        onChange={onChange}
-        options={column.selectOptions}
-        path={path}
-      />
-    );
-  }
-
   if (isBuiltInBooleanColumn(column)) {
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
@@ -852,80 +835,6 @@ function FilterOperand({
   );
 }
 
-function DiscreteInFilterOperand({
-  column,
-  draft,
-  errorId,
-  onChange,
-  options,
-  path,
-}: {
-  readonly column: CompiledColumn;
-  readonly draft: FilterLeafDraft;
-  readonly errorId: string;
-  readonly onChange: (
-    draft: FilterLeafDraft,
-    mode: "continuous" | "immediate" | "clear",
-    badInput?: boolean,
-  ) => void;
-  readonly options: readonly unknown[];
-  readonly path: string;
-}): ReactElement {
-  return (
-    <div
-      aria-label={`Filter values for ${column.headerName}`}
-      className="flex flex-col gap-2"
-      role="group"
-    >
-      {options.map((option, index) => {
-        let canonical: string;
-        try {
-          canonical = column.semantics.formatCanonicalText(option);
-        } catch {
-          canonical = String(index);
-        }
-        const checked = draft.inValues.includes(canonical);
-        const inputId = `${errorId}-${column.columnId}-${path}-in-${String(index)}`;
-        return (
-          <label className="flex items-center gap-2 text-sm" htmlFor={inputId} key={inputId}>
-            <Checkbox
-              checked={checked}
-              id={inputId}
-              aria-label={`Include ${column.semantics.formatDisplay(option)} in filter for ${column.headerName}`}
-              onCheckedChange={(nextChecked) => {
-                const nextValues = draft.inValues.filter((value) => value !== canonical);
-                if (nextChecked === true) nextValues.push(canonical);
-                const nextDraft = Object.freeze({
-                  ...draft,
-                  first: nextValues[0] ?? "",
-                  inValues: Object.freeze(nextValues),
-                  inValuesExplicit: true,
-                  selectIndex:
-                    column.semantics.filterFamily === "select"
-                      ? findSelectOptionIndexFromText(column, nextValues[0] ?? "")
-                      : draft.selectIndex,
-                });
-                const selectsAllValues =
-                  options.length > 0 &&
-                  options.every((candidate) => {
-                    try {
-                      return nextValues.includes(column.semantics.formatCanonicalText(candidate));
-                    } catch {
-                      return false;
-                    }
-                  });
-                onChange(nextDraft, selectsAllValues ? "clear" : "immediate");
-              }}
-            />
-            {column.semantics.formatDisplay(option)}
-          </label>
-        );
-      })}
-      {options.length === 0 ? <span className="text-sm">No values available.</span> : null}
-    </div>
-  );
-}
-
 function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
   switch (column.semantics.filterFamily) {
     case "text":
@@ -955,7 +864,7 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
       ]);
     case "boolean":
     case "select":
-      return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
+      return Object.freeze(["equals", "notEqual", "blank", "notBlank"]);
     case "equality":
       return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
     default:
@@ -1219,11 +1128,6 @@ function findSelectOptionIndex(column: CompiledColumn, value: unknown): number |
     }
   });
   return index === -1 ? undefined : index;
-}
-
-function findSelectOptionIndexFromText(column: CompiledColumn, text: string): number | undefined {
-  const parsed = column.semantics.parseCanonicalText(text);
-  return parsed._tag === "Success" ? findSelectOptionIndex(column, parsed.value) : undefined;
 }
 
 function defaultFilterOperator(column: CompiledColumn): FilterOperator {

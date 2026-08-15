@@ -234,6 +234,39 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NAME")).toBe(before + 3);
   });
 
+  it("notifies unaffected open filter editors when Clear All invalidates their candidates", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada", note: "first" }]),
+      (row) => row.id,
+      columns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const view = runtime.getView();
+    const listener = vi.fn();
+    view.subscribeColumnFilterCommandEpoch("COL_ID_NOTE", listener);
+    const before = view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE");
+
+    view.dispatchGridCommand({ type: "column.filters.clear" });
+
+    expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE")).toBe(before + 1);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds Quick Filter text at the command boundary", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),

@@ -453,7 +453,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
     <section
       ref={tableElement}
       aria-label={tableId}
-      className="data-[bruno-table]:isolate"
+      className="relative data-[bruno-table]:isolate"
       data-bruno-table={tableId}
       tabIndex={-1}
     >
@@ -461,18 +461,20 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
         <BrunoTableViewCommitDiagnosticProbe commitEvidence={compiledColumns} tableId={tableId} />
       ) : null}
       <BrunoTableSortPanel columns={compiledColumns} runtime={runtime} tableId={tableId} />
-      <ToolbarOutlet toolbar={toolbar} />
+      <div className="min-w-0">
+        <ToolbarOutlet toolbar={toolbar} />
+        <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
+        <BrunoTableGridBody
+          runtime={runtime}
+          tableId={tableId}
+          compiledColumns={compiledColumns}
+          focusFallback={focusFallback}
+          rowPipeline={rowPipeline}
+          rowPipelineAdapter={rowPipelineAdapter}
+          renderColumnFilter={renderColumnFilter}
+        />
+      </div>
       <GridOwnedToolRail controls={gridOwnedControls} />
-      <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
-      <BrunoTableGridBody
-        runtime={runtime}
-        tableId={tableId}
-        compiledColumns={compiledColumns}
-        focusFallback={focusFallback}
-        rowPipeline={rowPipeline}
-        rowPipelineAdapter={rowPipelineAdapter}
-        renderColumnFilter={renderColumnFilter}
-      />
     </section>
   );
 }
@@ -513,9 +515,9 @@ const GridOwnedToolRail = memo(function GridOwnedToolRail({
   return (
     <aside
       aria-label="Grid tools"
-      className="flex min-h-10 items-center justify-end border-b px-2 py-1"
+      className="pointer-events-none absolute end-0 top-0 z-20 flex w-28 flex-col items-stretch gap-1 border-s bg-background/95 px-2 py-1"
     >
-      {controls}
+      <div className="pointer-events-auto">{controls}</div>
     </aside>
   );
 });
