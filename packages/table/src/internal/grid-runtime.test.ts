@@ -246,6 +246,29 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
+  it("compares large text in operands through bounded keyed matching", () => {
+    const values = Array.from({ length: 4_096 }, (_, index) => `Name-${String(index)}`);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Name-0" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "in", filter: values }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "in", filter: [...values].reverse() },
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
   it("invalidates filter editor candidates for no-op Clear and Reset commands", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
@@ -602,6 +625,22 @@ describe("BrunoTable filter runtime primitives", () => {
     const configuration = adapter.getQueryConfiguration(runtimeColumns);
     expect(view.getQuickFilterFieldsSnapshot()).toBe(configuration.quickFilterFields);
     expect(adapter.getQueryConfiguration(runtimeColumns)).toBe(configuration);
+  });
+
+  it("rejects sparse Quick Filter field tuples", () => {
+    const sparseFields = Array(1) as unknown as readonly string[];
+
+    expect(
+      () =>
+        new BrunoTableClientRowPipelineAdapter(
+          source([{ id: "first", name: "Ada" }]),
+          (row) => row.id,
+          runtimeColumns,
+          undefined,
+          [{ columnId: "COL_ID_NAME", direction: "asc" }],
+          sparseFields,
+        ),
+    ).toThrow(TypeError);
   });
 
   it("uses Value Semantics for opaque cyclic filter operands", () => {

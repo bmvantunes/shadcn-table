@@ -352,9 +352,10 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  if (!entries.some((entry) => entry.kind === "quick")) openStore.setOpen(false);
+                  const keepsQuickFilter = entries.some((entry) => entry.kind === "quick");
+                  if (!keepsQuickFilter) openStore.setOpen(false);
                   runtime.dispatchGridCommand({ type: "column.filters.clear" });
-                  focusAfterMutation(undefined);
+                  focusAfterMutation(keepsQuickFilter ? "quick-filter" : undefined);
                 }}
               >
                 Clear all Grid Filters

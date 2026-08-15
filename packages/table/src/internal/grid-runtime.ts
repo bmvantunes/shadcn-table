@@ -1664,18 +1664,41 @@ function sameFilterOperand(
 ): boolean {
   if (Object.is(previous, next)) return true;
   if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
-    return (
-      previous.every((value) =>
-        next.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      ) &&
-      next.every((value) =>
-        previous.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      )
+    if (previous.length !== next.length) return false;
+    const previousKeys = previous.map((value) =>
+      filterOperandComparisonKey(value, column, options),
     );
+    const nextKeys = next.map((value) => filterOperandComparisonKey(value, column, options));
+    if (
+      previousKeys.every((key) => key !== undefined) &&
+      nextKeys.every((key) => key !== undefined)
+    ) {
+      const counts = new Map<string, number>();
+      for (const key of nextKeys) {
+        const value = key as string;
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+      for (const key of previousKeys) {
+        const value = key as string;
+        const count = counts.get(value) ?? 0;
+        if (count === 0) return false;
+        if (count === 1) counts.delete(value);
+        else counts.set(value, count - 1);
+      }
+      return counts.size === 0;
+    }
+    const matched = new Set<number>();
+    return previous.every((value) => {
+      for (let index = 0; index < next.length; index += 1) {
+        if (matched.has(index)) continue;
+        if (!sameFilterOperand(value, next[index], column, { ...options, unordered: false })) {
+          continue;
+        }
+        matched.add(index);
+        return true;
+      }
+      return false;
+    });
   }
   if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;
@@ -1709,6 +1732,45 @@ function sameFilterOperand(
     return column.semantics.equivalent(previous, next);
   } catch {
     return false;
+  }
+}
+
+function filterOperandComparisonKey(
+  value: unknown,
+  column: CompiledColumn,
+  options: Readonly<{
+    readonly accentSensitive: boolean;
+    readonly caseSensitive: boolean;
+    readonly raw: boolean;
+    readonly text: boolean;
+    readonly unordered: boolean;
+  }>,
+): string | undefined {
+  if (options.raw) {
+    return typeof value === "string"
+      ? `text:${normalizeBrunoTableFilterText(value, options.caseSensitive, options.accentSensitive)}`
+      : undefined;
+  }
+  if (options.text) {
+    try {
+      return `text:${normalizeBrunoTableFilterText(
+        column.semantics.formatCanonicalText(value),
+        options.caseSensitive,
+        options.accentSensitive,
+      )}`;
+    } catch {
+      return undefined;
+    }
+  }
+  switch (column.semantics.editorFamily) {
+    case "number":
+      return typeof value === "number" ? `number:${String(value)}` : undefined;
+    case "bigint":
+      return typeof value === "bigint" ? `bigint:${value.toString()}` : undefined;
+    case "boolean":
+      return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
+    default:
+      return undefined;
   }
 }
 

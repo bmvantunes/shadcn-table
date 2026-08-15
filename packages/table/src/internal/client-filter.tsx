@@ -296,7 +296,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     error: undefined,
   }));
   const currentState =
-    localState.column === column && localState.version === version
+    localState.column.columnId === column.columnId && localState.version === version
       ? localState
       : {
           column,
@@ -326,8 +326,10 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
   useLayoutEffect(() => {
-    if (localState.column !== column || localState.version !== version) debouncer.cancel();
-  }, [column, debouncer, localState.column, localState.version, version]);
+    if (localState.column.columnId !== column.columnId || localState.version !== version) {
+      debouncer.cancel();
+    }
+  }, [column.columnId, debouncer, localState.column.columnId, localState.version, version]);
 
   useEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });

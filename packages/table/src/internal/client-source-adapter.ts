@@ -1540,8 +1540,16 @@ function snapshotQuickFilterFields(fields: readonly string[] | undefined): reado
   if (!Array.isArray(fields) || fields.length === 0) {
     throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
   }
-  if (!fields.every((field) => typeof field === "string" && field.length > 0)) {
-    throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
+  const snapshot: string[] = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    if (!Object.hasOwn(fields, index)) {
+      throw new TypeError("BrunoTable quickFilterFields must be dense.");
+    }
+    const field = fields[index];
+    if (typeof field !== "string" || field.length === 0) {
+      throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
+    }
+    snapshot.push(field);
   }
-  return Object.freeze(Array.from(fields));
+  return Object.freeze(snapshot);
 }
