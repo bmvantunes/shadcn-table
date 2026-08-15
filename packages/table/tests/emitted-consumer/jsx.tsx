@@ -1,4 +1,9 @@
-import { BrunoTableClient, BrunoTableComputedColumn } from "@bruno/table";
+import {
+  BrunoTableClient,
+  BrunoTableComputedColumn,
+  BrunoTableQuickFilter,
+  BrunoTableToolbar,
+} from "@bruno/table";
 
 import type { BrunoTableColumns } from "@bruno/table";
 
@@ -90,6 +95,74 @@ const validClient = (
   />
 );
 void validClient;
+
+const validQuickFilterClient = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_VALID_QUICK_FILTER"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    quickFilterFields={["name"]}
+    clientSource={clientSource}
+  >
+    <BrunoTableToolbar>
+      <BrunoTableQuickFilter />
+    </BrunoTableToolbar>
+  </BrunoTableClient>
+);
+void validQuickFilterClient;
+
+const invalidNumericQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_INVALID_NUMERIC_QUICK_FILTER"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error Emitted JSX Quick Filter fields reject numeric source fields.
+    quickFilterFields={["score"]}
+    clientSource={clientSource}
+  />
+);
+void invalidNumericQuickFilterFields;
+
+const invalidEmptyQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_EMPTY_QUICK_FILTER"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error Emitted JSX Quick Filter fields require a non-empty tuple.
+    quickFilterFields={[]}
+    clientSource={clientSource}
+  />
+);
+void invalidEmptyQuickFilterFields;
+
+const invalidColumnIdentityQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_COLUMN_ID_QUICK_FILTER"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error Emitted JSX Quick Filter fields accept source fields, not Column Identities.
+    quickFilterFields={["COL_ID_NAME"]}
+    clientSource={clientSource}
+  />
+);
+void invalidColumnIdentityQuickFilterFields;
+
+const invalidMisspelledQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_MISSPELLED_QUICK_FILTER"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error Emitted JSX Quick Filter fields reject misspelled source fields.
+    quickFilterFields={["displayName"]}
+    clientSource={clientSource}
+  />
+);
+void invalidMisspelledQuickFilterFields;
 
 const missingOrder = (
   // @ts-expect-error Emitted JSX Client usage requires initialOrderBy.

@@ -314,6 +314,23 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(view.getQuickFilterSnapshot()).toHaveLength(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
   });
 
+  it("invalidates queued Quick Filter candidates for every replacement command", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const view = runtime.getView();
+    const before = view.getQuickFilterCommandEpochSnapshot();
+
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+    expect(view.getQuickFilterCommandEpochSnapshot()).toBe(before + 1);
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
+    expect(view.getQuickFilterCommandEpochSnapshot()).toBe(before + 2);
+  });
+
   it("compares scalar array operands through their Value Semantics", () => {
     type Vector = readonly string[];
     type VectorRow = Readonly<{ readonly id: string; readonly vector: Vector }>;

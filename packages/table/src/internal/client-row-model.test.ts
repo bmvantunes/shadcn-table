@@ -105,6 +105,26 @@ describe("Client row model", () => {
     expect(localeLowerCase).not.toHaveBeenCalled();
   });
 
+  it("compiles text filter operands once before evaluating rows", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const normalize = vi.spyOn(String.prototype, "normalize");
+    const predicate = createClientFilterPredicate(columns, [
+      { columnId: "COL_ID_NAME", type: "equals", filter: "ada" },
+    ]);
+    const rows = [{ name: "Ada" }, { name: "Grace" }, { name: "ADA" }];
+
+    expect(normalize).toHaveBeenCalledTimes(1);
+    expect(rows.filter(predicate!)).toEqual([{ name: "Ada" }, { name: "ADA" }]);
+    expect(normalize).toHaveBeenCalledTimes(rows.length + 1);
+  });
+
   it("normalizes canonically equivalent accent-sensitive text", () => {
     const columns = compileColumns([
       {

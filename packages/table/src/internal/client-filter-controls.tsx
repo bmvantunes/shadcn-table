@@ -111,9 +111,18 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   const draftRef = useRef(initialValue);
   const lastCommittedRef = useRef(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const draftEpochRef = useRef(0);
   const publish = useCallback(
-    (text: string): void => {
-      runtime.dispatchGridCommand({ type: "quick-filter.replace", text });
+    (
+      candidate: Readonly<{
+        readonly text: string;
+        readonly commandEpoch: number;
+        readonly draftEpoch: number;
+      }>,
+    ): void => {
+      if (runtime.getQuickFilterCommandEpochSnapshot() !== candidate.commandEpoch) return;
+      if (draftEpochRef.current !== candidate.draftEpoch) return;
+      runtime.dispatchGridCommand({ type: "quick-filter.replace", text: candidate.text });
     },
     [runtime],
   );
@@ -138,9 +147,15 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         value={draft}
         onChange={(event) => {
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
+          const draftEpoch = draftEpochRef.current + 1;
+          draftEpochRef.current = draftEpoch;
           draftRef.current = text;
           setDraft(text);
-          debouncer.maybeExecute(text);
+          debouncer.maybeExecute({
+            text,
+            commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
+            draftEpoch,
+          });
         }}
       />
       {draft.length === 0 ? null : (
@@ -151,9 +166,15 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           variant="ghost"
           onClick={() => {
             debouncer.cancel();
+            const draftEpoch = draftEpochRef.current + 1;
+            draftEpochRef.current = draftEpoch;
             draftRef.current = "";
             setDraft("");
-            publish("");
+            publish({
+              text: "",
+              commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
+              draftEpoch,
+            });
             inputRef.current?.focus({ preventScroll: true });
           }}
         >

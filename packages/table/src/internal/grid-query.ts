@@ -143,11 +143,12 @@ export function createClientFilterPredicate<TRow>(
   if (filters === undefined || filters.length === 0) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
+  const compiledOperands = compileFilterOperandPlans(filters, columnsById);
   const hasSharedNodes = containsSharedFilterNodes(filters);
   return (row) => {
     const completed = hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
     return filters.every((filter) =>
-      evaluateFilter(filter, row, columnsById, readUnknown, completed),
+      evaluateFilter(filter, row, columnsById, readUnknown, compiledOperands, completed),
     );
   };
 }
@@ -545,22 +546,121 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }
 
+type CompiledFilterOperandPlan = Readonly<{
+  readonly normalizedOperand?: string | undefined;
+  readonly normalizedOperands?: readonly (string | undefined)[] | undefined;
+  readonly normalizedSubstringOperand?: string | undefined;
+}>;
+
+function compileFilterOperandPlans(
+  filters: readonly unknown[],
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): WeakMap<object, CompiledFilterOperandPlan> {
+  const plans = new WeakMap<object, CompiledFilterOperandPlan>();
+  const pending = Array.from(filters);
+  const visited = new WeakSet<object>();
+  while (pending.length > 0) {
+    const candidate = pending.pop();
+    if (typeof candidate !== "object" || candidate === null || visited.has(candidate)) continue;
+    visited.add(candidate);
+    const filter = asRecord(candidate);
+    const type = filter["type"];
+    const columnId = filter["columnId"];
+    const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
+    const caseSensitive = filter["caseSensitive"] === true;
+    const accentSensitive = filter["accentSensitive"] === true;
+    const operand = filter["filter"];
+    if (column?.semantics.filterFamily === "text") {
+      if ((type === "equals" || type === "notEqual") && operand !== undefined) {
+        plans.set(candidate, {
+          normalizedOperand: normalizeCanonicalTextOperand(
+            column,
+            operand,
+            caseSensitive,
+            accentSensitive,
+          ),
+        });
+      } else if (type === "in" && Array.isArray(operand)) {
+        plans.set(candidate, {
+          normalizedOperands: Object.freeze(
+            operand.map((item) =>
+              normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive),
+            ),
+          ),
+        });
+      } else if (
+        (type === "contains" ||
+          type === "notContains" ||
+          type === "startsWith" ||
+          type === "endsWith") &&
+        typeof operand === "string"
+      ) {
+        plans.set(candidate, {
+          normalizedSubstringOperand: normalizeBrunoTableFilterText(
+            operand,
+            caseSensitive,
+            accentSensitive,
+          ),
+        });
+      }
+    }
+    const conditions = filter["conditions"];
+    if (Array.isArray(conditions)) {
+      for (const condition of conditions) pending.push(condition);
+    }
+    if (filter["condition"] !== undefined) pending.push(filter["condition"]);
+  }
+  return plans;
+}
+
+function normalizeCanonicalTextOperand(
+  column: CompiledColumn,
+  operand: unknown,
+  caseSensitive: boolean,
+  accentSensitive: boolean,
+): string | undefined {
+  try {
+    return normalizeBrunoTableFilterText(
+      column.semantics.formatCanonicalText(operand),
+      caseSensitive,
+      accentSensitive,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function evaluateFilter(
   candidate: unknown,
   row: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   readValue: (column: CompiledColumn, row: unknown) => unknown,
+  compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   if (completed === undefined) {
-    return evaluateFilterRecord(candidate, row, columnsById, readValue, undefined);
+    return evaluateFilterRecord(
+      candidate,
+      row,
+      columnsById,
+      readValue,
+      compiledOperands,
+      undefined,
+    );
   }
   const candidateObject =
     typeof candidate === "object" && candidate !== null ? candidate : undefined;
   if (candidateObject !== undefined && completed.has(candidateObject)) {
     return completed.get(candidateObject) ?? false;
   }
-  const result = evaluateFilterRecord(candidate, row, columnsById, readValue, completed);
+  const result = evaluateFilterRecord(
+    candidate,
+    row,
+    columnsById,
+    readValue,
+    compiledOperands,
+    completed,
+  );
   if (candidateObject !== undefined) completed.set(candidateObject, result);
   return result;
 }
@@ -570,6 +670,7 @@ function evaluateFilterRecord(
   row: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   readValue: (column: CompiledColumn, row: unknown) => unknown,
+  compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   const filter = asRecord(candidate);
@@ -578,14 +679,21 @@ function evaluateFilterRecord(
     const conditions = Array.isArray(filter["conditions"]) ? filter["conditions"] : [];
     return type === "AND"
       ? conditions.every((condition) =>
-          evaluateFilter(condition, row, columnsById, readValue, completed),
+          evaluateFilter(condition, row, columnsById, readValue, compiledOperands, completed),
         )
       : conditions.some((condition) =>
-          evaluateFilter(condition, row, columnsById, readValue, completed),
+          evaluateFilter(condition, row, columnsById, readValue, compiledOperands, completed),
         );
   }
   if (type === "NOT") {
-    return !evaluateFilter(filter["condition"], row, columnsById, readValue, completed);
+    return !evaluateFilter(
+      filter["condition"],
+      row,
+      columnsById,
+      readValue,
+      compiledOperands,
+      completed,
+    );
   }
   const columnId = filter["columnId"];
   const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
@@ -597,18 +705,45 @@ function evaluateFilterRecord(
   const operand = filter["filter"];
   const caseSensitive = filter["caseSensitive"] === true;
   const accentSensitive = filter["accentSensitive"] === true;
+  const plan =
+    typeof candidate === "object" && candidate !== null
+      ? compiledOperands.get(candidate)
+      : undefined;
   if (filter["type"] === "blank") return value === null || value === undefined || value === "";
   if (filter["type"] === "notBlank") return value !== null && value !== undefined && value !== "";
   if (filter["type"] === "equals") {
-    return compareEquality(column, value, operand, caseSensitive, accentSensitive);
+    return compareEquality(
+      column,
+      value,
+      operand,
+      caseSensitive,
+      accentSensitive,
+      plan?.normalizedOperand,
+    );
   }
   if (filter["type"] === "notEqual") {
-    return !compareEquality(column, value, operand, caseSensitive, accentSensitive);
+    return !compareEquality(
+      column,
+      value,
+      operand,
+      caseSensitive,
+      accentSensitive,
+      plan?.normalizedOperand,
+    );
   }
   if (filter["type"] === "in") {
     return (
       Array.isArray(operand) &&
-      operand.some((item) => compareEquality(column, value, item, caseSensitive, accentSensitive))
+      operand.some((item, index) =>
+        compareEquality(
+          column,
+          value,
+          item,
+          caseSensitive,
+          accentSensitive,
+          plan?.normalizedOperands?.[index],
+        ),
+      )
     );
   }
   if (
@@ -638,7 +773,9 @@ function evaluateFilterRecord(
     caseSensitive,
     accentSensitive,
   );
-  const right = normalizeBrunoTableFilterText(operand, caseSensitive, accentSensitive);
+  const right =
+    plan?.normalizedSubstringOperand ??
+    normalizeBrunoTableFilterText(operand, caseSensitive, accentSensitive);
   if (filter["type"] === "contains") return left.includes(right);
   if (filter["type"] === "notContains") return !left.includes(right);
   if (filter["type"] === "startsWith") return left.startsWith(right);
@@ -672,6 +809,7 @@ function compareEquality(
   operand: unknown,
   caseSensitive: boolean,
   accentSensitive: boolean,
+  normalizedOperand?: string,
 ): boolean {
   if (value === null || value === undefined || operand === null || operand === undefined) {
     return value === operand;
@@ -683,11 +821,12 @@ function compareEquality(
         caseSensitive,
         accentSensitive,
       ) ===
-      normalizeBrunoTableFilterText(
-        column.semantics.formatCanonicalText(operand),
-        caseSensitive,
-        accentSensitive,
-      )
+      (normalizedOperand ??
+        normalizeBrunoTableFilterText(
+          column.semantics.formatCanonicalText(operand),
+          caseSensitive,
+          accentSensitive,
+        ))
     );
   }
   return column.semantics.equivalent(value, operand);

@@ -125,6 +125,8 @@ export type BrunoTableRuntimeView = {
   /** Invalidates queued editor candidates even when a Clear/Reset command is a semantic no-op. */
   readonly getColumnFilterCommandEpochSnapshot: (columnId: string) => number;
   readonly getQuickFilterSnapshot: () => string;
+  /** Invalidates queued Quick Filter candidates when any Quick Filter command commits. */
+  readonly getQuickFilterCommandEpochSnapshot: () => number;
   readonly getQuickFilterFieldsSnapshot: () => readonly string[];
   readonly getSortingSnapshot: () => BrunoTableOrderBy;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
@@ -302,6 +304,7 @@ export class BrunoTableGridRuntime<TRow> {
   private columnFilterSnapshots: ReadonlyMap<string, unknown>;
   private readonly columnFilterVersions = new Map<string, number>();
   private readonly columnFilterCommandEpochs = new Map<string, number>();
+  private quickFilterCommandEpoch = 0;
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -377,6 +380,7 @@ export class BrunoTableGridRuntime<TRow> {
         getColumnFilterVersionSnapshot: this.getColumnFilterVersionSnapshot,
         getColumnFilterCommandEpochSnapshot: this.getColumnFilterCommandEpochSnapshot,
         getSortingSnapshot: this.getSortingSnapshot,
+        getQuickFilterCommandEpochSnapshot: this.getQuickFilterCommandEpochSnapshot,
         getColumnLayoutSnapshot: this.getColumnLayoutSnapshot,
         getColumnStructureSnapshot: this.getColumnStructureSnapshot,
         subscribeChrome: this.subscribeChrome,
@@ -533,6 +537,8 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getFilterSnapshot = (): BrunoTableFilterSnapshot => this.filterSnapshot;
 
   public readonly getQuickFilterSnapshot = (): string => this.query.quickFilter;
+
+  public readonly getQuickFilterCommandEpochSnapshot = (): number => this.quickFilterCommandEpoch;
 
   public readonly getQuickFilterFieldsSnapshot = (): readonly string[] => this.quickFilterFields;
 
@@ -756,6 +762,7 @@ export class BrunoTableGridRuntime<TRow> {
       return;
     }
     if (command.type === "quick-filter.replace") {
+      this.quickFilterCommandEpoch += 1;
       this.publishQuery(
         this.query.filters,
         this.query.orderBy,
