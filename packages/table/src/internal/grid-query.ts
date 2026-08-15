@@ -517,23 +517,25 @@ function sanitizeFilterRecord(
     let configuredSelectValue: unknown;
     let isConfiguredSelectValue = false;
     if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
-      for (const option of column.selectOptions) {
-        if (Object.is(option, operand)) {
-          configuredSelectValue = option;
-          isConfiguredSelectValue = true;
-          break;
-        }
-        if (typeof operand === "string" && operand.length > BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) {
-          continue;
-        }
-        try {
-          if (!column.semantics.equivalent(option, operand)) continue;
-          configuredSelectValue = option;
-          isConfiguredSelectValue = true;
-          break;
-        } catch {
-          // Ignore an unreadable or invalid external operand and continue to
-          // the ordinary bounded decoder path below.
+      const exactOptionIndex = column.selectOptions.findIndex((option) =>
+        Object.is(option, operand),
+      );
+      if (exactOptionIndex !== -1) {
+        configuredSelectValue = column.selectOptions[exactOptionIndex];
+        isConfiguredSelectValue = true;
+      } else if (!isBoundedFilterOperandText(operand, context)) {
+        return undefined;
+      } else {
+        for (const option of column.selectOptions) {
+          try {
+            if (!column.semantics.equivalent(option, operand)) continue;
+            configuredSelectValue = option;
+            isConfiguredSelectValue = true;
+            break;
+          } catch {
+            // Ignore an unreadable or invalid external operand and continue to
+            // the ordinary bounded decoder path below.
+          }
         }
       }
     }
