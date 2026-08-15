@@ -845,27 +845,16 @@ export class BrunoTableGridRuntime<TRow> {
   };
 
   private readonly replaceColumnFilterImpl = (columnId: string, candidate: unknown): void => {
-    const replacement =
-      candidate === undefined ? [] : sanitizeBrunoTableFilters([candidate], this.columns);
+    const candidates =
+      candidate === undefined ? [] : Array.isArray(candidate) ? candidate : [candidate];
+    const replacement = sanitizeBrunoTableFilters(candidates, this.columns);
     if (candidate !== undefined && replacement.length === 0) return;
-    if (
-      replacement.length > 1 ||
-      (replacement.length === 1 && !brunoTableFilterReferencesColumn(replacement[0], columnId))
-    ) {
-      return;
-    }
+    if (replacement.some((filter) => !brunoTableFilterReferencesColumn(filter, columnId))) return;
     const currentColumnFilters = this.query.filters.filter((filter) =>
       brunoTableFilterReferencesColumn(filter, columnId),
     );
     if (replacement.length === 0 && currentColumnFilters.length === 0) return;
-    if (
-      candidate !== undefined &&
-      replacement.length === 1 &&
-      currentColumnFilters.length === 1 &&
-      sameFilterValue(currentColumnFilters[0], replacement[0], this.columnsById)
-    ) {
-      return;
-    }
+    if (sameFilterCollection(currentColumnFilters, replacement, this.columnsById)) return;
     const withoutColumn = this.query.filters.filter(
       (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
     );
@@ -1683,13 +1672,14 @@ function filterValueComparisonKey(
             type === "startsWith" ||
             type === "endsWith",
           text:
-            type === "equals" ||
-            type === "notEqual" ||
-            type === "in" ||
-            type === "contains" ||
-            type === "notContains" ||
-            type === "startsWith" ||
-            type === "endsWith",
+            column.semantics.filterFamily === "text" &&
+            (type === "equals" ||
+              type === "notEqual" ||
+              type === "in" ||
+              type === "contains" ||
+              type === "notContains" ||
+              type === "startsWith" ||
+              type === "endsWith"),
           unordered: false,
         });
         if (operand === undefined) return undefined;

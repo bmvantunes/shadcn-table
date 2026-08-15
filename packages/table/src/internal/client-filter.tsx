@@ -19,6 +19,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -81,6 +82,7 @@ type FilterDraft =
       readonly kind: "compound";
       readonly operator: "AND" | "OR";
       readonly conditions: readonly [FilterDraft, ...FilterDraft[]];
+      readonly rootCollection?: boolean;
     }>
   | Readonly<{
       readonly kind: "not";
@@ -90,9 +92,14 @@ type FilterDraft =
 type FilterNode = Readonly<Record<string, unknown>>;
 
 type FilterCandidate = Readonly<{
-  readonly filter: FilterNode | undefined;
+  readonly filter: FilterNode | readonly FilterNode[] | undefined;
   readonly error?: string;
 }>;
+
+type FilterParseResult = ReturnType<CompiledColumn["semantics"]["parseCanonicalText"]>;
+type FilterParseCache = Map<string, FilterParseResult>;
+
+const FILTER_IN_VISIBLE_OPERANDS = 64;
 
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
@@ -306,6 +313,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         };
   const draft = currentState.draft;
   const error = currentState.error;
+  const parseCache = useMemo<FilterParseCache>(() => new Map(), []);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const errorId = useId();
@@ -382,13 +390,13 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         mode === "continuous"
           ? badInput
             ? { filter: undefined, error: "Enter a valid value." }
-            : buildFilterCandidate(column, nextDraft)
-          : buildFilterCandidate(column, nextDraft);
+            : buildFilterCandidate(column, nextDraft, parseCache)
+          : buildFilterCandidate(column, nextDraft, parseCache);
       setLocalState({ column, version, draft: nextDraft, error: candidate.error });
       if (mode === "continuous") commitContinuous(candidate);
       else commitImmediately(candidate);
     },
-    [column, commitContinuous, commitImmediately, debouncer, draft, runtime, version],
+    [column, commitContinuous, commitImmediately, debouncer, draft, parseCache, runtime, version],
   );
 
   return (
@@ -743,6 +751,10 @@ function FilterOperand({
   const isIn = draft.operator === "in";
   const composingRef = useRef(false);
   const latestDraftRef = useRef(draft);
+  const values = isIn && draft.inValuesExplicit ? draft.inValues : [draft.first];
+  const [operandWindowStart, setOperandWindowStart] = useState(0);
+  const maxOperandWindowStart = Math.max(0, values.length - FILTER_IN_VISIBLE_OPERANDS);
+  const visibleOperandWindowStart = Math.min(operandWindowStart, maxOperandWindowStart);
   useEffect(() => {
     latestDraftRef.current = draft;
   }, [draft]);
@@ -838,7 +850,10 @@ function FilterOperand({
     : column.semantics.editorFamily === "bigdecimal"
       ? "decimal"
       : undefined;
-  const values = isIn && draft.inValuesExplicit ? draft.inValues : [draft.first];
+  const visibleValues = values.slice(
+    visibleOperandWindowStart,
+    visibleOperandWindowStart + FILTER_IN_VISIBLE_OPERANDS,
+  );
   return (
     <div className="flex flex-col gap-2">
       {isIn ? (
@@ -847,115 +862,159 @@ function FilterOperand({
           role="group"
           className="flex flex-col gap-2"
         >
-          {values.map((value, index) => (
-            <div key={String(index)} className="flex items-end gap-1">
-              <label
-                className="flex min-w-0 flex-1 flex-col gap-1 text-sm"
-                htmlFor={`${errorId}-${path}-value-${String(index)}`}
-              >
-                {index === 0 ? "Value" : `Value ${String(index + 1)}`}
-                <Input
-                  ref={index === 0 ? inputRef : undefined}
-                  id={`${errorId}-${path}-value-${String(index)}`}
-                  aria-describedby={errorId}
-                  aria-label={
-                    index === 0
-                      ? inputLabel
-                      : `Filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`
-                  }
-                  inputMode={inputMode}
-                  maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
-                  onCompositionEnd={(event) =>
-                    finishComposition(event, (current, nextValue) => {
-                      const currentValues =
-                        current.inValues.length > 0 ? current.inValues : [current.first];
-                      const nextValues = currentValues.slice();
-                      nextValues[index] = nextValue;
-                      const currentValuesAuthored =
-                        current.inValuesAuthored.length > 0
-                          ? current.inValuesAuthored
-                          : [current.firstAuthored];
-                      const nextValuesAuthored = currentValuesAuthored.slice() as boolean[];
-                      nextValuesAuthored[index] = true;
-                      return Object.freeze({
-                        ...current,
-                        first: nextValues[0] ?? "",
-                        firstAuthored: nextValuesAuthored[0] === true,
-                        inValues: Object.freeze(nextValues),
-                        inValuesAuthored: Object.freeze(nextValuesAuthored),
-                        inValuesExplicit: true,
-                      });
-                    })
-                  }
-                  onCompositionStart={beginComposition}
-                  step={isNumber ? "any" : undefined}
-                  type={type}
-                  value={value}
-                  onChange={(event) => {
-                    const nextValues = values.slice();
-                    nextValues[index] = boundBrunoTableFilterOperandText(event.currentTarget.value);
-                    const nextValuesAuthored = (
-                      draft.inValuesAuthored.length > 0
-                        ? draft.inValuesAuthored
-                        : [draft.firstAuthored]
-                    ).slice() as boolean[];
-                    nextValuesAuthored[index] = true;
-                    onChange(
-                      Object.freeze({
-                        ...draft,
-                        first: nextValues[0] ?? "",
-                        firstAuthored: nextValuesAuthored[0] === true,
-                        inValues: Object.freeze(nextValues),
-                        inValuesAuthored: Object.freeze(nextValuesAuthored),
-                        inValuesExplicit: true,
-                      }),
-                      changeMode(),
-                      isNumber && event.currentTarget.validity.badInput,
-                    );
-                  }}
-                />
-              </label>
-              {values.length > 1 ? (
+          {values.length > FILTER_IN_VISIBLE_OPERANDS ? (
+            <div className="flex flex-col gap-1 text-sm">
+              <p aria-live="polite">
+                {`Showing values ${String(visibleOperandWindowStart + 1)}-${String(
+                  Math.min(values.length, visibleOperandWindowStart + FILTER_IN_VISIBLE_OPERANDS),
+                )} of ${String(values.length)}`}
+              </p>
+              <div className="flex gap-1">
                 <Button
-                  aria-label={`Remove filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
-                  size="icon-xs"
+                  aria-label={`Previous filter values for ${column.headerName}${labelSuffix}`}
+                  disabled={visibleOperandWindowStart === 0}
+                  size="xs"
                   type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    const nextValues = values.filter((_, candidate) => candidate !== index);
-                    const nextValuesAuthored = Object.freeze(
-                      nextValues.map((_, candidate) => {
-                        const sourceIndex = candidate >= index ? candidate + 1 : candidate;
-                        return (
-                          (draft.inValuesAuthored.length > 0
-                            ? draft.inValuesAuthored
-                            : [draft.firstAuthored])[sourceIndex] ?? false
-                        );
-                      }),
-                    );
-                    const nextFocusId =
-                      nextValues.length === 0
-                        ? `${errorId}-${path}-add-value`
-                        : `${errorId}-${path}-value-${String(Math.min(index, nextValues.length - 1))}`;
-                    onChange(
-                      Object.freeze({
-                        ...draft,
-                        first: nextValues[0] ?? "",
-                        firstAuthored: nextValuesAuthored[0] === true,
-                        inValues: Object.freeze(nextValues),
-                        inValuesExplicit: true,
-                        inValuesAuthored: nextValuesAuthored,
-                      }),
-                      continuous ? "continuous" : "immediate",
-                    );
-                    focusAddedControl(nextFocusId);
-                  }}
+                  variant="outline"
+                  onClick={() =>
+                    setOperandWindowStart((current) =>
+                      Math.max(0, current - FILTER_IN_VISIBLE_OPERANDS),
+                    )
+                  }
                 >
-                  ×
+                  Previous values
                 </Button>
-              ) : null}
+                <Button
+                  aria-label={`Next filter values for ${column.headerName}${labelSuffix}`}
+                  disabled={visibleOperandWindowStart >= maxOperandWindowStart}
+                  size="xs"
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    setOperandWindowStart((current) =>
+                      Math.min(maxOperandWindowStart, current + FILTER_IN_VISIBLE_OPERANDS),
+                    )
+                  }
+                >
+                  Next values
+                </Button>
+              </div>
             </div>
-          ))}
+          ) : null}
+          {visibleValues.map((value, offset) => {
+            const index = visibleOperandWindowStart + offset;
+            return (
+              <div key={String(index)} className="flex items-end gap-1">
+                <label
+                  className="flex min-w-0 flex-1 flex-col gap-1 text-sm"
+                  htmlFor={`${errorId}-${path}-value-${String(index)}`}
+                >
+                  {index === 0 ? "Value" : `Value ${String(index + 1)}`}
+                  <Input
+                    ref={index === 0 ? inputRef : undefined}
+                    id={`${errorId}-${path}-value-${String(index)}`}
+                    aria-describedby={errorId}
+                    aria-label={
+                      index === 0
+                        ? inputLabel
+                        : `Filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`
+                    }
+                    inputMode={inputMode}
+                    maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
+                    onCompositionEnd={(event) =>
+                      finishComposition(event, (current, nextValue) => {
+                        const currentValues =
+                          current.inValues.length > 0 ? current.inValues : [current.first];
+                        const nextValues = currentValues.slice();
+                        nextValues[index] = nextValue;
+                        const currentValuesAuthored =
+                          current.inValuesAuthored.length > 0
+                            ? current.inValuesAuthored
+                            : [current.firstAuthored];
+                        const nextValuesAuthored = currentValuesAuthored.slice() as boolean[];
+                        nextValuesAuthored[index] = true;
+                        return Object.freeze({
+                          ...current,
+                          first: nextValues[0] ?? "",
+                          firstAuthored: nextValuesAuthored[0] === true,
+                          inValues: Object.freeze(nextValues),
+                          inValuesAuthored: Object.freeze(nextValuesAuthored),
+                          inValuesExplicit: true,
+                        });
+                      })
+                    }
+                    onCompositionStart={beginComposition}
+                    step={isNumber ? "any" : undefined}
+                    type={type}
+                    value={value}
+                    onChange={(event) => {
+                      const nextValues = values.slice();
+                      nextValues[index] = boundBrunoTableFilterOperandText(
+                        event.currentTarget.value,
+                      );
+                      const nextValuesAuthored = (
+                        draft.inValuesAuthored.length > 0
+                          ? draft.inValuesAuthored
+                          : [draft.firstAuthored]
+                      ).slice() as boolean[];
+                      nextValuesAuthored[index] = true;
+                      onChange(
+                        Object.freeze({
+                          ...draft,
+                          first: nextValues[0] ?? "",
+                          firstAuthored: nextValuesAuthored[0] === true,
+                          inValues: Object.freeze(nextValues),
+                          inValuesAuthored: Object.freeze(nextValuesAuthored),
+                          inValuesExplicit: true,
+                        }),
+                        changeMode(),
+                        isNumber && event.currentTarget.validity.badInput,
+                      );
+                    }}
+                  />
+                </label>
+                {values.length > 1 ? (
+                  <Button
+                    aria-label={`Remove filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const nextValues = values.filter((_, candidate) => candidate !== index);
+                      const nextValuesAuthored = Object.freeze(
+                        nextValues.map((_, candidate) => {
+                          const sourceIndex = candidate >= index ? candidate + 1 : candidate;
+                          return (
+                            (draft.inValuesAuthored.length > 0
+                              ? draft.inValuesAuthored
+                              : [draft.firstAuthored])[sourceIndex] ?? false
+                          );
+                        }),
+                      );
+                      const nextFocusId =
+                        nextValues.length === 0
+                          ? `${errorId}-${path}-add-value`
+                          : `${errorId}-${path}-value-${String(Math.min(index, nextValues.length - 1))}`;
+                      onChange(
+                        Object.freeze({
+                          ...draft,
+                          first: nextValues[0] ?? "",
+                          firstAuthored: nextValuesAuthored[0] === true,
+                          inValues: Object.freeze(nextValues),
+                          inValuesExplicit: true,
+                          inValuesAuthored: nextValuesAuthored,
+                        }),
+                        continuous ? "continuous" : "immediate",
+                      );
+                      focusAddedControl(nextFocusId);
+                    }}
+                  >
+                    ×
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
           <Button
             aria-label={`Add filter value for ${column.headerName}${labelSuffix}`}
             id={`${errorId}-${path}-add-value`}
@@ -964,6 +1023,7 @@ function FilterOperand({
             variant="outline"
             onClick={() => {
               const nextIndex = values.length;
+              setOperandWindowStart(Math.max(0, nextIndex - FILTER_IN_VISIBLE_OPERANDS + 1));
               onChange(
                 Object.freeze({
                   ...draft,
@@ -1109,6 +1169,7 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
           FilterDraft,
           ...FilterDraft[],
         ],
+        rootCollection: true,
       });
     }
     return conditions[0] ?? createDefaultLeaf(column);
@@ -1204,20 +1265,29 @@ function draftFromNode(
   }
 }
 
-function buildFilterCandidate(column: CompiledColumn, draft: FilterDraft): FilterCandidate {
+function buildFilterCandidate(
+  column: CompiledColumn,
+  draft: FilterDraft,
+  parseCache?: FilterParseCache,
+): FilterCandidate {
   if (draft.kind === "not") {
-    const condition = buildFilterCandidate(column, draft.condition);
-    return condition.filter === undefined
-      ? condition
-      : { filter: Object.freeze({ type: "NOT", condition: condition.filter }) };
+    const condition = buildFilterCandidate(column, draft.condition, parseCache);
+    if (condition.filter === undefined) return condition;
+    const conditionFilter = Array.isArray(condition.filter)
+      ? Object.freeze({ type: "AND", conditions: condition.filter })
+      : condition.filter;
+    return { filter: Object.freeze({ type: "NOT", condition: conditionFilter }) };
   }
   if (draft.kind === "compound") {
     const conditions: FilterNode[] = [];
     for (const conditionDraft of draft.conditions) {
-      const condition = buildFilterCandidate(column, conditionDraft);
+      const condition = buildFilterCandidate(column, conditionDraft, parseCache);
       if (condition.filter === undefined) return condition;
-      conditions.push(condition.filter);
+      const conditionFilter = condition.filter;
+      if (Array.isArray(conditionFilter)) return { filter: undefined };
+      conditions.push(conditionFilter as FilterNode);
     }
+    if (draft.rootCollection) return { filter: Object.freeze(conditions) };
     return {
       filter: Object.freeze({
         type: draft.operator,
@@ -1225,30 +1295,63 @@ function buildFilterCandidate(column: CompiledColumn, draft: FilterDraft): Filte
       }),
     };
   }
-  return buildLeafFilterCandidate(column, draft);
+  return buildLeafFilterCandidate(column, draft, parseCache);
 }
 
 function isFilterDraftWithinBudget(draft: FilterDraft): boolean {
-  return countFilterDraftNodes(draft, 0) !== undefined;
+  const state = { seen: new WeakSet<object>(), nodes: 0 };
+  if (draft.kind === "compound" && draft.rootCollection === true) {
+    return draft.conditions.every(
+      (condition) =>
+        countFilterDraftNodes(condition, 0, { seen: new WeakSet<object>(), nodes: 0 }) !==
+        undefined,
+    );
+  }
+  return countFilterDraftNodes(draft, 0, state) !== undefined;
 }
 
-function countFilterDraftNodes(draft: FilterDraft, depth: number): number | undefined {
+function countFilterDraftNodes(
+  draft: FilterDraft,
+  depth: number,
+  state: { seen: WeakSet<object>; nodes: number },
+): number | undefined {
   if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) return undefined;
+  if (state.seen.has(draft)) return 0;
+  state.seen.add(draft);
+  state.nodes += 1;
+  if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
   if (draft.kind === "leaf") {
     return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
   }
   const childDrafts = draft.kind === "not" ? [draft.condition] : draft.conditions;
   let nodes = 1;
   for (const child of childDrafts) {
-    const childNodes = countFilterDraftNodes(child, depth + 1);
+    const childNodes = countFilterDraftNodes(child, depth + 1, state);
     if (childNodes === undefined) return undefined;
     nodes += childNodes;
-    if (nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+    if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
   }
   return nodes;
 }
 
-function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft): FilterCandidate {
+function parseFilterText(
+  column: CompiledColumn,
+  text: string,
+  cache: FilterParseCache | undefined,
+): FilterParseResult {
+  const key = `${column.columnId}\u0000${column.semantics.codecId}\u0000${String(column.semantics.codecVersion)}\u0000${text}`;
+  const cached = cache?.get(key);
+  if (cached !== undefined) return cached;
+  const result = column.semantics.parseCanonicalText(text);
+  cache?.set(key, result);
+  return result;
+}
+
+function buildLeafFilterCandidate(
+  column: CompiledColumn,
+  draft: FilterLeafDraft,
+  parseCache?: FilterParseCache,
+): FilterCandidate {
   const base = {
     columnId: column.columnId,
     type: draft.operator,
@@ -1276,7 +1379,7 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
       return { filter: undefined, error: "Enter one or more valid values." };
     }
     const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
-    const decoded = values.map((value) => column.semantics.parseCanonicalText(value));
+    const decoded = values.map((value) => parseFilterText(column, value, parseCache));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };
     return {
@@ -1297,13 +1400,13 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
   if (!draft.firstAuthored) {
     return { filter: undefined, error: "Enter one or more valid values." };
   }
-  const first = column.semantics.parseCanonicalText(draft.first);
+  const first = parseFilterText(column, draft.first, parseCache);
   if (first._tag === "Failure") return { filter: undefined, error: first.message };
   if (draft.operator === "inRange") {
     if (!draft.secondAuthored) {
       return { filter: undefined, error: "Enter an upper bound." };
     }
-    const second = column.semantics.parseCanonicalText(draft.second);
+    const second = parseFilterText(column, draft.second, parseCache);
     if (second._tag === "Failure") return { filter: undefined, error: second.message };
     return {
       filter: Object.freeze({ ...base, filter: first.value, filterTo: second.value }),
@@ -1330,7 +1433,16 @@ function changeExpressionMode(
         });
   }
   if (mode !== "AND" && mode !== "OR") return draft;
-  if (draft.kind === "compound") return Object.freeze({ ...draft, operator: mode });
+  if (draft.kind === "compound") {
+    if (draft.rootCollection === true && mode === "AND") return draft;
+    if (draft.rootCollection === true) {
+      return Object.freeze({ kind: "compound", operator: mode, conditions: draft.conditions });
+    }
+    return Object.freeze({
+      ...draft,
+      operator: mode,
+    });
+  }
   if (draft.kind === "not") {
     return Object.freeze({
       kind: "compound",

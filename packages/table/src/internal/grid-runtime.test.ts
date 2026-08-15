@@ -291,6 +291,31 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
+  it("replaces a column's implicit root filter collection without wrapping it", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Name-0" }]),
+      (row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const filters = Array.from({ length: 1_024 }, (_, index) => ({
+      columnId: "COL_ID_NAME",
+      type: "equals" as const,
+      filter: `Name-${String(index)}`,
+    }));
+    const generation = runtime.getQuerySnapshot().generation;
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: filters,
+    });
+
+    expect(runtime.getQuerySnapshot().filters).toHaveLength(filters.length);
+    expect(runtime.getQuerySnapshot().generation).toBe(generation + 1);
+  });
+
   it("invalidates filter editor candidates for no-op Clear and Reset commands", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),

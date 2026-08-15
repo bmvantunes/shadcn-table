@@ -84,6 +84,8 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement | null {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientQuickFilterRender();
+  // quickFilterFields is snapshotted by the Client adapter for this Table Instance;
+  // it is configuration, not a reactive row/query publication.
   const fields = runtime.getQuickFilterFieldsSnapshot();
   const committed = useSyncExternalStore(
     runtime.subscribeQuickFilter,
@@ -388,7 +390,6 @@ type BrunoTableActiveFilterEntry =
 function activeFilterEntries(
   query: BrunoTableFilterSnapshot,
 ): readonly BrunoTableActiveFilterEntry[] {
-  const descriptionState = createActiveFilterDescriptionState();
   const entries: BrunoTableActiveFilterEntry[] = [];
   if (normalizeBrunoTableFilterText(query.quickFilter).length > 0) {
     entries.push({
@@ -418,6 +419,7 @@ function activeFilterEntries(
       headerCounts.get(column.headerName) === 1
         ? column.headerName
         : `${column.headerName} (column ${String(columnIndex + 1)})`;
+    const descriptionState = createActiveFilterDescriptionState();
     entries.push({
       kind: "column",
       columnId: column.columnId,
