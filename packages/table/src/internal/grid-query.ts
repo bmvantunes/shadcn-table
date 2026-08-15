@@ -113,12 +113,12 @@ export function sanitizeClientInitialFilters(
       completed: new WeakMap<object, Map<number, SanitizedFilterNode | undefined>>(),
       visited: new WeakSet<object>(),
       overBudget: false,
-      remainingNodes: CLIENT_FILTER_MAX_NODES,
+      remainingNodes: BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
     };
     const next = sanitizeFilter(filter, columnsById, context, 0);
     if (context.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters expressions may contain at most ${CLIENT_FILTER_MAX_NODES} nodes, nesting depth ${CLIENT_FILTER_MAX_DEPTH}, and ${CLIENT_FILTER_MAX_OPERANDS} values per in operand.`,
+        `BrunoTable initialFilters expressions may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_NODES} nodes, nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}, and ${BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS} values per in operand.`,
       );
     }
     if (next !== undefined) sanitized.push(next.filter);
@@ -198,7 +198,7 @@ function sanitizeFilter(
   depth: number,
   precharged = false,
 ): SanitizedFilterNode | undefined {
-  if (depth > CLIENT_FILTER_MAX_DEPTH) {
+  if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) {
     context.overBudget = true;
     return undefined;
   }
@@ -286,7 +286,7 @@ function admitFilterArrayLength(
   reserveConditions: boolean,
 ): boolean {
   if (reserveConditions) return reserveConditionEntries(length, context);
-  if (length <= CLIENT_FILTER_MAX_OPERANDS) return true;
+  if (length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS) return true;
   context.overBudget = true;
   return false;
 }
@@ -776,9 +776,9 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 
 const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
-const CLIENT_FILTER_MAX_DEPTH = 64;
-const CLIENT_FILTER_MAX_NODES = 1_024;
-const CLIENT_FILTER_MAX_OPERANDS = 4_096;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES = 1_024;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS = 4_096;
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {

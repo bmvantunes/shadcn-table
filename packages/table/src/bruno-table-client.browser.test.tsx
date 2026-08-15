@@ -45,6 +45,7 @@ import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
+import { BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH } from "./internal/client-filter";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnFilterSubscriptionListener } from "./internal/grid-subscription-instrumentation";
 import type { BrunoTableGridCommand } from "./internal/column-management";
@@ -429,6 +430,8 @@ describe("BrunoTableClient browser surface", () => {
       const dialog = screen.getByRole("dialog", { name: "Filter Name" });
       const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
       const startedAt = performance.now();
+      await userEvent.fill(input, "x".repeat(BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH + 100));
+      await expect.element(input).toHaveValue("x".repeat(BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH));
       await userEvent.fill(input, "G");
       await userEvent.fill(input, "Grace");
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
@@ -932,15 +935,42 @@ describe("BrunoTableClient browser surface", () => {
       "AND",
     );
     dialog = screen.getByRole("dialog", { name: "Filter Name" });
-    const nameValues = dialog.getByRole("textbox", { name: "Filter value for Name" });
-    await userEvent.fill(nameValues.nth(0), "Ada");
-    await userEvent.fill(nameValues.nth(1), "Ada");
+    const firstNameValue = dialog.getByRole("textbox", {
+      name: "Filter value for Name (condition 1)",
+    });
+    const secondNameValue = dialog.getByRole("textbox", {
+      name: "Filter value for Name (condition 2)",
+    });
+    await expect
+      .element(dialog.getByRole("combobox", { name: "Filter operator for Name (condition 1)" }))
+      .toBeInTheDocument();
+    await userEvent.fill(firstNameValue, "Ada");
+    await userEvent.fill(secondNameValue, "Ada");
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .toBeInTheDocument();
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Add condition for Name" }));
+    await vi.waitFor(() =>
+      expect(
+        dialog.getByRole("combobox", { name: "Filter expression for Name (condition 3)" }),
+      ).toHaveFocus(),
+    );
+    await userEvent.click(dialog.getByRole("button", { name: "Remove condition 3 for Name" }));
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Name (condition 1)" }),
+      "in",
+    );
+    await userEvent.click(dialog.getByRole("button", { name: "Add filter value for Name" }));
+    await vi.waitFor(() =>
+      expect(
+        dialog.getByRole("textbox", { name: "Filter value 2 for Name (condition 1)" }),
+      ).toHaveFocus(),
+    );
+    await userEvent.click(dialog.getByRole("button", { name: "Remove filter value 2 for Name" }));
+    await vi.waitFor(() => expect(firstNameValue).toHaveFocus());
     await userEvent.click(dialog.getByRole("button", { name: "Remove condition 1 for Name" }));
     await vi.waitFor(() =>
       expect(document.activeElement).toBe(
@@ -1082,6 +1112,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("button", { name: "Active filters (0)" }))
       .toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Active filters (0)" })).toHaveFocus();
     await expect
       .element(screen.getByRole("dialog", { name: "Active filters" }))
       .not.toBeInTheDocument();

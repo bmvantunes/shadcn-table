@@ -175,19 +175,6 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
     runtime.getFilterSnapshot,
   );
   const entries = activeFilterEntries(filters);
-  if (entries.length === 0) {
-    return (
-      <Button
-        aria-label="Active filters (0)"
-        aria-disabled="true"
-        size="sm"
-        tabIndex={-1}
-        type="button"
-      >
-        Filters 0
-      </Button>
-    );
-  }
   return <BrunoTableActiveFiltersReview entries={entries} runtime={runtime} />;
 });
 
@@ -266,48 +253,53 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     </Button>
   );
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover key={entries.length === 0 ? "empty" : "active"} open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={trigger} />
-      <PopoverContent aria-label="Active filters" className="w-96" role="dialog">
-        <PopoverHeader>
-          <PopoverTitle>Active filters</PopoverTitle>
-          <PopoverDescription>Review filters across visible and hidden columns.</PopoverDescription>
-        </PopoverHeader>
-        <div className="flex flex-col gap-2">
-          {entries.map((entry) => (
-            <div className="flex items-center justify-between gap-2 text-sm" key={entry.key}>
-              <span>{entry.label}</span>
+      {entries.length > 0 ? (
+        <PopoverContent aria-label="Active filters" className="w-96" role="dialog">
+          <PopoverHeader>
+            <PopoverTitle>Active filters</PopoverTitle>
+            <PopoverDescription>
+              Review filters across visible and hidden columns.
+            </PopoverDescription>
+          </PopoverHeader>
+          <div className="flex flex-col gap-2">
+            {entries.map((entry) => (
+              <div className="flex items-center justify-between gap-2 text-sm" key={entry.key}>
+                <span>{entry.label}</span>
+                <Button
+                  ref={(element) => {
+                    if (element === null) removeButtonRefs.current.delete(entry.key);
+                    else removeButtonRefs.current.set(entry.key, element);
+                  }}
+                  aria-label={`Remove ${entry.label}`}
+                  size="icon-xs"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => removeEntry(entry)}
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+            {entries.some((entry) => entry.kind === "column") ? (
               <Button
-                ref={(element) => {
-                  if (element === null) removeButtonRefs.current.delete(entry.key);
-                  else removeButtonRefs.current.set(entry.key, element);
-                }}
-                aria-label={`Remove ${entry.label}`}
-                size="icon-xs"
+                aria-label="Clear all Grid Filters"
+                size="sm"
                 type="button"
-                variant="ghost"
-                onClick={() => removeEntry(entry)}
+                variant="outline"
+                onClick={() => {
+                  if (!entries.some((entry) => entry.kind === "quick")) setOpen(false);
+                  runtime.dispatchGridCommand({ type: "column.filters.clear" });
+                  focusAfterMutation(undefined);
+                }}
               >
-                ×
+                Clear all Grid Filters
               </Button>
-            </div>
-          ))}
-          {entries.some((entry) => entry.kind === "column") ? (
-            <Button
-              aria-label="Clear all Grid Filters"
-              size="sm"
-              type="button"
-              variant="outline"
-              onClick={() => {
-                runtime.dispatchGridCommand({ type: "column.filters.clear" });
-                focusAfterMutation(undefined);
-              }}
-            >
-              Clear all Grid Filters
-            </Button>
-          ) : null}
-        </div>
-      </PopoverContent>
+            ) : null}
+          </div>
+        </PopoverContent>
+      ) : null}
     </Popover>
   );
 });

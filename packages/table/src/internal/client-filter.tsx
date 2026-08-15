@@ -27,6 +27,11 @@ import {
 import type { NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
+import {
+  BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS,
+} from "./grid-query";
 import type { BrunoTableColumnCommandSnapshot, BrunoTableRuntimeView } from "./grid-runtime";
 import { recordBrunoTableClientColumnFilterRender } from "./render-instrumentation";
 
@@ -76,6 +81,14 @@ type FilterCandidate = Readonly<{
   readonly filter: FilterNode | undefined;
   readonly error?: string;
 }>;
+
+export const BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH = 1_024;
+
+export function boundBrunoTableFilterOperandText(text: string): string {
+  return text.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH
+    ? text
+    : text.slice(0, BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH);
+}
 
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
@@ -348,6 +361,16 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: column.columnId });
         return;
       }
+      if (!isFilterDraftWithinBudget(nextDraft)) {
+        debouncer.cancel();
+        setLocalState({
+          column,
+          version,
+          draft,
+          error: "This filter expression is too complex.",
+        });
+        return;
+      }
       const candidate =
         mode === "continuous"
           ? badInput
@@ -358,7 +381,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       if (mode === "continuous") commitContinuous(candidate);
       else commitImmediately(candidate);
     },
-    [column, commitContinuous, commitImmediately, debouncer, runtime, version],
+    [column, commitContinuous, commitImmediately, debouncer, draft, runtime, version],
   );
 
   return (
@@ -423,7 +446,9 @@ function FilterExpressionEditor({
 }): ReactElement {
   const expressionMode =
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
-  const modeLabel = `Filter expression for ${column.headerName}`;
+  const pathLabel = filterExpressionPathLabel(path);
+  const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
+  const modeLabel = `Filter expression for ${column.headerName}${labelSuffix}`;
   const isContinuous =
     column.semantics.editorFamily === "text" ||
     column.semantics.editorFamily === "number" ||
@@ -438,20 +463,29 @@ function FilterExpressionEditor({
     },
     [],
   );
-  const focusAfterConditionRemoval = (nextIndex: number): void => {
+  const scheduleFocus = (resolveTarget: () => HTMLElement | null): void => {
     if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
     const focus = () => {
       focusFrameRef.current = null;
-      const target =
-        (nextIndex < 0 ? undefined : removeConditionRefs.current.get(nextIndex)) ??
-        rootSelectRef?.current ??
-        selectRef?.current ??
-        inputRef?.current;
+      const target = resolveTarget();
       target?.focus({ preventScroll: true });
     };
     focusFrameRef.current = requestAnimationFrame(() => {
       focusFrameRef.current = requestAnimationFrame(focus);
     });
+  };
+  const focusAfterConditionRemoval = (nextIndex: number): void => {
+    scheduleFocus(
+      () =>
+        (nextIndex < 0 ? undefined : removeConditionRefs.current.get(nextIndex)) ??
+        rootSelectRef?.current ??
+        selectRef?.current ??
+        inputRef?.current ??
+        null,
+    );
+  };
+  const focusAddedControl = (controlId: string): void => {
+    scheduleFocus(() => document.getElementById(controlId));
   };
   const updateLeaf = (
     nextLeaf: FilterLeafDraft,
@@ -491,7 +525,7 @@ function FilterExpressionEditor({
                 <NativeSelect
                   ref={path === "root" && leaf.operator === "blank" ? selectRef : undefined}
                   id={`${errorId}-${path}-operator`}
-                  aria-label={`Filter operator for ${column.headerName}`}
+                  aria-label={`Filter operator for ${column.headerName}${labelSuffix}`}
                   value={leaf.operator}
                   onChange={(event) => {
                     const operator = event.currentTarget.value as FilterOperator;
@@ -526,7 +560,8 @@ function FilterExpressionEditor({
                   inputRef={inputRef}
                   path={path}
                   selectRef={selectRef}
-                  inputLabel={`Filter value for ${column.headerName}`}
+                  inputLabel={`Filter value for ${column.headerName}${labelSuffix}`}
+                  focusAddedControl={focusAddedControl}
                   onChange={updateLeaf}
                   continuous={isContinuous}
                 />
@@ -581,73 +616,80 @@ function FilterExpressionEditor({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {draft.conditions.map((condition, index) => (
-            <div
-              key={`${path}-${String(index)}`}
-              className="flex flex-col gap-2 rounded-md border p-2"
-            >
-              <FilterExpressionEditor
-                column={column}
-                draft={condition}
-                errorId={errorId}
-                onChange={(nextCondition, mode, badInput) => {
-                  const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
-                  conditions[index] = nextCondition;
-                  onChange(
-                    Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
-                    mode,
-                    badInput,
-                  );
-                }}
-                path={`${path}-${String(index)}`}
-                rootSelectRef={rootSelectRef ?? selectRef}
-              />
-              {draft.conditions.length > 1 ? (
-                <Button
-                  ref={(element) => {
-                    if (element === null) removeConditionRefs.current.delete(index);
-                    else removeConditionRefs.current.set(index, element);
-                  }}
-                  aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}`}
-                  size="xs"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    const conditions = draft.conditions.filter(
-                      (_, candidate) => candidate !== index,
-                    );
+          {draft.conditions.map((condition, index) => {
+            const conditionPath = `${path}-${String(index)}`;
+            const conditionLabel = filterExpressionPathLabel(conditionPath);
+            return (
+              <div
+                key={conditionPath}
+                className="flex flex-col gap-2 rounded-md border p-2"
+                role="group"
+                aria-label={`Filter ${conditionLabel ?? "condition"} for ${column.headerName}`}
+              >
+                <FilterExpressionEditor
+                  column={column}
+                  draft={condition}
+                  errorId={errorId}
+                  onChange={(nextCondition, mode, badInput) => {
+                    const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
+                    conditions[index] = nextCondition;
                     onChange(
-                      conditions.length === 1
-                        ? conditions[0]!
-                        : Object.freeze({
-                            ...draft,
-                            conditions: Object.freeze(conditions) as readonly [
-                              FilterDraft,
-                              ...FilterDraft[],
-                            ],
-                          }),
-                      "immediate",
-                    );
-                    focusAfterConditionRemoval(
-                      conditions.length === 1
-                        ? -1
-                        : index < draft.conditions.length - 1
-                          ? index
-                          : index - 1,
+                      Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
+                      mode,
+                      badInput,
                     );
                   }}
-                >
-                  Remove condition
-                </Button>
-              ) : null}
-            </div>
-          ))}
+                  path={conditionPath}
+                  rootSelectRef={rootSelectRef ?? selectRef}
+                />
+                {draft.conditions.length > 1 ? (
+                  <Button
+                    ref={(element) => {
+                      if (element === null) removeConditionRefs.current.delete(index);
+                      else removeConditionRefs.current.set(index, element);
+                    }}
+                    aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}`}
+                    size="xs"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const conditions = draft.conditions.filter(
+                        (_, candidate) => candidate !== index,
+                      );
+                      onChange(
+                        conditions.length === 1
+                          ? conditions[0]!
+                          : Object.freeze({
+                              ...draft,
+                              conditions: Object.freeze(conditions) as readonly [
+                                FilterDraft,
+                                ...FilterDraft[],
+                              ],
+                            }),
+                        "immediate",
+                      );
+                      focusAfterConditionRemoval(
+                        conditions.length === 1
+                          ? -1
+                          : index < draft.conditions.length - 1
+                            ? index
+                            : index - 1,
+                      );
+                    }}
+                  >
+                    Remove condition
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
           <Button
             aria-label={`Add condition for ${column.headerName}`}
             size="xs"
             type="button"
             variant="outline"
-            onClick={() =>
+            onClick={() => {
+              const nextIndex = draft.conditions.length;
               onChange(
                 Object.freeze({
                   ...draft,
@@ -657,8 +699,9 @@ function FilterExpressionEditor({
                   ]) as readonly [FilterDraft, ...FilterDraft[]],
                 }),
                 "immediate",
-              )
-            }
+              );
+              focusAddedControl(`${errorId}-${path}-${String(nextIndex)}-mode`);
+            }}
           >
             Add condition
           </Button>
@@ -672,6 +715,7 @@ function FilterOperand({
   column,
   draft,
   errorId,
+  focusAddedControl,
   inputLabel,
   inputRef,
   onChange,
@@ -684,6 +728,7 @@ function FilterOperand({
   readonly errorId: string;
   readonly inputLabel: string;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
+  readonly focusAddedControl: (controlId: string) => void;
   readonly onChange: (
     draft: FilterLeafDraft,
     mode: "continuous" | "immediate" | "clear",
@@ -694,6 +739,8 @@ function FilterOperand({
   readonly continuous: boolean;
 }): ReactElement {
   const isIn = draft.operator === "in";
+  const pathLabel = filterExpressionPathLabel(path);
+  const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
   if (isBuiltInBooleanColumn(column)) {
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
@@ -731,7 +778,12 @@ function FilterOperand({
             onChange(
               Object.freeze({
                 ...draft,
-                first: option === undefined ? "" : column.semantics.formatCanonicalText(option),
+                first:
+                  option === undefined
+                    ? ""
+                    : boundBrunoTableFilterOperandText(
+                        column.semantics.formatCanonicalText(option),
+                      ),
                 selectIndex: index,
               }),
               "immediate",
@@ -763,7 +815,7 @@ function FilterOperand({
     <div className="flex flex-col gap-2">
       {isIn ? (
         <div
-          aria-label={`Filter values for ${column.headerName}`}
+          aria-label={`Filter values for ${column.headerName}${labelSuffix}`}
           role="group"
           className="flex flex-col gap-2"
         >
@@ -781,15 +833,16 @@ function FilterOperand({
                   aria-label={
                     index === 0
                       ? inputLabel
-                      : `Filter value ${String(index + 1)} for ${column.headerName}`
+                      : `Filter value ${String(index + 1)} for ${column.headerName}${labelSuffix}`
                   }
                   inputMode={inputMode}
+                  maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
                   step={isNumber ? "any" : undefined}
                   type={type}
                   value={value}
                   onChange={(event) => {
                     const nextValues = values.slice();
-                    nextValues[index] = event.currentTarget.value;
+                    nextValues[index] = boundBrunoTableFilterOperandText(event.currentTarget.value);
                     onChange(
                       Object.freeze({
                         ...draft,
@@ -811,6 +864,10 @@ function FilterOperand({
                   variant="ghost"
                   onClick={() => {
                     const nextValues = values.filter((_, candidate) => candidate !== index);
+                    const nextFocusId =
+                      nextValues.length === 0
+                        ? `${errorId}-${path}-add-value`
+                        : `${errorId}-${path}-value-${String(Math.min(index, nextValues.length - 1))}`;
                     onChange(
                       Object.freeze({
                         ...draft,
@@ -820,6 +877,7 @@ function FilterOperand({
                       }),
                       continuous ? "continuous" : "immediate",
                     );
+                    focusAddedControl(nextFocusId);
                   }}
                 >
                   ×
@@ -829,10 +887,12 @@ function FilterOperand({
           ))}
           <Button
             aria-label={`Add filter value for ${column.headerName}`}
+            id={`${errorId}-${path}-add-value`}
             size="xs"
             type="button"
             variant="outline"
-            onClick={() =>
+            onClick={() => {
+              const nextIndex = values.length;
               onChange(
                 Object.freeze({
                   ...draft,
@@ -840,8 +900,9 @@ function FilterOperand({
                   inValuesExplicit: true,
                 }),
                 continuous ? "continuous" : "immediate",
-              )
-            }
+              );
+              focusAddedControl(`${errorId}-${path}-value-${String(nextIndex)}`);
+            }}
           >
             Add value
           </Button>
@@ -855,16 +916,18 @@ function FilterOperand({
             aria-describedby={errorId}
             aria-label={inputLabel}
             inputMode={inputMode}
+            maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
             step={isNumber ? "any" : undefined}
             type={type}
             value={draft.first}
-            onChange={(event) =>
+            onChange={(event) => {
+              const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
-                Object.freeze({ ...draft, first: event.currentTarget.value }),
+                Object.freeze({ ...draft, first: value }),
                 continuous ? "continuous" : "immediate",
                 isNumber && event.currentTarget.validity.badInput,
-              )
-            }
+              );
+            }}
           />
         </label>
       )}
@@ -874,18 +937,20 @@ function FilterOperand({
           <Input
             id={`${errorId}-${path}-value-to`}
             aria-describedby={errorId}
-            aria-label={`Filter upper bound for ${column.headerName}`}
+            aria-label={`Filter upper bound for ${column.headerName}${labelSuffix}`}
             inputMode={inputMode}
+            maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
             step={isNumber ? "any" : undefined}
             type={type}
             value={draft.second}
-            onChange={(event) =>
+            onChange={(event) => {
+              const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
               onChange(
-                Object.freeze({ ...draft, second: event.currentTarget.value }),
+                Object.freeze({ ...draft, second: value }),
                 continuous ? "continuous" : "immediate",
                 isNumber && event.currentTarget.validity.badInput,
-              )
-            }
+              );
+            }}
           />
         </label>
       ) : null}
@@ -1029,6 +1094,26 @@ function buildFilterCandidate(column: CompiledColumn, draft: FilterDraft): Filte
   return buildLeafFilterCandidate(column, draft);
 }
 
+function isFilterDraftWithinBudget(draft: FilterDraft): boolean {
+  return countFilterDraftNodes(draft, 0) !== undefined;
+}
+
+function countFilterDraftNodes(draft: FilterDraft, depth: number): number | undefined {
+  if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) return undefined;
+  if (draft.kind === "leaf") {
+    return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
+  }
+  const childDrafts = draft.kind === "not" ? [draft.condition] : draft.conditions;
+  let nodes = 1;
+  for (const child of childDrafts) {
+    const childNodes = countFilterDraftNodes(child, depth + 1);
+    if (childNodes === undefined) return undefined;
+    nodes += childNodes;
+    if (nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+  }
+  return nodes;
+}
+
 function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft): FilterCandidate {
   const base = {
     columnId: column.columnId,
@@ -1050,7 +1135,9 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
     if (!draft.inValuesExplicit && draft.first.length === 0) {
       return { filter: undefined, error: "Enter one or more valid values." };
     }
-    const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
+    const values = (draft.inValuesExplicit ? draft.inValues : [draft.first]).map(
+      boundBrunoTableFilterOperandText,
+    );
     const decoded = values.map((value) => column.semantics.parseCanonicalText(value));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };
@@ -1069,10 +1156,12 @@ function buildLeafFilterCandidate(column: CompiledColumn, draft: FilterLeafDraft
     if (option === undefined) return { filter: undefined, error: "Choose a value." };
     return { filter: Object.freeze({ ...base, filter: option }) };
   }
-  const first = column.semantics.parseCanonicalText(draft.first);
+  const first = column.semantics.parseCanonicalText(boundBrunoTableFilterOperandText(draft.first));
   if (first._tag === "Failure") return { filter: undefined, error: first.message };
   if (draft.operator === "inRange") {
-    const second = column.semantics.parseCanonicalText(draft.second);
+    const second = column.semantics.parseCanonicalText(
+      boundBrunoTableFilterOperandText(draft.second),
+    );
     if (second._tag === "Failure") return { filter: undefined, error: second.message };
     return {
       filter: Object.freeze({ ...base, filter: first.value, filterTo: second.value }),
@@ -1143,7 +1232,7 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
 function formatOperand(column: CompiledColumn, value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   try {
-    return column.semantics.formatCanonicalText(value);
+    return boundBrunoTableFilterOperandText(column.semantics.formatCanonicalText(value));
   } catch {
     return undefined;
   }
@@ -1154,7 +1243,9 @@ function formatFilterDraftOperand(
   operator: FilterOperator,
   value: unknown,
 ): string | undefined {
-  if (isSubstringFilterOperator(operator) && typeof value === "string") return value;
+  if (isSubstringFilterOperator(operator) && typeof value === "string") {
+    return boundBrunoTableFilterOperandText(value);
+  }
   return formatOperand(column, value);
 }
 
@@ -1226,6 +1317,21 @@ function operatorLabelText(operator: FilterOperator): string {
 
 function labelForContent(column: CompiledColumn): string {
   return `Filter ${column.headerName}`;
+}
+
+function filterExpressionPathLabel(path: string): string | undefined {
+  if (path === "root") return undefined;
+  return path
+    .split("-")
+    .slice(1)
+    .map((segment) => {
+      if (segment === "not") return "NOT condition";
+      const index = Number(segment);
+      return Number.isInteger(index) && index >= 0
+        ? `condition ${String(index + 1)}`
+        : "nested condition";
+    })
+    .join(" / ");
 }
 
 function selectOptionToken(index: number): string {

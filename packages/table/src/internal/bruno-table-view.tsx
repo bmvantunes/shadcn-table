@@ -463,7 +463,10 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       ) : null}
       <BrunoTableSortPanel columns={compiledColumns} runtime={runtime} tableId={tableId} />
       <div className="min-w-0">
-        <ToolbarOutlet toolbar={toolbar} />
+        <ToolbarOutlet
+          reserveEndSpace={gridOwnedControls !== undefined && gridOwnedControls !== null}
+          toolbar={toolbar}
+        />
         <SourceLifecycle runtime={runtime} focusFallback={focusFallback} />
         <BrunoTableGridBody
           runtime={runtime}
@@ -491,8 +494,10 @@ export function BrunoTableView<TRuntime extends BrunoTableRuntimeView, TAdapter>
 }
 
 const ToolbarOutlet = memo(function ToolbarOutlet({
+  reserveEndSpace,
   toolbar,
 }: {
+  readonly reserveEndSpace: boolean;
   readonly toolbar: BrunoTableToolbarStore;
 }) {
   const snapshot = useSyncExternalStore(
@@ -501,7 +506,7 @@ const ToolbarOutlet = memo(function ToolbarOutlet({
     toolbar.getSnapshot,
   );
   return snapshot.hasToolbar ? (
-    <div aria-label="Table toolbar" role="region">
+    <div aria-label="Table toolbar" className={reserveEndSpace ? "pe-28" : undefined} role="region">
       {snapshot.children}
     </div>
   ) : null;
