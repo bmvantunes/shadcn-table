@@ -1008,7 +1008,7 @@ describe("Client row model", () => {
     expect(indexedReads).toBe(1);
   });
 
-  it("propagates internal Value Type decoder failures", () => {
+  it("drops filters when an internal Value Type decoder throws", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1027,12 +1027,12 @@ describe("Client row model", () => {
       }),
     }));
 
-    expect(() =>
+    expect(
       sanitizeClientInitialFilters(
         [{ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" }],
         throwingColumns,
       ),
-    ).toThrow("Decoder implementation failed.");
+    ).toEqual([]);
   });
 
   it("drops a filter whose properties cannot be read", () => {
@@ -1622,6 +1622,12 @@ describe("Client row model", () => {
         { rejectOverBudget: true },
       ),
     ).toEqual([{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_STATUS", filter: `${status}-stale`, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
   });
 
   it("does not re-decode an already compiled long Select option", () => {

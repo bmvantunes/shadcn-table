@@ -453,7 +453,13 @@ function sanitizeFilterRecord(
     filter: sanitizedFilter,
   });
   const operand = filter["filter"];
-  const decode = (value: unknown) => column.semantics.decodeRuntime(value);
+  const decode = (value: unknown) => {
+    try {
+      return column.semantics.decodeRuntime(value);
+    } catch {
+      return { _tag: "Failure" as const, message: "Value decoding failed." };
+    }
+  };
   if (type === "blank" || type === "notBlank") {
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
@@ -525,28 +531,29 @@ function sanitizeFilterRecord(
     }
     let configuredSelectValue: unknown;
     let isConfiguredSelectValue = false;
-    if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
-      const exactOptionIndex = column.selectOptions.findIndex((option) =>
-        Object.is(option, operand),
-      );
+    if (column.semantics.filterFamily === "select") {
+      const selectOptions = column.selectOptions;
+      if (selectOptions === undefined) return undefined;
+      const exactOptionIndex = selectOptions.findIndex((option) => Object.is(option, operand));
       if (exactOptionIndex !== -1) {
-        configuredSelectValue = column.selectOptions[exactOptionIndex];
+        configuredSelectValue = selectOptions[exactOptionIndex];
         isConfiguredSelectValue = true;
       } else if (!isBoundedFilterOperand(operand, context)) {
         return undefined;
       } else {
-        for (const option of column.selectOptions) {
+        for (const option of selectOptions) {
           try {
             if (!column.semantics.equivalent(option, operand)) continue;
             configuredSelectValue = option;
             isConfiguredSelectValue = true;
             break;
           } catch {
-            // Ignore an unreadable or invalid external operand and continue to
-            // the ordinary bounded decoder path below.
+            // Ignore an unreadable or invalid external operand and continue checking
+            // the remaining bounded configured options.
           }
         }
       }
+      if (!isConfiguredSelectValue) return undefined;
     }
     if (!isConfiguredSelectValue && !isBoundedFilterOperand(operand, context)) return undefined;
     // Compiled Select options are already canonical. Reuse the admitted option

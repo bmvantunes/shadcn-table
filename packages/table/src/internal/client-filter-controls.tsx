@@ -257,23 +257,17 @@ const BrunoTableActiveFiltersConnected = memo(function BrunoTableActiveFiltersCo
     runtime.getFilterSnapshot,
   );
   const [entryWindowStart, setEntryWindowStart] = useState(0);
-  const entryCount = activeFilterEntryCount(filters);
-  const maxEntryWindowStart = Math.max(0, entryCount - ACTIVE_FILTER_VISIBLE_ENTRIES);
-  const visibleEntryWindowStart = Math.min(entryWindowStart, maxEntryWindowStart);
-  const visibleEntryWindowEnd = Math.min(
-    entryCount,
-    visibleEntryWindowStart + ACTIVE_FILTER_VISIBLE_ENTRIES,
-  );
-  const entries = activeFilterEntries(filters, visibleEntryWindowStart, visibleEntryWindowEnd);
+  const projection = activeFilterProjection(filters, entryWindowStart);
   return (
     <BrunoTableActiveFiltersReview
-      entries={entries}
-      entryCount={entryCount}
-      maxEntryWindowStart={maxEntryWindowStart}
+      entries={projection.entries}
+      entryCount={projection.entryCount}
+      maxEntryWindowStart={projection.maxEntryWindowStart}
+      quickFilterActive={projection.quickFilterActive}
       runtime={runtime}
       setEntryWindowStart={setEntryWindowStart}
-      visibleEntryWindowEnd={visibleEntryWindowEnd}
-      visibleEntryWindowStart={visibleEntryWindowStart}
+      visibleEntryWindowEnd={projection.visibleEntryWindowEnd}
+      visibleEntryWindowStart={projection.visibleEntryWindowStart}
     />
   );
 });
@@ -282,6 +276,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
   entries,
   entryCount,
   maxEntryWindowStart,
+  quickFilterActive,
   runtime,
   setEntryWindowStart,
   visibleEntryWindowEnd,
@@ -290,6 +285,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
   readonly entries: readonly BrunoTableActiveFilterEntry[];
   readonly entryCount: number;
   readonly maxEntryWindowStart: number;
+  readonly quickFilterActive: boolean;
   readonly runtime: BrunoTableRowPipelineRuntimeView;
   readonly setEntryWindowStart: (value: number | ((previous: number) => number)) => void;
   readonly visibleEntryWindowEnd: number;
@@ -466,7 +462,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  const keepsQuickFilter = entries.some((entry) => entry.kind === "quick");
+                  const keepsQuickFilter = quickFilterActive;
                   if (!keepsQuickFilter) openStore.setOpen(false);
                   runtime.dispatchGridCommand({ type: "column.filters.clear" });
                   focusAfterMutation(keepsQuickFilter ? "quick-filter" : undefined);
@@ -493,28 +489,30 @@ type BrunoTableActiveFilterEntry =
 
 const ACTIVE_FILTER_VISIBLE_ENTRIES = 64;
 
-function activeFilterEntries(
+type ActiveFilterProjection = Readonly<{
+  readonly entries: readonly BrunoTableActiveFilterEntry[];
+  readonly entryCount: number;
+  readonly maxEntryWindowStart: number;
+  readonly quickFilterActive: boolean;
+  readonly visibleEntryWindowEnd: number;
+  readonly visibleEntryWindowStart: number;
+}>;
+
+function activeFilterProjection(
   query: BrunoTableFilterSnapshot,
-  labelWindowStart = 0,
-  labelWindowEnd = Number.POSITIVE_INFINITY,
-): readonly BrunoTableActiveFilterEntry[] {
-  const entries: BrunoTableActiveFilterEntry[] = [];
+  requestedWindowStart: number,
+): ActiveFilterProjection {
   const quickFilterActive = normalizeBrunoTableFilterText(query.quickFilter).length > 0;
-  if (quickFilterActive) {
-    entries.push({
-      kind: "quick",
-      key: "quick-filter",
-      label:
-        labelWindowStart <= 0 && 0 < labelWindowEnd
-          ? `Quick Filter contains ${truncateActiveFilterSummary(JSON.stringify(query.quickFilter))}`
-          : "Quick Filter",
-    });
-  }
   const filtersByColumn = collectActiveFilterColumnFilters(query);
   const headerCounts = new Map<string, number>();
   for (const column of query.columns) {
     headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
   }
+  const activeColumns: Array<{
+    readonly column: (typeof query.columns)[number];
+    readonly filters: readonly unknown[];
+    readonly columnLabel: string;
+  }> = [];
   for (const [columnIndex, column] of query.columns.entries()) {
     const filters = filtersByColumn.get(column.columnId) ?? [];
     if (filters.length === 0) continue;
@@ -522,30 +520,58 @@ function activeFilterEntries(
       headerCounts.get(column.headerName) === 1
         ? column.headerName
         : `${column.headerName} (column ${String(columnIndex + 1)})`;
-    const entryIndex = entries.length;
-    const shouldDescribe = entryIndex >= labelWindowStart && entryIndex < labelWindowEnd;
+    activeColumns.push({ column, filters, columnLabel });
+  }
+  const entryCount = activeColumns.length + (quickFilterActive ? 1 : 0);
+  const maxEntryWindowStart = Math.max(0, entryCount - ACTIVE_FILTER_VISIBLE_ENTRIES);
+  const visibleEntryWindowStart = Math.min(requestedWindowStart, maxEntryWindowStart);
+  const visibleEntryWindowEnd = Math.min(
+    entryCount,
+    visibleEntryWindowStart + ACTIVE_FILTER_VISIBLE_ENTRIES,
+  );
+  const entries: BrunoTableActiveFilterEntry[] = [];
+  let entryIndex = 0;
+  if (quickFilterActive) {
+    const shouldDescribe =
+      entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
+    entries.push({
+      kind: "quick",
+      key: "quick-filter",
+      label: shouldDescribe
+        ? `Quick Filter contains ${truncateActiveFilterSummary(JSON.stringify(query.quickFilter))}`
+        : "Quick Filter",
+    });
+    entryIndex += 1;
+  }
+  for (const activeColumn of activeColumns) {
+    const shouldDescribe =
+      entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
     const descriptionState = shouldDescribe ? createActiveFilterDescriptionState() : undefined;
     entries.push({
       kind: "column",
-      columnId: column.columnId,
-      key: `column-filter-${column.columnId}`,
+      columnId: activeColumn.column.columnId,
+      key: `column-filter-${activeColumn.column.columnId}`,
       label: shouldDescribe
-        ? joinActiveFilterSummaries(filters, " AND ", (filter) =>
-            describeActiveFilter(column, filter, columnLabel, descriptionState),
+        ? joinActiveFilterSummaries(activeColumn.filters, " AND ", (filter) =>
+            describeActiveFilter(
+              activeColumn.column,
+              filter,
+              activeColumn.columnLabel,
+              descriptionState,
+            ),
           )
-        : columnLabel,
+        : activeColumn.columnLabel,
     });
+    entryIndex += 1;
   }
-  return entries;
-}
-
-function activeFilterEntryCount(query: BrunoTableFilterSnapshot): number {
-  const filtersByColumn = collectActiveFilterColumnFilters(query);
-  let count = normalizeBrunoTableFilterText(query.quickFilter).length > 0 ? 1 : 0;
-  for (const column of query.columns) {
-    if (filtersByColumn.has(column.columnId)) count += 1;
-  }
-  return count;
+  return {
+    entries,
+    entryCount,
+    maxEntryWindowStart,
+    quickFilterActive,
+    visibleEntryWindowEnd,
+    visibleEntryWindowStart,
+  };
 }
 
 function collectActiveFilterColumnFilters(query: BrunoTableFilterSnapshot): Map<string, unknown[]> {

@@ -130,7 +130,7 @@ function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn):
     return false;
   }
   if (previous.kind === "field" && next.kind === "field") {
-    return previous.field === next.field;
+    return previous.field === next.field && previous.selectOptions === next.selectOptions;
   }
   if (previous.kind === "computed" && next.kind === "computed") {
     return (
