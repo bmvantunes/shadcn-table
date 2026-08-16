@@ -35,8 +35,11 @@ import {
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
   boundBrunoTableFilterOperandText,
 } from "./grid-query";
-import type { BrunoTableColumnCommandSnapshot, BrunoTableRuntimeView } from "./grid-runtime";
-import { recordBrunoTableClientColumnFilterRender } from "./render-instrumentation";
+import type { BrunoTableRuntimeView } from "./grid-runtime";
+import {
+  recordBrunoTableClientColumnFilterRender,
+  recordBrunoTableClientColumnFilterTriggerRender,
+} from "./render-instrumentation";
 
 export {
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
@@ -129,7 +132,6 @@ function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn):
 
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
-  readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
   readonly focusFallback: (columnId: string) => void;
@@ -139,12 +141,23 @@ export type BrunoTableColumnFilterProps = {
 export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilterProps> = memo(
   function BrunoTableColumnFilter({
     column,
-    command,
     runtime,
     activateHeaderCommand,
     focusFallback,
     registerColumnFilterOpener,
   }: BrunoTableColumnFilterProps): ReactElement {
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientColumnFilterTriggerRender(column.columnId);
+    }
+    const subscribe = useCallback(
+      (listener: () => void) => runtime.subscribeColumnFilter(column.columnId, listener),
+      [column.columnId, runtime],
+    );
+    const getFilterActive = useCallback(
+      () => runtime.getColumnFilterSnapshot(column.columnId) !== undefined,
+      [column.columnId, runtime],
+    );
+    const filterActive = useSyncExternalStore(subscribe, getFilterActive, getFilterActive);
     const [open, setOpen] = useState(false);
     const [direction, setDirection] = useState<"ltr" | "rtl">("ltr");
     const closeReasonRef = useRef<string | null>(null);
@@ -214,11 +227,11 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
             render={
               <Button
                 ref={triggerRef}
-                aria-label={command.filterActive ? `${label} (active)` : label}
+                aria-label={filterActive ? `${label} (active)` : label}
                 size="xs"
                 tabIndex={-1}
                 type="button"
-                variant={command.filterActive ? "secondary" : "ghost"}
+                variant={filterActive ? "secondary" : "ghost"}
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
                   event.preventDefault();
@@ -271,27 +284,16 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
     recordBrunoTableClientColumnFilterRender(column.columnId);
   }
   const subscribe = useCallback(
-    (listener: () => void) => {
-      const unsubscribeFilter = runtime.subscribeColumnFilter(column.columnId, listener);
-      const unsubscribeEpoch = runtime.subscribeColumnFilterCommandEpoch(column.columnId, listener);
-      return () => {
-        unsubscribeEpoch();
-        unsubscribeFilter();
-      };
-    },
+    (listener: () => void) => runtime.subscribeColumnFilter(column.columnId, listener),
     [column.columnId, runtime],
   );
   const getVersion = useCallback(
-    () =>
-      runtime.getColumnFilterVersionSnapshot(column.columnId) +
-      runtime.getColumnFilterCommandEpochSnapshot(column.columnId),
+    () => runtime.getColumnFilterVersionSnapshot(column.columnId),
     [column.columnId, runtime],
   );
   const version = useSyncExternalStore(subscribe, getVersion, getVersion);
-  const commandEpoch = runtime.getColumnFilterCommandEpochSnapshot(column.columnId);
   return (
     <BrunoTableColumnFilterEditor
-      key={`${column.columnId}:${String(commandEpoch)}`}
       column={column}
       committed={runtime.getColumnFilterSnapshot(column.columnId)}
       direction={direction}
@@ -324,30 +326,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   readonly runtime: BrunoTableRuntimeView;
   readonly version: number;
 }): ReactElement {
-  const [localState, setLocalState] = useState<LocalFilterDraftState>(() => ({
-    column,
-    version,
-    draft: draftFromCommitted(column, committed),
-    error: undefined,
-  }));
-  const currentState =
-    sameFilterEditorColumn(localState.column, column) && localState.version === version
-      ? localState
-      : {
-          column,
-          version,
-          draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
-          error: undefined,
-        };
-  const draft = currentState.draft;
-  const error = currentState.error;
-  const parseCache = useMemo(
-    () => createFilterParseCache(column.semantics, version),
-    [column.semantics, version],
-  );
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const selectRef = useRef<HTMLSelectElement | null>(null);
-  const errorId = useId();
   const subscribeCommandEpoch = useCallback(
     (listener: () => void) => runtime.subscribeColumnFilterCommandEpoch(column.columnId, listener),
     [column.columnId, runtime],
@@ -361,6 +339,31 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     getCommandEpoch,
     getCommandEpoch,
   );
+  const editorVersion = version + commandEpoch;
+  const [localState, setLocalState] = useState<LocalFilterDraftState>(() => ({
+    column,
+    version: editorVersion,
+    draft: draftFromCommitted(column, committed),
+    error: undefined,
+  }));
+  const currentState =
+    sameFilterEditorColumn(localState.column, column) && localState.version === editorVersion
+      ? localState
+      : {
+          column,
+          version: editorVersion,
+          draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
+          error: undefined,
+        };
+  const draft = currentState.draft;
+  const error = currentState.error;
+  const parseCache = useMemo(
+    () => createFilterParseCache(column.semantics, editorVersion),
+    [column.semantics, editorVersion],
+  );
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const selectRef = useRef<HTMLSelectElement | null>(null);
+  const errorId = useId();
 
   const dispatchCandidate = useCallback(
     (candidate: FilterCandidate): void => {
@@ -377,10 +380,13 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
   useLayoutEffect(() => {
-    if (!sameFilterEditorColumn(localState.column, column) || localState.version !== version) {
+    if (
+      !sameFilterEditorColumn(localState.column, column) ||
+      localState.version !== editorVersion
+    ) {
       debouncer.cancel();
     }
-  }, [column, debouncer, localState.column, localState.version, version]);
+  }, [column, debouncer, editorVersion, localState.column, localState.version]);
 
   useEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
@@ -410,20 +416,20 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     (nextDraft: FilterDraft, mode: FilterChangeMode, badInput = false): void => {
       if (mode === "clear") {
         debouncer.cancel();
-        setLocalState({ column, version, draft: nextDraft, error: undefined });
+        setLocalState({ column, version: editorVersion, draft: nextDraft, error: undefined });
         runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: column.columnId });
         return;
       }
       if (mode === "local") {
         debouncer.cancel();
-        setLocalState({ column, version, draft: nextDraft, error: undefined });
+        setLocalState({ column, version: editorVersion, draft: nextDraft, error: undefined });
         return;
       }
       if (!isFilterDraftWithinBudget(nextDraft)) {
         debouncer.cancel();
         setLocalState({
           column,
-          version,
+          version: editorVersion,
           draft,
           error: "This filter expression is too complex.",
         });
@@ -435,11 +441,20 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
             ? { filter: undefined, error: "Enter a valid value." }
             : buildFilterCandidate(column, nextDraft, parseCache)
           : buildFilterCandidate(column, nextDraft, parseCache);
-      setLocalState({ column, version, draft: nextDraft, error: candidate.error });
+      setLocalState({ column, version: editorVersion, draft: nextDraft, error: candidate.error });
       if (mode === "continuous") commitContinuous(candidate);
       else commitImmediately(candidate);
     },
-    [column, commitContinuous, commitImmediately, debouncer, draft, parseCache, runtime, version],
+    [
+      column,
+      commitContinuous,
+      commitImmediately,
+      debouncer,
+      draft,
+      editorVersion,
+      parseCache,
+      runtime,
+    ],
   );
 
   return (
@@ -881,7 +896,7 @@ function FilterOperand({
       boundBrunoTableFilterOperandText(event.currentTarget.value),
     );
     latestDraftRef.current = nextDraft;
-    onChange(nextDraft, "local");
+    onChange(nextDraft, continuous ? "continuous" : "immediate");
   };
   const changeMode = (): FilterChangeMode =>
     composingRef.current ? "local" : continuous ? "continuous" : "immediate";

@@ -60,7 +60,19 @@ export function BrunoTableClientFilterProvider({
 
 export const renderBrunoTableClientColumnFilter = (
   props: BrunoTableColumnFilterRendererProps,
-): ReactElement => <BrunoTableColumnFilter {...props} />;
+): ReactElement => {
+  const { column, runtime, activateHeaderCommand, focusFallback, registerColumnFilterOpener } =
+    props;
+  return (
+    <BrunoTableColumnFilter
+      column={column}
+      runtime={runtime}
+      activateHeaderCommand={activateHeaderCommand}
+      focusFallback={focusFallback}
+      registerColumnFilterOpener={registerColumnFilterOpener}
+    />
+  );
+};
 
 export function BrunoTableQuickFilter(): ReactElement | null {
   const runtime = useContext(BrunoTableClientFilterRuntimeContext);
@@ -131,22 +143,14 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     [runtime],
   );
   const debouncer = useDebouncer(publish, { wait: 150 });
-  const commandEpoch = useSyncExternalStore(
-    runtime.subscribeQuickFilterCommandEpoch,
-    runtime.getQuickFilterCommandEpochSnapshot,
-    runtime.getQuickFilterCommandEpochSnapshot,
-  );
-  const lastCommandEpochRef = useRef(commandEpoch);
   useEffect(() => {
     debouncer.cancel();
-    const commandChanged = lastCommandEpochRef.current !== commandEpoch;
-    lastCommandEpochRef.current = commandEpoch;
-    if (!commandChanged && lastCommittedRef.current === initialValue) return;
+    if (lastCommittedRef.current === initialValue) return;
     lastCommittedRef.current = initialValue;
     if (draftRef.current === initialValue) return;
     draftRef.current = initialValue;
     setDraft(initialValue);
-  }, [commandEpoch, debouncer, initialValue]);
+  }, [debouncer, initialValue]);
   useEffect(() => () => debouncer.cancel(), [debouncer]);
   return (
     <div className="flex min-w-56 items-center gap-1">

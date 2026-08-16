@@ -44,6 +44,7 @@ let clientHeaderRenderListener: Listener | undefined;
 let clientViewRenderListener: Listener | undefined;
 let clientQuickFilterRenderListener: Listener | undefined;
 let clientColumnFilterRenderListener: ColumnFilterRenderListener | undefined;
+let clientColumnFilterTriggerRenderListener: ColumnFilterRenderListener | undefined;
 const clientQueryTransitionListeners = new Set<QueryTransitionListener>();
 let clientCellRenderListener: CellListener | undefined;
 let clientColumnResizeFrameListener: Listener | undefined;
@@ -73,6 +74,7 @@ let hasGlobalCellRenderListener = false;
 let hasGlobalViewRenderListener = false;
 let hasGlobalQuickFilterRenderListener = false;
 let hasGlobalColumnFilterRenderListener = false;
+let hasGlobalColumnFilterTriggerRenderListener = false;
 let hasGlobalQueryTransitionListener = false;
 let hasGlobalGridSurfaceRenderListener = false;
 let hasGlobalHeaderRenderListener = false;
@@ -321,6 +323,30 @@ export function installBrunoTableClientColumnFilterRenderListener(
     if (clientColumnFilterRenderListener === listener) {
       clientColumnFilterRenderListener = undefined;
       hasGlobalColumnFilterRenderListener = false;
+    }
+  };
+}
+
+export function recordBrunoTableClientColumnFilterTriggerRender(columnId: string): void {
+  if (!hasGlobalColumnFilterTriggerRenderListener) return;
+  if (clientColumnFilterTriggerRenderListener !== undefined) {
+    try {
+      clientColumnFilterTriggerRenderListener(columnId);
+    } catch {
+      // Diagnostics are observational and must never alter runtime behavior.
+    }
+  }
+}
+
+export function installBrunoTableClientColumnFilterTriggerRenderListener(
+  listener: ColumnFilterRenderListener,
+): () => void {
+  clientColumnFilterTriggerRenderListener = listener;
+  hasGlobalColumnFilterTriggerRenderListener = true;
+  return () => {
+    if (clientColumnFilterTriggerRenderListener === listener) {
+      clientColumnFilterTriggerRenderListener = undefined;
+      hasGlobalColumnFilterTriggerRenderListener = false;
     }
   };
 }

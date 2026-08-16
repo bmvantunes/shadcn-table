@@ -26,6 +26,7 @@ import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientColumnFilterRenderListener,
+  installBrunoTableClientColumnFilterTriggerRenderListener,
   installBrunoTableClientGridSurfaceRenderListener,
   installBrunoTableClientHeaderRenderListener,
   installBrunoTableClientQueryTransitionListener,
@@ -592,6 +593,50 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("commits the final value when a text filter composition ends", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_IME",
+      (command) => commands.push(command),
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_IME"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+      const input = screen
+        .getByRole("dialog", { name: "Filter Name" })
+        .getByRole("textbox", { name: "Filter value for Name" });
+      await userEvent.click(input);
+      input.element().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      await userEvent.fill(input, "Grace");
+      await expect.element(input).toHaveValue("Grace");
+      input
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "Grace" }));
+
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+    } finally {
+      removeCommandListener();
+    }
+  });
+
   test("isolates Client column filter subscriptions and local drafts", async () => {
     const tableId = "TABLE_ID_FILTER_SUBSCRIPTIONS";
     const filterSubscriptions: Array<{
@@ -600,6 +645,7 @@ describe("BrunoTableClient browser surface", () => {
       readonly phase: "subscribe" | "unsubscribe" | "notify";
     }> = [];
     const filterRenders = vi.fn();
+    const filterTriggerRenders = vi.fn();
     const viewRenders = vi.fn();
     const rowRenders = vi.fn();
     const removeFilterSubscriptionListener = installBrunoTableColumnFilterSubscriptionListener(
@@ -609,6 +655,10 @@ describe("BrunoTableClient browser surface", () => {
     const removeFilterRenderListener = installBrunoTableClientColumnFilterRenderListener(
       (columnId) => filterRenders(columnId),
     );
+    const removeFilterTriggerRenderListener =
+      installBrunoTableClientColumnFilterTriggerRenderListener((columnId) =>
+        filterTriggerRenders(columnId),
+      );
     const removeViewRenderListener = installBrunoTableClientViewRenderListenerForTable(
       tableId,
       viewRenders,
@@ -635,6 +685,7 @@ describe("BrunoTableClient browser surface", () => {
 
       filterSubscriptions.length = 0;
       filterRenders.mockClear();
+      filterTriggerRenders.mockClear();
       viewRenders.mockClear();
       rowRenders.mockClear();
 
@@ -644,7 +695,7 @@ describe("BrunoTableClient browser surface", () => {
       expect(filterSubscriptions).toContainEqual({
         tableId,
         columnId: "COL_ID_FILTER_NAME",
-        listenerCount: 1,
+        listenerCount: 2,
         phase: "subscribe",
       });
       const rendersAfterOpen = filterRenders.mock.calls.length;
@@ -664,7 +715,7 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
       expect(
         filterSubscriptions.filter((event) => event.phase === "notify" && event.listenerCount > 0),
-      ).toEqual([{ tableId, columnId: "COL_ID_FILTER_NAME", listenerCount: 1, phase: "notify" }]);
+      ).toEqual([{ tableId, columnId: "COL_ID_FILTER_NAME", listenerCount: 2, phase: "notify" }]);
       expect(
         filterSubscriptions.some(
           (event) => event.columnId === "COL_ID_FILTER_SCORE" && event.phase === "notify",
@@ -678,11 +729,19 @@ describe("BrunoTableClient browser surface", () => {
       expect(filterSubscriptions).toContainEqual({
         tableId,
         columnId: "COL_ID_FILTER_NAME",
-        listenerCount: 0,
+        listenerCount: 1,
         phase: "unsubscribe",
       });
       filterSubscriptions.length = 0;
       filterRenders.mockClear();
+      filterTriggerRenders.mockClear();
+
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Sort by Name, currently ascending, priority 1",
+        }),
+      );
+      expect(filterTriggerRenders).not.toHaveBeenCalled();
 
       await userEvent.click(screen.getByRole("button", { name: "Clear filter for Name" }));
       await expect
@@ -692,7 +751,7 @@ describe("BrunoTableClient browser surface", () => {
         filterSubscriptions.some(
           (event) =>
             event.columnId === "COL_ID_FILTER_NAME" &&
-            event.listenerCount === 0 &&
+            event.listenerCount === 1 &&
             event.phase === "notify",
         ),
       ).toBe(true);
@@ -700,6 +759,7 @@ describe("BrunoTableClient browser surface", () => {
     } finally {
       removeRowRenderListener();
       removeViewRenderListener();
+      removeFilterTriggerRenderListener();
       removeFilterRenderListener();
       removeFilterSubscriptionListener();
     }
@@ -1744,6 +1804,56 @@ describe("BrunoTableClient browser surface", () => {
         ),
       );
       expect(commands.at(-1)).toEqual({ type: "quick-filter.replace", text: "msft" });
+    } finally {
+      removeCommandListener();
+    }
+  });
+
+  test("commits the final Quick Filter value when a composition ends", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_QUICK_FILTER_IME",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_QUICK_FILTER_IME"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+          quickFilterFields={["symbol", "description"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+      quickFilter
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      await userEvent.fill(quickFilter, "micro");
+      quickFilter
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "micro" }));
+
+      expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      expect(commands.at(-1)).toEqual({ type: "quick-filter.replace", text: "micro" });
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
     } finally {
       removeCommandListener();
     }
