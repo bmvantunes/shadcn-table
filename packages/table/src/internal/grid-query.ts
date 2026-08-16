@@ -983,15 +983,58 @@ function compareEquality(
  * Compares filter state using the same compiled Column Value Semantics as row evaluation.
  * Runtime query publication uses this seam so semantic equality cannot drift from predicates.
  */
+type BrunoTableFilterComparisonBudget = {
+  remaining: number;
+};
+
+const BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET = 4_096;
+
+function createBrunoTableFilterComparisonBudget(): BrunoTableFilterComparisonBudget {
+  return { remaining: BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET };
+}
+
+function consumeBrunoTableFilterComparisonBudget(
+  budget: BrunoTableFilterComparisonBudget,
+): boolean {
+  if (budget.remaining <= 0) return false;
+  budget.remaining -= 1;
+  return true;
+}
+
 export function sameBrunoTableFilterCollection(
   previous: readonly unknown[],
   next: readonly unknown[],
   columnsById: ReadonlyMap<string, CompiledColumn>,
   unordered = true,
 ): boolean {
+  return sameBrunoTableFilterCollectionWithBudget(
+    previous,
+    next,
+    columnsById,
+    unordered,
+    createBrunoTableFilterComparisonBudget(),
+  );
+}
+
+function sameBrunoTableFilterCollectionWithBudget(
+  previous: readonly unknown[],
+  next: readonly unknown[],
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  unordered: boolean,
+  comparisonBudget: BrunoTableFilterComparisonBudget,
+): boolean {
   if (previous.length !== next.length) return false;
   if (
-    previous.every((value, index) => sameBrunoTableFilterValue(value, next[index], columnsById))
+    previous.every((value, index) =>
+      sameBrunoTableFilterValueWithBudget(
+        value,
+        next[index],
+        columnsById,
+        undefined,
+        new WeakMap(),
+        comparisonBudget,
+      ),
+    )
   ) {
     return true;
   }
@@ -1016,22 +1059,28 @@ export function sameBrunoTableFilterCollection(
   // semantic fallback bounded instead of allowing a maximum-size root to trigger O(n²)
   // equivalent() calls. A false result publishes a fresh query, which is safer than blocking
   // the interaction frame on an equality proof the runtime cannot make cheaply.
-  let remainingComparisons = BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET;
   const matched = new Set<number>();
   return previous.every((value) => {
     for (let index = 0; index < next.length; index += 1) {
       if (matched.has(index)) continue;
-      remainingComparisons -= 1;
-      if (remainingComparisons < 0) return false;
-      if (!sameBrunoTableFilterValue(value, next[index], columnsById)) continue;
+      if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
+      if (
+        !sameBrunoTableFilterValueWithBudget(
+          value,
+          next[index],
+          columnsById,
+          undefined,
+          new WeakMap(),
+          comparisonBudget,
+        )
+      )
+        continue;
       matched.add(index);
       return true;
     }
     return false;
   });
 }
-
-const BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET = 4_096;
 
 function filterValueComparisonKey(
   value: unknown,
@@ -1140,13 +1189,38 @@ export function sameBrunoTableFilterValue(
   column?: CompiledColumn,
   seen: WeakMap<object, object> = new WeakMap(),
 ): boolean {
+  return sameBrunoTableFilterValueWithBudget(
+    previous,
+    next,
+    columnsById,
+    column,
+    seen,
+    createBrunoTableFilterComparisonBudget(),
+  );
+}
+
+function sameBrunoTableFilterValueWithBudget(
+  previous: unknown,
+  next: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  column: CompiledColumn | undefined,
+  seen: WeakMap<object, object>,
+  comparisonBudget: BrunoTableFilterComparisonBudget,
+): boolean {
   try {
     if (Object.is(previous, next)) return true;
     if (Array.isArray(previous) && Array.isArray(next)) {
       return (
         previous.length === next.length &&
         previous.every((value, index) =>
-          sameBrunoTableFilterValue(value, next[index], columnsById, column, seen),
+          sameBrunoTableFilterValueWithBudget(
+            value,
+            next[index],
+            columnsById,
+            column,
+            seen,
+            comparisonBudget,
+          ),
         )
       );
     }
@@ -1214,7 +1288,13 @@ export function sameBrunoTableFilterValue(
         Array.isArray(previousValue) &&
         Array.isArray(nextValue)
       ) {
-        return sameBrunoTableFilterCollection(previousValue, nextValue, columnsById, true);
+        return sameBrunoTableFilterCollectionWithBudget(
+          previousValue,
+          nextValue,
+          columnsById,
+          true,
+          comparisonBudget,
+        );
       }
       if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
         return sameFilterOperand(
@@ -1224,9 +1304,17 @@ export function sameBrunoTableFilterValue(
           key === "filter" && operator === "in"
             ? { ...operandOptions, unordered: true }
             : { ...operandOptions, unordered: false },
+          comparisonBudget,
         );
       }
-      return sameBrunoTableFilterValue(previousValue, nextValue, columnsById, valueColumn, seen);
+      return sameBrunoTableFilterValueWithBudget(
+        previousValue,
+        nextValue,
+        columnsById,
+        valueColumn,
+        seen,
+        comparisonBudget,
+      );
     });
   } catch {
     return false;
@@ -1251,6 +1339,7 @@ function sameFilterOperand(
     readonly text: boolean;
     readonly unordered: boolean;
   }>,
+  comparisonBudget: BrunoTableFilterComparisonBudget,
 ): boolean {
   if (Object.is(previous, next)) return true;
   if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
@@ -1266,14 +1355,20 @@ function sameFilterOperand(
       const previousSet = new Set(previousKeys as string[]);
       return previousSet.size === nextSet.size && [...previousSet].every((key) => nextSet.has(key));
     }
-    let remainingComparisons = BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET;
     const hasEveryMatch = (values: readonly unknown[], candidates: readonly unknown[]): boolean => {
       for (const value of values) {
         let matched = false;
         for (const candidate of candidates) {
-          if (remainingComparisons <= 0) return false;
-          remainingComparisons -= 1;
-          if (sameFilterOperand(value, candidate, column, { ...options, unordered: false })) {
+          if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
+          if (
+            sameFilterOperand(
+              value,
+              candidate,
+              column,
+              { ...options, unordered: false },
+              comparisonBudget,
+            )
+          ) {
             matched = true;
             break;
           }
@@ -1313,6 +1408,7 @@ function sameFilterOperand(
     }
   }
   try {
+    if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
     return column.semantics.equivalent(previous, next);
   } catch {
     return false;

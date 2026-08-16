@@ -397,7 +397,8 @@ describe("BrunoTable filter runtime primitives", () => {
     const next = [...previous].reverse();
 
     expect(sameBrunoTableFilterCollection(previous, next, columnsById)).toBe(false);
-    expect(equivalent).toHaveBeenCalledTimes(4_097);
+    expect(equivalent.mock.calls.length).toBeGreaterThan(0);
+    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
 
     equivalent.mockClear();
     const operands = Array.from({ length: 4_096 }, (_, id) => Object.freeze({ id }));
@@ -406,8 +407,21 @@ describe("BrunoTable filter runtime primitives", () => {
       { columnId: "COL_ID_OPAQUE", type: "in" as const, filter: [...operands].reverse() },
     ];
     expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(false);
-    expect(equivalent.mock.calls.length).toBeGreaterThan(4_000);
-    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(8_192);
+    expect(equivalent.mock.calls.length).toBeGreaterThan(0);
+    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
+
+    equivalent.mockClear();
+    const multiplePrevious = Array.from({ length: 16_384 }, (_, id) => ({
+      columnId: "COL_ID_OPAQUE",
+      type: "in" as const,
+      filter: [Object.freeze({ id })],
+    }));
+    const multipleNext = multiplePrevious.map((entry) => ({
+      ...entry,
+      filter: entry.filter.map((operand) => Object.freeze({ id: operand.id })),
+    }));
+    expect(sameBrunoTableFilterCollection(multiplePrevious, multipleNext, columnsById)).toBe(false);
+    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
   });
 
   it("replaces a column's implicit root filter collection without wrapping it", () => {
