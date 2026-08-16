@@ -22,6 +22,7 @@ import {
 
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 // Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
+// The public Quick Filter contract documents this limit alongside its tuple type.
 const BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS = 256;
 
 export type BrunoTableClientReconciliationEvent = Readonly<{

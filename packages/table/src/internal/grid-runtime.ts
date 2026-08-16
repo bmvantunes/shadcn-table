@@ -150,6 +150,8 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnFilterCommandEpoch: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
   readonly subscribeQuickFilterCommandEpoch: (listener: Listener) => () => void;
+  /** Imperative invalidation sink for same-value Quick Filter command cancellation. */
+  readonly registerQuickFilterInvalidation: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
@@ -403,6 +405,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeQuery: this.subscribeQuery,
         subscribeFilter: this.subscribeFilter,
         subscribeQuickFilter: this.subscribeQuickFilter,
+        registerQuickFilterInvalidation: this.registerQuickFilterInvalidation,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
         subscribeColumnFilter: this.subscribeColumnFilter,
@@ -666,6 +669,9 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeQuickFilterCommandEpoch = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterCommandEpochListeners, listener);
+
+  public readonly registerQuickFilterInvalidation = (listener: Listener): (() => void) =>
+    this.subscribeQuickFilterCommandEpoch(listener);
 
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);

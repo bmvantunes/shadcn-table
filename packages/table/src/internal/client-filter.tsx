@@ -32,6 +32,7 @@ import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
   boundBrunoTableFilterOperandText,
 } from "./grid-query";
@@ -103,6 +104,7 @@ type FilterParseResult = ReturnType<CompiledColumn["semantics"]["parseCanonicalT
 type FilterParseCache = Map<string, FilterParseResult>;
 
 const FILTER_IN_VISIBLE_OPERANDS = 64;
+const FILTER_SELECT_VISIBLE_OPTIONS = 64;
 const FILTER_COMPOUND_VISIBLE_CONDITIONS = 64;
 
 function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn): boolean {
@@ -811,11 +813,21 @@ function FilterExpressionEditor({
             })}
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
+            disabled={
+              draft.rootCollection === true &&
+              draft.conditions.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES
+            }
             size="xs"
             type="button"
             variant="outline"
             onClick={() => {
               const nextIndex = draft.conditions.length;
+              if (
+                draft.rootCollection === true &&
+                nextIndex >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES
+              ) {
+                return;
+              }
               setConditionWindowStart(
                 Math.max(0, nextIndex - FILTER_COMPOUND_VISIBLE_CONDITIONS + 1),
               );
@@ -877,6 +889,7 @@ function FilterOperand({
   const latestDraftRef = useRef(draft);
   const values = isIn && draft.inValuesExplicit ? draft.inValues : [draft.first];
   const [operandWindowStart, setOperandWindowStart] = useState(0);
+  const [selectOptionWindowStart, setSelectOptionWindowStart] = useState(0);
   const maxOperandWindowStart = Math.max(0, values.length - FILTER_IN_VISIBLE_OPERANDS);
   const visibleOperandWindowStart = Math.min(operandWindowStart, maxOperandWindowStart);
   useEffect(() => {
@@ -931,9 +944,67 @@ function FilterOperand({
   }
 
   if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
+    const selectOptions = column.selectOptions;
+    const optionCount = selectOptions.length;
+    const maxOptionWindowStart = Math.max(0, optionCount - FILTER_SELECT_VISIBLE_OPTIONS);
+    const optionWindowStart = Math.min(selectOptionWindowStart, maxOptionWindowStart);
+    const optionWindowEnd = Math.min(
+      optionCount,
+      optionWindowStart + FILTER_SELECT_VISIBLE_OPTIONS,
+    );
+    const visibleOptionIndexes = Array.from(
+      { length: optionWindowEnd - optionWindowStart },
+      (_, offset) => optionWindowStart + offset,
+    );
+    if (
+      draft.selectIndex !== undefined &&
+      (draft.selectIndex < optionWindowStart || draft.selectIndex >= optionWindowEnd)
+    ) {
+      visibleOptionIndexes.unshift(draft.selectIndex);
+    }
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
         Value
+        {optionCount > FILTER_SELECT_VISIBLE_OPTIONS ? (
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span aria-live="polite" role="status">
+              {`Showing options ${String(optionWindowStart + 1)}–${String(optionWindowEnd)} of ${optionCount.toLocaleString("en-US")}`}
+            </span>
+            <div className="flex gap-1">
+              <Button
+                aria-label={`Previous filter options for ${column.headerName}${labelSuffix}`}
+                disabled={optionWindowStart === 0}
+                size="xs"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  setSelectOptionWindowStart(
+                    Math.max(0, optionWindowStart - FILTER_SELECT_VISIBLE_OPTIONS),
+                  )
+                }
+              >
+                Previous
+              </Button>
+              <Button
+                aria-label={`Next filter options for ${column.headerName}${labelSuffix}`}
+                disabled={optionWindowEnd === optionCount}
+                size="xs"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  setSelectOptionWindowStart(
+                    Math.min(
+                      maxOptionWindowStart,
+                      optionWindowStart + FILTER_SELECT_VISIBLE_OPTIONS,
+                    ),
+                  )
+                }
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <NativeSelect
           ref={selectRef}
           id={`${errorId}-${path}-value`}
@@ -955,11 +1026,13 @@ function FilterOperand({
           }}
         >
           <NativeSelectOption value="">Choose a value</NativeSelectOption>
-          {column.selectOptions.map((option, index) => (
-            <NativeSelectOption key={String(index)} value={selectOptionToken(index)}>
-              {column.semantics.formatDisplay(option)}
-            </NativeSelectOption>
-          ))}
+          {visibleOptionIndexes.map((index) => {
+            return (
+              <NativeSelectOption key={String(index)} value={selectOptionToken(index)}>
+                {column.semantics.formatDisplay(selectOptions[index])}
+              </NativeSelectOption>
+            );
+          })}
         </NativeSelect>
       </label>
     );
@@ -1426,11 +1499,12 @@ function buildFilterCandidate(
 }
 
 function isFilterDraftWithinBudget(draft: FilterDraft): boolean {
-  const state = { seen: new WeakSet<object>(), nodes: 0 };
+  const state = { active: new WeakSet<object>(), nodes: 0 };
   if (draft.kind === "compound" && draft.rootCollection === true) {
+    if (draft.conditions.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) return false;
     return draft.conditions.every(
       (condition) =>
-        countFilterDraftNodes(condition, 0, { seen: new WeakSet<object>(), nodes: 0 }) !==
+        countFilterDraftNodes(condition, 0, { active: new WeakSet<object>(), nodes: 0 }) !==
         undefined,
     );
   }
@@ -1440,25 +1514,29 @@ function isFilterDraftWithinBudget(draft: FilterDraft): boolean {
 function countFilterDraftNodes(
   draft: FilterDraft,
   depth: number,
-  state: { seen: WeakSet<object>; nodes: number },
+  state: { active: WeakSet<object>; nodes: number },
 ): number | undefined {
   if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) return undefined;
-  if (state.seen.has(draft)) return 0;
-  state.seen.add(draft);
+  if (state.active.has(draft)) return undefined;
+  state.active.add(draft);
   state.nodes += 1;
-  if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
-  if (draft.kind === "leaf") {
-    return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
-  }
-  const childDrafts = draft.kind === "not" ? [draft.condition] : draft.conditions;
-  let nodes = 1;
-  for (const child of childDrafts) {
-    const childNodes = countFilterDraftNodes(child, depth + 1, state);
-    if (childNodes === undefined) return undefined;
-    nodes += childNodes;
+  try {
     if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+    if (draft.kind === "leaf") {
+      return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
+    }
+    const childDrafts = draft.kind === "not" ? [draft.condition] : draft.conditions;
+    let nodes = 1;
+    for (const child of childDrafts) {
+      const childNodes = countFilterDraftNodes(child, depth + 1, state);
+      if (childNodes === undefined) return undefined;
+      nodes += childNodes;
+      if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+    }
+    return nodes;
+  } finally {
+    state.active.delete(draft);
   }
-  return nodes;
 }
 
 function parseFilterText(

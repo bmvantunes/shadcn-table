@@ -26,6 +26,7 @@ type EmittedFilterRow = Readonly<{
   active: boolean;
   status: "open" | "closed";
 }>;
+type EmittedSelectRow = Readonly<{ id: string; choice: string }>;
 
 const source = Object.freeze({
   rows: Object.freeze([{ id: "row", name: "Ada", score: 1_234.5 }]) satisfies readonly Row[],
@@ -104,6 +105,48 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
     .toHaveFocus();
+});
+
+test("windows emitted Select filter options while retaining a selected value", async () => {
+  const options = [
+    "option-0",
+    ...Array.from({ length: 64 }, (_, index) => `option-${index + 1}`),
+  ] as readonly [string, ...string[]];
+  const columns = [
+    BrunoTableSelectColumn({
+      columnId: "COL_ID_EMITTED_LARGE_SELECT",
+      field: "choice",
+      headerName: "Choice",
+      options,
+    }),
+  ] satisfies BrunoTableColumns<EmittedSelectRow>;
+  const screen = await render(
+    <BrunoTableClient<EmittedSelectRow, typeof columns>
+      tableId="TABLE_ID_EMITTED_LARGE_SELECT"
+      getRowId={(row) => row.id}
+      columns={columns}
+      initialFilters={[
+        { columnId: "COL_ID_EMITTED_LARGE_SELECT", type: "equals", filter: "option-64" },
+      ]}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_LARGE_SELECT", direction: "asc" }]}
+      clientSource={{
+        rows: [{ id: "selected", choice: "option-64" }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      }}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Choice (active)" }));
+  const dialog = screen.getByRole("dialog", { name: "Filter Choice" });
+  await expect.element(dialog.getByRole("status")).toHaveTextContent("Showing options 1–64 of 65");
+  await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
+  await userEvent.click(dialog.getByRole("button", { name: "Next filter options for Choice" }));
+  await expect.element(dialog.getByRole("status")).toHaveTextContent("Showing options 2–65 of 65");
+  await expect.element(dialog.getByRole("option", { name: "option-0" })).not.toBeInTheDocument();
+  await userEvent.click(dialog.getByRole("button", { name: "Previous filter options for Choice" }));
+  await expect.element(dialog.getByRole("option", { name: "option-0" })).toBeInTheDocument();
 });
 
 test("applies emitted numeric, BigInt, discrete, range, and compound filters", async () => {

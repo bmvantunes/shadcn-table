@@ -555,7 +555,11 @@ type StringQueryField<TRow> = {
 /** A string-valued source field eligible for the Client Quick Filter. */
 export type BrunoTableQuickFilterField<TRow> = StringQueryField<TRow>;
 
-/** Explicit, non-empty source-field configuration for the Client Quick Filter. */
+/**
+ * Explicit, non-empty source-field configuration for the Client Quick Filter.
+ * TypeScript enforces the field shape and non-empty tuple; the runtime applies a defensive
+ * maximum of 256 entries when snapshotting untrusted configuration.
+ */
 export type BrunoTableQuickFilterFields<TRow> = readonly [
   BrunoTableQuickFilterField<TRow>,
   ...BrunoTableQuickFilterField<TRow>[],

@@ -128,6 +128,25 @@ const filterRows = [
   },
 ] satisfies readonly [FilterRow, FilterRow];
 
+type LargeSelectRow = {
+  readonly id: string;
+  readonly choice: string;
+};
+
+const largeSelectOptions = [
+  "option-0",
+  ...Array.from({ length: 64 }, (_, index) => `option-${index + 1}`),
+] as readonly [string, ...string[]];
+
+const largeSelectColumns = [
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_LARGE_SELECT",
+    field: "choice",
+    headerName: "Choice",
+    options: largeSelectOptions,
+  }),
+] satisfies BrunoTableColumns<LargeSelectRow>;
+
 const oversizedQuantity = BigInt(`1${"0".repeat(1_024)}`);
 const oversizedFilterRows = [
   ...filterRows,
@@ -1140,6 +1159,49 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
   });
 
+  test("windows high-cardinality Select filter options while retaining the committed choice", async () => {
+    const screen = await render(
+      <BrunoTableClient<LargeSelectRow, typeof largeSelectColumns>
+        tableId="TABLE_ID_FILTER_LARGE_SELECT_OPTIONS"
+        columns={largeSelectColumns}
+        initialFilters={[{ columnId: "COL_ID_LARGE_SELECT", type: "equals", filter: "option-64" }]}
+        initialOrderBy={[{ columnId: "COL_ID_LARGE_SELECT", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: [{ id: "selected", choice: "option-64" }],
+          totalRows: 1,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Choice (active)" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Choice" });
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing options 1–64 of 65");
+    await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
+    await expect
+      .element(dialog.getByRole("button", { name: "Previous filter options for Choice" }))
+      .toBeDisabled();
+
+    await userEvent.click(dialog.getByRole("button", { name: "Next filter options for Choice" }));
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing options 2–65 of 65");
+    await expect.element(dialog.getByRole("option", { name: "option-0" })).not.toBeInTheDocument();
+    await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
+
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Previous filter options for Choice" }),
+    );
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing options 1–64 of 65");
+    await expect.element(dialog.getByRole("option", { name: "option-0" })).toBeInTheDocument();
+  });
+
   test("bounds the mounted window for a large root filter collection", async () => {
     const leaf = { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" } as const;
     const initialFilters = Array.from({ length: 2_048 }, () => leaf);
@@ -1186,6 +1248,36 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("counts repeated shared filter nodes toward the editor complexity budget", async () => {
+    const sharedLeaf = {
+      columnId: "COL_ID_FILTER_NAME",
+      type: "equals",
+      filter: "Ada",
+    } as const;
+    const sharedCompound = {
+      type: "AND",
+      conditions: Array.from({ length: 1_023 }, () => sharedLeaf),
+    } as const;
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_SHARED_DAG_BUDGET"
+        columns={filterColumns}
+        initialFilters={[sharedCompound] as never}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.click(dialog.getByRole("button", { name: "Add condition for Name" }));
+    await expect.element(dialog.getByRole("alert")).toHaveTextContent("too complex");
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
   });
 
   test("preserves a NOT subtree when changing to a same-column compound", async () => {
@@ -1464,6 +1556,31 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("reconciles sibling Quick Filter drafts after a no-op clear", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_QUICK_FILTER_SIBLINGS"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+        quickFilterFields={["name"]}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableQuickFilter />
+          <BrunoTableQuickFilter />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+    const first = screen.getByRole("searchbox", { name: "Quick Filter" }).nth(0);
+    const second = screen.getByRole("searchbox", { name: "Quick Filter" }).nth(1);
+    await userEvent.fill(first, "Ada");
+    await userEvent.fill(second, "Grace");
+    await userEvent.click(screen.getByRole("button", { name: "Clear Quick Filter" }).nth(0));
+    await expect.element(first).toHaveValue("");
+    await expect.element(second).toHaveValue("");
+  });
+
   test("reconciles a surviving active cell after a Quick Filter query", async () => {
     const screen = await render(
       <BrunoTableClient<FilterRow, typeof filterColumns>
@@ -1501,6 +1618,55 @@ describe("BrunoTableClient browser surface", () => {
         screen.getByRole("gridcell", { name: "Grace", exact: true }).element().id,
       );
     });
+  });
+
+  test("windows the Active Filters review and keeps removal focus in the visible page", async () => {
+    const manyColumns = Array.from({ length: 65 }, (_, index) => ({
+      columnId: `COL_ID_ACTIVE_FILTER_${String(index)}`,
+      field: "name",
+      headerName: `Filter ${String(index)}`,
+      valueType: "text" as const,
+    })) as unknown as BrunoTableColumns<FilterRow>;
+    const manyFilters = Array.from({ length: 65 }, (_, index) => ({
+      columnId: `COL_ID_ACTIVE_FILTER_${String(index)}`,
+      type: "equals" as const,
+      filter: "Ada",
+    }));
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof manyColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_WINDOW"
+        columns={manyColumns}
+        initialFilters={manyFilters as never}
+        initialOrderBy={[{ columnId: "COL_ID_ACTIVE_FILTER_0", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (65)" }));
+    const dialog = screen.getByRole("dialog", { name: "Active filters" });
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing filters 1–64 of 65");
+    await expect
+      .element(dialog.getByRole("button", { name: 'Remove Filter 63: equals "Ada"' }))
+      .toBeInTheDocument();
+
+    await userEvent.click(dialog.getByRole("button", { name: "Next active filters" }));
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing filters 2–65 of 65");
+    const lastEntry = dialog.getByRole("button", { name: 'Remove Filter 64: equals "Ada"' });
+    await expect.element(lastEntry).toBeInTheDocument();
+    await userEvent.click(lastEntry);
+    await vi.waitFor(() => {
+      expect(
+        dialog.getByRole("button", { name: 'Remove Filter 63: equals "Ada"' }).element(),
+      ).toHaveFocus();
+    });
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (64)" }))
+      .toBeInTheDocument();
   });
 
   test("reviews and clears Grid Filters and Quick Filter through the active-filter control", async () => {

@@ -1064,7 +1064,7 @@ const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES = 1_024;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS = 4_096;
-const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
 const ROOT_ENTRIES_OVER_BUDGET = Symbol("BrunoTable root filter entries over budget");
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 

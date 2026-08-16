@@ -151,6 +151,16 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     draftRef.current = initialValue;
     setDraft(initialValue);
   }, [debouncer, initialValue]);
+  useEffect(() => {
+    return runtime.registerQuickFilterInvalidation(() => {
+      debouncer.cancel();
+      const committed = runtime.getQuickFilterSnapshot();
+      lastCommittedRef.current = committed;
+      if (draftRef.current === committed) return;
+      draftRef.current = committed;
+      setDraft(committed);
+    });
+  }, [debouncer, runtime]);
   useEffect(() => () => debouncer.cancel(), [debouncer]);
   return (
     <div className="flex min-w-56 items-center gap-1">
@@ -248,6 +258,14 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     openStore.getSnapshot,
     openStore.getSnapshot,
   );
+  const [entryWindowStart, setEntryWindowStart] = useState(0);
+  const maxEntryWindowStart = Math.max(0, entries.length - ACTIVE_FILTER_VISIBLE_ENTRIES);
+  const visibleEntryWindowStart = Math.min(entryWindowStart, maxEntryWindowStart);
+  const visibleEntryWindowEnd = Math.min(
+    entries.length,
+    visibleEntryWindowStart + ACTIVE_FILTER_VISIBLE_ENTRIES,
+  );
+  const visibleEntries = entries.slice(visibleEntryWindowStart, visibleEntryWindowEnd);
   useLayoutEffect(() => {
     openStore.setHasEntries(entries.length > 0);
   }, [entries.length, openStore]);
@@ -291,6 +309,12 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
     (entry: BrunoTableActiveFilterEntry): void => {
       const index = entries.findIndex((candidate) => candidate.key === entry.key);
       const nextKey = entries[index + 1]?.key ?? entries[index - 1]?.key;
+      const nextIndex = index < entries.length - 1 ? index : index - 1;
+      if (nextIndex >= 0) {
+        setEntryWindowStart(
+          Math.floor(nextIndex / ACTIVE_FILTER_VISIBLE_ENTRIES) * ACTIVE_FILTER_VISIBLE_ENTRIES,
+        );
+      }
       if (nextKey === undefined) openStore.setOpen(false);
       if (entry.kind === "quick") {
         runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
@@ -335,9 +359,49 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
             <PopoverDescription>
               Review filters across visible and hidden columns.
             </PopoverDescription>
+            {entries.length > ACTIVE_FILTER_VISIBLE_ENTRIES ? (
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <span aria-live="polite" role="status">
+                  {`Showing filters ${String(visibleEntryWindowStart + 1)}–${String(visibleEntryWindowEnd)} of ${entries.length.toLocaleString("en-US")}`}
+                </span>
+                <div className="flex gap-1">
+                  <Button
+                    aria-label="Previous active filters"
+                    disabled={visibleEntryWindowStart === 0}
+                    size="xs"
+                    type="button"
+                    variant="ghost"
+                    onClick={() =>
+                      setEntryWindowStart(
+                        Math.max(0, visibleEntryWindowStart - ACTIVE_FILTER_VISIBLE_ENTRIES),
+                      )
+                    }
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    aria-label="Next active filters"
+                    disabled={visibleEntryWindowEnd === entries.length}
+                    size="xs"
+                    type="button"
+                    variant="ghost"
+                    onClick={() =>
+                      setEntryWindowStart(
+                        Math.min(
+                          maxEntryWindowStart,
+                          visibleEntryWindowStart + ACTIVE_FILTER_VISIBLE_ENTRIES,
+                        ),
+                      )
+                    }
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </PopoverHeader>
           <div className="flex flex-col gap-2">
-            {entries.map((entry) => (
+            {visibleEntries.map((entry) => (
               <div
                 className="flex min-w-0 items-center justify-between gap-2 text-sm"
                 key={entry.key}
@@ -390,6 +454,8 @@ type BrunoTableActiveFilterEntry =
       readonly label: string;
     }>
   | Readonly<{ readonly kind: "quick"; readonly key: string; readonly label: string }>;
+
+const ACTIVE_FILTER_VISIBLE_ENTRIES = 64;
 
 function activeFilterEntries(
   query: BrunoTableFilterSnapshot,
