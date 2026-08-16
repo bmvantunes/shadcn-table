@@ -1985,18 +1985,9 @@ function findSelectOptionIndex(column: CompiledColumn, value: unknown): number |
   if (exactIndex !== undefined && Object.is(column.selectOptions[exactIndex], value)) {
     return exactIndex;
   }
-  try {
-    const canonical = column.semantics.formatCanonicalText(value);
-    const canonicalIndex = column.selectOptionCanonicalIndexes?.get(canonical);
-    if (
-      canonicalIndex !== undefined &&
-      column.semantics.equivalent(column.selectOptions[canonicalIndex], value)
-    ) {
-      return canonicalIndex;
-    }
-  } catch {
-    // Invalid external operands remain unselected; the sanitizer is the admission authority.
-  }
+  // Committed Select snapshots have already crossed the filter admission seam and retain the
+  // exact configured option object. Do not invoke custom equivalence while rendering an editor;
+  // an unrecognized external value remains unselected until the next admitted command.
   return undefined;
 }
 

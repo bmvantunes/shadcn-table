@@ -182,15 +182,12 @@ export function compileClientFilterCollection(
   const columnLabelsById = createClientFilterColumnLabels(columns);
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
-  const context = createFilterSanitizationContext(
-    {},
-    new Map(),
+  const context = createFilterSanitizationContext({
     captured,
     capturedArrays,
-    undefined,
     columnLabelsById,
-    new Map(),
-  );
+    descriptionMemo: new Map(),
+  });
   const roots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
     // Each root is a transaction over the one collection-wide ledger. Its weak traversal caches
@@ -201,36 +198,44 @@ export function compileClientFilterCollection(
       operands: context.operands,
       textLength: context.textLength,
     };
-    const rootContext = createFilterSanitizationContext(
-      previous,
-      new Map(),
+    const rootContext = createFilterSanitizationContext({
+      initial: { ...previous, comparisons: context.comparisons },
       captured,
       capturedArrays,
-      undefined,
       columnLabelsById,
-      context.descriptionMemo,
-      new Map(),
-    );
+      descriptionMemo: context.descriptionMemo,
+      pendingDescriptionMemo: new Map(),
+      comparisonBudgetExhausted: context.comparisonBudgetExhausted,
+    });
     const next = sanitizeFilter(filter, columnsById, rootContext, 0);
+    // Admission work is not retained filter state. Charge every bounded counter to the parent
+    // even when the candidate is rejected so a hostile root cannot reopen the shared allowance.
+    context.nodes = rootContext.nodes;
+    context.operands = rootContext.operands;
+    context.textLength = rootContext.textLength;
+    context.comparisons = rootContext.comparisons;
+    context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
     if (rootContext.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
+        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS} semantic comparisons, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
       );
     }
     if (next === undefined || rootContext.overBudget) {
       continue;
     }
     const root = retainClientFilterRoot(next, columnsById, rootContext, previous);
+    context.nodes = rootContext.nodes;
+    context.operands = rootContext.operands;
+    context.textLength = rootContext.textLength;
+    context.comparisons = rootContext.comparisons;
+    context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
     if (rootContext.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
+        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS} semantic comparisons, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
       );
     }
     if (root === undefined || rootContext.overBudget) continue;
     mergeClientFilterDescriptionMemo(context.descriptionMemo, rootContext.pendingDescriptionMemo);
-    context.nodes = rootContext.nodes;
-    context.operands = rootContext.operands;
-    context.textLength = rootContext.textLength;
     context.hasSharedNodes ||= rootContext.hasSharedNodes;
     for (const [node, plan] of rootContext.compiledOperands) {
       context.compiledOperands.set(node, plan);
@@ -243,14 +248,9 @@ export function compileClientFilterCollection(
 function createEmptyClientFilterCollection(
   columns: readonly CompiledColumn[],
 ): BrunoTableClientFilterCollection {
-  const context = createFilterSanitizationContext(
-    {},
-    new Map(),
-    undefined,
-    undefined,
-    undefined,
-    createClientFilterColumnLabels(columns),
-  );
+  const context = createFilterSanitizationContext({
+    columnLabelsById: createClientFilterColumnLabels(columns),
+  });
   return createClientFilterCollection(
     new Map(columns.map((column) => [column.columnId, column])),
     [],
@@ -392,6 +392,10 @@ function createClientFilterCollection(
   for (const values of rootsByColumn.values()) Object.freeze(values);
   for (const values of activeFilterLabelsByColumn.values()) Object.freeze(values);
   for (const counts of signatureCountsByColumn.values()) Object.freeze(counts);
+  const complexity = frozenRoots.reduce(
+    (total, root) => addFilterComplexity(total, root.complexity),
+    createEmptyFilterComplexity(),
+  );
   return Object.freeze({
     filters,
     columnsById,
@@ -405,12 +409,7 @@ function createClientFilterCollection(
     columnIds,
     signatureCountsByColumn,
     opaqueRootCountByColumn,
-    complexity: Object.freeze({
-      rootEntries: frozenRoots.length,
-      nodes: context.nodes,
-      operands: context.operands,
-      textLength: context.textLength,
-    }),
+    complexity: Object.freeze(complexity),
     compiledOperands,
     hasSharedNodes: context.hasSharedNodes,
   });
@@ -544,15 +543,15 @@ function replaceClientFilterRoots(
   const retainedCompiledOperands = collectCompiledOperandPlans(retainedRoots, [
     collection.compiledOperands,
   ]);
-  const context = createFilterSanitizationContext(
-    retainedComplexity,
-    new Map(),
+  const context = createFilterSanitizationContext({
+    initial: retainedComplexity,
+    compiledOperands: new Map(),
     captured,
     capturedArrays,
-    retainedCompiledOperands,
-    collection.columnLabelsById,
-    createClientFilterDescriptionMemo(retainedRoots),
-  );
+    compiledOperandLookup: retainedCompiledOperands,
+    columnLabelsById: collection.columnLabelsById,
+    descriptionMemo: createClientFilterDescriptionMemo(retainedRoots),
+  });
   context.hasSharedNodes = collection.hasSharedNodes;
   const candidateRoots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
@@ -561,30 +560,37 @@ function replaceClientFilterRoots(
       operands: context.operands,
       textLength: context.textLength,
     };
-    const candidateContext = createFilterSanitizationContext(
-      previous,
-      new Map(),
+    const candidateContext = createFilterSanitizationContext({
+      initial: { ...previous, comparisons: context.comparisons },
       captured,
       capturedArrays,
-      new Map(),
-      collection.columnLabelsById,
-      context.descriptionMemo,
-      new Map(),
-    );
+      compiledOperandLookup: new Map(),
+      columnLabelsById: collection.columnLabelsById,
+      descriptionMemo: context.descriptionMemo,
+      pendingDescriptionMemo: new Map(),
+      comparisonBudgetExhausted: context.comparisonBudgetExhausted,
+    });
     const next = sanitizeFilter(filter, collection.columnsById, candidateContext, 0);
+    context.nodes = candidateContext.nodes;
+    context.operands = candidateContext.operands;
+    context.textLength = candidateContext.textLength;
+    context.comparisons = candidateContext.comparisons;
+    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
     const candidateColumnId = next?.columnIds.values().next().value;
     if (next === undefined || candidateContext.overBudget || candidateColumnId !== columnId) {
       return undefined;
     }
     const root = retainClientFilterRoot(next, collection.columnsById, candidateContext, previous);
+    context.nodes = candidateContext.nodes;
+    context.operands = candidateContext.operands;
+    context.textLength = candidateContext.textLength;
+    context.comparisons = candidateContext.comparisons;
+    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
     if (root === undefined || candidateContext.overBudget) return undefined;
     mergeClientFilterDescriptionMemo(
       context.descriptionMemo,
       candidateContext.pendingDescriptionMemo,
     );
-    context.nodes = candidateContext.nodes;
-    context.operands = candidateContext.operands;
-    context.textLength = candidateContext.textLength;
     context.hasSharedNodes ||= candidateContext.hasSharedNodes;
     for (const [node, plan] of candidateContext.compiledOperands) {
       context.compiledOperands.set(node, plan);
@@ -621,14 +627,11 @@ function createDerivedClientFilterCollection(
       ? [collection.compiledOperands]
       : [collection.compiledOperands, additional.compiledOperands],
   );
-  const context = createFilterSanitizationContext(
-    complexity,
+  const context = createFilterSanitizationContext({
+    initial: complexity,
     compiledOperands,
-    undefined,
-    undefined,
-    undefined,
-    collection.columnLabelsById,
-  );
+    columnLabelsById: collection.columnLabelsById,
+  });
   context.hasSharedNodes = collection.hasSharedNodes || additional?.hasSharedNodes === true;
   return createClientFilterCollection(
     collection.columnsById,
@@ -668,6 +671,10 @@ function addFilterComplexity(
     operands: (left?.operands ?? 0) + (right?.operands ?? 0),
     textLength: (left?.textLength ?? 0) + (right?.textLength ?? 0),
   };
+}
+
+function createEmptyFilterComplexity(): BrunoTableFilterComplexity {
+  return { rootEntries: 0, nodes: 0, operands: 0, textLength: 0 };
 }
 
 function subtractFilterComplexity(
@@ -935,6 +942,19 @@ function reserveFilterText(length: number, context: FilterSanitizationContext): 
     return false;
   }
   context.textLength += length;
+  return true;
+}
+
+function reserveFilterComparison(context: FilterSanitizationContext): boolean {
+  if (
+    context.comparisonBudgetExhausted ||
+    context.comparisons >= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS
+  ) {
+    context.comparisonBudgetExhausted = true;
+    context.overBudget = true;
+    return false;
+  }
+  context.comparisons += 1;
   return true;
 }
 
@@ -1416,7 +1436,10 @@ function resolveConfiguredSelectValue(
   }
   const canonicalOptionIndex =
     canonical === undefined ? undefined : column.selectOptionCanonicalIndexes?.get(canonical);
+  let comparedCanonicalOptionIndex: number | undefined;
   if (canonicalOptionIndex !== undefined) {
+    if (!reserveFilterComparison(context)) return undefined;
+    comparedCanonicalOptionIndex = canonicalOptionIndex;
     try {
       if (column.semantics.equivalent(selectOptions[canonicalOptionIndex], operand)) {
         return selectOptions[canonicalOptionIndex];
@@ -1426,9 +1449,11 @@ function resolveConfiguredSelectValue(
     }
   }
   // Custom equivalence cannot be indexed generically. The configured option domain is validated
-  // and capped once during column compilation; this admission-only fallback scan is bounded
-  // static metadata, not another Grid Filter node budget.
-  for (const option of selectOptions) {
+  // and indexed once during column compilation; each unavoidable comparison consumes the one
+  // collection-wide admission allowance. The allowance is deliberately not local to this scan.
+  for (const [optionIndex, option] of selectOptions.entries()) {
+    if (optionIndex === comparedCanonicalOptionIndex) continue;
+    if (!reserveFilterComparison(context)) return undefined;
     try {
       if (column.semantics.equivalent(option, operand)) return option;
     } catch {
@@ -2196,6 +2221,8 @@ export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES = 16_384;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS = 16_384;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH = 1_048_576;
+/** One shared admission allowance for custom Select semantic-equivalence calls. */
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS = 16_384;
 // Compatibility names for internal tests and diagnostics. These are aggregate limits, not
 // per-expression budgets.
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES: number =
@@ -2226,40 +2253,54 @@ type FilterSanitizationContext = {
   nodes: number;
   operands: number;
   textLength: number;
+  /** Monotonic admission work counter; rejected roots cannot reopen consumed comparisons. */
+  comparisons: number;
+  comparisonBudgetExhausted: boolean;
   overBudget: boolean;
 };
 
+type FilterSanitizationContextInitial = Readonly<{
+  readonly nodes?: number;
+  readonly operands?: number;
+  readonly textLength?: number;
+  readonly comparisons?: number;
+}>;
+
+type FilterSanitizationContextOptions = Readonly<{
+  readonly initial?: FilterSanitizationContextInitial;
+  readonly compiledOperands?: Map<object, CompiledFilterOperandPlan>;
+  readonly captured?: WeakMap<object, Readonly<Record<string, unknown>> | undefined>;
+  readonly capturedArrays?: WeakMap<object, CapturedFilterArray | undefined>;
+  readonly compiledOperandLookup?: ReadonlyMap<object, CompiledFilterOperandPlan>;
+  readonly columnLabelsById?: ReadonlyMap<string, string>;
+  readonly descriptionMemo?: Map<object, string | undefined>;
+  readonly pendingDescriptionMemo?: Map<object, string | undefined>;
+  readonly comparisonBudgetExhausted?: boolean;
+}>;
+
 function createFilterSanitizationContext(
-  initial: Readonly<{
-    readonly nodes?: number;
-    readonly operands?: number;
-    readonly textLength?: number;
-  }> = {},
-  compiledOperands: Map<object, CompiledFilterOperandPlan> = new Map(),
-  captured: WeakMap<object, Readonly<Record<string, unknown>> | undefined> = new WeakMap(),
-  capturedArrays: WeakMap<object, CapturedFilterArray | undefined> = new WeakMap(),
-  compiledOperandLookup: ReadonlyMap<object, CompiledFilterOperandPlan> = compiledOperands,
-  columnLabelsById: ReadonlyMap<string, string> = new Map(),
-  descriptionMemo: Map<object, string | undefined> = new Map(),
-  pendingDescriptionMemo: Map<object, string | undefined> = new Map(),
+  options: FilterSanitizationContextOptions = {},
 ): FilterSanitizationContext {
+  const compiledOperands = options.compiledOperands ?? new Map();
   return {
-    captured,
-    capturedArrays,
+    captured: options.captured ?? new WeakMap(),
+    capturedArrays: options.capturedArrays ?? new WeakMap(),
     completed: new WeakMap(),
     visited: new WeakSet(),
     admittedNodes: new WeakSet(),
     meteredOperandObjects: new WeakSet(),
     meteredOperandStrings: new Set(),
     compiledOperands,
-    compiledOperandLookup,
-    columnLabelsById,
-    descriptionMemo,
-    pendingDescriptionMemo,
+    compiledOperandLookup: options.compiledOperandLookup ?? compiledOperands,
+    columnLabelsById: options.columnLabelsById ?? new Map(),
+    descriptionMemo: options.descriptionMemo ?? new Map(),
+    pendingDescriptionMemo: options.pendingDescriptionMemo ?? new Map(),
     hasSharedNodes: false,
-    nodes: initial.nodes ?? 0,
-    operands: initial.operands ?? 0,
-    textLength: initial.textLength ?? 0,
+    nodes: options.initial?.nodes ?? 0,
+    operands: options.initial?.operands ?? 0,
+    textLength: options.initial?.textLength ?? 0,
+    comparisons: options.initial?.comparisons ?? 0,
+    comparisonBudgetExhausted: options.comparisonBudgetExhausted === true,
     overBudget: false,
   };
 }

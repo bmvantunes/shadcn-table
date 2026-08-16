@@ -912,6 +912,12 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly dispatchGridCommand = (command: BrunoTableGridCommand): boolean => {
     if (
+      command.type === "quick-filter.replace" &&
+      !isBrunoTableQuickFilterTextWithinLimit(command.text)
+    ) {
+      return false;
+    }
+    if (
       (isBrunoTableFilterCommand(command) || isBrunoTableSortingCommand(command)) &&
       !this.commitActiveEditor()
     ) {
@@ -967,7 +973,6 @@ export class BrunoTableGridRuntime<TRow> {
       return this.replaceColumnFilterImpl(command.columnId, command.filter);
     }
     if (command.type === "quick-filter.replace") {
-      if (!isBrunoTableQuickFilterTextWithinLimit(command.text)) return false;
       this.quickFilterCommandEpoch += 1;
       this.publishQuery(this.filterCollection, this.query.orderBy, command.text);
       const error = notify(this.quickFilterCommandEpochListeners);

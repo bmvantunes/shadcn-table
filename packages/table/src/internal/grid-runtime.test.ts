@@ -198,6 +198,15 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(gate).toHaveBeenCalledTimes(5);
     expect(runtime.getQuerySnapshot()).toBe(before);
 
+    const gateCallsBeforeRejectedQuickFilter = gate.mock.calls.length;
+    expect(
+      runtime.dispatchGridCommand({
+        type: "quick-filter.replace",
+        text: "x".repeat(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH + 1),
+      }),
+    ).toBe(false);
+    expect(gate).toHaveBeenCalledTimes(gateCallsBeforeRejectedQuickFilter);
+
     unregister();
     runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
     expect(runtime.getQuerySnapshot().quickFilter).toBe("ada");
@@ -460,6 +469,8 @@ describe("BrunoTable filter runtime primitives", () => {
     // #13. Both unsupported collections sanitize to empty rather than entering a comparator
     // fallback that would rescan every operand.
     expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(true);
+    expect(sanitizeClientInitialFilters(previousIn, columns)).toEqual([]);
+    expect(sanitizeClientInitialFilters(nextIn, columns)).toEqual([]);
     expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();

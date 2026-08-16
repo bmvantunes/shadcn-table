@@ -300,6 +300,42 @@ describe("compileColumns", () => {
     expect(() => compileColumns([widened])).toThrow(/option at index 0 is invalid/u);
   });
 
+  it("wraps a throwing Select decoder in a ColumnConfigurationError", () => {
+    const throwingValueType = {
+      codecId: "test/throwing-select-decoder",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: () => {
+        throw new Error("decoder exploded");
+      },
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_THROWING_SELECT",
+          field: "status",
+          headerName: "Status",
+          valueType: throwingValueType,
+          options: ["open"],
+        } as never,
+      ]),
+    ).toThrow(
+      "BrunoTable Select column option at index 0 is invalid for COL_ID_THROWING_SELECT: BrunoTable Value Type decodeRuntime failed.",
+    );
+  });
+
   it("rejects sparse Select option arrays", () => {
     const select = Reflect.apply(BrunoTableSelectColumn, undefined, [
       {

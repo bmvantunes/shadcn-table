@@ -13,6 +13,7 @@ import {
   sanitizeClientOrderBy,
 } from "./client-row-model";
 import {
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
   compileClientFilterCollection,
   compileClientFilterPlan,
@@ -858,7 +859,7 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([deep], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
   });
 
@@ -1588,7 +1589,7 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([filter], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
     expect(ownKeys).not.toHaveBeenCalled();
   });
@@ -2111,9 +2112,17 @@ describe("Client row model", () => {
     expect(exactCollection.roots.length).toBeLessThan(exactFilters.length);
   });
 
-  it("does not charge bounded static Select option scans to filter-node capacity", () => {
+  it("charges custom Select scans to one collection-wide comparison allowance", () => {
     const options = Array.from({ length: 16_384 }, (_, index) =>
       Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
     );
     const selectValueType = {
       codecId: "test/large-equivalence-select",
@@ -2124,12 +2133,7 @@ describe("Client row model", () => {
       editorLayout: "fullWidth",
       defaultWidth: 160,
       decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
-      equivalent: (left: unknown, right: unknown) =>
-        typeof left === "object" &&
-        left !== null &&
-        typeof right === "object" &&
-        right !== null &&
-        Reflect.get(left, "code") === Reflect.get(right, "code"),
+      equivalent,
       compare: () => 0,
       formatCanonicalText: () => {
         throw new Error("No canonical identity");
@@ -2164,6 +2168,158 @@ describe("Client row model", () => {
     );
 
     expect(collection.roots).toHaveLength(1);
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("does not reopen the comparison allowance for rejected Select roots", () => {
+    const options = Array.from({ length: 64 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/shared-equivalence-budget",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const filters = Array.from(
+      { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS / options.length + 4 },
+      (_, index) => ({
+        columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: `missing-${String(index)}` }),
+        type: "equals" as const,
+      }),
+    );
+
+    const collection = compileClientFilterCollection(
+      [
+        ...filters,
+        {
+          columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+          filter: Object.freeze({ code: "0" }),
+          type: "equals" as const,
+        },
+      ],
+      columns,
+    );
+
+    expect(collection.roots).toEqual([]);
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("starts a fresh comparison allowance for each replacement admission", () => {
+    const options = Array.from(
+      { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS },
+      (_, index) => Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/replacement-equivalence-budget",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const collection = compileClientFilterCollection(
+      [
+        {
+          columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+          filter: options[0],
+          type: "equals" as const,
+        },
+      ],
+      columns,
+    );
+
+    const firstReplacement = replaceClientFilterRoot(
+      collection,
+      "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+      collection.roots[0]!.filter,
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: String(options.length - 1) }),
+        type: "equals" as const,
+      },
+    );
+    const secondReplacement = replaceClientFilterRoot(
+      firstReplacement!,
+      "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+      firstReplacement!.roots[0]!.filter,
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: String(options.length - 2) }),
+        type: "equals" as const,
+      },
+    );
+
+    expect(firstReplacement?.roots).toHaveLength(1);
+    expect(secondReplacement?.roots).toHaveLength(1);
+    expect(equivalent).toHaveBeenCalledTimes(
+      BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS * 2 - 1,
+    );
   });
 
   it("admits exact custom Select equality without a configured option domain", () => {
@@ -2262,7 +2418,7 @@ describe("Client row model", () => {
         rejectOverBudget: true,
       }),
     ).toThrowError(
-      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
 
     expect(

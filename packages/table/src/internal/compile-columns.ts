@@ -160,7 +160,14 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         );
       }
       const option = options[optionIndex];
-      const decoded = semantics.decodeRuntime(option);
+      let decoded: ReturnType<typeof semantics.decodeRuntime>;
+      try {
+        decoded = semantics.decodeRuntime(option);
+      } catch {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: decoding failed.`,
+        );
+      }
       if (decoded._tag === "Failure") {
         throw new ColumnConfigurationError(
           `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: ${decoded.message}`,

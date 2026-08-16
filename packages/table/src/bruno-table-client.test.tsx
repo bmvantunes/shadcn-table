@@ -59,7 +59,7 @@ describe("BrunoTableClient server rendering", () => {
         />,
       ),
     ).toThrowError(
-      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
   });
 
@@ -94,7 +94,7 @@ describe("BrunoTableClient server rendering", () => {
         />,
       ),
     ).toThrowError(
-      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
   });
 
