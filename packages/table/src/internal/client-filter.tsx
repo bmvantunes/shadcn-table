@@ -114,7 +114,7 @@ const FILTER_EDITOR_RENDER_NODE_LIMIT = 256;
 
 function filterEditorBudgetMessage(column: CompiledColumn): ReactElement {
   return (
-    <p role="status" className="text-sm text-muted-foreground">
+    <p className="text-sm text-muted-foreground">
       Additional conditions for {column.headerName} are hidden to keep this filter responsive. Clear
       or Reset the column filter to replace this expression.
     </p>
@@ -502,7 +502,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           errorId={errorId}
           inputRef={inputRef}
           selectRef={selectRef}
-          materializationState={createFilterDraftMaterializationState()}
           renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
           onChange={commitDraft}
         />
@@ -523,7 +522,6 @@ function FilterExpressionEditor({
   inputRef,
   onChange,
   path = "root",
-  materializationState,
   renderBudget,
   rootSelectRef,
   selectRef,
@@ -534,19 +532,16 @@ function FilterExpressionEditor({
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path?: string;
-  readonly materializationState?: FilterDraftMaterializationState | undefined;
   readonly renderBudget: number;
   readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
 }): ReactElement {
   const draft =
-    inputDraft.kind === "opaque" &&
-    (materializationState === undefined ||
-      materializationState.nodes < BRUNO_TABLE_CLIENT_FILTER_MAX_NODES)
+    inputDraft.kind === "opaque"
       ? draftFromNode(
           column,
           inputDraft.committed,
-          materializationState ?? createFilterDraftMaterializationState(),
+          createFilterDraftMaterializationState(Math.max(1, renderBudget)),
           0,
         )
       : inputDraft;
@@ -640,7 +635,6 @@ function FilterExpressionEditor({
             column={column}
             draft={condition}
             errorId={errorId}
-            materializationState={materializationState}
             onChange={(nextCondition, mode, badInput) => {
               const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
               conditions[index] = nextCondition;
@@ -822,7 +816,6 @@ function FilterExpressionEditor({
             draft={draft.condition}
             errorId={errorId}
             inputRef={inputRef}
-            materializationState={materializationState}
             onChange={(condition, mode, badInput) =>
               onChange(Object.freeze({ ...draft, condition }), mode, badInput)
             }
@@ -1414,6 +1407,7 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
 type FilterDraftMaterializationState = {
   readonly memo: WeakMap<object, FilterDraft>;
   readonly active: WeakSet<object>;
+  readonly maxNodes: number;
   nodes: number;
 };
 
@@ -1447,10 +1441,13 @@ function createOpaqueFilterDraft(record: Readonly<Record<string, unknown>>): Fil
   return Object.freeze({ kind: "opaque", committed: record });
 }
 
-function createFilterDraftMaterializationState(): FilterDraftMaterializationState {
+function createFilterDraftMaterializationState(
+  maxNodes = BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
+): FilterDraftMaterializationState {
   return {
     memo: new WeakMap<object, FilterDraft>(),
     active: new WeakSet<object>(),
+    maxNodes,
     nodes: 0,
   };
 }
@@ -1465,7 +1462,7 @@ function draftFromNode(
   if (cached !== undefined) return cached;
   if (
     depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH ||
-    state.nodes >= BRUNO_TABLE_CLIENT_FILTER_MAX_NODES ||
+    state.nodes >= state.maxNodes ||
     state.active.has(record)
   ) {
     return createOpaqueFilterDraft(record);
@@ -1475,9 +1472,12 @@ function draftFromNode(
   const type = record["type"];
   try {
     if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
-      const conditions = record["conditions"].map((condition) =>
-        draftFromNode(column, asRecord(condition), state, depth + 1),
-      );
+      const conditions = record["conditions"].map((condition, index) => {
+        const childRecord = asRecord(condition);
+        return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
+          ? draftFromNode(column, childRecord, state, depth + 1)
+          : createOpaqueFilterDraft(childRecord);
+      });
       if (conditions.length >= 1) {
         const draft = Object.freeze({
           kind: "compound",
