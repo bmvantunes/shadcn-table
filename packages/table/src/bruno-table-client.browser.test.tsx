@@ -46,7 +46,10 @@ import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
-import { BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH } from "./internal/client-filter";
+import {
+  BRUNO_TABLE_FILTER_COMPOUND_VISIBLE_CONDITIONS,
+  BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
+} from "./internal/client-filter";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnFilterSubscriptionListener } from "./internal/grid-subscription-instrumentation";
 import type { BrunoTableGridCommand } from "./internal/column-management";
@@ -651,7 +654,6 @@ describe("BrunoTableClient browser surface", () => {
       await userEvent.click(screen.getByRole("button", { name: "Active filters (1)" }));
       const review = screen.getByRole("dialog", { name: "Active filters" });
       await userEvent.click(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }));
-      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         0,
@@ -1290,7 +1292,10 @@ describe("BrunoTableClient browser surface", () => {
     const nextConditions = dialog.getByRole("button", {
       name: "Next filter conditions for Name",
     });
-    for (let pageIndex = 2; pageIndex < 32; pageIndex += 1) {
+    const conditionPageCount = Math.ceil(
+      initialFilters.length / BRUNO_TABLE_FILTER_COMPOUND_VISIBLE_CONDITIONS,
+    );
+    for (let pageIndex = 2; pageIndex < conditionPageCount; pageIndex += 1) {
       await userEvent.click(nextConditions);
     }
     await expect
@@ -1559,7 +1564,9 @@ describe("BrunoTableClient browser surface", () => {
       await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
       await userEvent.fill(dialog.getByRole("textbox", { name: "Filter value for Name" }), "new");
       await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.waitFor(() =>
+        expect(commands.some((command) => command.type === "column.filter.replace")).toBe(true),
+      );
       expect(commands.some((command) => command.type === "column.filter.replace")).toBe(true);
       await expect
         .element(screen.getByRole("gridcell", { name: "new", exact: true }))
@@ -2210,7 +2217,6 @@ describe("BrunoTableClient browser surface", () => {
         .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "micro" }));
 
       expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
-      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(0);
       await vi.waitFor(() =>
         expect(commands.filter((command) => command.type === "quick-filter.replace")).toHaveLength(

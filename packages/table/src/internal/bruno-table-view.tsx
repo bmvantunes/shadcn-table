@@ -3276,6 +3276,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
         </DropdownMenuGroup>
       ) : null}
       {supportsBrunoTableCustomColumnFilter(column, renderColumnFilter) ||
+      command.filterActive ||
       command.filterBaselineAvailable ? (
         <DropdownMenuGroup>
           <DropdownMenuLabel>Filter</DropdownMenuLabel>
@@ -3290,13 +3291,16 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           ) : null}
           {command.filterActive || command.filterBaselineAvailable ? (
             <DropdownMenuItem
-              onClick={() => {
+              onClick={(event) => {
                 const action = command.filterActive ? "cleared" : "reset";
                 const accepted = runtime.dispatchGridCommand({
                   type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
                   columnId: column.columnId,
                 });
-                if (!accepted) return;
+                if (!accepted) {
+                  event.preventDefault();
+                  return;
+                }
                 announce(`${column.headerName} filter ${action}`);
                 restoreColumnFocus(column.columnId);
               }}

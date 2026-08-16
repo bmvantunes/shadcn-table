@@ -19,9 +19,11 @@ import {
   reconcileClientOrderBy,
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
-import { BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS } from "./quick-filter";
+import {
+  BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS,
+  validateBrunoTableQuickFilterFields,
+} from "./quick-filter";
 
-const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 // Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
 // The public Quick Filter contract documents this limit alongside its tuple type.
 
@@ -1547,30 +1549,18 @@ function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
 }
 
 function snapshotQuickFilterFields(fields: readonly string[] | undefined): readonly string[] {
-  if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
-  if (!Array.isArray(fields)) {
-    throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
-  }
-  const length = fields.length;
-  if (
-    !Number.isSafeInteger(length) ||
-    length <= 0 ||
-    length > BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS
-  ) {
-    throw new TypeError(
-      `BrunoTable quickFilterFields must contain between 1 and ${String(BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS)} fields.`,
-    );
-  }
-  const snapshot: string[] = [];
-  for (let index = 0; index < length; index += 1) {
-    if (!Object.hasOwn(fields, index)) {
+  const result = validateBrunoTableQuickFilterFields(fields);
+  if (result.ok) return result.fields;
+  switch (result.reason) {
+    case "not-array":
+      throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
+    case "length":
+      throw new TypeError(
+        `BrunoTable quickFilterFields must contain between 1 and ${String(BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS)} fields.`,
+      );
+    case "sparse":
       throw new TypeError("BrunoTable quickFilterFields must be dense.");
-    }
-    const field = fields[index];
-    if (typeof field !== "string" || field.length === 0) {
+    case "empty-field":
       throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
-    }
-    snapshot.push(field);
   }
-  return Object.freeze(snapshot);
 }

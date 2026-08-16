@@ -31,6 +31,7 @@ import type { CompiledColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
   boundBrunoTableFilterOperandText,
   normalizeBrunoTableFilterText,
@@ -79,6 +80,18 @@ type FilterLeafDraft = Readonly<{
 
 type FilterChangeMode = "continuous" | "immediate" | "clear" | "local";
 
+type FilterEditorIdentity = Readonly<{
+  readonly version: number;
+  readonly commandEpoch: number;
+}>;
+
+function sameFilterEditorIdentity(
+  previous: FilterEditorIdentity,
+  next: FilterEditorIdentity,
+): boolean {
+  return previous.version === next.version && previous.commandEpoch === next.commandEpoch;
+}
+
 type FilterDraft =
   | FilterLeafDraft
   | Readonly<{
@@ -116,6 +129,8 @@ type FilterParseCache = Map<string, FilterParseResult>;
 const FILTER_IN_VISIBLE_OPERANDS = 64;
 const FILTER_SELECT_VISIBLE_OPTIONS = 64;
 const FILTER_COMPOUND_VISIBLE_CONDITIONS = 64;
+export const BRUNO_TABLE_FILTER_COMPOUND_VISIBLE_CONDITIONS: number =
+  FILTER_COMPOUND_VISIBLE_CONDITIONS;
 const FILTER_EDITOR_RENDER_NODE_LIMIT = 256;
 
 function filterEditorBudgetMessage(column: CompiledColumn): ReactElement {
@@ -328,7 +343,7 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
 
 type LocalFilterDraftState = Readonly<{
   readonly column: CompiledColumn;
-  readonly version: number;
+  readonly identity: FilterEditorIdentity;
   readonly draft: FilterDraft;
   readonly error: string | undefined;
 }>;
@@ -361,27 +376,31 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     getCommandEpoch,
     getCommandEpoch,
   );
-  const editorVersion = version + commandEpoch;
+  const editorIdentity = useMemo(
+    () => Object.freeze({ version, commandEpoch }),
+    [commandEpoch, version],
+  );
   const [localState, setLocalState] = useState<LocalFilterDraftState>(() => ({
     column,
-    version: editorVersion,
+    identity: editorIdentity,
     draft: draftFromCommitted(column, committed),
     error: undefined,
   }));
   const currentState =
-    sameFilterEditorColumn(localState.column, column) && localState.version === editorVersion
+    sameFilterEditorColumn(localState.column, column) &&
+    sameFilterEditorIdentity(localState.identity, editorIdentity)
       ? localState
       : {
           column,
-          version: editorVersion,
+          identity: editorIdentity,
           draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
           error: undefined,
         };
   const draft = currentState.draft;
   const error = currentState.error;
   const parseCache = useMemo(
-    () => createFilterParseCache(column.semantics, editorVersion),
-    [column.semantics, editorVersion],
+    () => createFilterParseCache(column.semantics, editorIdentity),
+    [column.semantics, editorIdentity],
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
@@ -415,24 +434,24 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       draftRevisionRef.current += 1;
       setLocalState({
         column,
-        version: editorVersion,
+        identity: editorIdentity,
         draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
         error: "This filter collection is too complex.",
       });
     },
-    [column, commandEpoch, editorVersion, runtime],
+    [column, commandEpoch, editorIdentity, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
   useLayoutEffect(() => {
     if (
       !sameFilterEditorColumn(localState.column, column) ||
-      localState.version !== editorVersion
+      !sameFilterEditorIdentity(localState.identity, editorIdentity)
     ) {
       debouncer.cancel();
       draftRevisionRef.current += 1;
     }
-  }, [column, debouncer, editorVersion, localState.column, localState.version]);
+  }, [column, debouncer, editorIdentity, localState.column, localState.identity]);
 
   useLayoutEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
@@ -475,7 +494,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         });
         setLocalState({
           column,
-          version: editorVersion,
+          identity: editorIdentity,
           draft: accepted ? nextDraft : draft,
           error: undefined,
         });
@@ -483,7 +502,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       }
       if (mode === "local") {
         debouncer.cancel();
-        setLocalState({ column, version: editorVersion, draft: nextDraft, error: undefined });
+        setLocalState({ column, identity: editorIdentity, draft: nextDraft, error: undefined });
         return;
       }
       const candidate =
@@ -492,7 +511,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
             ? { filter: undefined, error: "Enter a valid value." }
             : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache)
           : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache);
-      setLocalState({ column, version: editorVersion, draft: nextDraft, error: candidate.error });
+      setLocalState({ column, identity: editorIdentity, draft: nextDraft, error: candidate.error });
       const committedCandidate = Object.freeze({ ...candidate, draftRevision });
       if (mode === "continuous") commitContinuous(committedCandidate);
       else commitImmediately(committedCandidate);
@@ -503,7 +522,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       commitImmediately,
       debouncer,
       draft,
-      editorVersion,
+      editorIdentity,
       parseCache,
       runtime,
     ],
@@ -532,7 +551,13 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           column={column}
           draft={draft}
           errorId={errorId}
+          compositionIdentity={editorIdentity}
+          invalid={error !== undefined}
           inputRef={inputRef}
+          canAddFilterValue={
+            runtime.getFilterComplexitySnapshot().operands <
+            BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
+          }
           selectRef={selectRef}
           renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
           onChange={commitDraft}
@@ -550,8 +575,11 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
 function FilterExpressionEditor({
   column,
   draft: inputDraft,
+  compositionIdentity,
   errorId,
+  invalid,
   inputRef,
+  canAddFilterValue,
   onChange,
   path = "root",
   renderBudget,
@@ -560,8 +588,11 @@ function FilterExpressionEditor({
 }: {
   readonly column: CompiledColumn;
   readonly draft: FilterDraft;
+  readonly compositionIdentity: FilterEditorIdentity;
   readonly errorId: string;
+  readonly invalid: boolean;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
+  readonly canAddFilterValue: boolean;
   readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path?: string;
   readonly renderBudget: number;
@@ -572,16 +603,16 @@ function FilterExpressionEditor({
     inputDraft.kind === "opaque"
       ? draftFromNode(column, inputDraft.committed, createFilterDraftMaterializationState(), 0)
       : inputDraft;
+  const draftOperandCount = countFilterDraftOperands(draft);
   const expressionMode =
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
   const pathLabel = filterExpressionPathLabel(path);
   const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
   const modeLabel = `Filter expression for ${column.headerName}${labelSuffix}`;
-  const isContinuous =
-    column.semantics.editorFamily === "text" ||
-    column.semantics.editorFamily === "number" ||
-    column.semantics.editorFamily === "bigint" ||
-    column.semantics.editorFamily === "bigdecimal";
+  const isContinuous = !(
+    isBuiltInBooleanColumn(column) ||
+    (column.semantics.filterFamily === "select" && column.selectOptions !== undefined)
+  );
   const operatorOptions = filterOperators(column);
   const removeConditionRefs = useRef(new Map<number, HTMLButtonElement>());
   const focusFrameRef = useRef<number | null>(null);
@@ -661,7 +692,12 @@ function FilterExpressionEditor({
           <FilterExpressionEditor
             column={column}
             draft={condition}
+            compositionIdentity={compositionIdentity}
             errorId={errorId}
+            invalid={invalid}
+            canAddFilterValue={
+              canAddFilterValue && draftOperandCount < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
+            }
             onChange={(nextCondition, mode, badInput) => {
               const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
               conditions[index] = nextCondition;
@@ -790,7 +826,13 @@ function FilterExpressionEditor({
                 <FilterOperand
                   column={column}
                   draft={leaf}
+                  compositionIdentity={compositionIdentity}
                   errorId={errorId}
+                  invalid={invalid}
+                  canAddFilterValue={
+                    canAddFilterValue &&
+                    draftOperandCount < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
+                  }
                   inputRef={inputRef}
                   path={path}
                   selectRef={selectRef}
@@ -841,7 +883,10 @@ function FilterExpressionEditor({
           <FilterExpressionEditor
             column={column}
             draft={draft.condition}
+            compositionIdentity={compositionIdentity}
             errorId={errorId}
+            invalid={invalid}
+            canAddFilterValue={canAddFilterValue}
             inputRef={inputRef}
             onChange={(condition, mode, badInput) =>
               onChange(Object.freeze({ ...draft, condition }), mode, badInput)
@@ -904,8 +949,9 @@ function FilterExpressionEditor({
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
             disabled={
-              draft.rootCollection === true &&
-              draft.conditions.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES
+              omittedCompoundConditionCount > 0 ||
+              (draft.rootCollection === true &&
+                draft.conditions.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
             }
             size="xs"
             type="button"
@@ -913,8 +959,9 @@ function FilterExpressionEditor({
             onClick={() => {
               const nextIndex = draft.conditions.length;
               if (
-                draft.rootCollection === true &&
-                nextIndex >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES
+                omittedCompoundConditionCount > 0 ||
+                (draft.rootCollection === true &&
+                  nextIndex >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
               ) {
                 return;
               }
@@ -944,17 +991,21 @@ function FilterExpressionEditor({
 
 function createFilterParseCache(
   semantics: CompiledColumn["semantics"],
-  version: number,
+  identity: FilterEditorIdentity,
 ): FilterParseCache {
   void semantics;
-  void version;
+  void identity.version;
+  void identity.commandEpoch;
   return new Map();
 }
 
 function FilterOperand({
   column,
   draft,
+  compositionIdentity,
   errorId,
+  invalid,
+  canAddFilterValue,
   focusAddedControl,
   inputLabel,
   inputRef,
@@ -965,7 +1016,10 @@ function FilterOperand({
 }: {
   readonly column: CompiledColumn;
   readonly draft: FilterLeafDraft;
+  readonly compositionIdentity: FilterEditorIdentity;
   readonly errorId: string;
+  readonly invalid: boolean;
+  readonly canAddFilterValue: boolean;
   readonly inputLabel: string;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly focusAddedControl: (controlId: string) => void;
@@ -976,6 +1030,8 @@ function FilterOperand({
 }): ReactElement {
   const isIn = draft.operator === "in";
   const composingRef = useRef(false);
+  const invalidatedCompositionSessionRef = useRef<number | null>(null);
+  const compositionSessionRef = useRef(0);
   const latestDraftRef = useRef(draft);
   const values = isIn && draft.inValuesExplicit ? draft.inValues : [draft.first];
   const [operandWindowStart, setOperandWindowStart] = useState(0);
@@ -985,7 +1041,16 @@ function FilterOperand({
   useEffect(() => {
     latestDraftRef.current = draft;
   }, [draft]);
+  useLayoutEffect(() => {
+    if (composingRef.current) {
+      invalidatedCompositionSessionRef.current = compositionSessionRef.current;
+    }
+  }, [compositionIdentity.commandEpoch, compositionIdentity.version]);
+  const isCompositionInvalidated = (): boolean =>
+    invalidatedCompositionSessionRef.current === compositionSessionRef.current;
   const beginComposition = (): void => {
+    compositionSessionRef.current += 1;
+    invalidatedCompositionSessionRef.current = null;
     composingRef.current = true;
     onChange(latestDraftRef.current, "local");
   };
@@ -993,6 +1058,12 @@ function FilterOperand({
     event: CompositionEvent<HTMLInputElement>,
     updateDraft: (current: FilterLeafDraft, value: string) => FilterLeafDraft,
   ): void => {
+    const compositionSession = compositionSessionRef.current;
+    if (invalidatedCompositionSessionRef.current === compositionSession) {
+      invalidatedCompositionSessionRef.current = null;
+      composingRef.current = false;
+      return;
+    }
     composingRef.current = false;
     const nextDraft = updateDraft(
       latestDraftRef.current,
@@ -1001,8 +1072,14 @@ function FilterOperand({
     latestDraftRef.current = nextDraft;
     onChange(nextDraft, continuous ? "continuous" : "immediate");
   };
-  const changeMode = (): FilterChangeMode =>
-    composingRef.current ? "local" : continuous ? "continuous" : "immediate";
+  const changeMode = (): FilterChangeMode | undefined => {
+    if (isCompositionInvalidated()) return undefined;
+    return composingRef.current ? "local" : continuous ? "continuous" : "immediate";
+  };
+  const publishOperandChange = (nextDraft: FilterLeafDraft, badInput = false): void => {
+    const mode = changeMode();
+    if (mode !== undefined) onChange(nextDraft, mode, badInput);
+  };
   const pathLabel = filterExpressionPathLabel(path);
   const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
   if (isBuiltInBooleanColumn(column)) {
@@ -1013,6 +1090,8 @@ function FilterOperand({
           ref={selectRef}
           id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
+          aria-invalid={invalid ? "true" : undefined}
+          aria-describedby={invalid ? errorId : undefined}
           value={draft.first}
           onChange={(event) =>
             onChange(
@@ -1053,8 +1132,8 @@ function FilterOperand({
       visibleOptionIndexes.unshift(draft.selectIndex);
     }
     return (
-      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
-        Value
+      <div className="flex flex-col gap-1 text-sm">
+        <label htmlFor={`${errorId}-${path}-value`}>Value</label>
         {optionCount > FILTER_SELECT_VISIBLE_OPTIONS ? (
           <div className="flex items-center justify-between gap-2 text-sm">
             <span aria-live="polite" role="status">
@@ -1099,6 +1178,8 @@ function FilterOperand({
           ref={selectRef}
           id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
+          aria-invalid={invalid ? "true" : undefined}
+          aria-describedby={invalid ? errorId : undefined}
           value={draft.selectIndex === undefined ? "" : selectOptionToken(draft.selectIndex)}
           onChange={(event) => {
             const token = event.currentTarget.value;
@@ -1107,7 +1188,8 @@ function FilterOperand({
             onChange(
               Object.freeze({
                 ...draft,
-                first: option === undefined ? "" : column.semantics.formatCanonicalText(option),
+                first:
+                  option === undefined ? "" : (formatFilterEditorCanonical(column, option) ?? ""),
                 firstAuthored: option !== undefined,
                 selectIndex: index,
               }),
@@ -1119,12 +1201,12 @@ function FilterOperand({
           {visibleOptionIndexes.map((index) => {
             return (
               <NativeSelectOption key={String(index)} value={selectOptionToken(index)}>
-                {column.semantics.formatDisplay(selectOptions[index])}
+                {formatFilterEditorDisplay(column, selectOptions[index])}
               </NativeSelectOption>
             );
           })}
         </NativeSelect>
-      </label>
+      </div>
     );
   }
 
@@ -1200,7 +1282,8 @@ function FilterOperand({
                   <Input
                     ref={index === 0 ? inputRef : undefined}
                     id={`${errorId}-${path}-value-${String(index)}`}
-                    aria-describedby={errorId}
+                    aria-describedby={invalid ? errorId : undefined}
+                    aria-invalid={invalid ? "true" : undefined}
                     aria-label={
                       index === 0
                         ? inputLabel
@@ -1235,6 +1318,7 @@ function FilterOperand({
                     type={type}
                     value={value}
                     onChange={(event) => {
+                      if (isCompositionInvalidated()) return;
                       const nextValues = values.slice();
                       nextValues[index] = boundBrunoTableFilterOperandText(
                         event.currentTarget.value,
@@ -1245,7 +1329,7 @@ function FilterOperand({
                           : [draft.firstAuthored]
                       ).slice() as boolean[];
                       nextValuesAuthored[index] = true;
-                      onChange(
+                      publishOperandChange(
                         Object.freeze({
                           ...draft,
                           first: nextValues[0] ?? "",
@@ -1254,7 +1338,6 @@ function FilterOperand({
                           inValuesAuthored: Object.freeze(nextValuesAuthored),
                           inValuesExplicit: true,
                         }),
-                        changeMode(),
                         isNumber && event.currentTarget.validity.badInput,
                       );
                     }}
@@ -1308,7 +1391,9 @@ function FilterOperand({
             size="xs"
             type="button"
             variant="outline"
+            disabled={!canAddFilterValue}
             onClick={() => {
+              if (!canAddFilterValue) return;
               const nextIndex = values.length;
               setOperandWindowStart(Math.max(0, nextIndex - FILTER_IN_VISIBLE_OPERANDS + 1));
               onChange(
@@ -1337,7 +1422,8 @@ function FilterOperand({
           <Input
             ref={inputRef}
             id={`${errorId}-${path}-value`}
-            aria-describedby={errorId}
+            aria-describedby={invalid ? errorId : undefined}
+            aria-invalid={invalid ? "true" : undefined}
             aria-label={inputLabel}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
@@ -1351,10 +1437,10 @@ function FilterOperand({
             type={type}
             value={draft.first}
             onChange={(event) => {
+              if (isCompositionInvalidated()) return;
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
-              onChange(
+              publishOperandChange(
                 Object.freeze({ ...draft, first: value, firstAuthored: true }),
-                changeMode(),
                 isNumber && event.currentTarget.validity.badInput,
               );
             }}
@@ -1366,7 +1452,8 @@ function FilterOperand({
           Less than
           <Input
             id={`${errorId}-${path}-value-to`}
-            aria-describedby={errorId}
+            aria-describedby={invalid ? errorId : undefined}
+            aria-invalid={invalid ? "true" : undefined}
             aria-label={`Filter upper bound for ${column.headerName}${labelSuffix}`}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
@@ -1380,10 +1467,10 @@ function FilterOperand({
             type={type}
             value={draft.second}
             onChange={(event) => {
+              if (isCompositionInvalidated()) return;
               const value = boundBrunoTableFilterOperandText(event.currentTarget.value);
-              onChange(
+              publishOperandChange(
                 Object.freeze({ ...draft, second: value, secondAuthored: true }),
-                changeMode(),
                 isNumber && event.currentTarget.validity.badInput,
               );
             }}
@@ -1425,7 +1512,7 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
     case "select":
       return Object.freeze(["equals", "notEqual", "blank", "notBlank"]);
     case "equality":
-      return Object.freeze(["equals", "notEqual", "in", "blank", "notBlank"]);
+      return Object.freeze(["equals", "notEqual", "blank", "notBlank"]);
     default:
       return Object.freeze(["equals", "notEqual"]);
   }
@@ -1499,11 +1586,7 @@ function draftFromNode(
         const draft = Object.freeze({
           kind: "compound",
           operator: type,
-          conditions: Object.freeze(conditions) as readonly [
-            FilterDraft,
-            FilterDraft,
-            ...FilterDraft[],
-          ],
+          conditions: Object.freeze(conditions) as readonly [FilterDraft, ...FilterDraft[]],
         });
         state.memo.set(record, draft);
         return draft;
@@ -1697,7 +1780,7 @@ function buildLeafFilterCandidate(
             try {
               return (
                 normalizeBrunoTableFilterText(
-                  column.semantics.formatCanonicalText(result.value),
+                  formatFilterSemanticCanonical(column, result.value),
                   draft.caseSensitive,
                   draft.accentSensitive,
                 ).length === 0
@@ -1822,12 +1905,48 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
   });
 }
 
+function countFilterDraftOperands(draft: FilterDraft): number {
+  if (draft.kind === "opaque") return 0;
+  if (draft.kind === "not") return countFilterDraftOperands(draft.condition);
+  if (draft.kind === "compound") {
+    return draft.conditions.reduce(
+      (total, condition) => total + countFilterDraftOperands(condition),
+      0,
+    );
+  }
+  if (draft.operator !== "in") return 0;
+  return draft.inValuesExplicit ? draft.inValues.length : draft.firstAuthored ? 1 : 0;
+}
+
 function formatOperand(column: CompiledColumn, value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
+  return formatFilterEditorCanonical(column, value);
+}
+
+function formatFilterEditorCanonical(column: CompiledColumn, value: unknown): string | undefined {
   try {
+    // This is the committed operand presentation, not a display label. The collection-wide
+    // admission ledger already bounds retained materialized text, while the editor must preserve
+    // exact long text, BigInt, and optional BigDecimal values when changing operators.
     return column.semantics.formatCanonicalText(value);
   } catch {
     return undefined;
+  }
+}
+
+function formatFilterSemanticCanonical(column: CompiledColumn, value: unknown): string {
+  try {
+    return column.semantics.formatCanonicalText(value);
+  } catch {
+    return "";
+  }
+}
+
+function formatFilterEditorDisplay(column: CompiledColumn, value: unknown): string {
+  try {
+    return boundBrunoTableFilterOperandText(column.semantics.formatDisplay(value));
+  } catch {
+    return "<unavailable>";
   }
 }
 
@@ -1862,14 +1981,23 @@ function supportsTextSensitivity(operator: FilterOperator): boolean {
 
 function findSelectOptionIndex(column: CompiledColumn, value: unknown): number | undefined {
   if (value === undefined || column.selectOptions === undefined) return undefined;
-  const index = column.selectOptions.findIndex((option) => {
-    try {
-      return column.semantics.equivalent(option, value);
-    } catch {
-      return false;
+  const exactIndex = column.selectOptionIndexes?.get(value);
+  if (exactIndex !== undefined && Object.is(column.selectOptions[exactIndex], value)) {
+    return exactIndex;
+  }
+  try {
+    const canonical = column.semantics.formatCanonicalText(value);
+    const canonicalIndex = column.selectOptionCanonicalIndexes?.get(canonical);
+    if (
+      canonicalIndex !== undefined &&
+      column.semantics.equivalent(column.selectOptions[canonicalIndex], value)
+    ) {
+      return canonicalIndex;
     }
-  });
-  return index === -1 ? undefined : index;
+  } catch {
+    // Invalid external operands remain unselected; the sanitizer is the admission authority.
+  }
+  return undefined;
 }
 
 function defaultFilterOperator(column: CompiledColumn): FilterOperator {

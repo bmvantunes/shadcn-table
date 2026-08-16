@@ -20,6 +20,9 @@ type CompiledColumnBase = {
   readonly valueType: unknown;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
   readonly selectOptions?: readonly unknown[];
+  /** Exact and canonical Select lookup indexes compiled once with the column semantics. */
+  readonly selectOptionIndexes?: ReadonlyMap<unknown, number>;
+  readonly selectOptionCanonicalIndexes?: ReadonlyMap<string, number>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
@@ -127,7 +130,9 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   }
   semantics = nullableSafeSemantics(semantics);
   let selectOptions: readonly unknown[] | undefined;
-  if (semantics.filterFamily === "select" && Object.hasOwn(candidate, "options")) {
+  let selectOptionIndexes: ReadonlyMap<unknown, number> | undefined;
+  let selectOptionCanonicalIndexes: ReadonlyMap<string, number> | undefined;
+  if (semantics.filterFamily === "select" && hasField && Object.hasOwn(candidate, "options")) {
     const options = candidate["options"];
     if (!Array.isArray(options)) {
       throw new ColumnConfigurationError(
@@ -146,6 +151,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
     const decodedOptions: unknown[] = [];
+    const exactIndexes = new Map<unknown, number>();
+    const canonicalIndexes = new Map<string, number>();
     for (let optionIndex = 0; optionIndex < optionCount; optionIndex += 1) {
       if (!Object.hasOwn(options, optionIndex)) {
         throw new ColumnConfigurationError(
@@ -160,8 +167,17 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         );
       }
       decodedOptions.push(decoded.value);
+      if (!exactIndexes.has(decoded.value)) exactIndexes.set(decoded.value, optionIndex);
+      try {
+        const canonical = semantics.formatCanonicalText(decoded.value);
+        if (!canonicalIndexes.has(canonical)) canonicalIndexes.set(canonical, optionIndex);
+      } catch {
+        // Exact identity remains available when a custom canonical formatter rejects an option.
+      }
     }
     selectOptions = Object.freeze(decodedOptions);
+    selectOptionIndexes = exactIndexes;
+    selectOptionCanonicalIndexes = canonicalIndexes;
   }
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
@@ -261,6 +277,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       valueType,
       semantics,
       ...(selectOptions === undefined ? {} : { selectOptions }),
+      ...(selectOptionIndexes === undefined ? {} : { selectOptionIndexes }),
+      ...(selectOptionCanonicalIndexes === undefined ? {} : { selectOptionCanonicalIndexes }),
       field,
       groupBy,
       enableFilter,
@@ -346,6 +364,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     valueType,
     semantics,
     ...(selectOptions === undefined ? {} : { selectOptions }),
+    ...(selectOptionIndexes === undefined ? {} : { selectOptionIndexes }),
+    ...(selectOptionCanonicalIndexes === undefined ? {} : { selectOptionCanonicalIndexes }),
     enableFilter: false,
     enableSorting: false,
     fields,

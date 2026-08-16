@@ -855,13 +855,13 @@ type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue, TFilterFamily>
       readonly type: "equals" | "notEqual";
       readonly filter: ScalarFilterValue<TValue>;
     } & TextSensitivity<TFilterFamily>)
-  | (TFilterFamily extends "boolean" | "select"
-      ? never
-      : {
+  | (TFilterFamily extends "text" | "numeric"
+      ? {
           readonly columnId: TColumnId;
           readonly type: "in";
           readonly filter: NonEmptyScalarFilterValues<TValue>;
-        } & TextSensitivity<TFilterFamily>);
+        } & TextSensitivity<TFilterFamily>
+      : never);
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TFilterFamily> = TFilterFamily extends "text"
   ? {

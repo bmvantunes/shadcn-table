@@ -865,6 +865,14 @@ const invalidEmptyInFilter = [
   { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
+const acceptedTextInFilter = [
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: ["AAPL"] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const acceptedNumericInFilter = [
+  { columnId: "COL_ID_PRICE", type: "in", filter: [10] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
 const invalidMixedColumnCompoundFilter = [
   {
     type: "OR",
@@ -1092,6 +1100,8 @@ void invalidOptedOutFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
 void invalidEmptyInFilter;
+void acceptedTextInFilter;
+void acceptedNumericInFilter;
 void invalidMixedColumnCompoundFilter;
 void invalidEmptySort;
 void invalidOptedOutSort;

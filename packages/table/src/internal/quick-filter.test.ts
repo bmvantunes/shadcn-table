@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { compileColumns, type CompiledColumn } from "./compile-columns";
-import { createClientQueryPredicate, createClientQuickFilterPredicate } from "./quick-filter";
+import {
+  BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS,
+  BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH,
+  createClientQueryPredicate,
+  createClientQuickFilterPredicate,
+  validateBrunoTableQuickFilterFields,
+} from "./quick-filter";
 
 type QuickRow = {
   readonly id: string;
@@ -92,7 +98,14 @@ describe("BrunoTable Client Quick Filter", () => {
   });
 
   it("rejects over-limit predicate text and bounds field snapshots", () => {
-    const boundedText = "a".repeat(1_024);
+    const boundedText = "a".repeat(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
+    const boundaryPredicate = createClientQuickFilterPredicate(
+      boundedText,
+      ["description"],
+      () => boundedText,
+    );
+    expect(boundaryPredicate?.({})).toBe(true);
+
     const longTextPredicate = createClientQuickFilterPredicate(
       `${boundedText}x`,
       ["description"],
@@ -103,9 +116,27 @@ describe("BrunoTable Client Quick Filter", () => {
     expect(
       createClientQuickFilterPredicate(
         "a",
-        Array.from({ length: 257 }, (_, index) => `field-${index}`),
+        Array.from(
+          { length: BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS + 1 },
+          (_, index) => `field-${index}`,
+        ),
         readField,
       ),
     ).toBeUndefined();
+
+    const boundaryFields = Array.from(
+      { length: BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS },
+      (_, index) => `field-${index}`,
+    );
+    const boundaryFieldsPredicate = createClientQuickFilterPredicate(
+      "match",
+      boundaryFields,
+      () => "match",
+    );
+    expect(boundaryFieldsPredicate?.({})).toBe(true);
+    expect(validateBrunoTableQuickFilterFields(["symbol", "symbol"])).toEqual({
+      ok: true,
+      fields: ["symbol"],
+    });
   });
 });

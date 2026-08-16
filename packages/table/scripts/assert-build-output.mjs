@@ -601,13 +601,14 @@ const columns = [
 ] satisfies BrunoTableColumns<Row>;
 void columns;
 const source = { rows: [] as readonly Row[], totalRows: 0, version: 1, status: "ready" as const };
+const quickFilterFields = ["symbol"] as const;
 const rendered = (
   <BrunoTableClient
     tableId="TABLE_ID_PACKED"
     columns={columns}
     initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
     getRowId={(row) => row.symbol}
-    quickFilterFields={["symbol"]}
+    quickFilterFields={quickFilterFields}
     clientSource={source}
   >
     <BrunoTableToolbar>

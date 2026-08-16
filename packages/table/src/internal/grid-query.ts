@@ -25,6 +25,8 @@ export type BrunoTableFilterComplexity = Readonly<{
 type BrunoTableClientFilterRoot = Readonly<{
   readonly filter: Readonly<Record<string, unknown>>;
   readonly columnId: string;
+  /** Bounded active-filter label compiled from the admitted root, never rediscovered in the UI. */
+  readonly activeFilterLabel: string;
   readonly signature?: string;
   readonly compiledOperandNodes: readonly object[];
   readonly complexity: BrunoTableFilterComplexity;
@@ -38,10 +40,11 @@ type BrunoTableClientFilterRoot = Readonly<{
 export type BrunoTableClientFilterCollection = Readonly<{
   readonly filters: readonly unknown[];
   readonly columnsById: ReadonlyMap<string, CompiledColumn>;
+  readonly columnLabelsById: ReadonlyMap<string, string>;
   readonly roots: readonly BrunoTableClientFilterRoot[];
   readonly byColumn: ReadonlyMap<string, readonly unknown[]>;
   readonly rootsByColumn: ReadonlyMap<string, readonly BrunoTableClientFilterRoot[]>;
-  readonly rootHandlesByColumn: ReadonlyMap<string, readonly object[]>;
+  readonly activeFilterLabelsByColumn: ReadonlyMap<string, readonly string[]>;
   readonly snapshotsByColumn: ReadonlyMap<string, unknown>;
   readonly complexityByColumn: ReadonlyMap<string, BrunoTableFilterComplexity>;
   readonly columnIds: ReadonlySet<string>;
@@ -176,9 +179,18 @@ export function compileClientFilterCollection(
   }
   if (candidates === undefined) return createEmptyClientFilterCollection(columns);
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  const columnLabelsById = createClientFilterColumnLabels(columns);
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
-  const context = createFilterSanitizationContext({}, new Map(), captured, capturedArrays);
+  const context = createFilterSanitizationContext(
+    {},
+    new Map(),
+    captured,
+    capturedArrays,
+    undefined,
+    columnLabelsById,
+    new Map(),
+  );
   const roots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
     // Each root is a transaction over the one collection-wide ledger. Its weak traversal caches
@@ -194,6 +206,10 @@ export function compileClientFilterCollection(
       new Map(),
       captured,
       capturedArrays,
+      undefined,
+      columnLabelsById,
+      context.descriptionMemo,
+      new Map(),
     );
     const next = sanitizeFilter(filter, columnsById, rootContext, 0);
     if (rootContext.overBudget && options?.rejectOverBudget === true) {
@@ -204,17 +220,14 @@ export function compileClientFilterCollection(
     if (next === undefined || rootContext.overBudget) {
       continue;
     }
-    const columnId = next.columnIds.values().next().value;
-    if (typeof columnId !== "string") {
-      continue;
+    const root = retainClientFilterRoot(next, columnsById, rootContext, previous);
+    if (rootContext.overBudget && options?.rejectOverBudget === true) {
+      throw new TypeError(
+        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
+      );
     }
-    const complexity = {
-      rootEntries: 1,
-      nodes: rootContext.nodes - previous.nodes,
-      operands: rootContext.operands - previous.operands,
-      textLength: rootContext.textLength - previous.textLength,
-    };
-    const compiledOperandNodes = Object.freeze([...rootContext.compiledOperands.keys()]);
+    if (root === undefined || rootContext.overBudget) continue;
+    mergeClientFilterDescriptionMemo(context.descriptionMemo, rootContext.pendingDescriptionMemo);
     context.nodes = rootContext.nodes;
     context.operands = rootContext.operands;
     context.textLength = rootContext.textLength;
@@ -222,13 +235,7 @@ export function compileClientFilterCollection(
     for (const [node, plan] of rootContext.compiledOperands) {
       context.compiledOperands.set(node, plan);
     }
-    roots.push({
-      filter: next.filter,
-      columnId,
-      ...(next.signature === undefined ? {} : { signature: next.signature }),
-      compiledOperandNodes,
-      complexity,
-    });
+    roots.push(root);
   }
   return createClientFilterCollection(columnsById, roots, context, filters);
 }
@@ -236,12 +243,71 @@ export function compileClientFilterCollection(
 function createEmptyClientFilterCollection(
   columns: readonly CompiledColumn[],
 ): BrunoTableClientFilterCollection {
-  const context = createFilterSanitizationContext();
+  const context = createFilterSanitizationContext(
+    {},
+    new Map(),
+    undefined,
+    undefined,
+    undefined,
+    createClientFilterColumnLabels(columns),
+  );
   return createClientFilterCollection(
     new Map(columns.map((column) => [column.columnId, column])),
     [],
     context,
   );
+}
+
+function createClientFilterColumnLabels(
+  columns: readonly CompiledColumn[],
+): ReadonlyMap<string, string> {
+  const headerCounts = new Map<string, number>();
+  for (const column of columns) {
+    headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
+  }
+  const labels = new Map<string, string>();
+  for (const [columnIndex, column] of columns.entries()) {
+    labels.set(
+      column.columnId,
+      headerCounts.get(column.headerName) === 1
+        ? column.headerName
+        : `${column.headerName} (column ${String(columnIndex + 1)})`,
+    );
+  }
+  return labels;
+}
+
+function retainClientFilterRoot(
+  next: SanitizedFilterNode,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  context: FilterSanitizationContext,
+  previous: Readonly<Pick<BrunoTableFilterComplexity, "nodes" | "operands" | "textLength">>,
+): BrunoTableClientFilterRoot | undefined {
+  const columnId = next.columnIds.values().next().value;
+  if (typeof columnId !== "string") return undefined;
+  const column = columnsById.get(columnId);
+  if (column === undefined) return undefined;
+  const activeFilterLabel = compileClientFilterDescription(
+    column,
+    next.filter,
+    context.columnLabelsById.get(columnId) ?? column.headerName,
+    context,
+  );
+  if (activeFilterLabel === undefined) return undefined;
+  if (!reserveFilterText(activeFilterLabel.length, context)) return undefined;
+  return {
+    filter: next.filter,
+    columnId,
+    activeFilterLabel,
+    ...(next.signature === undefined ? {} : { signature: next.signature }),
+    compiledOperandNodes: Object.freeze([...context.compiledOperands.keys()]),
+    complexity: {
+      rootEntries: 1,
+      nodes: context.nodes - previous.nodes,
+      operands: context.operands - previous.operands,
+      textLength: context.textLength - previous.textLength,
+    },
+  };
 }
 
 function createClientFilterCollection(
@@ -265,14 +331,14 @@ function createClientFilterCollection(
   const compiledOperands = new Map<object, CompiledFilterOperandPlan>();
   for (const root of frozenRoots) {
     for (const node of root.compiledOperandNodes) {
-      const plan = context.compiledOperands.get(node);
+      const plan = context.compiledOperands.get(node) ?? context.compiledOperandLookup.get(node);
       if (plan !== undefined) compiledOperands.set(node, plan);
     }
   }
   const filters = snapshotSanitizedFilterArray(sourceFilters, rootFilters);
   const byColumn = new Map<string, unknown[]>();
   const rootsByColumn = new Map<string, BrunoTableClientFilterRoot[]>();
-  const rootHandlesByColumn = new Map<string, object[]>();
+  const activeFilterLabelsByColumn = new Map<string, string[]>();
   const snapshotsByColumn = new Map<string, unknown>();
   const complexityByColumn = new Map<string, BrunoTableFilterComplexity>();
   const signatureCountsByColumn = new Map<string, Map<string, number>>();
@@ -286,9 +352,12 @@ function createClientFilterCollection(
     const columnRoots = rootsByColumn.get(root.columnId);
     if (columnRoots === undefined) rootsByColumn.set(root.columnId, [root]);
     else columnRoots.push(root);
-    const rootHandles = rootHandlesByColumn.get(root.columnId);
-    if (rootHandles === undefined) rootHandlesByColumn.set(root.columnId, [root]);
-    else rootHandles.push(root);
+    const activeFilterLabels = activeFilterLabelsByColumn.get(root.columnId);
+    if (activeFilterLabels === undefined) {
+      activeFilterLabelsByColumn.set(root.columnId, [root.activeFilterLabel]);
+    } else {
+      activeFilterLabels.push(root.activeFilterLabel);
+    }
     complexityByColumn.set(
       root.columnId,
       addFilterComplexity(complexityByColumn.get(root.columnId), root.complexity),
@@ -321,15 +390,16 @@ function createClientFilterCollection(
   }
   for (const values of byColumn.values()) Object.freeze(values);
   for (const values of rootsByColumn.values()) Object.freeze(values);
-  for (const values of rootHandlesByColumn.values()) Object.freeze(values);
+  for (const values of activeFilterLabelsByColumn.values()) Object.freeze(values);
   for (const counts of signatureCountsByColumn.values()) Object.freeze(counts);
   return Object.freeze({
     filters,
     columnsById,
+    columnLabelsById: context.columnLabelsById,
     roots: frozenRoots,
     byColumn,
     rootsByColumn,
-    rootHandlesByColumn,
+    activeFilterLabelsByColumn,
     snapshotsByColumn,
     complexityByColumn,
     columnIds,
@@ -471,14 +541,20 @@ function replaceClientFilterRoots(
 
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
+  const retainedCompiledOperands = collectCompiledOperandPlans(retainedRoots, [
+    collection.compiledOperands,
+  ]);
   const context = createFilterSanitizationContext(
     retainedComplexity,
-    new Map(collection.compiledOperands),
+    new Map(),
     captured,
     capturedArrays,
+    retainedCompiledOperands,
+    collection.columnLabelsById,
+    createClientFilterDescriptionMemo(retainedRoots),
   );
   context.hasSharedNodes = collection.hasSharedNodes;
-  const roots: BrunoTableClientFilterRoot[] = [...retainedRoots];
+  const candidateRoots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
     const previous = {
       nodes: context.nodes,
@@ -490,13 +566,22 @@ function replaceClientFilterRoots(
       new Map(),
       captured,
       capturedArrays,
+      new Map(),
+      collection.columnLabelsById,
+      context.descriptionMemo,
+      new Map(),
     );
     const next = sanitizeFilter(filter, collection.columnsById, candidateContext, 0);
     const candidateColumnId = next?.columnIds.values().next().value;
     if (next === undefined || candidateContext.overBudget || candidateColumnId !== columnId) {
       return undefined;
     }
-    const compiledOperandNodes = Object.freeze([...candidateContext.compiledOperands.keys()]);
+    const root = retainClientFilterRoot(next, collection.columnsById, candidateContext, previous);
+    if (root === undefined || candidateContext.overBudget) return undefined;
+    mergeClientFilterDescriptionMemo(
+      context.descriptionMemo,
+      candidateContext.pendingDescriptionMemo,
+    );
     context.nodes = candidateContext.nodes;
     context.operands = candidateContext.operands;
     context.textLength = candidateContext.textLength;
@@ -504,19 +589,16 @@ function replaceClientFilterRoots(
     for (const [node, plan] of candidateContext.compiledOperands) {
       context.compiledOperands.set(node, plan);
     }
-    roots.push({
-      filter: next.filter,
-      columnId,
-      ...(next.signature === undefined ? {} : { signature: next.signature }),
-      compiledOperandNodes,
-      complexity: {
-        rootEntries: 1,
-        nodes: candidateContext.nodes - previous.nodes,
-        operands: candidateContext.operands - previous.operands,
-        textLength: candidateContext.textLength - previous.textLength,
-      },
-    });
+    candidateRoots.push(root);
   }
+  const roots =
+    rootToReplace === undefined
+      ? [...retainedRoots, ...candidateRoots]
+      : [
+          ...retainedRoots.slice(0, collection.roots.indexOf(rootToReplace)),
+          ...candidateRoots,
+          ...retainedRoots.slice(collection.roots.indexOf(rootToReplace)),
+        ];
   return createClientFilterCollection(
     collection.columnsById,
     roots,
@@ -539,7 +621,14 @@ function createDerivedClientFilterCollection(
       ? [collection.compiledOperands]
       : [collection.compiledOperands, additional.compiledOperands],
   );
-  const context = createFilterSanitizationContext(complexity, compiledOperands);
+  const context = createFilterSanitizationContext(
+    complexity,
+    compiledOperands,
+    undefined,
+    undefined,
+    undefined,
+    collection.columnLabelsById,
+  );
   context.hasSharedNodes = collection.hasSharedNodes || additional?.hasSharedNodes === true;
   return createClientFilterCollection(
     collection.columnsById,
@@ -586,10 +675,10 @@ function subtractFilterComplexity(
   removed: BrunoTableFilterComplexity | undefined,
 ): BrunoTableFilterComplexity {
   return {
-    rootEntries: total.rootEntries - (removed?.rootEntries ?? 0),
-    nodes: total.nodes - (removed?.nodes ?? 0),
-    operands: total.operands - (removed?.operands ?? 0),
-    textLength: total.textLength - (removed?.textLength ?? 0),
+    rootEntries: Math.max(0, total.rootEntries - (removed?.rootEntries ?? 0)),
+    nodes: Math.max(0, total.nodes - (removed?.nodes ?? 0)),
+    operands: Math.max(0, total.operands - (removed?.operands ?? 0)),
+    textLength: Math.max(0, total.textLength - (removed?.textLength ?? 0)),
   };
 }
 
@@ -849,6 +938,17 @@ function reserveFilterText(length: number, context: FilterSanitizationContext): 
   return true;
 }
 
+function reserveFilterNodeText(
+  type: string,
+  columnId: string | undefined,
+  context: FilterSanitizationContext,
+): boolean {
+  return (
+    reserveFilterText(type.length, context) &&
+    (columnId === undefined || reserveFilterText(columnId.length, context))
+  );
+}
+
 function memoizeSanitizedFilter(
   candidate: object,
   depth: number,
@@ -897,6 +997,7 @@ function sanitizeFilterRecord(
 ): SanitizedFilterNode | undefined {
   const type = filter["type"];
   if (type === "AND" || type === "OR") {
+    if (!reserveFilterNodeText(type, undefined, context)) return undefined;
     const candidates = captureDenseFilterArray(filter["conditions"], context, true);
     if (candidates === undefined || candidates.length === 0) return undefined;
     const conditions: Readonly<Record<string, unknown>>[] = [];
@@ -925,6 +1026,7 @@ function sanitizeFilterRecord(
     };
   }
   if (type === "NOT") {
+    if (!reserveFilterNodeText(type, undefined, context)) return undefined;
     const condition = sanitizeFilter(filter["condition"], columnsById, context, depth + 1);
     if (condition === undefined) return undefined;
     const sanitized = snapshotFilter(filter, ["type", "condition"], {
@@ -945,6 +1047,9 @@ function sanitizeFilterRecord(
   if (typeof columnId !== "string") return undefined;
   const column = columnsById.get(columnId);
   if (column === undefined || column.enableFilter === false || column.kind !== "field") {
+    return undefined;
+  }
+  if (typeof type !== "string" || !reserveFilterNodeText(type, columnId, context)) {
     return undefined;
   }
   const node = (
@@ -973,7 +1078,11 @@ function sanitizeFilterRecord(
   const operand = filter["filter"];
   const decode = (value: unknown) => {
     try {
-      return column.semantics.decodeRuntime(value);
+      const decoded = column.semantics.decodeRuntime(value);
+      if (decoded._tag === "Success" && !isBoundedFilterOperand(decoded.value, context)) {
+        return { _tag: "Failure" as const, message: "Decoded value is not safely readable." };
+      }
+      return decoded;
     } catch {
       return { _tag: "Failure" as const, message: "Value decoding failed." };
     }
@@ -984,7 +1093,7 @@ function sanitizeFilterRecord(
   if (type === "in") {
     // Boolean and Select filters intentionally remain exact equality surfaces
     // until issue #13 owns Set Filter inclusion semantics and its live facets.
-    if (column.semantics.filterFamily === "boolean" || column.semantics.filterFamily === "select") {
+    if (column.semantics.filterFamily !== "text" && column.semantics.filterFamily !== "numeric") {
       return undefined;
     }
     const captured = captureDenseFilterArray(operand, context, false, true);
@@ -1054,29 +1163,11 @@ function sanitizeFilterRecord(
     }
     let configuredSelectValue: unknown;
     let isConfiguredSelectValue = false;
-    if (column.semantics.filterFamily === "select") {
-      const selectOptions = column.selectOptions;
-      if (selectOptions === undefined) return undefined;
-      const exactOptionIndex = selectOptions.findIndex((option) => Object.is(option, operand));
-      if (exactOptionIndex !== -1) {
-        configuredSelectValue = selectOptions[exactOptionIndex];
-        isConfiguredSelectValue = true;
-      } else if (!isBoundedFilterOperand(operand, context)) {
-        return undefined;
-      } else {
-        for (const option of selectOptions) {
-          try {
-            if (!column.semantics.equivalent(option, operand)) continue;
-            configuredSelectValue = option;
-            isConfiguredSelectValue = true;
-            break;
-          } catch {
-            // Ignore an unreadable or invalid external operand and continue checking
-            // the remaining bounded configured options.
-          }
-        }
-      }
-      if (!isConfiguredSelectValue) return undefined;
+    if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
+      const configured = resolveConfiguredSelectValue(column, operand, context);
+      if (configured === undefined) return undefined;
+      configuredSelectValue = configured;
+      isConfiguredSelectValue = true;
     }
     if (!isConfiguredSelectValue && !isBoundedFilterOperand(operand, context)) return undefined;
     if (!reserveFilterOperands(1, context)) return undefined;
@@ -1123,6 +1214,226 @@ function sanitizeFilterRecord(
           ),
         )
       : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Builds the active-filter label while a sanitized root is admitted. The input graph has already
+ * crossed the collection-wide node/operand/text boundary, and the bounded summary only retains
+ * the first few visible children. Ordinary active-filter renders consume the retained string and
+ * never walk this graph again.
+ */
+function compileClientFilterDescription(
+  column: CompiledColumn,
+  value: Readonly<Record<string, unknown>>,
+  columnLabel: string,
+  context: FilterSanitizationContext,
+): string | undefined {
+  const active = new WeakSet<object>();
+  const describe = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== "object" || candidate === null) return columnLabel;
+    if (context.descriptionMemo.has(candidate)) return context.descriptionMemo.get(candidate);
+    if (context.pendingDescriptionMemo.has(candidate)) {
+      return context.pendingDescriptionMemo.get(candidate);
+    }
+    if (active.has(candidate)) return "…";
+    active.add(candidate);
+    let description: string | undefined;
+    if (Array.isArray(candidate)) {
+      description = joinClientFilterDescriptions(candidate, " AND ", describe, context);
+      active.delete(candidate);
+      context.pendingDescriptionMemo.set(candidate, description);
+      return description;
+    }
+    const record = candidate as Readonly<Record<string, unknown>>;
+    const type = typeof record["type"] === "string" ? record["type"] : "filter";
+    if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
+      const joiner = type === "AND" ? " AND " : " OR ";
+      const conditions = joinClientFilterDescriptions(
+        record["conditions"],
+        joiner,
+        describe,
+        context,
+      );
+      description =
+        conditions === undefined
+          ? undefined
+          : meterAndTruncateClientFilterDescription(`${columnLabel}: (${conditions})`, context);
+    } else if (type === "NOT" && record["condition"] !== undefined) {
+      const condition = describe(record["condition"]);
+      description =
+        condition === undefined
+          ? undefined
+          : meterAndTruncateClientFilterDescription(`${columnLabel}: NOT (${condition})`, context);
+    } else {
+      const operand = record["filter"];
+      if (type === "blank" || type === "notBlank") {
+        description = meterAndTruncateClientFilterDescription(`${columnLabel}: ${type}`, context);
+      } else if (type === "inRange") {
+        const from = formatClientFilterOperand(column, operand, type, context);
+        const to = formatClientFilterOperand(column, record["filterTo"], type, context);
+        description =
+          from === undefined || to === undefined
+            ? undefined
+            : meterAndTruncateClientFilterDescription(
+                `${columnLabel}: inRange ${from} ≤ value < ${to} (upper bound exclusive)`,
+                context,
+              );
+      } else {
+        const formattedOperand = formatClientFilterOperand(column, operand, type, context);
+        if (formattedOperand === undefined) {
+          description = undefined;
+        } else {
+          const sensitivity = [
+            record["caseSensitive"] === true ? "case-sensitive" : undefined,
+            record["accentSensitive"] === true ? "accent-sensitive" : undefined,
+          ].filter((entry): entry is string => entry !== undefined);
+          const sensitivityLabel = sensitivity.length > 0 ? ` (${sensitivity.join(", ")})` : "";
+          description = meterAndTruncateClientFilterDescription(
+            `${columnLabel}: ${type}${sensitivityLabel} ${formattedOperand}`,
+            context,
+          );
+        }
+      }
+    }
+    active.delete(candidate);
+    context.pendingDescriptionMemo.set(candidate, description);
+    return description;
+  };
+  return describe(value);
+}
+
+function formatClientFilterOperand(
+  column: CompiledColumn,
+  value: unknown,
+  operator: unknown,
+  context: FilterSanitizationContext,
+): string | undefined {
+  if (operator === "in" && Array.isArray(value)) {
+    const joined = joinClientFilterDescriptions(
+      value,
+      ", ",
+      (item) => formatClientFilterOperand(column, item, "equals", context),
+      context,
+    );
+    return joined === undefined
+      ? undefined
+      : meterClientFilterDescriptionText(`[${joined}]`, context);
+  }
+  if (
+    operator === "contains" ||
+    operator === "notContains" ||
+    operator === "startsWith" ||
+    operator === "endsWith"
+  ) {
+    return meterClientFilterDescriptionText(
+      typeof value === "string" ? JSON.stringify(value) : safeClientFilterString(value),
+      context,
+    );
+  }
+  try {
+    const display = column.semantics.formatDisplay(value);
+    return meterClientFilterDescriptionText(
+      typeof value === "string" ? JSON.stringify(display) : safeClientFilterString(display),
+      context,
+    );
+  } catch {
+    return meterClientFilterDescriptionText(safeClientFilterString(value), context);
+  }
+}
+
+const CLIENT_FILTER_DESCRIPTION_ITEM_LIMIT = 8;
+const CLIENT_FILTER_DESCRIPTION_LENGTH_LIMIT = 512;
+
+function joinClientFilterDescriptions(
+  values: readonly unknown[],
+  separator: string,
+  render: (value: unknown) => string | undefined,
+  context: FilterSanitizationContext,
+): string | undefined {
+  const visible: string[] = [];
+  for (const value of values.slice(0, CLIENT_FILTER_DESCRIPTION_ITEM_LIMIT)) {
+    const rendered = render(value);
+    if (rendered === undefined) return undefined;
+    visible.push(rendered);
+  }
+  const omitted = values.length - visible.length;
+  if (omitted > 0) visible.push(`… ${String(omitted)} more`);
+  return meterAndTruncateClientFilterDescription(visible.join(separator), context);
+}
+
+function meterClientFilterDescriptionText(
+  value: string,
+  context: FilterSanitizationContext,
+): string | undefined {
+  return reserveFilterText(value.length, context) ? value : undefined;
+}
+
+function meterAndTruncateClientFilterDescription(
+  value: string,
+  context: FilterSanitizationContext,
+): string | undefined {
+  const metered = meterClientFilterDescriptionText(value, context);
+  return metered === undefined ? undefined : truncateClientFilterDescription(metered);
+}
+
+function truncateClientFilterDescription(value: string): string {
+  return value.length <= CLIENT_FILTER_DESCRIPTION_LENGTH_LIMIT
+    ? value
+    : `${value.slice(0, CLIENT_FILTER_DESCRIPTION_LENGTH_LIMIT - 1)}…`;
+}
+
+function safeClientFilterString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "<unavailable>";
+  }
+}
+
+function resolveConfiguredSelectValue(
+  column: CompiledColumn,
+  operand: unknown,
+  context: FilterSanitizationContext,
+): unknown {
+  const selectOptions = column.selectOptions;
+  if (selectOptions === undefined) return undefined;
+  // Even an exact compiled-option hit is still an admitted filter operand. Meter its raw shape
+  // and materialized text before taking the indexed fast path so repeated long Select values
+  // cannot bypass the collection-wide ledger.
+  if (!isBoundedFilterOperand(operand, context)) return undefined;
+  let canonical: string | undefined;
+  try {
+    canonical = column.semantics.formatCanonicalText(operand);
+  } catch {
+    canonical = undefined;
+  }
+  if (canonical !== undefined && !reserveFilterText(canonical.length, context)) return undefined;
+  const exactOptionIndex = column.selectOptionIndexes?.get(operand);
+  if (exactOptionIndex !== undefined && Object.is(selectOptions[exactOptionIndex], operand)) {
+    return selectOptions[exactOptionIndex];
+  }
+  const canonicalOptionIndex =
+    canonical === undefined ? undefined : column.selectOptionCanonicalIndexes?.get(canonical);
+  if (canonicalOptionIndex !== undefined) {
+    try {
+      if (column.semantics.equivalent(selectOptions[canonicalOptionIndex], operand)) {
+        return selectOptions[canonicalOptionIndex];
+      }
+    } catch {
+      // Continue to the bounded fallback below.
+    }
+  }
+  // Custom equivalence cannot be indexed generically. The configured option domain is validated
+  // and capped once during column compilation; this admission-only fallback scan is bounded
+  // static metadata, not another Grid Filter node budget.
+  for (const option of selectOptions) {
+    try {
+      if (column.semantics.equivalent(option, operand)) return option;
+    } catch {
+      // Ignore one unreadable custom operand and continue within the bounded option domain.
+    }
   }
   return undefined;
 }
@@ -1175,6 +1486,11 @@ function compileFilterOperandPlan(
   filter: Readonly<Record<string, unknown>>,
   context: FilterSanitizationContext,
 ): CompiledFilterOperandPlan | undefined {
+  const retained = context.compiledOperandLookup.get(filter);
+  if (retained !== undefined) {
+    context.compiledOperands.set(filter, retained);
+    return retained;
+  }
   const type = filter["type"];
   const caseSensitive = filter["caseSensitive"] === true;
   const accentSensitive = filter["accentSensitive"] === true;
@@ -1224,7 +1540,11 @@ function compileFilterOperandPlan(
       );
       return normalizedSubstringOperand === undefined ? undefined : { normalizedSubstringOperand };
     }
-  } else if (type === "in" && Array.isArray(operand)) {
+  } else if (
+    column.semantics.filterFamily === "numeric" &&
+    type === "in" &&
+    Array.isArray(operand)
+  ) {
     const membershipKeys = compileFilterMembershipKeys(column, operand, [], context);
     if (membershipKeys !== undefined) return { membershipKeys };
   }
@@ -1325,8 +1645,8 @@ function createLeafFilterSignature(
       : createFilterSignature([...parts, normalized], context);
   }
   if (type === "inRange") {
-    const from = filterOperandSignature(column, filter["filter"]);
-    const to = filterOperandSignature(column, filter["filterTo"]);
+    const from = filterOperandSignature(column, filter["filter"], context);
+    const to = filterOperandSignature(column, filter["filterTo"], context);
     return from === undefined || to === undefined
       ? undefined
       : createFilterSignature([...parts, from, to], context);
@@ -1339,16 +1659,22 @@ function createLeafFilterSignature(
         : createFilterSignature([...parts, normalized], context);
     }
   }
-  const operand = filterOperandSignature(column, filter["filter"]);
+  const operand = filterOperandSignature(column, filter["filter"], context);
   return operand === undefined ? undefined : createFilterSignature([...parts, operand], context);
 }
 
-function filterOperandSignature(column: CompiledColumn, value: unknown): string | undefined {
+function filterOperandSignature(
+  column: CompiledColumn,
+  value: unknown,
+  context: FilterSanitizationContext,
+): string | undefined {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   if (column.semantics.filterFamily === "select") {
-    const index = column.selectOptions?.findIndex((option) => Object.is(option, value));
-    return index === undefined || index === -1 ? undefined : `select:${String(index)}`;
+    const index = column.selectOptionIndexes?.get(value);
+    return index === undefined || !Object.is(column.selectOptions?.[index], value)
+      ? undefined
+      : `select:${String(index)}`;
   }
   if (column.semantics.filterFamily === "boolean") {
     return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
@@ -1359,7 +1685,9 @@ function filterOperandSignature(column: CompiledColumn, value: unknown): string 
       : undefined;
   }
   if (column.valueType === "bigint") {
-    return typeof value === "bigint" ? `bigint:${value.toString(10)}` : undefined;
+    if (typeof value !== "bigint") return undefined;
+    const decimal = value.toString(10);
+    return reserveFilterText(decimal.length, context) ? `bigint:${decimal}` : undefined;
   }
   return undefined;
 }
@@ -1370,9 +1698,9 @@ function createFilterSignature(
 ): string | undefined {
   // Length-delimited tokens are collision-free without JSON serialization. The final key is
   // charged once against the shared retained-text ledger before it is retained in the index. If a
-  // compound key would itself be too large, keep the admitted root opaque rather than allocating
-  // an unbounded transient string; its filter predicate remains fully usable and equality is
-  // conservatively treated as changed.
+  // A compound key that would exceed the remaining collection text budget stays opaque rather than
+  // allocating an unbounded transient string. Leaf representations that can themselves be large
+  // (notably BigInt decimal text) are charged before reaching this bounded signature assembly.
   const length = parts.reduce(
     (total, part) => total + part.length + String(part.length).length + 1,
     0,
@@ -1597,15 +1925,119 @@ export function sameBrunoTableFilterValue(
   previous: unknown,
   next: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  _column?: CompiledColumn,
-  _seen: WeakMap<object, object> = new WeakMap(),
+  column?: CompiledColumn,
+  seen: WeakMap<object, object> = new WeakMap(),
 ): boolean {
-  const columns = Array.from(columnsById.values());
-  return sameCompiledFilterCollections(
-    compileClientFilterCollection([previous], columns),
-    compileClientFilterCollection([next], columns),
-    false,
-  );
+  if (column !== undefined) return sameFilterSemanticValue(column, previous, next);
+  return sameFilterValueStructure(previous, next, columnsById, seen);
+}
+
+function sameFilterSemanticValue(
+  column: CompiledColumn,
+  previous: unknown,
+  next: unknown,
+): boolean {
+  if (Object.is(previous, next)) return true;
+  if (previous === null || previous === undefined || next === null || next === undefined) {
+    return previous === next;
+  }
+  try {
+    if (column.semantics.filterFamily === "text") {
+      return (
+        normalizeBrunoTableFilterText(column.semantics.formatCanonicalText(previous)) ===
+        normalizeBrunoTableFilterText(column.semantics.formatCanonicalText(next))
+      );
+    }
+    return column.semantics.equivalent(previous, next);
+  } catch {
+    return false;
+  }
+}
+
+function sameFilterValueStructure(
+  previous: unknown,
+  next: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  seen: WeakMap<object, object>,
+): boolean {
+  if (Object.is(previous, next)) return true;
+  if (typeof previous !== typeof next || previous === null || next === null) return false;
+  if (typeof previous !== "object" || typeof next !== "object") return false;
+  const previousObject = previous as object;
+  const nextObject = next as object;
+  const matched = seen.get(previousObject);
+  if (matched !== undefined) return matched === nextObject;
+  seen.set(previousObject, nextObject);
+  try {
+    if (Array.isArray(previous) || Array.isArray(next)) {
+      if (!Array.isArray(previous) || !Array.isArray(next) || previous.length !== next.length) {
+        return false;
+      }
+      return previous.every((value, index) =>
+        sameFilterValueStructure(value, next[index], columnsById, seen),
+      );
+    }
+    const previousKeys = Reflect.ownKeys(previous);
+    const nextKeys = Reflect.ownKeys(next);
+    if (previousKeys.length !== nextKeys.length) return false;
+    const nextKeySet = new Set(nextKeys);
+    if (!previousKeys.every((key) => nextKeySet.has(key))) return false;
+    const previousColumnId = readDataProperty(previous, "columnId");
+    const nextColumnId = readDataProperty(next, "columnId");
+    const column =
+      typeof previousColumnId === "string" && previousColumnId === nextColumnId
+        ? columnsById.get(previousColumnId)
+        : undefined;
+    const type = readDataProperty(previous, "type");
+    for (const key of previousKeys) {
+      const previousDescriptor = Object.getOwnPropertyDescriptor(previous, key);
+      const nextDescriptor = Object.getOwnPropertyDescriptor(next, key);
+      if (
+        previousDescriptor === undefined ||
+        nextDescriptor === undefined ||
+        !Object.hasOwn(previousDescriptor, "value") ||
+        !Object.hasOwn(nextDescriptor, "value")
+      ) {
+        return false;
+      }
+      const leftValue = previousDescriptor.value;
+      const rightValue = nextDescriptor.value;
+      if (column !== undefined && (key === "filter" || key === "filterTo")) {
+        if (type === "in" && key === "filter" && Array.isArray(leftValue)) {
+          if (!Array.isArray(rightValue) || leftValue.length !== rightValue.length) return false;
+          const matchedValues = new Set<number>();
+          if (
+            !leftValue.every((value) => {
+              const index = rightValue.findIndex(
+                (candidate, candidateIndex) =>
+                  !matchedValues.has(candidateIndex) &&
+                  sameFilterSemanticValue(column, value, candidate),
+              );
+              if (index < 0) return false;
+              matchedValues.add(index);
+              return true;
+            })
+          ) {
+            return false;
+          }
+        } else if (!sameFilterSemanticValue(column, leftValue, rightValue)) {
+          return false;
+        }
+      } else if (!sameFilterValueStructure(leftValue, rightValue, columnsById, seen)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readDataProperty(value: object, key: PropertyKey): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && Object.hasOwn(descriptor, "value")
+    ? descriptor.value
+    : undefined;
 }
 
 function sameCompiledFilterCollections(
@@ -1780,7 +2212,16 @@ type FilterSanitizationContext = {
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
   readonly admittedNodes: WeakSet<object>;
+  /** Raw operand objects and strings already metered during this root admission transaction. */
+  readonly meteredOperandObjects: WeakSet<object>;
+  readonly meteredOperandStrings: Set<string>;
   readonly compiledOperands: Map<object, CompiledFilterOperandPlan>;
+  readonly compiledOperandLookup: ReadonlyMap<object, CompiledFilterOperandPlan>;
+  readonly columnLabelsById: ReadonlyMap<string, string>;
+  /** Descriptions committed by earlier accepted roots in this collection admission. */
+  readonly descriptionMemo: Map<object, string | undefined>;
+  /** Candidate-local descriptions; merged only after the candidate root is accepted. */
+  readonly pendingDescriptionMemo: Map<object, string | undefined>;
   hasSharedNodes: boolean;
   nodes: number;
   operands: number;
@@ -1797,6 +2238,10 @@ function createFilterSanitizationContext(
   compiledOperands: Map<object, CompiledFilterOperandPlan> = new Map(),
   captured: WeakMap<object, Readonly<Record<string, unknown>> | undefined> = new WeakMap(),
   capturedArrays: WeakMap<object, CapturedFilterArray | undefined> = new WeakMap(),
+  compiledOperandLookup: ReadonlyMap<object, CompiledFilterOperandPlan> = compiledOperands,
+  columnLabelsById: ReadonlyMap<string, string> = new Map(),
+  descriptionMemo: Map<object, string | undefined> = new Map(),
+  pendingDescriptionMemo: Map<object, string | undefined> = new Map(),
 ): FilterSanitizationContext {
   return {
     captured,
@@ -1804,7 +2249,13 @@ function createFilterSanitizationContext(
     completed: new WeakMap(),
     visited: new WeakSet(),
     admittedNodes: new WeakSet(),
+    meteredOperandObjects: new WeakSet(),
+    meteredOperandStrings: new Set(),
     compiledOperands,
+    compiledOperandLookup,
+    columnLabelsById,
+    descriptionMemo,
+    pendingDescriptionMemo,
     hasSharedNodes: false,
     nodes: initial.nodes ?? 0,
     operands: initial.operands ?? 0,
@@ -1813,16 +2264,36 @@ function createFilterSanitizationContext(
   };
 }
 
+function createClientFilterDescriptionMemo(
+  roots: readonly BrunoTableClientFilterRoot[],
+): Map<object, string | undefined> {
+  const memo = new Map<object, string | undefined>();
+  for (const root of roots) memo.set(root.filter, root.activeFilterLabel);
+  return memo;
+}
+
+function mergeClientFilterDescriptionMemo(
+  target: Map<object, string | undefined>,
+  source: ReadonlyMap<object, string | undefined>,
+): void {
+  for (const [node, description] of source) target.set(node, description);
+}
+
 function isBoundedFilterOperand(value: unknown, context: FilterSanitizationContext): boolean {
   // These per-operand object/property/depth checks are structural readability guards. They stop
   // an accessor-backed or cyclic value before decoding; they are deliberately not complexity
   // budgets and never replace or reset the collection-wide node/operand/text ledger below.
   const visited = new WeakSet<object>();
+  const discoveredObjects: object[] = [];
+  const discoveredStrings = new Set<string>();
   let objectCount = 0;
   let propertyCount = 0;
 
   const visit = (candidate: unknown, depth: number): boolean => {
-    if (typeof candidate === "string") return true;
+    if (typeof candidate === "string") {
+      if (!context.meteredOperandStrings.has(candidate)) discoveredStrings.add(candidate);
+      return true;
+    }
     if (
       candidate === null ||
       candidate === undefined ||
@@ -1837,8 +2308,10 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
       if (depth > BRUNO_TABLE_MAX_FILTER_OPERAND_DEPTH) context.overBudget = true;
       return false;
     }
+    if (context.meteredOperandObjects.has(candidate)) return true;
     if (visited.has(candidate)) return true;
     visited.add(candidate);
+    discoveredObjects.push(candidate);
     objectCount += 1;
     if (objectCount > BRUNO_TABLE_MAX_FILTER_OPERAND_OBJECTS) {
       context.overBudget = true;
@@ -1856,6 +2329,9 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
       return false;
     }
     for (const key of keys) {
+      if (typeof key === "string" && !context.meteredOperandStrings.has(key)) {
+        discoveredStrings.add(key);
+      }
       let descriptor: PropertyDescriptor | undefined;
       try {
         descriptor = Object.getOwnPropertyDescriptor(candidate, key);
@@ -1868,7 +2344,13 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
     return true;
   };
 
-  return visit(value, 0);
+  if (!visit(value, 0)) return false;
+  let textLength = 0;
+  for (const text of discoveredStrings) textLength += text.length;
+  if (!reserveFilterText(textLength, context)) return false;
+  for (const object of discoveredObjects) context.meteredOperandObjects.add(object);
+  for (const text of discoveredStrings) context.meteredOperandStrings.add(text);
+  return true;
 }
 
 type CapturedFilterArray = {

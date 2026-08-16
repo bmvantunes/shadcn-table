@@ -80,32 +80,53 @@ export function readClientQuickFilterField(row: unknown, field: string): unknown
 
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 
-function snapshotQuickFilterFieldsForPredicate(
-  fields: readonly string[] | undefined,
-): readonly string[] {
-  // Public Client configuration is validated and rejected by the Adapter before this predicate
-  // seam. The defensive empty result here is only for hostile internal/direct predicate callers;
-  // it must never be used as the public configuration admission path.
-  if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
+export type BrunoTableQuickFilterFieldsValidation =
+  | Readonly<{ readonly ok: true; readonly fields: readonly string[] }>
+  | Readonly<{
+      readonly ok: false;
+      readonly reason: "not-array" | "length" | "sparse" | "empty-field";
+    }>;
+
+/** Validates and snapshots the source-field tuple once for every Client runtime boundary. */
+export function validateBrunoTableQuickFilterFields(
+  fields: unknown,
+): BrunoTableQuickFilterFieldsValidation {
+  if (fields === undefined) return Object.freeze({ ok: true, fields: EMPTY_QUICK_FILTER_FIELDS });
   try {
-    if (!Array.isArray(fields)) return EMPTY_QUICK_FILTER_FIELDS;
+    if (!Array.isArray(fields)) return Object.freeze({ ok: false, reason: "not-array" });
     const length = fields.length;
     if (
       !Number.isSafeInteger(length) ||
       length <= 0 ||
       length > BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS
     ) {
-      return EMPTY_QUICK_FILTER_FIELDS;
+      return Object.freeze({ ok: false, reason: "length" });
     }
     const snapshot: string[] = [];
+    const seen = new Set<string>();
     for (let index = 0; index < length; index += 1) {
-      if (!Object.hasOwn(fields, index)) return EMPTY_QUICK_FILTER_FIELDS;
+      if (!Object.hasOwn(fields, index)) return Object.freeze({ ok: false, reason: "sparse" });
       const field = fields[index];
-      if (typeof field !== "string" || field.length === 0) return EMPTY_QUICK_FILTER_FIELDS;
-      snapshot.push(field);
+      if (typeof field !== "string" || field.length === 0) {
+        return Object.freeze({ ok: false, reason: "empty-field" });
+      }
+      if (!seen.has(field)) {
+        seen.add(field);
+        snapshot.push(field);
+      }
     }
-    return Object.freeze(snapshot);
+    return Object.freeze({ ok: true, fields: Object.freeze(snapshot) });
   } catch {
-    return EMPTY_QUICK_FILTER_FIELDS;
+    return Object.freeze({ ok: false, reason: "not-array" });
   }
+}
+
+function snapshotQuickFilterFieldsForPredicate(
+  fields: readonly string[] | undefined,
+): readonly string[] {
+  // Public Client configuration is validated and rejected by the Adapter before this predicate
+  // seam. The defensive empty result here is only for hostile internal/direct predicate callers;
+  // it must never be used as the public configuration admission path.
+  const result = validateBrunoTableQuickFilterFields(fields);
+  return result.ok ? result.fields : EMPTY_QUICK_FILTER_FIELDS;
 }

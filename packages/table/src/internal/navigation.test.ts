@@ -108,6 +108,36 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("resets a body query to row zero and its first visible column", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("right");
+    navigation.move("down");
+
+    navigation.resetForCommittedQuery(["replacement"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "replacement",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
   it("falls back to the prior display position when a query projection removes its identity", () => {
     const columns = compileColumns([
       {

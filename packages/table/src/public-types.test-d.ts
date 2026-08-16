@@ -1087,6 +1087,14 @@ const invalidEmptyInFilter = [
   { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
+const acceptedTextInFilter = [
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: ["AAPL"] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const acceptedNumericInFilter = [
+  { columnId: "COL_ID_PRICE", type: "in", filter: [10] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
 const invalidSelectSetFilter = [
   // @ts-expect-error Select Set Filter inclusion is deferred to issue #13.
   { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
@@ -1547,6 +1555,8 @@ void invalidBooleanSensitivity;
 void invalidBooleanSetFilter;
 void invalidSelectSetFilter;
 void invalidEmptyInFilter;
+void acceptedTextInFilter;
+void acceptedNumericInFilter;
 void invalidComputedFilter;
 void invalidOptedOutFilter;
 void invalidMixedColumnCompoundFilter;

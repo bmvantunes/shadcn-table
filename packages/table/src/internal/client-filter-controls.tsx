@@ -26,7 +26,6 @@ import type { ReactElement, ReactNode } from "react";
 
 import { BrunoTableColumnFilter } from "./client-filter";
 import type { BrunoTableColumnFilterRendererProps } from "./bruno-table-view";
-import type { CompiledColumn } from "./compile-columns";
 import { normalizeBrunoTableFilterText } from "./grid-query";
 import type {
   BrunoTableFilterSnapshot,
@@ -185,7 +184,6 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
       draftEpochRef.current += 1;
       if (composingRef.current) {
         invalidatedCompositionSessionRef.current = compositionSessionRef.current;
-        composingRef.current = false;
       }
       const committed = runtime.getQuickFilterSnapshot();
       lastCommittedRef.current = committed;
@@ -233,6 +231,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           debouncer.cancel();
         }}
         onChange={(event) => {
+          if (invalidatedCompositionSessionRef.current === compositionSessionRef.current) return;
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           const draftEpoch = draftEpochRef.current + 1;
           draftEpochRef.current = draftEpoch;
@@ -561,27 +560,20 @@ function activeFilterProjection(
   requestedWindowStart: number,
 ): ActiveFilterProjection {
   const quickFilterActive = normalizeBrunoTableFilterText(query.quickFilter).length > 0;
-  const headerCounts = new Map<string, number>();
-  for (const column of query.columns) {
-    headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
-  }
   const activeColumns: Array<{
     readonly column: (typeof query.columns)[number];
     readonly filters: readonly unknown[];
     readonly handles: readonly object[];
-    readonly columnLabel: string;
+    readonly labels: readonly string[];
   }> = [];
-  for (const [columnIndex, column] of query.columns.entries()) {
+  for (const column of query.columns) {
     const snapshot = query.filtersByColumn.get(column.columnId);
     const filters =
       snapshot === undefined ? [] : Array.isArray(snapshot) ? snapshot : Object.freeze([snapshot]);
     if (filters.length === 0) continue;
     const handles = query.filterHandlesByColumn.get(column.columnId) ?? [];
-    const columnLabel =
-      headerCounts.get(column.headerName) === 1
-        ? column.headerName
-        : `${column.headerName} (column ${String(columnIndex + 1)})`;
-    activeColumns.push({ column, filters, handles, columnLabel });
+    const labels = query.activeFilterLabelsByColumn.get(column.columnId) ?? [];
+    activeColumns.push({ column, filters, handles, labels });
   }
   const gridFilterEntryCount = activeColumns.reduce(
     (count, activeColumn) => count + activeColumn.filters.length,
@@ -620,13 +612,8 @@ function activeFilterProjection(
         key: `column-filter-${activeColumn.column.columnId}-${activeFilterRootKey(root)}`,
         root,
         label: shouldDescribe
-          ? describeActiveFilter(
-              activeColumn.column,
-              filter,
-              activeColumn.columnLabel,
-              createActiveFilterDescriptionState(),
-            )
-          : activeColumn.columnLabel,
+          ? (activeColumn.labels[filterIndex] ?? activeColumn.column.headerName)
+          : activeColumn.column.headerName,
       });
       entryIndex += 1;
     }
@@ -639,24 +626,6 @@ function activeFilterProjection(
     visibleEntryWindowEnd,
     visibleEntryWindowStart,
   };
-}
-
-type ActiveFilterDescriptionState = {
-  readonly seen: WeakSet<object>;
-  nodes: number;
-};
-
-function createActiveFilterDescriptionState(): ActiveFilterDescriptionState {
-  return { seen: new WeakSet<object>(), nodes: 0 };
-}
-
-const ACTIVE_FILTER_DESCRIPTION_NODE_LIMIT = 1_024;
-
-function enterActiveFilterDescription(value: object, state: ActiveFilterDescriptionState): boolean {
-  if (state.seen.has(value) || state.nodes >= ACTIVE_FILTER_DESCRIPTION_NODE_LIMIT) return false;
-  state.seen.add(value);
-  state.nodes += 1;
-  return true;
 }
 
 function createBrunoTableActiveFilterOpenStore(): {
@@ -692,95 +661,7 @@ function createBrunoTableActiveFilterOpenStore(): {
   };
 }
 
-function describeActiveFilter(
-  column: CompiledColumn,
-  value: unknown,
-  columnLabel = column.headerName,
-  state: ActiveFilterDescriptionState = createActiveFilterDescriptionState(),
-): string {
-  if (Array.isArray(value)) {
-    if (!enterActiveFilterDescription(value, state)) return "…";
-    return joinActiveFilterSummaries(value, " AND ", (condition) =>
-      describeActiveFilter(column, condition, columnLabel, state),
-    );
-  }
-  if (typeof value !== "object" || value === null) return columnLabel;
-  if (!enterActiveFilterDescription(value, state)) return "…";
-  const record = value as Readonly<Record<string, unknown>>;
-  const type = typeof record["type"] === "string" ? record["type"] : "filter";
-  if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
-    const joiner = type === "AND" ? " AND " : " OR ";
-    return truncateActiveFilterSummary(
-      `${columnLabel}: (${joinActiveFilterSummaries(record["conditions"], joiner, (condition) =>
-        describeActiveFilter(column, condition, columnLabel, state),
-      )})`,
-    );
-  }
-  if (type === "NOT" && record["condition"] !== undefined) {
-    return truncateActiveFilterSummary(
-      `${columnLabel}: NOT (${describeActiveFilter(column, record["condition"], columnLabel, state)})`,
-    );
-  }
-  const operand = record["filter"];
-  if (type === "blank" || type === "notBlank") return `${columnLabel}: ${type}`;
-  if (type === "inRange") {
-    return truncateActiveFilterSummary(
-      `${columnLabel}: inRange ${formatActiveFilterOperand(column, operand, type)} ≤ value < ${formatActiveFilterOperand(column, record["filterTo"], type)} (upper bound exclusive)`,
-    );
-  }
-  const sensitivity = [
-    record["caseSensitive"] === true ? "case-sensitive" : undefined,
-    record["accentSensitive"] === true ? "accent-sensitive" : undefined,
-  ].filter((value): value is string => value !== undefined);
-  const sensitivityLabel = sensitivity.length > 0 ? ` (${sensitivity.join(", ")})` : "";
-  return truncateActiveFilterSummary(
-    `${columnLabel}: ${type}${sensitivityLabel} ${formatActiveFilterOperand(column, operand, type)}`,
-  );
-}
-
-function formatActiveFilterOperand(
-  column: CompiledColumn,
-  value: unknown,
-  operator?: string,
-): string {
-  if (operator === "in" && Array.isArray(value)) {
-    return `[${joinActiveFilterSummaries(value, ", ", (item) =>
-      formatActiveFilterOperand(column, item, "equals"),
-    )}]`;
-  }
-  if (
-    operator === "contains" ||
-    operator === "notContains" ||
-    operator === "startsWith" ||
-    operator === "endsWith"
-  ) {
-    return truncateActiveFilterSummary(
-      typeof value === "string" ? JSON.stringify(value) : String(value),
-    );
-  }
-  try {
-    const display = column.semantics.formatDisplay(value);
-    return truncateActiveFilterSummary(
-      typeof value === "string" ? JSON.stringify(display) : display,
-    );
-  } catch {
-    return truncateActiveFilterSummary(String(value));
-  }
-}
-
-const ACTIVE_FILTER_SUMMARY_ITEM_LIMIT = 8;
 const ACTIVE_FILTER_SUMMARY_LENGTH_LIMIT = 512;
-
-function joinActiveFilterSummaries(
-  values: readonly unknown[],
-  separator: string,
-  render: (value: unknown) => string,
-): string {
-  const visible = values.slice(0, ACTIVE_FILTER_SUMMARY_ITEM_LIMIT).map((value) => render(value));
-  const omitted = values.length - visible.length;
-  if (omitted > 0) visible.push(`… ${String(omitted)} more`);
-  return truncateActiveFilterSummary(visible.join(separator));
-}
 
 function truncateActiveFilterSummary(value: string): string {
   if (value.length <= ACTIVE_FILTER_SUMMARY_LENGTH_LIMIT) return value;

@@ -182,14 +182,18 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(
       runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" }),
     ).toBe(false);
-    runtime.dispatchGridCommand({ type: "column.filters.clear" });
-    runtime.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" });
-    runtime.dispatchGridCommand({
-      type: "column.filter.replace",
-      columnId: "COL_ID_NAME",
-      filter: { columnId: "COL_ID_NAME", type: "contains", filter: "B" },
-    });
-    runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+    expect(runtime.dispatchGridCommand({ type: "column.filters.clear" })).toBe(false);
+    expect(
+      runtime.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" }),
+    ).toBe(false);
+    expect(
+      runtime.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_NAME",
+        filter: { columnId: "COL_ID_NAME", type: "contains", filter: "B" },
+      }),
+    ).toBe(false);
+    expect(runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" })).toBe(false);
 
     expect(gate).toHaveBeenCalledTimes(5);
     expect(runtime.getQuerySnapshot()).toBe(before);
@@ -397,7 +401,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
-  it("bounds unordered fallback matching for maximum-size custom roots", () => {
+  it("keeps unsupported custom membership out of semantic comparison", () => {
     type OpaqueValue = Readonly<{ readonly id: number }>;
     const equivalent = vi.fn(
       (left: OpaqueValue, right: OpaqueValue): boolean => left.id === right.id,
@@ -452,7 +456,10 @@ describe("BrunoTable filter runtime primitives", () => {
     const nextIn = [
       { columnId: "COL_ID_OPAQUE", type: "in" as const, filter: [...operands].reverse() },
     ];
-    expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(false);
+    // Set-style membership for Boolean, Select, and custom equality families belongs to issue
+    // #13. Both unsupported collections sanitize to empty rather than entering a comparator
+    // fallback that would rescan every operand.
+    expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(true);
     expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();
@@ -465,7 +472,7 @@ describe("BrunoTable filter runtime primitives", () => {
       ...entry,
       filter: entry.filter.map((operand) => Object.freeze({ id: operand.id })),
     }));
-    expect(sameBrunoTableFilterCollection(multiplePrevious, multipleNext, columnsById)).toBe(false);
+    expect(sameBrunoTableFilterCollection(multiplePrevious, multipleNext, columnsById)).toBe(true);
     expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();
@@ -516,17 +523,24 @@ describe("BrunoTable filter runtime primitives", () => {
   });
 
   it("compares the maximum admitted root through linear semantic keys", () => {
-    const filters = Array.from({ length: 16_384 }, (_, index) => ({
-      columnId: "COL_ID_NAME",
-      type: "equals" as const,
-      filter: `Name-${String(index)}`,
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_A",
+        field: "score",
+        headerName: "A",
+        valueType: "number",
+      },
+    ]);
+    const filters = Array.from({ length: 16_384 }, () => ({
+      columnId: "COL_ID_A",
+      type: "blank" as const,
     }));
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Name-0" }]),
       (row) => row.id,
-      runtimeColumns,
+      columns,
       filters,
-      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      [{ columnId: "COL_ID_A", direction: "asc" }],
     );
     const query = runtime.getQuerySnapshot();
     const queryListener = vi.fn();
@@ -534,7 +548,7 @@ describe("BrunoTable filter runtime primitives", () => {
 
     runtime.dispatchGridCommand({
       type: "column.filter.replace",
-      columnId: "COL_ID_NAME",
+      columnId: "COL_ID_A",
       filter: [...filters].reverse(),
     });
 
