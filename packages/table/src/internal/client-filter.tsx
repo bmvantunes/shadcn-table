@@ -91,6 +91,10 @@ type FilterDraft =
   | Readonly<{
       readonly kind: "not";
       readonly condition: FilterDraft;
+    }>
+  | Readonly<{
+      readonly kind: "opaque";
+      readonly committed: Readonly<Record<string, unknown>>;
     }>;
 
 type FilterNode = Readonly<Record<string, unknown>>;
@@ -498,6 +502,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           errorId={errorId}
           inputRef={inputRef}
           selectRef={selectRef}
+          materializationState={createFilterDraftMaterializationState()}
           renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
           onChange={commitDraft}
         />
@@ -513,11 +518,12 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
 
 function FilterExpressionEditor({
   column,
-  draft,
+  draft: inputDraft,
   errorId,
   inputRef,
   onChange,
   path = "root",
+  materializationState,
   renderBudget,
   rootSelectRef,
   selectRef,
@@ -528,10 +534,22 @@ function FilterExpressionEditor({
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path?: string;
+  readonly materializationState?: FilterDraftMaterializationState | undefined;
   readonly renderBudget: number;
   readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
 }): ReactElement {
+  const draft =
+    inputDraft.kind === "opaque" &&
+    (materializationState === undefined ||
+      materializationState.nodes < BRUNO_TABLE_CLIENT_FILTER_MAX_NODES)
+      ? draftFromNode(
+          column,
+          inputDraft.committed,
+          materializationState ?? createFilterDraftMaterializationState(),
+          0,
+        )
+      : inputDraft;
   const expressionMode =
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
   const pathLabel = filterExpressionPathLabel(path);
@@ -622,6 +640,7 @@ function FilterExpressionEditor({
             column={column}
             draft={condition}
             errorId={errorId}
+            materializationState={materializationState}
             onChange={(nextCondition, mode, badInput) => {
               const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
               conditions[index] = nextCondition;
@@ -680,24 +699,28 @@ function FilterExpressionEditor({
 
   return (
     <div className="flex flex-col gap-3">
-      <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-mode`}>
-        Expression
-        <NativeSelect
-          ref={path === "root" ? selectRef : undefined}
-          id={`${errorId}-${path}-mode`}
-          aria-label={modeLabel}
-          value={expressionMode}
-          onChange={(event) => {
-            onChange(changeExpressionMode(column, draft, event.currentTarget.value), "immediate");
-          }}
-        >
-          <NativeSelectOption value="leaf">Single condition</NativeSelectOption>
-          <NativeSelectOption value="AND">All conditions (AND)</NativeSelectOption>
-          <NativeSelectOption value="OR">Any conditions (OR)</NativeSelectOption>
-          <NativeSelectOption value="NOT">Not condition (NOT)</NativeSelectOption>
-        </NativeSelect>
-      </label>
-      {draft.kind === "leaf" ? (
+      {draft.kind === "opaque" ? null : (
+        <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-mode`}>
+          Expression
+          <NativeSelect
+            ref={path === "root" ? selectRef : undefined}
+            id={`${errorId}-${path}-mode`}
+            aria-label={modeLabel}
+            value={expressionMode}
+            onChange={(event) => {
+              onChange(changeExpressionMode(column, draft, event.currentTarget.value), "immediate");
+            }}
+          >
+            <NativeSelectOption value="leaf">Single condition</NativeSelectOption>
+            <NativeSelectOption value="AND">All conditions (AND)</NativeSelectOption>
+            <NativeSelectOption value="OR">Any conditions (OR)</NativeSelectOption>
+            <NativeSelectOption value="NOT">Not condition (NOT)</NativeSelectOption>
+          </NativeSelect>
+        </label>
+      )}
+      {draft.kind === "opaque" ? (
+        filterEditorBudgetMessage(column)
+      ) : draft.kind === "leaf" ? (
         (() => {
           const leaf = draft;
           return (
@@ -799,6 +822,7 @@ function FilterExpressionEditor({
             draft={draft.condition}
             errorId={errorId}
             inputRef={inputRef}
+            materializationState={materializationState}
             onChange={(condition, mode, badInput) =>
               onChange(Object.freeze({ ...draft, condition }), mode, badInput)
             }
@@ -1395,9 +1419,13 @@ type FilterDraftMaterializationState = {
 
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
   if (Array.isArray(committed)) {
-    const conditions = committed.map((condition) =>
-      draftFromNode(column, asRecord(condition), createFilterDraftMaterializationState(), 0),
-    );
+    const state = createFilterDraftMaterializationState();
+    const conditions = committed.map((condition, index) => {
+      const record = asRecord(condition);
+      return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
+        ? draftFromNode(column, record, state, 0)
+        : createOpaqueFilterDraft(record);
+    });
     if (conditions.length >= 2) {
       return Object.freeze({
         kind: "compound",
@@ -1413,6 +1441,10 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
     return conditions[0] ?? createDefaultLeaf(column);
   }
   return draftFromNode(column, asRecord(committed), createFilterDraftMaterializationState(), 0);
+}
+
+function createOpaqueFilterDraft(record: Readonly<Record<string, unknown>>): FilterDraft {
+  return Object.freeze({ kind: "opaque", committed: record });
 }
 
 function createFilterDraftMaterializationState(): FilterDraftMaterializationState {
@@ -1436,7 +1468,7 @@ function draftFromNode(
     state.nodes >= BRUNO_TABLE_CLIENT_FILTER_MAX_NODES ||
     state.active.has(record)
   ) {
-    return createDefaultLeaf(column);
+    return createOpaqueFilterDraft(record);
   }
   state.nodes += 1;
   state.active.add(record);
@@ -1516,6 +1548,7 @@ function buildFilterCandidate(
   draft: FilterDraft,
   parseCache?: FilterParseCache,
 ): FilterCandidate {
+  if (draft.kind === "opaque") return { filter: draft.committed };
   if (draft.kind === "not") {
     const condition = buildFilterCandidate(column, draft.condition, parseCache);
     if (condition.filter === undefined) return condition;
@@ -1568,6 +1601,7 @@ function countFilterDraftNodes(
   state.nodes += 1;
   try {
     if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+    if (draft.kind === "opaque") return 1;
     if (draft.kind === "leaf") {
       return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
     }
@@ -1676,7 +1710,7 @@ function changeExpressionMode(
 ): FilterDraft {
   if (mode === "leaf") {
     if (draft.kind === "leaf") return draft;
-    return firstFilterLeaf(draft);
+    return firstFilterLeaf(column, draft);
   }
   if (mode === "NOT") {
     return draft.kind === "not"
@@ -1717,10 +1751,11 @@ function changeExpressionMode(
   });
 }
 
-function firstFilterLeaf(draft: FilterDraft): FilterLeafDraft {
+function firstFilterLeaf(column: CompiledColumn, draft: FilterDraft): FilterLeafDraft {
   if (draft.kind === "leaf") return draft;
-  if (draft.kind === "not") return firstFilterLeaf(draft.condition);
-  return firstFilterLeaf(draft.conditions[0]);
+  if (draft.kind === "not") return firstFilterLeaf(column, draft.condition);
+  if (draft.kind === "opaque") return createDefaultLeaf(column);
+  return firstFilterLeaf(column, draft.conditions[0]);
 }
 
 function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
