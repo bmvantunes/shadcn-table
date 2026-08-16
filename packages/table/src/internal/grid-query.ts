@@ -1012,10 +1012,17 @@ export function sameBrunoTableFilterCollection(
     }
     if (nextCounts.size === 0) return true;
   }
+  // Custom Value Semantics may not have a built-in comparison key. Keep the conservative
+  // semantic fallback bounded instead of allowing a maximum-size root to trigger O(n²)
+  // equivalent() calls. A false result publishes a fresh query, which is safer than blocking
+  // the interaction frame on an equality proof the runtime cannot make cheaply.
+  let remainingComparisons = BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET;
   const matched = new Set<number>();
   return previous.every((value) => {
     for (let index = 0; index < next.length; index += 1) {
       if (matched.has(index)) continue;
+      remainingComparisons -= 1;
+      if (remainingComparisons < 0) return false;
       if (!sameBrunoTableFilterValue(value, next[index], columnsById)) continue;
       matched.add(index);
       return true;
@@ -1023,6 +1030,8 @@ export function sameBrunoTableFilterCollection(
     return false;
   });
 }
+
+const BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET = 4_096;
 
 function filterValueComparisonKey(
   value: unknown,

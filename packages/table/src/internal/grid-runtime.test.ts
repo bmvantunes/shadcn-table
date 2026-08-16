@@ -11,7 +11,7 @@ import {
 } from "./client-source-adapter";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
-import { sanitizeClientInitialFilters } from "./grid-query";
+import { sanitizeClientInitialFilters, sameBrunoTableFilterCollection } from "./grid-query";
 import { BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH } from "./quick-filter";
 import type { BrunoTableValueType } from "../public-types";
 
@@ -348,6 +348,56 @@ describe("BrunoTable filter runtime primitives", () => {
 
     expect(runtime.getQuerySnapshot()).toBe(query);
     expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("bounds unordered fallback matching for maximum-size custom roots", () => {
+    type OpaqueValue = Readonly<{ readonly id: number }>;
+    const equivalent = vi.fn(
+      (left: OpaqueValue, right: OpaqueValue): boolean => left.id === right.id,
+    );
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_OPAQUE",
+        field: "value",
+        headerName: "Opaque",
+        valueType: {
+          codecId: "test/opaque-filter-comparison",
+          codecVersion: 1,
+          filterFamily: "equality",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 120,
+          decodeRuntime: (input: unknown) =>
+            typeof input === "object" && input !== null
+              ? { _tag: "Success" as const, value: input as OpaqueValue }
+              : { _tag: "Failure" as const, message: "Expected an object." },
+          equivalent,
+          compare: () => 0,
+          formatCanonicalText: (value: OpaqueValue) => String(value.id),
+          parseCanonicalText: (text: string) => ({
+            _tag: "Success" as const,
+            value: Object.freeze({ id: Number(text) }),
+          }),
+          formatDisplay: (value: OpaqueValue) => String(value.id),
+          encodePersisted: (value: OpaqueValue) => value.id,
+          decodePersisted: (input: unknown) =>
+            typeof input === "number"
+              ? { _tag: "Success" as const, value: Object.freeze({ id: input }) }
+              : { _tag: "Failure" as const, message: "Expected a number." },
+        },
+      } as never,
+    ]);
+    const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+    const previous = Array.from({ length: 16_384 }, (_, id) => ({
+      columnId: "COL_ID_OPAQUE",
+      type: "equals" as const,
+      filter: Object.freeze({ id }),
+    }));
+    const next = [...previous].reverse();
+
+    expect(sameBrunoTableFilterCollection(previous, next, columnsById)).toBe(false);
+    expect(equivalent).toHaveBeenCalledTimes(4_097);
   });
 
   it("replaces a column's implicit root filter collection without wrapping it", () => {
