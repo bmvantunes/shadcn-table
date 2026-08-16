@@ -452,6 +452,22 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("diagnoses a Quick Filter rendered without configured fields", async () => {
+    await expect(
+      render(
+        <BrunoTableClient<Row, typeof columns>
+          {...props}
+          tableId="TABLE_ID_QUICK_FILTER_MISSING_FIELDS"
+          clientSource={readySource()}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      ),
+    ).rejects.toThrow("BrunoTableQuickFilter requires BrunoTableClient quickFilterFields");
+  });
+
   test("uses a trailing 150 ms Pacer commit and cancels pending filter drafts", async () => {
     const commands: BrunoTableGridCommand[] = [];
     const removeCommandListener = installBrunoTableGridCommandListener(

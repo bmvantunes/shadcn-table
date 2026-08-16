@@ -337,6 +337,32 @@ const exactAmountFilters = [
   { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: { minor: 10n } },
 ] satisfies BrunoTableFilterExpressions<AmountRow, typeof exactAmountColumns>;
 
+const exactBuiltInFilters = [
+  { columnId: "COL_ID_QUANTITY", type: "greaterThanOrEqual", filter: 10n },
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: true },
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "open" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidBigIntFilterOperand = [
+  // @ts-expect-error Emitted BigInt filters preserve bigint operands.
+  { columnId: "COL_ID_QUANTITY", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidBooleanFilterOperand = [
+  // @ts-expect-error Emitted Boolean filters preserve boolean operands.
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: "true" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidSelectFilterOperand = [
+  // @ts-expect-error Emitted Select filters admit only the exact configured value union.
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "pending" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+void exactBuiltInFilters;
+void invalidBigIntFilterOperand;
+void invalidBooleanFilterOperand;
+void invalidSelectFilterOperand;
+
 const capabilityColumns = [
   {
     columnId: "COL_ID_SYMBOL",

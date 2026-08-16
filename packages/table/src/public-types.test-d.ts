@@ -1030,6 +1030,32 @@ const invalidNumericSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
+const exactBuiltInFilters = [
+  { columnId: "COL_ID_QUANTITY", type: "greaterThanOrEqual", filter: 10n },
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: true },
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "open" },
+] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
+
+const invalidBigIntFilterOperand = [
+  // @ts-expect-error BigInt filters preserve bigint operands instead of accepting number values.
+  { columnId: "COL_ID_QUANTITY", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
+
+const invalidBooleanFilterOperand = [
+  // @ts-expect-error Boolean filters preserve boolean operands instead of accepting text labels.
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: "true" },
+] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
+
+const invalidSelectFilterOperand = [
+  // @ts-expect-error Select filters admit only the exact configured value union.
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "pending" },
+] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
+
+void exactBuiltInFilters;
+void invalidBigIntFilterOperand;
+void invalidBooleanFilterOperand;
+void invalidSelectFilterOperand;
+
 type FeatureFlag = { readonly enabled: boolean };
 
 const featureFlagColumns = [
