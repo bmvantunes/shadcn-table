@@ -178,7 +178,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
   readonly registerActiveEditorCommitGate: (gate: BrunoTableActiveEditorCommitGate) => () => void;
-  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => void;
+  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly toggleColumnSort: (columnId: string, multi: boolean) => void;
   readonly clearColumnFilters: (columnId: string) => void;
   readonly resetColumnFilters: (columnId: string) => void;
@@ -780,8 +780,8 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeColumnStructure = (listener: Listener): (() => void) =>
     subscribe(this.columnStructureListeners, listener);
 
-  public readonly dispatchGridCommand = (command: BrunoTableGridCommand): void => {
-    if (isBrunoTableFilterCommand(command) && !this.commitActiveEditor()) return;
+  public readonly dispatchGridCommand = (command: BrunoTableGridCommand): boolean => {
+    if (isBrunoTableFilterCommand(command) && !this.commitActiveEditor()) return false;
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableGridCommand(this.tableId, command);
     }
@@ -793,13 +793,13 @@ export class BrunoTableGridRuntime<TRow> {
         command,
       );
       this.publishQuery(this.query.filters, nextOrderBy);
-      return;
+      return true;
     }
     if (command.type === "column.filter.clear") {
       const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
       this.clearColumnFiltersImpl(command.columnId);
       if (invalidationError !== undefined) throw invalidationError.value;
-      return;
+      return true;
     }
     if (command.type === "column.filters.clear") {
       let invalidationError: ListenerError | undefined;
@@ -811,17 +811,17 @@ export class BrunoTableGridRuntime<TRow> {
       }
       this.clearAllColumnFiltersImpl();
       if (invalidationError !== undefined) throw invalidationError.value;
-      return;
+      return true;
     }
     if (command.type === "column.filter.reset") {
       const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
       this.resetColumnFiltersImpl(command.columnId);
       if (invalidationError !== undefined) throw invalidationError.value;
-      return;
+      return true;
     }
     if (command.type === "column.filter.replace") {
       this.replaceColumnFilterImpl(command.columnId, command.filter);
-      return;
+      return true;
     }
     if (command.type === "quick-filter.replace") {
       this.quickFilterCommandEpoch += 1;
@@ -832,13 +832,13 @@ export class BrunoTableGridRuntime<TRow> {
       );
       const error = notify(this.quickFilterCommandEpochListeners);
       if (error !== undefined) throw error.value;
-      return;
+      return true;
     }
-    if (!isBrunoTableColumnLayoutCommand(command)) return;
+    if (!isBrunoTableColumnLayoutCommand(command)) return true;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const previousCommands = this.columnCommands;
     const nextLayout = applyBrunoTableGridCommand(this.columnLayout, command);
-    if (nextLayout === this.columnLayout) return;
+    if (nextLayout === this.columnLayout) return true;
     this.columnLayout = nextLayout;
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(nextLayout);
     this.columnCommands = createColumnCommandSnapshots(
@@ -853,6 +853,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.notifyColumnStructureTransition(previousLayoutSnapshot),
     );
     if (error !== undefined) throw error.value;
+    return true;
   };
 
   public readonly registerActiveEditorCommitGate = (

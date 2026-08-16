@@ -436,8 +436,16 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     (nextDraft: FilterDraft, mode: FilterChangeMode, badInput = false): void => {
       if (mode === "clear") {
         debouncer.cancel();
-        setLocalState({ column, version: editorVersion, draft: nextDraft, error: undefined });
-        runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: column.columnId });
+        const accepted = runtime.dispatchGridCommand({
+          type: "column.filter.clear",
+          columnId: column.columnId,
+        });
+        setLocalState({
+          column,
+          version: editorVersion,
+          draft: accepted ? nextDraft : draft,
+          error: undefined,
+        });
         return;
       }
       if (mode === "local") {

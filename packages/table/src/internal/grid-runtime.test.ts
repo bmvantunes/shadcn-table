@@ -179,7 +179,9 @@ describe("BrunoTable filter runtime primitives", () => {
     const unregister = runtime.registerActiveEditorCommitGate(gate);
     const before = runtime.getQuerySnapshot();
 
-    runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" });
+    expect(
+      runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" }),
+    ).toBe(false);
     runtime.dispatchGridCommand({ type: "column.filters.clear" });
     runtime.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" });
     runtime.dispatchGridCommand({

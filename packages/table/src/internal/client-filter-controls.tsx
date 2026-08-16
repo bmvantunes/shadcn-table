@@ -137,10 +137,10 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         readonly commandEpoch: number;
         readonly draftEpoch: number;
       }>,
-    ): void => {
-      if (runtime.getQuickFilterCommandEpochSnapshot() !== candidate.commandEpoch) return;
-      if (draftEpochRef.current !== candidate.draftEpoch) return;
-      runtime.dispatchGridCommand({ type: "quick-filter.replace", text: candidate.text });
+    ): boolean => {
+      if (runtime.getQuickFilterCommandEpochSnapshot() !== candidate.commandEpoch) return false;
+      if (draftEpochRef.current !== candidate.draftEpoch) return false;
+      return runtime.dispatchGridCommand({ type: "quick-filter.replace", text: candidate.text });
     },
     [runtime],
   );
@@ -225,17 +225,23 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           type="button"
           variant="ghost"
           onClick={() => {
+            const previousDraft = draftRef.current;
             composingRef.current = false;
             debouncer.cancel();
             const draftEpoch = draftEpochRef.current + 1;
             draftEpochRef.current = draftEpoch;
             draftRef.current = "";
             setDraft("");
-            publish({
+            const accepted = publish({
               text: "",
               commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
               draftEpoch,
             });
+            if (!accepted) {
+              draftRef.current = previousDraft;
+              setDraft(previousDraft);
+              return;
+            }
             inputRef.current?.focus({ preventScroll: true });
           }}
         >
@@ -342,20 +348,22 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
       const index = entries.findIndex((candidate) => candidate.key === entry.key);
       const nextKey = entries[index + 1]?.key ?? entries[index - 1]?.key;
       const nextIndex = index < entryCount - 1 ? index : index - 1;
+      // Apply the command before changing the review projection. A rejected command lets the
+      // active editor restore its own focus and keeps this review open for another attempt.
+      const accepted =
+        entry.kind === "quick"
+          ? runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" })
+          : runtime.dispatchGridCommand({
+              type: "column.filter.clear",
+              columnId: entry.columnId,
+            });
+      if (!accepted) return;
       if (nextIndex >= 0) {
         setEntryWindowStart(
           Math.floor(nextIndex / ACTIVE_FILTER_VISIBLE_ENTRIES) * ACTIVE_FILTER_VISIBLE_ENTRIES,
         );
       }
       if (nextKey === undefined) openStore.setOpen(false);
-      if (entry.kind === "quick") {
-        runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" });
-      } else {
-        runtime.dispatchGridCommand({
-          type: "column.filter.clear",
-          columnId: entry.columnId,
-        });
-      }
       focusAfterMutation(nextKey);
     },
     [entries, entryCount, focusAfterMutation, openStore, runtime, setEntryWindowStart],
@@ -463,8 +471,9 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                 variant="outline"
                 onClick={() => {
                   const keepsQuickFilter = quickFilterActive;
+                  const accepted = runtime.dispatchGridCommand({ type: "column.filters.clear" });
+                  if (!accepted) return;
                   if (!keepsQuickFilter) openStore.setOpen(false);
-                  runtime.dispatchGridCommand({ type: "column.filters.clear" });
                   focusAfterMutation(keepsQuickFilter ? "quick-filter" : undefined);
                 }}
               >

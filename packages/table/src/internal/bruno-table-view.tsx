@@ -2105,10 +2105,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         const column = logicalColumns.find((candidate) => candidate.columnId === columnId);
         if (column === undefined) return;
         const action = command.filterActive ? "cleared" : "reset";
-        runtime.dispatchGridCommand({
+        const accepted = runtime.dispatchGridCommand({
           type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
           columnId,
         });
+        if (!accepted) return;
         setAnnouncement(`${column.headerName} filter ${action}`);
       },
     [logicalColumns, runtime, setAnnouncement],
@@ -3274,10 +3275,11 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
             <DropdownMenuItem
               onClick={() => {
                 const action = command.filterActive ? "cleared" : "reset";
-                runtime.dispatchGridCommand({
+                const accepted = runtime.dispatchGridCommand({
                   type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
                   columnId: column.columnId,
                 });
+                if (!accepted) return;
                 announce(`${column.headerName} filter ${action}`);
                 restoreColumnFocus(column.columnId);
               }}
