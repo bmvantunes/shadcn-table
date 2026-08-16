@@ -1056,6 +1056,11 @@ const invalidBooleanSetFilter = [
   { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
+const invalidEmptyInFilter = [
+  // @ts-expect-error `in` operands must be a non-empty tuple.
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
 const invalidSelectSetFilter = [
   // @ts-expect-error Select Set Filter inclusion is deferred to issue #13.
   { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
@@ -1515,6 +1520,7 @@ void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
 void invalidBooleanSetFilter;
 void invalidSelectSetFilter;
+void invalidEmptyInFilter;
 void invalidComputedFilter;
 void invalidOptedOutFilter;
 void invalidMixedColumnCompoundFilter;

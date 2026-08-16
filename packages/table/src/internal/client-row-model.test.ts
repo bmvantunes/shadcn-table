@@ -542,12 +542,14 @@ describe("Client row model", () => {
       type: "startsWith",
       filter: "\u0301",
     } as const;
+    const emptyIn = { columnId: "COL_ID_NAME", type: "in", filter: [] } as const;
     expect(
       sanitizeClientInitialFilters(
         [
           ...emptyRanges,
           emptyText,
           normalizedEmptyText,
+          emptyIn,
           {
             columnId: "COL_ID_NAME",
             type: "equals",
@@ -570,6 +572,7 @@ describe("Client row model", () => {
       expect(filterClientRows(rows, columns, [range])).toEqual([]);
     }
     expect(filterClientRows(rows, columns, [normalizedEmptyText])).toEqual(rows);
+    expect(filterClientRows(rows, columns, [emptyIn])).toEqual(rows);
 
     expect(
       sanitizeClientInitialFilters(

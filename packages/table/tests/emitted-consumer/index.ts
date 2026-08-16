@@ -834,6 +834,11 @@ const invalidBooleanSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
+const invalidEmptyInFilter = [
+  // @ts-expect-error emitted declarations require non-empty `in` operands.
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
 const invalidMixedColumnCompoundFilter = [
   {
     type: "OR",
@@ -1060,6 +1065,7 @@ void invalidFilter;
 void invalidOptedOutFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
+void invalidEmptyInFilter;
 void invalidMixedColumnCompoundFilter;
 void invalidEmptySort;
 void invalidOptedOutSort;

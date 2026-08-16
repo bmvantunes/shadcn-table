@@ -1626,6 +1626,9 @@ function buildLeafFilterCandidate(
       return { filter: undefined, error: "Enter one or more valid values." };
     }
     const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
+    if (values.length === 0) {
+      return { filter: undefined, error: "Enter one or more valid values." };
+    }
     const decoded = values.map((value) => parseFilterText(column, value, parseCache));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };

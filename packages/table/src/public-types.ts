@@ -816,6 +816,10 @@ export type BrunoTableEditableColumnId<
     : never;
 
 type ScalarFilterValue<TValue> = Exclude<TValue, null | undefined>;
+type NonEmptyScalarFilterValues<TValue> = readonly [
+  ScalarFilterValue<TValue>,
+  ...ScalarFilterValue<TValue>[],
+];
 
 type FilterFamilyForValueType<TValueType> = TValueType extends "text"
   ? "text"
@@ -856,7 +860,7 @@ type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue, TFilterFamily>
       : {
           readonly columnId: TColumnId;
           readonly type: "in";
-          readonly filter: readonly ScalarFilterValue<TValue>[];
+          readonly filter: NonEmptyScalarFilterValues<TValue>;
         } & TextSensitivity<TFilterFamily>);
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TFilterFamily> = TFilterFamily extends "text"

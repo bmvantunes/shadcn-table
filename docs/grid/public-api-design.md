@@ -988,6 +988,8 @@ The built-in filter UI exposes the complete operator vocabulary supported by the
 - Number, BigInt, and BigDecimal: `equals`, `notEqual`, `in`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, half-open `inRange`, `blank`, and `notBlank`.
 - Boolean and other supported scalars: `equals`, `notEqual`, `blank`, and `notBlank`. The live Boolean/Select Set Filter `in` surface is deferred to issue #13.
 
+Every admitted `in` operand is a non-empty tuple. An empty `in` expression is rejected during type checking, runtime sanitization, and editor candidate construction; it is never used as a Match-None substitute.
+
 Select option arrays are snapshotted once during column normalization and are bounded to 16,384 values; the Client filter editor mounts only a 64-option window at a time. An oversized captured length is rejected, and a later runtime length change cannot extend the bounded decode loop.
 
 The complete target design gives Boolean and Select Field Columns a live Set Filter for `in` by default. Issue #12 intentionally stops before live faceting and inclusion/exclusion intent: its Client Boolean/Select surface uses exact typed choices and does not admit `in`. Text, Number, BigInt, and BigDecimal Field Columns still expose `in`, but live distinct-value faceting requires explicit column opt-in so a high-cardinality field does not silently create an expensive subscription. The exact opt-in property belongs to the final column filter configuration design.

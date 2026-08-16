@@ -461,6 +461,7 @@ function sanitizeFilterRecord(
     const captured = captureDenseFilterArray(operand, context, false);
     if (
       captured === undefined ||
+      captured.length === 0 ||
       !hasValidTextSensitivity(filter, column.semantics.filterFamily === "text")
     ) {
       return undefined;
@@ -856,6 +857,10 @@ function evaluateFilterRecord(
     );
   }
   if (filter["type"] === "in") {
+    // Empty `in` is invalid in the Client filter model. If hostile callers bypass
+    // sanitization, keep parity with View Server normalization by treating it as
+    // no restriction rather than as a Match-None predicate.
+    if (Array.isArray(operand) && operand.length === 0) return true;
     if (plan?.membershipKeys !== undefined) {
       const key = filterMembershipKey(
         column,

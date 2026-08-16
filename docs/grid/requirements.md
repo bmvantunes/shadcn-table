@@ -564,6 +564,8 @@ The filters panel should support:
 
 Each eligible Field Column exposes every operator supported by its Value Type and the View Server contract. Text includes equality, `in`, contains/not-contains, starts/ends-with, blank/not-blank, and case/accent sensitivity. Number, BigInt, and BigDecimal include equality, `in`, ordered comparisons, half-open `inRange`, and blank/not-blank. Boolean and other scalar domains include equality and blank/not-blank in this Client slice. Issue #12 is the pre-faceting Client slice: Boolean/Select `in` and live inclusion/exclusion Set Filter intent are explicitly deferred to issue #13, so its exact typed Boolean/Select controls expose equality and blank/not-blank only.
 
+Every admitted `in` operand is non-empty. Type checking, runtime sanitization, and editor validation reject an empty `in` expression rather than assigning it Match-None semantics.
+
 The live Set Filter and facet design is a future target owned by issue #13, not by the issue #12 Client slice. Issue #13 will decide which Boolean, Select, Text, Number, BigInt, and BigDecimal columns mount live distinct-value controls, how unbounded cardinality is opted into, and how complete Client and whole-result Server facet subscriptions behave. No issue #12 implementation may infer a facet domain from visible columns or loaded sparse blocks.
 
 Issue #13 may render checkbox options and value-level Select All inside a Set Filter overlay. In a Server Table those future controls will select filter values only and will not violate the separate prohibition on row checkboxes, Row Selection, or row Select All.
