@@ -400,9 +400,13 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     }
   }, [column, debouncer, editorVersion, localState.column, localState.version]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
-    return () => debouncer.cancel();
+    return () => {
+      // Outside/Escape close must not manufacture a command from a local draft. Releasing the
+      // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
+      debouncer.cancel();
+    };
   }, [debouncer]);
 
   const commitImmediately = useCallback(

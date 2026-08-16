@@ -7,6 +7,8 @@ import {
 
 /** Internal safety boundary for pasted Quick Filter candidates. */
 export const BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH = 1_024;
+/** Internal configuration bound shared by Client configuration and predicate construction. */
+export const BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS = 256;
 
 export function boundBrunoTableQuickFilterText(text: string): string {
   return text.length <= BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH
@@ -26,9 +28,10 @@ export function createClientQuickFilterPredicate<TRow>(
   readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
 ): ((row: TRow) => boolean) | undefined {
   if (text === undefined || text.length === 0) return undefined;
-  const normalizedQuery = normalizeBrunoTableFilterText(text);
+  const normalizedQuery = normalizeBrunoTableFilterText(boundBrunoTableQuickFilterText(text));
   if (normalizedQuery.length === 0) return undefined;
-  const quickFilterFields = fields ?? EMPTY_QUICK_FILTER_FIELDS;
+  const quickFilterFields = snapshotQuickFilterFieldsForPredicate(fields);
+  if (quickFilterFields.length === 0) return undefined;
   return (row) =>
     quickFilterFields.some((field) => {
       try {
@@ -71,3 +74,30 @@ export function readClientQuickFilterField(row: unknown, field: string): unknown
 }
 
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
+
+function snapshotQuickFilterFieldsForPredicate(
+  fields: readonly string[] | undefined,
+): readonly string[] {
+  if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
+  try {
+    if (!Array.isArray(fields)) return EMPTY_QUICK_FILTER_FIELDS;
+    const length = fields.length;
+    if (
+      !Number.isSafeInteger(length) ||
+      length <= 0 ||
+      length > BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS
+    ) {
+      return EMPTY_QUICK_FILTER_FIELDS;
+    }
+    const snapshot: string[] = [];
+    for (let index = 0; index < length; index += 1) {
+      if (!Object.hasOwn(fields, index)) return EMPTY_QUICK_FILTER_FIELDS;
+      const field = fields[index];
+      if (typeof field !== "string" || field.length === 0) return EMPTY_QUICK_FILTER_FIELDS;
+      snapshot.push(field);
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return EMPTY_QUICK_FILTER_FIELDS;
+  }
+}

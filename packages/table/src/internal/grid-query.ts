@@ -146,6 +146,7 @@ export function filterClientRows<TRow>(
 }
 
 export type ClientFilterPlan = Readonly<{
+  readonly filters: readonly unknown[];
   readonly columnsById: ReadonlyMap<string, CompiledColumn>;
   readonly compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>;
   readonly hasSharedNodes: boolean;
@@ -160,12 +161,17 @@ export function compileClientFilterPlan(
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
 ): ClientFilterPlan | undefined {
-  if (filters === undefined || filters.length === 0) return undefined;
+  // Keep the plan's filter snapshot beside its compiled operands so every predicate entry point
+  // evaluates bounded, immutable evidence, including direct internal callers that skip the row
+  // pipeline's normal query snapshot path.
+  const sanitizedFilters = sanitizeClientInitialFilters(filters, columns);
+  if (sanitizedFilters.length === 0) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   return Object.freeze({
+    filters: sanitizedFilters,
     columnsById,
-    compiledOperands: compileFilterOperandPlans(filters, columnsById),
-    hasSharedNodes: containsSharedFilterNodes(filters),
+    compiledOperands: compileFilterOperandPlans(sanitizedFilters, columnsById),
+    hasSharedNodes: containsSharedFilterNodes(sanitizedFilters),
   });
 }
 
@@ -175,14 +181,13 @@ export function createClientFilterPredicate<TRow>(
   readValue: (column: CompiledColumn, row: TRow) => unknown = readCompiledColumnValue,
   filterPlan?: ClientFilterPlan,
 ): ((row: TRow) => boolean) | undefined {
-  if (filters === undefined || filters.length === 0) return undefined;
   const plan = filterPlan ?? compileClientFilterPlan(columns, filters);
   if (plan === undefined) return undefined;
   const columnsById = plan.columnsById;
   const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
   return (row) => {
     const completed = plan.hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
-    return filters.every((filter) =>
+    return plan.filters.every((filter) =>
       evaluateFilter(filter, row, columnsById, readUnknown, plan.compiledOperands, completed),
     );
   };
@@ -857,10 +862,6 @@ function evaluateFilterRecord(
     );
   }
   if (filter["type"] === "in") {
-    // Empty `in` is invalid in the Client filter model. If hostile callers bypass
-    // sanitization, keep parity with View Server normalization by treating it as
-    // no restriction rather than as a Match-None predicate.
-    if (Array.isArray(operand) && operand.length === 0) return true;
     if (plan?.membershipKeys !== undefined) {
       const key = filterMembershipKey(
         column,

@@ -156,6 +156,24 @@ describe("Client row model", () => {
     expect(normalize).toHaveBeenCalledTimes(1);
   });
 
+  it("sanitizes direct predicate plans before compiling hostile filters", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+
+    expect(
+      compileClientFilterPlan(columns, [{ columnId: "COL_ID_NAME", type: "in", filter: [] }]),
+    ).toBeUndefined();
+    expect(
+      createClientFilterPredicate(columns, [{ columnId: "COL_ID_NAME", type: "in", filter: [] }]),
+    ).toBeUndefined();
+  });
+
   it("normalizes canonically equivalent accent-sensitive text", () => {
     const columns = compileColumns([
       {

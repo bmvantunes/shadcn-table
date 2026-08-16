@@ -343,6 +343,33 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(runtime.getQuerySnapshot().generation).toBe(generation + 1);
   });
 
+  it("compares the maximum admitted root through linear semantic keys", () => {
+    const filters = Array.from({ length: 16_384 }, (_, index) => ({
+      columnId: "COL_ID_NAME",
+      type: "equals" as const,
+      filter: `Name-${String(index)}`,
+    }));
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Name-0" }]),
+      (row) => row.id,
+      runtimeColumns,
+      filters,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const query = runtime.getQuerySnapshot();
+    const queryListener = vi.fn();
+    runtime.subscribeQuery(queryListener);
+
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: [...filters].reverse(),
+    });
+
+    expect(runtime.getQuerySnapshot()).toBe(query);
+    expect(queryListener).not.toHaveBeenCalled();
+  });
+
   it("invalidates filter editor candidates for no-op Clear and Reset commands", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),

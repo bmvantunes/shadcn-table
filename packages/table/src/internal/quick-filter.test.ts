@@ -90,4 +90,22 @@ describe("BrunoTable Client Quick Filter", () => {
     const nonStringPredicate = createClientQuickFilterPredicate("1", ["price"], () => 1);
     expect(nonStringPredicate?.({})).toBe(false);
   });
+
+  it("bounds standalone predicate text and field snapshots", () => {
+    const boundedText = "a".repeat(1_024);
+    const longTextPredicate = createClientQuickFilterPredicate(
+      `${boundedText}x`,
+      ["description"],
+      readField,
+    );
+    expect(longTextPredicate?.({ ...rows[0], description: boundedText })).toBe(true);
+
+    expect(
+      createClientQuickFilterPredicate(
+        "a",
+        Array.from({ length: 257 }, (_, index) => `field-${index}`),
+        readField,
+      ),
+    ).toBeUndefined();
+  });
 });

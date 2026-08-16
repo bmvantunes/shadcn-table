@@ -1597,10 +1597,9 @@ function sameFilterCollection(
     return true;
   }
   if (!unordered) return false;
-  if (
-    !containsSharedFilterNodesForComparison(previous) &&
-    !containsSharedFilterNodesForComparison(next)
-  ) {
+  const previousInspection = inspectFilterNodesForComparison(previous);
+  const nextInspection = inspectFilterNodesForComparison(next);
+  if (!previousInspection.hasSharedNodes && !nextInspection.hasSharedNodes) {
     const nextCounts = new Map<string, number>();
     const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
     if (nextKeys.every((key): key is string => key !== undefined)) {
@@ -1616,6 +1615,9 @@ function sameFilterCollection(
       if (nextCounts.size === 0) return true;
     }
   }
+  // Never fall back to the nested matching path after the bounded comparison walk gives up.
+  // Returning false is conservative and keeps an admitted large root on a linear work bound.
+  if (previousInspection.overBudget || nextInspection.overBudget) return false;
   const matched = new Set<number>();
   return previous.every((value) => {
     for (let index = 0; index < next.length; index += 1) {
@@ -1628,17 +1630,24 @@ function sameFilterCollection(
   });
 }
 
-function containsSharedFilterNodesForComparison(filters: readonly unknown[]): boolean {
+type FilterNodeComparisonInspection = Readonly<{
+  readonly hasSharedNodes: boolean;
+  readonly overBudget: boolean;
+}>;
+
+function inspectFilterNodesForComparison(
+  filters: readonly unknown[],
+): FilterNodeComparisonInspection {
   const visited = new WeakSet<object>();
   const pending = Array.from(filters);
   let nodes = 0;
   while (pending.length > 0) {
     const candidate = pending.pop();
     if (typeof candidate !== "object" || candidate === null) continue;
-    if (visited.has(candidate)) return true;
+    if (visited.has(candidate)) return { hasSharedNodes: true, overBudget: false };
     visited.add(candidate);
     nodes += 1;
-    if (nodes > 1_024) return true;
+    if (nodes > 1_024) return { hasSharedNodes: false, overBudget: true };
     if (Array.isArray(candidate)) {
       for (const condition of candidate) pending.push(condition);
       continue;
@@ -1652,10 +1661,10 @@ function containsSharedFilterNodesForComparison(filters: readonly unknown[]): bo
         pending.push(filter["condition"]);
       }
     } catch {
-      return true;
+      return { hasSharedNodes: false, overBudget: true };
     }
   }
-  return false;
+  return { hasSharedNodes: false, overBudget: false };
 }
 
 function filterValueComparisonKey(
