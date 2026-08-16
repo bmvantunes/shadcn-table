@@ -33,6 +33,28 @@ import { boundBrunoTableQuickFilterText } from "./quick-filter";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
+/**
+ * Optional editor-owned gate for commands that can change the filtered row projection.
+ * The registered editor owns parsing, validation, and focus restoration; returning false
+ * rejects the filter command before it is instrumented or published. Client editing is
+ * intentionally not installed by the current read-only filter slice, but this seam keeps
+ * future editor capabilities out of the filter controls and command implementations.
+ */
+export type BrunoTableActiveEditorCommitGate = () => boolean;
+
+function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
+  switch (command.type) {
+    case "column.filter.clear":
+    case "column.filters.clear":
+    case "column.filter.reset":
+    case "column.filter.replace":
+    case "quick-filter.replace":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export type BrunoTableInvalidSourceSnapshot =
   | Readonly<{
       readonly kind: "row-count-mismatch";
@@ -155,6 +177,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
+  readonly registerActiveEditorCommitGate: (gate: BrunoTableActiveEditorCommitGate) => () => void;
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => void;
   readonly toggleColumnSort: (columnId: string, multi: boolean) => void;
   readonly clearColumnFilters: (columnId: string) => void;
@@ -301,6 +324,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly quickFilterCommandEpochListeners = new Set<Listener>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
+  private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
   private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
@@ -413,6 +437,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeSorting: this.subscribeSorting,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
+        registerActiveEditorCommitGate: this.registerActiveEditorCommitGate,
         subscribeQuickFilterCommandEpoch: this.subscribeQuickFilterCommandEpoch,
         dispatchGridCommand: this.dispatchGridCommand,
         toggleColumnSort: this.toggleColumnSort,
@@ -756,6 +781,7 @@ export class BrunoTableGridRuntime<TRow> {
     subscribe(this.columnStructureListeners, listener);
 
   public readonly dispatchGridCommand = (command: BrunoTableGridCommand): void => {
+    if (isBrunoTableFilterCommand(command) && !this.commitActiveEditor()) return;
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableGridCommand(this.tableId, command);
     }
@@ -827,6 +853,25 @@ export class BrunoTableGridRuntime<TRow> {
       this.notifyColumnStructureTransition(previousLayoutSnapshot),
     );
     if (error !== undefined) throw error.value;
+  };
+
+  public readonly registerActiveEditorCommitGate = (
+    gate: BrunoTableActiveEditorCommitGate,
+  ): (() => void) => {
+    this.activeEditorCommitGates.add(gate);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.activeEditorCommitGates.delete(gate);
+    };
+  };
+
+  private readonly commitActiveEditor = (): boolean => {
+    for (const gate of this.activeEditorCommitGates) {
+      if (!gate()) return false;
+    }
+    return true;
   };
 
   public readonly toggleColumnSort = (columnId: string, multi: boolean): void => {

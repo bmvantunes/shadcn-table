@@ -167,6 +167,36 @@ describe("BrunoTableGridRuntime sorting invariant", () => {
 });
 
 describe("BrunoTable filter runtime primitives", () => {
+  it("gates every filter command through the optional active editor seam", () => {
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "contains", filter: "A" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const gate = vi.fn(() => false);
+    const unregister = runtime.registerActiveEditorCommitGate(gate);
+    const before = runtime.getQuerySnapshot();
+
+    runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" });
+    runtime.dispatchGridCommand({ type: "column.filters.clear" });
+    runtime.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" });
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "contains", filter: "B" },
+    });
+    runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+
+    expect(gate).toHaveBeenCalledTimes(5);
+    expect(runtime.getQuerySnapshot()).toBe(before);
+
+    unregister();
+    runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+    expect(runtime.getQuerySnapshot().quickFilter).toBe("ada");
+  });
+
   it("sanitizes Boolean notEqual operands", () => {
     const columns = compileColumns([
       {
