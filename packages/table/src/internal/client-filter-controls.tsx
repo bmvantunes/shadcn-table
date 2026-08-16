@@ -473,6 +473,7 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
                   const keepsQuickFilter = quickFilterActive;
                   const accepted = runtime.dispatchGridCommand({ type: "column.filters.clear" });
                   if (!accepted) return;
+                  if (keepsQuickFilter) setEntryWindowStart(0);
                   if (!keepsQuickFilter) openStore.setOpen(false);
                   focusAfterMutation(keepsQuickFilter ? "quick-filter" : undefined);
                 }}

@@ -1746,6 +1746,54 @@ describe("BrunoTableClient browser surface", () => {
       .toBeInTheDocument();
   });
 
+  test("returns focus to a surviving Quick Filter after clearing an off-page Grid Filter window", async () => {
+    const manyColumns = Array.from({ length: 65 }, (_, index) => ({
+      columnId: `COL_ID_ACTIVE_FILTER_QUICK_${String(index)}`,
+      field: "name",
+      headerName: `Quick Filter ${String(index)}`,
+      valueType: "text" as const,
+    })) as unknown as BrunoTableColumns<FilterRow>;
+    const manyFilters = Array.from({ length: 65 }, (_, index) => ({
+      columnId: `COL_ID_ACTIVE_FILTER_QUICK_${String(index)}`,
+      type: "equals" as const,
+      filter: "Ada",
+    }));
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof manyColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_QUICK_WINDOW"
+        columns={manyColumns}
+        initialFilters={manyFilters as never}
+        initialOrderBy={[{ columnId: "COL_ID_ACTIVE_FILTER_QUICK_0", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+        quickFilterFields={["name"]}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableQuickFilter />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+
+    await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "a");
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (66)" }))
+      .toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (66)" }));
+    const dialog = screen.getByRole("dialog", { name: "Active filters" });
+    await userEvent.click(dialog.getByRole("button", { name: "Next active filters" }));
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("Showing filters 3–66 of 66");
+
+    await userEvent.click(dialog.getByRole("button", { name: "Clear all Grid Filters" }));
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (1)" }))
+      .toBeInTheDocument();
+    await expect
+      .element(dialog.getByRole("button", { name: 'Remove Quick Filter contains "a"' }))
+      .toHaveFocus();
+  });
+
   test("reviews and clears Grid Filters and Quick Filter through the active-filter control", async () => {
     const screen = await render(
       <BrunoTableClient<FilterRow, typeof filterColumns>
