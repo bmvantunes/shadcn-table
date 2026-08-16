@@ -78,6 +78,47 @@ export class BrunoTableNavigationRuntime {
     this.setActive(undefined);
   };
 
+  /**
+   * Reset the position owned by a committed query command without retaining a body row identity.
+   * Header navigation is not a row position, so a header-originated command keeps its logical
+   * header column while a body-originated command starts at row zero (or clears for an empty
+   * result).
+   */
+  public readonly resetForCommittedQuery = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const activeCell = this.activeCell;
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    const column =
+      columns.find((candidate) => candidate.columnId === activeCell?.columnId) ?? columns[0];
+    if (column === undefined) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    if (activeCell?.region === "header") {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    if (rowSpace.totalRows === 0) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    this.bodyInitializationBlocked = false;
+    this.setActive({
+      region: "body",
+      rowIndex: 0,
+      ...rowIdentity(rowSpace, 0),
+      columnId: columns[0]!.columnId,
+    });
+  };
+
   public readonly reconcileForQuery = (
     rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
     columns: readonly CompiledColumn[],

@@ -1202,20 +1202,15 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         start: resetWindow.rowStart,
         end: resetWindow.rowEnd,
       });
-      const activeCell = navigation.getSnapshot();
-      if (activeCell?.region !== "header") {
-        const shouldReconcileActiveCell =
-          preserveActiveCellOnQueryChange ||
-          runtime.getPreserveActiveCellOnQueryChangeSnapshot?.() === true;
-        if (shouldReconcileActiveCell) {
-          navigation.reconcileForQuery(rowSpace, logicalColumns);
-        } else {
-          navigation.clearForQuery();
-          navigation.setShape(rowSpace, logicalColumns);
-          navigation.activateForFocus();
-        }
+      const shouldReconcileActiveCell =
+        preserveActiveCellOnQueryChange ||
+        runtime.getPreserveActiveCellOnQueryChangeSnapshot?.() === true;
+      if (shouldReconcileActiveCell) {
+        navigation.reconcileForQuery(rowSpace, logicalColumns);
       } else {
-        navigation.setShape(rowSpace, logicalColumns);
+        // Issue #12 resets body position without retaining a hidden/non-zero row. A header
+        // origin remains a header origin, so its DOM focus and logical header navigation survive.
+        navigation.resetForCommittedQuery(rowSpace, logicalColumns);
       }
     }, [
       logicalColumns,
@@ -1239,14 +1234,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         start: resetWindow.rowStart,
         end: resetWindow.rowEnd,
       });
-      const activeCell = navigation.getSnapshot();
-      if (activeCell?.region === "header") {
-        navigation.setShape(rowSpace, logicalColumns);
-      } else {
-        navigation.clearForQuery();
-        navigation.setShape(rowSpace, logicalColumns);
-        navigation.activateForFocus();
-      }
+      navigation.resetForCommittedQuery(rowSpace, logicalColumns);
     }, [filterPositionResetEpoch, logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
     useLayoutEffect(() => {
       const columnsChanged =

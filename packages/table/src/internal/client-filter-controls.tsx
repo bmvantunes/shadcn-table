@@ -15,6 +15,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -35,6 +36,7 @@ import type {
 import {
   boundBrunoTableQuickFilterText,
   BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH,
+  isBrunoTableQuickFilterTextWithinLimit,
 } from "./quick-filter";
 import { recordBrunoTableClientQuickFilterRender } from "./render-instrumentation";
 
@@ -123,6 +125,8 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
   const [draft, setDraft] = useState(initialValue);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const errorId = useId();
   const draftRef = useRef(initialValue);
   const lastCommittedRef = useRef(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -140,7 +144,29 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     ): boolean => {
       if (runtime.getQuickFilterCommandEpochSnapshot() !== candidate.commandEpoch) return false;
       if (draftEpochRef.current !== candidate.draftEpoch) return false;
-      return runtime.dispatchGridCommand({ type: "quick-filter.replace", text: candidate.text });
+      if (!isBrunoTableQuickFilterTextWithinLimit(candidate.text)) {
+        const committed = lastCommittedRef.current;
+        draftEpochRef.current += 1;
+        draftRef.current = committed;
+        setDraft(committed);
+        setError("Quick Filter text is too long.");
+        return false;
+      }
+      const accepted = runtime.dispatchGridCommand({
+        type: "quick-filter.replace",
+        text: candidate.text,
+      });
+      if (!accepted) {
+        const committed = runtime.getQuickFilterSnapshot();
+        lastCommittedRef.current = committed;
+        draftRef.current = committed;
+        setDraft(committed);
+        setError("Quick Filter could not be committed.");
+        return false;
+      }
+      lastCommittedRef.current = candidate.text;
+      setError(undefined);
+      return true;
     },
     [runtime],
   );
@@ -163,6 +189,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
       }
       const committed = runtime.getQuickFilterSnapshot();
       lastCommittedRef.current = committed;
+      setError(undefined);
       if (draftRef.current === committed) return;
       draftRef.current = committed;
       setDraft(committed);
@@ -173,6 +200,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     <div className="flex min-w-56 items-center gap-1">
       <Input
         aria-label="Quick Filter"
+        aria-describedby={error === undefined ? undefined : errorId}
         maxLength={BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH}
         placeholder="Quick Filter"
         ref={inputRef}
@@ -240,13 +268,20 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
             if (!accepted) {
               draftRef.current = previousDraft;
               setDraft(previousDraft);
+              setError("Quick Filter could not be committed.");
               return;
             }
+            setError(undefined);
             inputRef.current?.focus({ preventScroll: true });
           }}
         >
           ×
         </Button>
+      )}
+      {error === undefined ? null : (
+        <p id={errorId} aria-live="polite" className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -354,8 +389,9 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
         entry.kind === "quick"
           ? runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" })
           : runtime.dispatchGridCommand({
-              type: "column.filter.clear",
+              type: "column.filter.remove",
               columnId: entry.columnId,
+              root: entry.root,
             });
       if (!accepted) return;
       if (nextIndex >= 0) {
@@ -493,11 +529,23 @@ type BrunoTableActiveFilterEntry =
       readonly kind: "column";
       readonly columnId: string;
       readonly key: string;
+      readonly root: object;
       readonly label: string;
     }>
   | Readonly<{ readonly kind: "quick"; readonly key: string; readonly label: string }>;
 
 const ACTIVE_FILTER_VISIBLE_ENTRIES = 64;
+const ACTIVE_FILTER_ROOT_KEYS = new WeakMap<object, string>();
+let nextActiveFilterRootKey = 0;
+
+function activeFilterRootKey(root: object): string {
+  const existing = ACTIVE_FILTER_ROOT_KEYS.get(root);
+  if (existing !== undefined) return existing;
+  const key = String(nextActiveFilterRootKey);
+  nextActiveFilterRootKey += 1;
+  ACTIVE_FILTER_ROOT_KEYS.set(root, key);
+  return key;
+}
 
 type ActiveFilterProjection = Readonly<{
   readonly entries: readonly BrunoTableActiveFilterEntry[];
@@ -520,6 +568,7 @@ function activeFilterProjection(
   const activeColumns: Array<{
     readonly column: (typeof query.columns)[number];
     readonly filters: readonly unknown[];
+    readonly handles: readonly object[];
     readonly columnLabel: string;
   }> = [];
   for (const [columnIndex, column] of query.columns.entries()) {
@@ -527,13 +576,18 @@ function activeFilterProjection(
     const filters =
       snapshot === undefined ? [] : Array.isArray(snapshot) ? snapshot : Object.freeze([snapshot]);
     if (filters.length === 0) continue;
+    const handles = query.filterHandlesByColumn.get(column.columnId) ?? [];
     const columnLabel =
       headerCounts.get(column.headerName) === 1
         ? column.headerName
         : `${column.headerName} (column ${String(columnIndex + 1)})`;
-    activeColumns.push({ column, filters, columnLabel });
+    activeColumns.push({ column, filters, handles, columnLabel });
   }
-  const entryCount = activeColumns.length + (quickFilterActive ? 1 : 0);
+  const gridFilterEntryCount = activeColumns.reduce(
+    (count, activeColumn) => count + activeColumn.filters.length,
+    0,
+  );
+  const entryCount = gridFilterEntryCount + (quickFilterActive ? 1 : 0);
   const maxEntryWindowStart = Math.max(0, entryCount - ACTIVE_FILTER_VISIBLE_ENTRIES);
   const visibleEntryWindowStart = Math.min(requestedWindowStart, maxEntryWindowStart);
   const visibleEntryWindowEnd = Math.min(
@@ -555,25 +609,27 @@ function activeFilterProjection(
     entryIndex += 1;
   }
   for (const activeColumn of activeColumns) {
-    const shouldDescribe =
-      entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
-    const descriptionState = shouldDescribe ? createActiveFilterDescriptionState() : undefined;
-    entries.push({
-      kind: "column",
-      columnId: activeColumn.column.columnId,
-      key: `column-filter-${activeColumn.column.columnId}`,
-      label: shouldDescribe
-        ? joinActiveFilterSummaries(activeColumn.filters, " AND ", (filter) =>
-            describeActiveFilter(
+    for (const [filterIndex, filter] of activeColumn.filters.entries()) {
+      if (typeof filter !== "object" || filter === null) continue;
+      const root = activeColumn.handles[filterIndex] ?? filter;
+      const shouldDescribe =
+        entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
+      entries.push({
+        kind: "column",
+        columnId: activeColumn.column.columnId,
+        key: `column-filter-${activeColumn.column.columnId}-${activeFilterRootKey(root)}`,
+        root,
+        label: shouldDescribe
+          ? describeActiveFilter(
               activeColumn.column,
               filter,
               activeColumn.columnLabel,
-              descriptionState,
-            ),
-          )
-        : activeColumn.columnLabel,
-    });
-    entryIndex += 1;
+              createActiveFilterDescriptionState(),
+            )
+          : activeColumn.columnLabel,
+      });
+      entryIndex += 1;
+    }
   }
   return {
     entries,

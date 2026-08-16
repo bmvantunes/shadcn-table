@@ -8,6 +8,50 @@ export type ClientOrderBy = readonly {
 
 export type BrunoTableOrderBy = ClientOrderBy;
 
+type CompiledFilterOperandPlan = Readonly<{
+  readonly normalizedOperand?: string | undefined;
+  readonly normalizedOperands?: readonly (string | undefined)[] | undefined;
+  readonly membershipKeys?: ReadonlySet<string> | undefined;
+  readonly normalizedSubstringOperand?: string | undefined;
+}>;
+
+export type BrunoTableFilterComplexity = Readonly<{
+  readonly rootEntries: number;
+  readonly nodes: number;
+  readonly operands: number;
+  readonly textLength: number;
+}>;
+
+type BrunoTableClientFilterRoot = Readonly<{
+  readonly filter: Readonly<Record<string, unknown>>;
+  readonly columnId: string;
+  readonly signature?: string;
+  readonly compiledOperandNodes: readonly object[];
+  readonly complexity: BrunoTableFilterComplexity;
+}>;
+
+/**
+ * The sole admitted Grid Filter representation used by the Client runtime. Raw filter snapshots
+ * remain available at the Adapter seam, while commands and render projections use the retained
+ * roots, per-column index, and semantic evidence compiled during one bounded admission pass.
+ */
+export type BrunoTableClientFilterCollection = Readonly<{
+  readonly filters: readonly unknown[];
+  readonly columnsById: ReadonlyMap<string, CompiledColumn>;
+  readonly roots: readonly BrunoTableClientFilterRoot[];
+  readonly byColumn: ReadonlyMap<string, readonly unknown[]>;
+  readonly rootsByColumn: ReadonlyMap<string, readonly BrunoTableClientFilterRoot[]>;
+  readonly rootHandlesByColumn: ReadonlyMap<string, readonly object[]>;
+  readonly snapshotsByColumn: ReadonlyMap<string, unknown>;
+  readonly complexityByColumn: ReadonlyMap<string, BrunoTableFilterComplexity>;
+  readonly columnIds: ReadonlySet<string>;
+  readonly signatureCountsByColumn: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  readonly opaqueRootCountByColumn: ReadonlyMap<string, number>;
+  readonly complexity: BrunoTableFilterComplexity;
+  readonly compiledOperands: ReadonlyMap<object, CompiledFilterOperandPlan>;
+  readonly hasSharedNodes: boolean;
+}>;
+
 export function reconcileBrunoTableOrderBy(
   orderBy: BrunoTableOrderBy,
   baseline: BrunoTableOrderBy,
@@ -27,9 +71,13 @@ export function sanitizeBrunoTableFilters(
   filters: readonly unknown[] | undefined,
   columns: readonly CompiledColumn[],
 ): readonly unknown[] {
-  return sanitizeClientInitialFilters(filters, columns);
+  return compileClientFilterCollection(filters, columns).filters;
 }
 
+/**
+ * Legacy raw-input inspection kept for compatibility with low-level tests. Runtime commands use
+ * BrunoTableClientFilterCollection.columnIds/rootsByColumn and never rediscover these identities.
+ */
 export function brunoTableFilterReferencesColumn(candidate: unknown, columnId: string): boolean {
   return filterReferencesColumn(candidate, columnId);
 }
@@ -102,6 +150,21 @@ export function sanitizeClientInitialFilters(
   columns: readonly CompiledColumn[],
   options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
 ): readonly unknown[] {
+  return compileClientFilterCollection(filters, columns, options).filters;
+}
+
+/**
+ * Admits the complete filter collection through one bounded pass. The returned collection is the
+ * only representation the Client query/runtime path should use after this boundary: roots retain
+ * their sanitized snapshots, while indexes and value-semantic evidence are compiled alongside
+ * them. Invalid restoration/command candidates are dropped by default; initial configuration can
+ * request a hard failure for an over-budget candidate.
+ */
+export function compileClientFilterCollection(
+  filters: readonly unknown[] | undefined,
+  columns: readonly CompiledColumn[],
+  options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
+): BrunoTableClientFilterCollection {
   const candidates = snapshotRootEntries(filters);
   if (candidates === ROOT_ENTRIES_OVER_BUDGET) {
     if (options?.rejectOverBudget === true) {
@@ -109,31 +172,434 @@ export function sanitizeClientInitialFilters(
         `BrunoTable initialFilters root contains more than ${BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES} entries.`,
       );
     }
-    return EMPTY_FILTERS;
+    return createEmptyClientFilterCollection(columns);
   }
-  if (candidates === undefined) return EMPTY_FILTERS;
+  if (candidates === undefined) return createEmptyClientFilterCollection(columns);
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
-  const sanitized: Readonly<Record<string, unknown>>[] = [];
+  const context = createFilterSanitizationContext({}, new Map(), captured, capturedArrays);
+  const roots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
-    const context: FilterSanitizationContext = {
+    // Each root is a transaction over the one collection-wide ledger. Its weak traversal caches
+    // and operand map are discarded with an invalid candidate, so hostile rejected roots cannot
+    // retain compiled evidence or poison a later valid root through a cached failure.
+    const previous = {
+      nodes: context.nodes,
+      operands: context.operands,
+      textLength: context.textLength,
+    };
+    const rootContext = createFilterSanitizationContext(
+      previous,
+      new Map(),
       captured,
       capturedArrays,
-      completed: new WeakMap<object, Map<number, SanitizedFilterNode | undefined>>(),
-      visited: new WeakSet<object>(),
-      overBudget: false,
-      remainingNodes: BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
-    };
-    const next = sanitizeFilter(filter, columnsById, context, 0);
-    if (context.overBudget && options?.rejectOverBudget === true) {
+    );
+    const next = sanitizeFilter(filter, columnsById, rootContext, 0);
+    if (rootContext.overBudget && options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters expressions may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_NODES} nodes, nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}, and ${BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS} values per in operand.`,
+        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
       );
     }
-    if (next !== undefined) sanitized.push(next.filter);
+    if (next === undefined || rootContext.overBudget) {
+      continue;
+    }
+    const columnId = next.columnIds.values().next().value;
+    if (typeof columnId !== "string") {
+      continue;
+    }
+    const complexity = {
+      rootEntries: 1,
+      nodes: rootContext.nodes - previous.nodes,
+      operands: rootContext.operands - previous.operands,
+      textLength: rootContext.textLength - previous.textLength,
+    };
+    const compiledOperandNodes = Object.freeze([...rootContext.compiledOperands.keys()]);
+    context.nodes = rootContext.nodes;
+    context.operands = rootContext.operands;
+    context.textLength = rootContext.textLength;
+    context.hasSharedNodes ||= rootContext.hasSharedNodes;
+    for (const [node, plan] of rootContext.compiledOperands) {
+      context.compiledOperands.set(node, plan);
+    }
+    roots.push({
+      filter: next.filter,
+      columnId,
+      ...(next.signature === undefined ? {} : { signature: next.signature }),
+      compiledOperandNodes,
+      complexity,
+    });
   }
-  return snapshotSanitizedFilterArray(filters, sanitized);
+  return createClientFilterCollection(columnsById, roots, context, filters);
+}
+
+function createEmptyClientFilterCollection(
+  columns: readonly CompiledColumn[],
+): BrunoTableClientFilterCollection {
+  const context = createFilterSanitizationContext();
+  return createClientFilterCollection(
+    new Map(columns.map((column) => [column.columnId, column])),
+    [],
+    context,
+  );
+}
+
+function createClientFilterCollection(
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  roots: readonly BrunoTableClientFilterRoot[],
+  context: FilterSanitizationContext,
+  sourceFilters?: readonly unknown[],
+  previousCollection?: BrunoTableClientFilterCollection,
+): BrunoTableClientFilterCollection {
+  const frozenRoots = Object.freeze(
+    roots.map((root) =>
+      Object.isFrozen(root)
+        ? root
+        : Object.freeze({
+            ...root,
+            complexity: Object.freeze({ ...root.complexity }),
+          }),
+    ),
+  );
+  const rootFilters = frozenRoots.map((root) => root.filter);
+  const compiledOperands = new Map<object, CompiledFilterOperandPlan>();
+  for (const root of frozenRoots) {
+    for (const node of root.compiledOperandNodes) {
+      const plan = context.compiledOperands.get(node);
+      if (plan !== undefined) compiledOperands.set(node, plan);
+    }
+  }
+  const filters = snapshotSanitizedFilterArray(sourceFilters, rootFilters);
+  const byColumn = new Map<string, unknown[]>();
+  const rootsByColumn = new Map<string, BrunoTableClientFilterRoot[]>();
+  const rootHandlesByColumn = new Map<string, object[]>();
+  const snapshotsByColumn = new Map<string, unknown>();
+  const complexityByColumn = new Map<string, BrunoTableFilterComplexity>();
+  const signatureCountsByColumn = new Map<string, Map<string, number>>();
+  const opaqueRootCountByColumn = new Map<string, number>();
+  const columnIds = new Set<string>();
+  for (const root of frozenRoots) {
+    columnIds.add(root.columnId);
+    const columnFilters = byColumn.get(root.columnId);
+    if (columnFilters === undefined) byColumn.set(root.columnId, [root.filter]);
+    else columnFilters.push(root.filter);
+    const columnRoots = rootsByColumn.get(root.columnId);
+    if (columnRoots === undefined) rootsByColumn.set(root.columnId, [root]);
+    else columnRoots.push(root);
+    const rootHandles = rootHandlesByColumn.get(root.columnId);
+    if (rootHandles === undefined) rootHandlesByColumn.set(root.columnId, [root]);
+    else rootHandles.push(root);
+    complexityByColumn.set(
+      root.columnId,
+      addFilterComplexity(complexityByColumn.get(root.columnId), root.complexity),
+    );
+    if (root.signature === undefined) {
+      opaqueRootCountByColumn.set(
+        root.columnId,
+        (opaqueRootCountByColumn.get(root.columnId) ?? 0) + 1,
+      );
+    } else {
+      const counts = signatureCountsByColumn.get(root.columnId) ?? new Map<string, number>();
+      counts.set(root.signature, (counts.get(root.signature) ?? 0) + 1);
+      signatureCountsByColumn.set(root.columnId, counts);
+    }
+  }
+  for (const [columnId, columnFilters] of byColumn) {
+    const previousFilters = previousCollection?.byColumn.get(columnId);
+    if (
+      previousCollection !== undefined &&
+      previousFilters !== undefined &&
+      sameReferences(previousFilters, columnFilters)
+    ) {
+      snapshotsByColumn.set(columnId, previousCollection.snapshotsByColumn.get(columnId));
+    } else {
+      snapshotsByColumn.set(
+        columnId,
+        columnFilters.length === 1 ? columnFilters[0] : Object.freeze(Array.from(columnFilters)),
+      );
+    }
+  }
+  for (const values of byColumn.values()) Object.freeze(values);
+  for (const values of rootsByColumn.values()) Object.freeze(values);
+  for (const values of rootHandlesByColumn.values()) Object.freeze(values);
+  for (const counts of signatureCountsByColumn.values()) Object.freeze(counts);
+  return Object.freeze({
+    filters,
+    columnsById,
+    roots: frozenRoots,
+    byColumn,
+    rootsByColumn,
+    rootHandlesByColumn,
+    snapshotsByColumn,
+    complexityByColumn,
+    columnIds,
+    signatureCountsByColumn,
+    opaqueRootCountByColumn,
+    complexity: Object.freeze({
+      rootEntries: frozenRoots.length,
+      nodes: context.nodes,
+      operands: context.operands,
+      textLength: context.textLength,
+    }),
+    compiledOperands,
+    hasSharedNodes: context.hasSharedNodes,
+  });
+}
+
+/** Removes one column's admitted roots without reopening or rescanning any expression. */
+export function removeClientFilterColumn(
+  collection: BrunoTableClientFilterCollection,
+  columnId: string,
+): BrunoTableClientFilterCollection {
+  const roots = collection.roots.filter((root) => root.columnId !== columnId);
+  if (roots.length === collection.roots.length) return collection;
+  return (
+    createDerivedClientFilterCollection(
+      collection,
+      roots,
+      undefined,
+      subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId)),
+    ) ?? collection
+  );
+}
+
+/** Removes one retained root without reopening the other roots in that column. */
+export function removeClientFilterRoot(
+  collection: BrunoTableClientFilterCollection,
+  columnId: string,
+  rootFilter: unknown,
+): BrunoTableClientFilterCollection | undefined {
+  const root = collection.roots.find(
+    (candidate) =>
+      candidate.columnId === columnId &&
+      (candidate === rootFilter || candidate.filter === rootFilter),
+  );
+  if (root === undefined) return undefined;
+  return createDerivedClientFilterCollection(
+    collection,
+    collection.roots.filter((candidate) => candidate !== root),
+    undefined,
+    subtractFilterComplexity(collection.complexity, root.complexity),
+  );
+}
+
+/** Restores one column from the already-admitted sanitized baseline collection. */
+export function restoreClientFilterColumn(
+  collection: BrunoTableClientFilterCollection,
+  baseline: BrunoTableClientFilterCollection,
+  columnId: string,
+): BrunoTableClientFilterCollection | undefined {
+  if (sameBrunoTableFilterColumn(collection, baseline, columnId)) return collection;
+  const roots = [
+    ...collection.roots.filter((root) => root.columnId !== columnId),
+    ...baseline.roots.filter((root) => root.columnId === columnId),
+  ];
+  return createDerivedClientFilterCollection(
+    collection,
+    roots,
+    baseline,
+    addFilterComplexity(
+      subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId)),
+      baseline.complexityByColumn.get(columnId),
+    ),
+  );
+}
+
+/**
+ * Admits a replacement for one column against the remaining compiled collection. Existing roots
+ * contribute their retained ledger cost and operand plans directly; only the replacement roots
+ * cross the sanitizer/compiler boundary.
+ */
+export function replaceClientFilterColumn(
+  collection: BrunoTableClientFilterCollection,
+  columnId: string,
+  candidate: unknown,
+): BrunoTableClientFilterCollection | undefined {
+  const candidateEntries =
+    candidate === undefined ? [] : Array.isArray(candidate) ? candidate : [candidate];
+  const candidates = snapshotRootEntries(candidateEntries);
+  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) return undefined;
+  return replaceClientFilterRoots(collection, columnId, candidates);
+}
+
+/**
+ * Replaces one retained root while keeping every other root and its compiled evidence intact.
+ * Overlay editors use this seam for continuous edits so Pacer work never rebuilds a whole
+ * same-column root collection for one changed leaf.
+ */
+export function replaceClientFilterRoot(
+  collection: BrunoTableClientFilterCollection,
+  columnId: string,
+  rootFilter: unknown,
+  candidate: unknown,
+): BrunoTableClientFilterCollection | undefined {
+  const root = collection.roots.find(
+    (candidateRoot) =>
+      candidateRoot.columnId === columnId &&
+      (candidateRoot === rootFilter || candidateRoot.filter === rootFilter),
+  );
+  if (root === undefined) return undefined;
+  const candidates = snapshotRootEntries([candidate]);
+  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) return undefined;
+  if (candidates.length !== 1) return undefined;
+  return replaceClientFilterRoots(collection, columnId, candidates, root);
+}
+
+function replaceClientFilterRoots(
+  collection: BrunoTableClientFilterCollection,
+  columnId: string,
+  candidates: readonly unknown[],
+  rootToReplace?: BrunoTableClientFilterRoot,
+): BrunoTableClientFilterCollection | undefined {
+  const retainedRoots = collection.roots.filter((root) =>
+    rootToReplace === undefined ? root.columnId !== columnId : root !== rootToReplace,
+  );
+  if (retainedRoots.length + candidates.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) {
+    return undefined;
+  }
+  const retainedComplexity =
+    rootToReplace === undefined
+      ? subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId))
+      : subtractFilterComplexity(collection.complexity, rootToReplace.complexity);
+  if (candidates.length === 0)
+    return createDerivedClientFilterCollection(
+      collection,
+      retainedRoots,
+      undefined,
+      retainedComplexity,
+    );
+
+  const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
+  const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
+  const context = createFilterSanitizationContext(
+    retainedComplexity,
+    new Map(collection.compiledOperands),
+    captured,
+    capturedArrays,
+  );
+  context.hasSharedNodes = collection.hasSharedNodes;
+  const roots: BrunoTableClientFilterRoot[] = [...retainedRoots];
+  for (const filter of candidates) {
+    const previous = {
+      nodes: context.nodes,
+      operands: context.operands,
+      textLength: context.textLength,
+    };
+    const candidateContext = createFilterSanitizationContext(
+      previous,
+      new Map(),
+      captured,
+      capturedArrays,
+    );
+    const next = sanitizeFilter(filter, collection.columnsById, candidateContext, 0);
+    const candidateColumnId = next?.columnIds.values().next().value;
+    if (next === undefined || candidateContext.overBudget || candidateColumnId !== columnId) {
+      return undefined;
+    }
+    const compiledOperandNodes = Object.freeze([...candidateContext.compiledOperands.keys()]);
+    context.nodes = candidateContext.nodes;
+    context.operands = candidateContext.operands;
+    context.textLength = candidateContext.textLength;
+    context.hasSharedNodes ||= candidateContext.hasSharedNodes;
+    for (const [node, plan] of candidateContext.compiledOperands) {
+      context.compiledOperands.set(node, plan);
+    }
+    roots.push({
+      filter: next.filter,
+      columnId,
+      ...(next.signature === undefined ? {} : { signature: next.signature }),
+      compiledOperandNodes,
+      complexity: {
+        rootEntries: 1,
+        nodes: candidateContext.nodes - previous.nodes,
+        operands: candidateContext.operands - previous.operands,
+        textLength: candidateContext.textLength - previous.textLength,
+      },
+    });
+  }
+  return createClientFilterCollection(
+    collection.columnsById,
+    roots,
+    context,
+    undefined,
+    collection,
+  );
+}
+
+function createDerivedClientFilterCollection(
+  collection: BrunoTableClientFilterCollection,
+  roots: readonly BrunoTableClientFilterRoot[],
+  additional: BrunoTableClientFilterCollection | undefined,
+  complexity: BrunoTableFilterComplexity,
+): BrunoTableClientFilterCollection | undefined {
+  if (!isClientFilterComplexityWithinBudget(complexity)) return undefined;
+  const compiledOperands = collectCompiledOperandPlans(
+    roots,
+    additional === undefined || additional === collection
+      ? [collection.compiledOperands]
+      : [collection.compiledOperands, additional.compiledOperands],
+  );
+  const context = createFilterSanitizationContext(complexity, compiledOperands);
+  context.hasSharedNodes = collection.hasSharedNodes || additional?.hasSharedNodes === true;
+  return createClientFilterCollection(
+    collection.columnsById,
+    roots,
+    context,
+    undefined,
+    collection,
+  );
+}
+
+function collectCompiledOperandPlans(
+  roots: readonly BrunoTableClientFilterRoot[],
+  sources: readonly ReadonlyMap<object, CompiledFilterOperandPlan>[],
+): Map<object, CompiledFilterOperandPlan> {
+  const compiledOperands = new Map<object, CompiledFilterOperandPlan>();
+  for (const root of roots) {
+    for (const node of root.compiledOperandNodes) {
+      for (const source of sources) {
+        const plan = source.get(node);
+        if (plan !== undefined) {
+          compiledOperands.set(node, plan);
+          break;
+        }
+      }
+    }
+  }
+  return compiledOperands;
+}
+
+function addFilterComplexity(
+  left: BrunoTableFilterComplexity | undefined,
+  right: BrunoTableFilterComplexity | undefined,
+): BrunoTableFilterComplexity {
+  return {
+    rootEntries: (left?.rootEntries ?? 0) + (right?.rootEntries ?? 0),
+    nodes: (left?.nodes ?? 0) + (right?.nodes ?? 0),
+    operands: (left?.operands ?? 0) + (right?.operands ?? 0),
+    textLength: (left?.textLength ?? 0) + (right?.textLength ?? 0),
+  };
+}
+
+function subtractFilterComplexity(
+  total: BrunoTableFilterComplexity,
+  removed: BrunoTableFilterComplexity | undefined,
+): BrunoTableFilterComplexity {
+  return {
+    rootEntries: total.rootEntries - (removed?.rootEntries ?? 0),
+    nodes: total.nodes - (removed?.nodes ?? 0),
+    operands: total.operands - (removed?.operands ?? 0),
+    textLength: total.textLength - (removed?.textLength ?? 0),
+  };
+}
+
+function isClientFilterComplexityWithinBudget(complexity: BrunoTableFilterComplexity): boolean {
+  return (
+    complexity.rootEntries <= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES &&
+    complexity.nodes <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES &&
+    complexity.operands <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS &&
+    complexity.textLength <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH
+  );
 }
 
 export function filterClientRows<TRow>(
@@ -145,12 +611,7 @@ export function filterClientRows<TRow>(
   return predicate === undefined ? rows : rows.filter(predicate);
 }
 
-export type ClientFilterPlan = Readonly<{
-  readonly filters: readonly unknown[];
-  readonly columnsById: ReadonlyMap<string, CompiledColumn>;
-  readonly compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>;
-  readonly hasSharedNodes: boolean;
-}>;
+export type ClientFilterPlan = BrunoTableClientFilterCollection;
 
 /**
  * Compiles immutable filter evidence once for the query consumers that use different row
@@ -160,19 +621,10 @@ export type ClientFilterPlan = Readonly<{
 export function compileClientFilterPlan(
   columns: readonly CompiledColumn[],
   filters: readonly unknown[] | undefined,
+  collection?: BrunoTableClientFilterCollection,
 ): ClientFilterPlan | undefined {
-  // Keep the plan's filter snapshot beside its compiled operands so every predicate entry point
-  // evaluates bounded, immutable evidence, including direct internal callers that skip the row
-  // pipeline's normal query snapshot path.
-  const sanitizedFilters = sanitizeClientInitialFilters(filters, columns);
-  if (sanitizedFilters.length === 0) return undefined;
-  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  return Object.freeze({
-    filters: sanitizedFilters,
-    columnsById,
-    compiledOperands: compileFilterOperandPlans(sanitizedFilters, columnsById),
-    hasSharedNodes: containsSharedFilterNodes(sanitizedFilters),
-  });
+  const plan = collection ?? compileClientFilterCollection(filters, columns);
+  return plan.roots.length === 0 ? undefined : plan;
 }
 
 export function createClientFilterPredicate<TRow>(
@@ -187,8 +639,8 @@ export function createClientFilterPredicate<TRow>(
   const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
   return (row) => {
     const completed = plan.hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
-    return plan.filters.every((filter) =>
-      evaluateFilter(filter, row, columnsById, readUnknown, plan.compiledOperands, completed),
+    return plan.roots.every((root) =>
+      evaluateFilter(root.filter, row, columnsById, readUnknown, plan.compiledOperands, completed),
     );
   };
 }
@@ -198,12 +650,12 @@ export function normalizeBrunoTableFilterText(
   caseSensitive = false,
   accentSensitive = false,
 ): string {
-  const withoutAccents = accentSensitive
-    ? value.normalize("NFC")
-    : value.normalize("NFD").replace(/\p{Mark}/gu, "");
-  return caseSensitive ? withoutAccents : withoutAccents.toLowerCase();
+  const normalized = value.normalize("NFD");
+  const comparable = accentSensitive ? normalized : normalized.replace(/\p{Mark}/gu, "");
+  return caseSensitive ? comparable : comparable.toLowerCase();
 }
 
+/** UI draft bound only; admitted filters use the collection-wide text ledger below. */
 export const BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH = 1_024;
 const BRUNO_TABLE_MAX_FILTER_OPERAND_OBJECTS = 64;
 const BRUNO_TABLE_MAX_FILTER_OPERAND_PROPERTIES = 256;
@@ -257,12 +709,13 @@ function sanitizeFilter(
   if (typeof candidate !== "object" || candidate === null || context.visited.has(candidate)) {
     return undefined;
   }
+  if (context.admittedNodes.has(candidate)) context.hasSharedNodes = true;
+  else context.admittedNodes.add(candidate);
   if (!precharged) {
-    if (context.remainingNodes === 0) {
+    if (!reserveFilterNodes(1, context)) {
       context.overBudget = true;
       return undefined;
     }
-    context.remainingNodes -= 1;
   }
   const completedAtDepth = context.completed.get(candidate);
   if (completedAtDepth?.has(depth) === true) return completedAtDepth.get(depth);
@@ -311,10 +764,14 @@ function captureDenseFilterArray(
   value: unknown,
   context: FilterSanitizationContext,
   reserveConditions: boolean,
+  reserveOperands = false,
 ): readonly unknown[] | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (SANITIZED_FILTER_SNAPSHOTS.has(value) && Array.isArray(value)) {
-    return admitFilterArrayLength(value.length, context, reserveConditions) ? value : undefined;
+    if (!admitFilterArrayLength(value.length, context, reserveConditions)) return undefined;
+    if (reserveOperands && !hasFilterOperandCapacity(value.length, context)) return undefined;
+    if (reserveOperands && !reserveFilterOperands(value.length, context)) return undefined;
+    return value;
   }
   let captured = context.capturedArrays.get(value);
   if (!context.capturedArrays.has(value)) {
@@ -323,12 +780,15 @@ function captureDenseFilterArray(
   }
   if (captured === undefined) return undefined;
   if (!admitFilterArrayLength(captured.length, context, reserveConditions)) return undefined;
+  if (reserveOperands && !hasFilterOperandCapacity(captured.length, context)) return undefined;
   if (!captured.attempted) {
     captured.attempted = true;
     const snapshot = snapshotDenseArray(value, captured.length);
     captured.snapshot = snapshot === undefined ? undefined : Object.freeze(snapshot);
     if (captured.snapshot !== undefined) SANITIZED_FILTER_SNAPSHOTS.add(captured.snapshot);
   }
+  if (captured.snapshot === undefined) return undefined;
+  if (reserveOperands && !reserveFilterOperands(captured.length, context)) return undefined;
   return captured.snapshot;
 }
 
@@ -338,9 +798,7 @@ function admitFilterArrayLength(
   reserveConditions: boolean,
 ): boolean {
   if (reserveConditions) return reserveConditionEntries(length, context);
-  if (length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS) return true;
-  context.overBudget = true;
-  return false;
+  return true;
 }
 
 function captureFilterArrayLength(value: object): CapturedFilterArray | undefined {
@@ -356,11 +814,38 @@ function captureFilterArrayLength(value: object): CapturedFilterArray | undefine
 }
 
 function reserveConditionEntries(length: number, context: FilterSanitizationContext): boolean {
-  if (length > context.remainingNodes) {
+  return reserveFilterNodes(length, context);
+}
+
+function reserveFilterNodes(length: number, context: FilterSanitizationContext): boolean {
+  if (length < 0 || context.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES - length) {
     context.overBudget = true;
     return false;
   }
-  context.remainingNodes -= length;
+  context.nodes += length;
+  return true;
+}
+
+function reserveFilterOperands(length: number, context: FilterSanitizationContext): boolean {
+  if (!hasFilterOperandCapacity(length, context)) return false;
+  context.operands += length;
+  return true;
+}
+
+function hasFilterOperandCapacity(length: number, context: FilterSanitizationContext): boolean {
+  if (length < 0 || context.operands > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS - length) {
+    context.overBudget = true;
+    return false;
+  }
+  return true;
+}
+
+function reserveFilterText(length: number, context: FilterSanitizationContext): boolean {
+  if (length < 0 || context.textLength > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH - length) {
+    context.overBudget = true;
+    return false;
+  }
+  context.textLength += length;
   return true;
 }
 
@@ -415,32 +900,46 @@ function sanitizeFilterRecord(
     const candidates = captureDenseFilterArray(filter["conditions"], context, true);
     if (candidates === undefined || candidates.length === 0) return undefined;
     const conditions: Readonly<Record<string, unknown>>[] = [];
+    const conditionNodes: SanitizedFilterNode[] = [];
     const columnIds = new Set<string>();
     for (const candidate of candidates) {
       const condition = sanitizeFilter(candidate, columnsById, context, depth + 1, true);
       if (condition === undefined) return undefined;
       conditions.push(condition.filter);
+      conditionNodes.push(condition);
       for (const columnId of condition.columnIds) columnIds.add(columnId);
     }
     if (columnIds.size > 1) return undefined;
     const sanitizedConditions = snapshotSanitizedFilterArray(candidates, conditions);
+    const conditionSignatures = conditionNodes.map((condition) => condition.signature);
+    const signature = conditionSignatures.every((value): value is string => value !== undefined)
+      ? createFilterSignature([type, ...conditionSignatures.sort(compareStringValues)], context)
+      : undefined;
+    if (context.overBudget) return undefined;
     return {
       columnIds,
       filter: snapshotFilter(filter, ["type", "conditions"], {
         conditions: sanitizedConditions,
       }),
+      ...(signature === undefined ? {} : { signature }),
     };
   }
   if (type === "NOT") {
     const condition = sanitizeFilter(filter["condition"], columnsById, context, depth + 1);
-    return condition === undefined
-      ? undefined
-      : {
-          columnIds: condition.columnIds,
-          filter: snapshotFilter(filter, ["type", "condition"], {
-            condition: condition.filter,
-          }),
-        };
+    if (condition === undefined) return undefined;
+    const sanitized = snapshotFilter(filter, ["type", "condition"], {
+      condition: condition.filter,
+    });
+    const signature =
+      condition.signature === undefined
+        ? undefined
+        : createFilterSignature(["NOT", condition.signature], context);
+    if (context.overBudget) return undefined;
+    return {
+      columnIds: condition.columnIds,
+      filter: sanitized,
+      ...(signature === undefined ? {} : { signature }),
+    };
   }
   const columnId = filter["columnId"];
   if (typeof columnId !== "string") return undefined;
@@ -448,10 +947,29 @@ function sanitizeFilterRecord(
   if (column === undefined || column.enableFilter === false || column.kind !== "field") {
     return undefined;
   }
-  const node = (sanitizedFilter: Readonly<Record<string, unknown>>): SanitizedFilterNode => ({
-    columnIds: new Set([columnId]),
-    filter: sanitizedFilter,
-  });
+  const node = (
+    sanitizedFilter: Readonly<Record<string, unknown>>,
+  ): SanitizedFilterNode | undefined => {
+    const plan = compileFilterOperandPlan(column, sanitizedFilter, context);
+    if (
+      plan === undefined &&
+      (type === "contains" ||
+        type === "notContains" ||
+        type === "startsWith" ||
+        type === "endsWith" ||
+        (type === "in" && column.semantics.filterFamily === "text"))
+    ) {
+      return undefined;
+    }
+    if (plan !== undefined) context.compiledOperands.set(sanitizedFilter, plan);
+    const signature = createLeafFilterSignature(column, sanitizedFilter, plan, context);
+    if (context.overBudget) return undefined;
+    return {
+      columnIds: new Set([columnId]),
+      filter: sanitizedFilter,
+      ...(signature === undefined ? {} : { signature }),
+    };
+  };
   const operand = filter["filter"];
   const decode = (value: unknown) => {
     try {
@@ -469,7 +987,7 @@ function sanitizeFilterRecord(
     if (column.semantics.filterFamily === "boolean" || column.semantics.filterFamily === "select") {
       return undefined;
     }
-    const captured = captureDenseFilterArray(operand, context, false);
+    const captured = captureDenseFilterArray(operand, context, false, true);
     if (
       captured === undefined ||
       captured.length === 0 ||
@@ -497,20 +1015,25 @@ function sanitizeFilterRecord(
     if (column.semantics.filterFamily !== "numeric") return undefined;
     if (
       !isBoundedFilterOperand(operand, context) ||
-      !isBoundedFilterOperand(filter["filterTo"], context)
+      !isBoundedFilterOperand(filter["filterTo"], context) ||
+      !reserveFilterOperands(2, context)
     ) {
       return undefined;
     }
     const from = decode(operand);
     const to = decode(filter["filterTo"]);
-    return from._tag === "Success" && to._tag === "Success"
-      ? node(
-          snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
-            filter: from.value,
-            filterTo: to.value,
-          }),
-        )
-      : undefined;
+    if (from._tag !== "Success" || to._tag !== "Success") return undefined;
+    try {
+      if (column.semantics.compare(from.value, to.value) >= 0) return undefined;
+    } catch {
+      return undefined;
+    }
+    return node(
+      snapshotFilter(filter, ["columnId", "type", "filter", "filterTo"], {
+        filter: from.value,
+        filterTo: to.value,
+      }),
+    );
   }
   if (
     type === "equals" ||
@@ -556,6 +1079,7 @@ function sanitizeFilterRecord(
       if (!isConfiguredSelectValue) return undefined;
     }
     if (!isConfiguredSelectValue && !isBoundedFilterOperand(operand, context)) return undefined;
+    if (!reserveFilterOperands(1, context)) return undefined;
     // Compiled Select options are already canonical. Reuse the admitted option
     // so a long trusted option never re-enters a consumer decoder.
     const result = isConfiguredSelectValue
@@ -589,6 +1113,7 @@ function sanitizeFilterRecord(
     return column.semantics.filterFamily === "text" &&
       textOperand !== undefined &&
       isBoundedFilterOperand(textOperand, context) &&
+      reserveFilterOperands(1, context) &&
       validSensitivity
       ? node(
           snapshotFilter(
@@ -645,76 +1170,65 @@ function sameReferences(previous: readonly unknown[], next: readonly unknown[]):
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
 }
 
-type CompiledFilterOperandPlan = Readonly<{
-  readonly normalizedOperand?: string | undefined;
-  readonly normalizedOperands?: readonly (string | undefined)[] | undefined;
-  readonly membershipKeys?: ReadonlySet<string> | undefined;
-  readonly normalizedSubstringOperand?: string | undefined;
-}>;
-
-function compileFilterOperandPlans(
-  filters: readonly unknown[],
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-): WeakMap<object, CompiledFilterOperandPlan> {
-  const plans = new WeakMap<object, CompiledFilterOperandPlan>();
-  const pending = Array.from(filters);
-  const visited = new WeakSet<object>();
-  while (pending.length > 0) {
-    const candidate = pending.pop();
-    if (typeof candidate !== "object" || candidate === null || visited.has(candidate)) continue;
-    visited.add(candidate);
-    const filter = asRecord(candidate);
-    const type = filter["type"];
-    const columnId = filter["columnId"];
-    const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
-    const caseSensitive = filter["caseSensitive"] === true;
-    const accentSensitive = filter["accentSensitive"] === true;
-    const operand = filter["filter"];
-    if (column?.semantics.filterFamily === "text") {
-      if ((type === "equals" || type === "notEqual") && operand !== undefined) {
-        plans.set(candidate, {
-          normalizedOperand: normalizeCanonicalTextOperand(
-            column,
-            operand,
-            caseSensitive,
-            accentSensitive,
-          ),
-        });
-      } else if (type === "in" && Array.isArray(operand)) {
-        const normalizedOperands = operand.map((item) =>
-          normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive),
-        );
-        const membershipKeys = compileFilterMembershipKeys(column, operand, normalizedOperands);
-        plans.set(candidate, {
-          normalizedOperands: Object.freeze(normalizedOperands),
-          ...(membershipKeys === undefined ? {} : { membershipKeys }),
-        });
-      } else if (
-        (type === "contains" ||
-          type === "notContains" ||
-          type === "startsWith" ||
-          type === "endsWith") &&
-        typeof operand === "string"
-      ) {
-        plans.set(candidate, {
-          normalizedSubstringOperand: normalizeBrunoTableFilterText(
-            operand,
-            caseSensitive,
-            accentSensitive,
-          ),
-        });
+function compileFilterOperandPlan(
+  column: CompiledColumn,
+  filter: Readonly<Record<string, unknown>>,
+  context: FilterSanitizationContext,
+): CompiledFilterOperandPlan | undefined {
+  const type = filter["type"];
+  const caseSensitive = filter["caseSensitive"] === true;
+  const accentSensitive = filter["accentSensitive"] === true;
+  const operand = filter["filter"];
+  if (column.semantics.filterFamily === "text") {
+    if ((type === "equals" || type === "notEqual") && operand !== undefined) {
+      return {
+        normalizedOperand: normalizeCanonicalTextOperand(
+          column,
+          operand,
+          caseSensitive,
+          accentSensitive,
+          context,
+        ),
+      };
+    }
+    if (type === "in" && Array.isArray(operand)) {
+      const normalizedOperands = operand.map((item) =>
+        normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive, context),
+      );
+      if (normalizedOperands.some((value) => value === undefined || value.length === 0)) {
+        return undefined;
       }
-    } else if (column !== undefined && type === "in" && Array.isArray(operand)) {
-      const membershipKeys = compileFilterMembershipKeys(column, operand, []);
-      if (membershipKeys !== undefined) plans.set(candidate, { membershipKeys });
+      const membershipKeys = compileFilterMembershipKeys(
+        column,
+        operand,
+        normalizedOperands,
+        context,
+      );
+      return {
+        normalizedOperands: Object.freeze(normalizedOperands),
+        ...(membershipKeys === undefined ? {} : { membershipKeys }),
+      };
     }
-    const conditions = filter["conditions"];
-    if (Array.isArray(conditions)) {
-      for (const condition of conditions) pending.push(condition);
+    if (
+      (type === "contains" ||
+        type === "notContains" ||
+        type === "startsWith" ||
+        type === "endsWith") &&
+      typeof operand === "string"
+    ) {
+      const normalizedSubstringOperand = normalizeFilterTextOperand(
+        operand,
+        caseSensitive,
+        accentSensitive,
+        context,
+      );
+      return normalizedSubstringOperand === undefined ? undefined : { normalizedSubstringOperand };
     }
-    if (filter["condition"] !== undefined) pending.push(filter["condition"]);
+  } else if (type === "in" && Array.isArray(operand)) {
+    const membershipKeys = compileFilterMembershipKeys(column, operand, [], context);
+    if (membershipKeys !== undefined) return { membershipKeys };
   }
-  return plans;
+  return undefined;
 }
 
 function normalizeCanonicalTextOperand(
@@ -722,27 +1236,43 @@ function normalizeCanonicalTextOperand(
   operand: unknown,
   caseSensitive: boolean,
   accentSensitive: boolean,
+  context?: FilterSanitizationContext,
 ): string | undefined {
   try {
-    return normalizeBrunoTableFilterText(
-      column.semantics.formatCanonicalText(operand),
-      caseSensitive,
-      accentSensitive,
-    );
+    const canonical = column.semantics.formatCanonicalText(operand);
+    if (context !== undefined && !reserveFilterText(canonical.length, context)) return undefined;
+    const normalized = normalizeBrunoTableFilterText(canonical, caseSensitive, accentSensitive);
+    if (context !== undefined && !reserveFilterText(normalized.length, context)) return undefined;
+    return normalized;
   } catch {
     return undefined;
   }
+}
+
+function normalizeFilterTextOperand(
+  operand: string,
+  caseSensitive: boolean,
+  accentSensitive: boolean,
+  context: FilterSanitizationContext,
+): string | undefined {
+  if (!reserveFilterText(operand.length, context)) return undefined;
+  const normalized = normalizeBrunoTableFilterText(operand, caseSensitive, accentSensitive);
+  if (!reserveFilterText(normalized.length, context)) return undefined;
+  if (normalized.length === 0) return undefined;
+  return normalized;
 }
 
 function compileFilterMembershipKeys(
   column: CompiledColumn,
   operands: readonly unknown[],
   normalizedOperands: readonly (string | undefined)[],
+  context?: FilterSanitizationContext,
 ): ReadonlySet<string> | undefined {
   const keys = new Set<string>();
   for (let index = 0; index < operands.length; index += 1) {
     const key = filterMembershipKey(column, operands[index], normalizedOperands[index]);
     if (key === undefined) return undefined;
+    if (context !== undefined && !reserveFilterText(key.length, context)) return undefined;
     keys.add(key);
   }
   return keys;
@@ -767,12 +1297,102 @@ function filterMembershipKey(
   return undefined;
 }
 
+function createLeafFilterSignature(
+  column: CompiledColumn,
+  filter: Readonly<Record<string, unknown>>,
+  plan: CompiledFilterOperandPlan | undefined,
+  context: FilterSanitizationContext,
+): string | undefined {
+  const type = filter["type"];
+  const parts = ["leaf", column.columnId, typeof type === "string" ? type : "unknown"];
+  if (filter["caseSensitive"] === true) parts.push("caseSensitive");
+  if (filter["accentSensitive"] === true) parts.push("accentSensitive");
+  if (type === "blank" || type === "notBlank") return createFilterSignature(parts, context);
+  if (type === "in") {
+    if (plan?.membershipKeys === undefined) return undefined;
+    parts.push(...Array.from(plan.membershipKeys).sort(compareStringValues));
+    return createFilterSignature(parts, context);
+  }
+  if (
+    type === "contains" ||
+    type === "notContains" ||
+    type === "startsWith" ||
+    type === "endsWith"
+  ) {
+    const normalized = plan?.normalizedSubstringOperand;
+    return normalized === undefined
+      ? undefined
+      : createFilterSignature([...parts, normalized], context);
+  }
+  if (type === "inRange") {
+    const from = filterOperandSignature(column, filter["filter"]);
+    const to = filterOperandSignature(column, filter["filterTo"]);
+    return from === undefined || to === undefined
+      ? undefined
+      : createFilterSignature([...parts, from, to], context);
+  }
+  if (type === "equals" || type === "notEqual") {
+    if (column.semantics.filterFamily === "text") {
+      const normalized = plan?.normalizedOperand;
+      return normalized === undefined
+        ? undefined
+        : createFilterSignature([...parts, normalized], context);
+    }
+  }
+  const operand = filterOperandSignature(column, filter["filter"]);
+  return operand === undefined ? undefined : createFilterSignature([...parts, operand], context);
+}
+
+function filterOperandSignature(column: CompiledColumn, value: unknown): string | undefined {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (column.semantics.filterFamily === "select") {
+    const index = column.selectOptions?.findIndex((option) => Object.is(option, value));
+    return index === undefined || index === -1 ? undefined : `select:${String(index)}`;
+  }
+  if (column.semantics.filterFamily === "boolean") {
+    return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
+  }
+  if (column.valueType === "number") {
+    return typeof value === "number" && Number.isFinite(value)
+      ? `number:${String(value)}`
+      : undefined;
+  }
+  if (column.valueType === "bigint") {
+    return typeof value === "bigint" ? `bigint:${value.toString(10)}` : undefined;
+  }
+  return undefined;
+}
+
+function createFilterSignature(
+  parts: readonly string[],
+  context: FilterSanitizationContext,
+): string | undefined {
+  // Length-delimited tokens are collision-free without JSON serialization. The final key is
+  // charged once against the shared retained-text ledger before it is retained in the index. If a
+  // compound key would itself be too large, keep the admitted root opaque rather than allocating
+  // an unbounded transient string; its filter predicate remains fully usable and equality is
+  // conservatively treated as changed.
+  const length = parts.reduce(
+    (total, part) => total + part.length + String(part.length).length + 1,
+    0,
+  );
+  if (length > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH - context.textLength)
+    return undefined;
+  const signature = parts.map((part) => `${part.length}:${part}`).join("|");
+  return reserveFilterText(signature.length, context) ? signature : undefined;
+}
+
+function compareStringValues(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function evaluateFilter(
   candidate: unknown,
   row: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   readValue: (column: CompiledColumn, row: unknown) => unknown,
-  compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>,
+  compiledOperands: ReadonlyMap<object, CompiledFilterOperandPlan>,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   if (completed === undefined) {
@@ -807,7 +1427,7 @@ function evaluateFilterRecord(
   row: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   readValue: (column: CompiledColumn, row: unknown) => unknown,
-  compiledOperands: Readonly<WeakMap<object, CompiledFilterOperandPlan>>,
+  compiledOperands: ReadonlyMap<object, CompiledFilterOperandPlan>,
   completed: WeakMap<object, boolean> | undefined,
 ): boolean {
   const filter = asRecord(candidate);
@@ -930,26 +1550,6 @@ function evaluateFilterRecord(
   return false;
 }
 
-function containsSharedFilterNodes(filters: readonly unknown[]): boolean {
-  const visited = new WeakSet<object>();
-  const pending = Array.from(filters);
-  while (pending.length > 0) {
-    const candidate = pending.pop();
-    if (typeof candidate !== "object" || candidate === null) continue;
-    if (visited.has(candidate)) return true;
-    visited.add(candidate);
-    const filter = asRecord(candidate);
-    const conditions = filter["conditions"];
-    if (Array.isArray(conditions)) {
-      for (let index = 0; index < conditions.length; index += 1) {
-        pending.push(conditions[index]);
-      }
-    }
-    if (filter["condition"] !== undefined) pending.push(filter["condition"]);
-  }
-  return false;
-}
-
 function compareEquality(
   column: CompiledColumn,
   value: unknown,
@@ -979,487 +1579,91 @@ function compareEquality(
   return column.semantics.equivalent(value, operand);
 }
 
-/**
- * Compares filter state using the same compiled Column Value Semantics as row evaluation.
- * Runtime query publication uses this seam so semantic equality cannot drift from predicates.
- */
-type BrunoTableFilterComparisonBudget = {
-  remaining: number;
-};
-
-const BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET = 4_096;
-
-function createBrunoTableFilterComparisonBudget(): BrunoTableFilterComparisonBudget {
-  return { remaining: BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET };
-}
-
-function consumeBrunoTableFilterComparisonBudget(
-  budget: BrunoTableFilterComparisonBudget,
-): boolean {
-  if (budget.remaining <= 0) return false;
-  budget.remaining -= 1;
-  return true;
-}
-
 export function sameBrunoTableFilterCollection(
   previous: readonly unknown[],
   next: readonly unknown[],
   columnsById: ReadonlyMap<string, CompiledColumn>,
   unordered = true,
 ): boolean {
-  return sameBrunoTableFilterCollectionWithBudget(
-    previous,
-    next,
-    columnsById,
+  const columns = Array.from(columnsById.values());
+  return sameCompiledFilterCollections(
+    compileClientFilterCollection(previous, columns),
+    compileClientFilterCollection(next, columns),
     unordered,
-    createBrunoTableFilterComparisonBudget(),
   );
-}
-
-function sameBrunoTableFilterCollectionWithBudget(
-  previous: readonly unknown[],
-  next: readonly unknown[],
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  unordered: boolean,
-  comparisonBudget: BrunoTableFilterComparisonBudget,
-): boolean {
-  if (previous.length !== next.length) return false;
-  if (
-    previous.every((value, index) =>
-      sameBrunoTableFilterValueWithBudget(
-        value,
-        next[index],
-        columnsById,
-        undefined,
-        new WeakMap(),
-        comparisonBudget,
-      ),
-    )
-  ) {
-    return true;
-  }
-  if (!unordered) return false;
-  // The root budget admits more than the per-expression comparison budget. Compare the
-  // canonical semantic multiset directly so a valid large root is not mistaken for a change.
-  const nextCounts = new Map<string, number>();
-  const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
-  if (nextKeys.every((key): key is string => key !== undefined)) {
-    for (const key of nextKeys) nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1);
-    for (const value of previous) {
-      const key = filterValueComparisonKey(value, columnsById);
-      if (key === undefined) break;
-      const count = nextCounts.get(key) ?? 0;
-      if (count === 0) break;
-      if (count === 1) nextCounts.delete(key);
-      else nextCounts.set(key, count - 1);
-    }
-    if (nextCounts.size === 0) return true;
-  }
-  // Custom Value Semantics may not have a built-in comparison key. Keep the conservative
-  // semantic fallback bounded instead of allowing a maximum-size root to trigger O(n²)
-  // equivalent() calls. A false result publishes a fresh query, which is safer than blocking
-  // the interaction frame on an equality proof the runtime cannot make cheaply.
-  const matched = new Set<number>();
-  return previous.every((value) => {
-    for (let index = 0; index < next.length; index += 1) {
-      if (matched.has(index)) continue;
-      if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
-      if (
-        !sameBrunoTableFilterValueWithBudget(
-          value,
-          next[index],
-          columnsById,
-          undefined,
-          new WeakMap(),
-          comparisonBudget,
-        )
-      )
-        continue;
-      matched.add(index);
-      return true;
-    }
-    return false;
-  });
-}
-
-function filterValueComparisonKey(
-  value: unknown,
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  seen: WeakMap<object, string | undefined> = new WeakMap(),
-): string | undefined {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return `string:${JSON.stringify(value)}`;
-  if (typeof value === "number")
-    return Number.isFinite(value) ? `number:${String(value)}` : undefined;
-  if (typeof value === "bigint") return `bigint:${value.toString(10)}`;
-  if (typeof value === "boolean") return `boolean:${String(value)}`;
-  if (typeof value !== "object") return undefined;
-  const existing = seen.get(value);
-  if (existing !== undefined || seen.has(value)) return existing;
-  seen.set(value, undefined);
-  if (Array.isArray(value)) {
-    const keys = value.map((item) => filterValueComparisonKey(item, columnsById, seen));
-    if (keys.some((key) => key === undefined)) return undefined;
-    const result = `array:${JSON.stringify(keys)}`;
-    seen.set(value, result);
-    return result;
-  }
-  if (!isPlainFilterRecord(value)) return undefined;
-  const record = value as Readonly<Record<PropertyKey, unknown>>;
-  const columnId = record["columnId"];
-  const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
-  const type = typeof record["type"] === "string" ? record["type"] : undefined;
-  const keys = Reflect.ownKeys(record)
-    .filter((key) => !isImplicitFalseTextSensitivity(record, key))
-    .sort((left, right) => {
-      const leftText = String(left);
-      const rightText = String(right);
-      return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
-    });
-  const parts: Array<readonly [string, string]> = [];
-  for (const key of keys) {
-    const child = record[key];
-    if ((key === "filter" || key === "filterTo") && column !== undefined) {
-      if (key === "filter" && type === "in" && Array.isArray(child)) {
-        const operands = child.map((operand) =>
-          filterOperandComparisonKey(operand, column, {
-            accentSensitive: record["accentSensitive"] === true,
-            caseSensitive: record["caseSensitive"] === true,
-            raw: false,
-            text: column.semantics.filterFamily === "text",
-            unordered: true,
-          }),
-        );
-        if (operands.some((operand) => operand === undefined)) return undefined;
-        parts.push([
-          String(key),
-          JSON.stringify([...new Set(operands as string[])].sort(compareStringValues)),
-        ]);
-      } else {
-        const operand = filterOperandComparisonKey(child, column, {
-          accentSensitive: record["accentSensitive"] === true,
-          caseSensitive: record["caseSensitive"] === true,
-          raw:
-            type === "contains" ||
-            type === "notContains" ||
-            type === "startsWith" ||
-            type === "endsWith",
-          text:
-            column.semantics.filterFamily === "text" &&
-            (type === "equals" ||
-              type === "notEqual" ||
-              type === "in" ||
-              type === "contains" ||
-              type === "notContains" ||
-              type === "startsWith" ||
-              type === "endsWith"),
-          unordered: false,
-        });
-        if (operand === undefined) return undefined;
-        parts.push([String(key), operand]);
-      }
-      continue;
-    }
-    if (key === "conditions" && (type === "AND" || type === "OR") && Array.isArray(child)) {
-      const conditions = child.map((condition) =>
-        filterValueComparisonKey(condition, columnsById, seen),
-      );
-      if (conditions.some((condition) => condition === undefined)) return undefined;
-      parts.push([String(key), JSON.stringify((conditions as string[]).sort(compareStringValues))]);
-      continue;
-    }
-    const childKey = filterValueComparisonKey(child, columnsById, seen);
-    if (childKey === undefined) return undefined;
-    parts.push([String(key), childKey]);
-  }
-  const result = `record:${JSON.stringify(parts)}`;
-  seen.set(value, result);
-  return result;
-}
-
-function compareStringValues(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function sameBrunoTableFilterValue(
   previous: unknown,
   next: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  column?: CompiledColumn,
-  seen: WeakMap<object, object> = new WeakMap(),
+  _column?: CompiledColumn,
+  _seen: WeakMap<object, object> = new WeakMap(),
 ): boolean {
-  return sameBrunoTableFilterValueWithBudget(
-    previous,
-    next,
-    columnsById,
-    column,
-    seen,
-    createBrunoTableFilterComparisonBudget(),
+  const columns = Array.from(columnsById.values());
+  return sameCompiledFilterCollections(
+    compileClientFilterCollection([previous], columns),
+    compileClientFilterCollection([next], columns),
+    false,
   );
 }
 
-function sameBrunoTableFilterValueWithBudget(
-  previous: unknown,
-  next: unknown,
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  column: CompiledColumn | undefined,
-  seen: WeakMap<object, object>,
-  comparisonBudget: BrunoTableFilterComparisonBudget,
+function sameCompiledFilterCollections(
+  previous: BrunoTableClientFilterCollection,
+  next: BrunoTableClientFilterCollection,
+  unordered: boolean,
 ): boolean {
-  try {
-    if (Object.is(previous, next)) return true;
-    if (Array.isArray(previous) && Array.isArray(next)) {
-      return (
-        previous.length === next.length &&
-        previous.every((value, index) =>
-          sameBrunoTableFilterValueWithBudget(
-            value,
-            next[index],
-            columnsById,
-            column,
-            seen,
-            comparisonBudget,
-          ),
-        )
-      );
-    }
-    if (
-      typeof previous !== "object" ||
-      previous === null ||
-      typeof next !== "object" ||
-      next === null
-    ) {
-      return false;
-    }
-    const previousRecord = previous as Readonly<Record<PropertyKey, unknown>>;
-    const nextRecord = next as Readonly<Record<PropertyKey, unknown>>;
-    const previousColumnId = previousRecord["columnId"];
-    const nextColumnId = nextRecord["columnId"];
-    const valueColumn =
-      column ??
-      (typeof previousColumnId === "string" && previousColumnId === nextColumnId
-        ? columnsById.get(previousColumnId)
-        : undefined);
-    const remembered = seen.get(previous);
-    if (remembered !== undefined) return remembered === next;
-    seen.set(previous, next);
-    if (Object.getPrototypeOf(previous) !== Object.getPrototypeOf(next)) return false;
-    if (!isPlainFilterRecord(previous) || !isPlainFilterRecord(next)) return false;
-    const previousKeys = Reflect.ownKeys(previous).filter(
-      (key) => !isImplicitFalseTextSensitivity(previousRecord, key),
-    );
-    const nextKeys = Reflect.ownKeys(next).filter(
-      (key) => !isImplicitFalseTextSensitivity(nextRecord, key),
-    );
-    if (previousKeys.length !== nextKeys.length) return false;
-    const operator =
-      previousRecord["type"] === nextRecord["type"] && typeof previousRecord["type"] === "string"
-        ? previousRecord["type"]
-        : undefined;
-    const rawTextOperand =
-      valueColumn?.semantics.filterFamily === "text" &&
-      (operator === "contains" ||
-        operator === "notContains" ||
-        operator === "startsWith" ||
-        operator === "endsWith");
-    const textOperand =
-      valueColumn?.semantics.filterFamily === "text" &&
-      (operator === "equals" ||
-        operator === "notEqual" ||
-        operator === "in" ||
-        operator === "contains" ||
-        operator === "notContains" ||
-        operator === "startsWith" ||
-        operator === "endsWith");
-    const operandOptions = {
-      accentSensitive: previousRecord["accentSensitive"] === true,
-      caseSensitive: previousRecord["caseSensitive"] === true,
-      raw: rawTextOperand,
-      text: textOperand,
-    } as const;
-    return previousKeys.every((key) => {
-      if (!nextKeys.includes(key)) return false;
-      const previousValue = previousRecord[key];
-      const nextValue = nextRecord[key];
-      if (
-        key === "conditions" &&
-        (operator === "AND" || operator === "OR") &&
-        Array.isArray(previousValue) &&
-        Array.isArray(nextValue)
-      ) {
-        return sameBrunoTableFilterCollectionWithBudget(
-          previousValue,
-          nextValue,
-          columnsById,
-          true,
-          comparisonBudget,
-        );
-      }
-      if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
-        return sameFilterOperand(
-          previousValue,
-          nextValue,
-          valueColumn,
-          key === "filter" && operator === "in"
-            ? { ...operandOptions, unordered: true }
-            : { ...operandOptions, unordered: false },
-          comparisonBudget,
-        );
-      }
-      return sameBrunoTableFilterValueWithBudget(
-        previousValue,
-        nextValue,
-        columnsById,
-        valueColumn,
-        seen,
-        comparisonBudget,
-      );
-    });
-  } catch {
+  if (previous === next) return true;
+  if (previous.roots.length !== next.roots.length) return false;
+  if (previous.opaqueRootCountByColumn.size > 0 || next.opaqueRootCountByColumn.size > 0) {
     return false;
   }
-}
-
-function isImplicitFalseTextSensitivity(
-  record: Readonly<Record<PropertyKey, unknown>>,
-  key: PropertyKey,
-): boolean {
-  return (key === "caseSensitive" || key === "accentSensitive") && record[key] === false;
-}
-
-function sameFilterOperand(
-  previous: unknown,
-  next: unknown,
-  column: CompiledColumn,
-  options: Readonly<{
-    readonly accentSensitive: boolean;
-    readonly caseSensitive: boolean;
-    readonly raw: boolean;
-    readonly text: boolean;
-    readonly unordered: boolean;
-  }>,
-  comparisonBudget: BrunoTableFilterComparisonBudget,
-): boolean {
-  if (Object.is(previous, next)) return true;
-  if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
-    const previousKeys = previous.map((value) =>
-      filterOperandComparisonKey(value, column, options),
-    );
-    const nextKeys = next.map((value) => filterOperandComparisonKey(value, column, options));
-    if (
-      previousKeys.every((key) => key !== undefined) &&
-      nextKeys.every((key) => key !== undefined)
-    ) {
-      const nextSet = new Set(nextKeys as string[]);
-      const previousSet = new Set(previousKeys as string[]);
-      return previousSet.size === nextSet.size && [...previousSet].every((key) => nextSet.has(key));
-    }
-    const hasEveryMatch = (values: readonly unknown[], candidates: readonly unknown[]): boolean => {
-      for (const value of values) {
-        let matched = false;
-        for (const candidate of candidates) {
-          if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
-          if (
-            sameFilterOperand(
-              value,
-              candidate,
-              column,
-              { ...options, unordered: false },
-              comparisonBudget,
-            )
-          ) {
-            matched = true;
-            break;
-          }
-        }
-        if (!matched) return false;
-      }
-      return true;
-    };
-    return hasEveryMatch(previous, next) && hasEveryMatch(next, previous);
-  }
-  if (previous === null || next === null || previous === undefined || next === undefined) {
-    return false;
-  }
-  if (options.raw) {
-    if (typeof previous !== "string" || typeof next !== "string") return false;
-    return (
-      normalizeBrunoTableFilterText(previous, options.caseSensitive, options.accentSensitive) ===
-      normalizeBrunoTableFilterText(next, options.caseSensitive, options.accentSensitive)
+  if (!unordered) {
+    return previous.roots.every(
+      (root, index) =>
+        root.signature !== undefined && root.signature === next.roots[index]?.signature,
     );
   }
-  if (options.text) {
-    try {
-      return (
-        normalizeBrunoTableFilterText(
-          column.semantics.formatCanonicalText(previous),
-          options.caseSensitive,
-          options.accentSensitive,
-        ) ===
-        normalizeBrunoTableFilterText(
-          column.semantics.formatCanonicalText(next),
-          options.caseSensitive,
-          options.accentSensitive,
-        )
-      );
-    } catch {
-      return false;
-    }
-  }
-  try {
-    if (!consumeBrunoTableFilterComparisonBudget(comparisonBudget)) return false;
-    return column.semantics.equivalent(previous, next);
-  } catch {
-    return false;
-  }
+  const columnIds = new Set<string>([
+    ...previous.signatureCountsByColumn.keys(),
+    ...next.signatureCountsByColumn.keys(),
+  ]);
+  return [...columnIds].every((columnId) =>
+    sameSignatureCounts(
+      previous.signatureCountsByColumn.get(columnId),
+      next.signatureCountsByColumn.get(columnId),
+    ),
+  );
 }
 
-function filterOperandComparisonKey(
-  value: unknown,
-  column: CompiledColumn,
-  options: Readonly<{
-    readonly accentSensitive: boolean;
-    readonly caseSensitive: boolean;
-    readonly raw: boolean;
-    readonly text: boolean;
-    readonly unordered: boolean;
-  }>,
-): string | undefined {
-  if (options.raw) {
-    return typeof value === "string"
-      ? `text:${normalizeBrunoTableFilterText(value, options.caseSensitive, options.accentSensitive)}`
-      : undefined;
-  }
-  if (options.text) {
-    try {
-      return `text:${normalizeBrunoTableFilterText(
-        column.semantics.formatCanonicalText(value),
-        options.caseSensitive,
-        options.accentSensitive,
-      )}`;
-    } catch {
-      return undefined;
-    }
-  }
-  switch (column.semantics.editorFamily) {
-    case "number":
-      if (column.valueType !== "number") return undefined;
-      return typeof value === "number" ? `number:${String(value)}` : undefined;
-    case "bigint":
-      if (column.valueType !== "bigint") return undefined;
-      return typeof value === "bigint" ? `bigint:${value.toString()}` : undefined;
-    case "boolean":
-      if (column.valueType !== "boolean") return undefined;
-      return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
-    default:
-      return undefined;
-  }
+export function sameBrunoTableFilterCollections(
+  previous: BrunoTableClientFilterCollection,
+  next: BrunoTableClientFilterCollection,
+  unordered = true,
+): boolean {
+  return sameCompiledFilterCollections(previous, next, unordered);
 }
 
-function isPlainFilterRecord(value: object): boolean {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+export function sameBrunoTableFilterColumn(
+  previous: BrunoTableClientFilterCollection,
+  next: BrunoTableClientFilterCollection,
+  columnId: string,
+): boolean {
+  if ((previous.opaqueRootCountByColumn.get(columnId) ?? 0) > 0) return false;
+  if ((next.opaqueRootCountByColumn.get(columnId) ?? 0) > 0) return false;
+  return sameSignatureCounts(
+    previous.signatureCountsByColumn.get(columnId),
+    next.signatureCountsByColumn.get(columnId),
+  );
+}
+
+function sameSignatureCounts(
+  previous: ReadonlyMap<string, number> | undefined,
+  next: ReadonlyMap<string, number> | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (previous === undefined || next === undefined || previous.size !== next.size) return false;
+  return [...previous].every(([signature, count]) => next.get(signature) === count);
 }
 
 function hasValidTextSensitivity(
@@ -1555,11 +1759,17 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
   return value as Readonly<Record<string, unknown>>;
 }
 
-const EMPTY_FILTERS: readonly never[] = Object.freeze([]);
 const EMPTY_ORDER_BY: ClientOrderBy = Object.freeze([]);
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH = 64;
-export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES = 1_024;
-export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS = 4_096;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES = 16_384;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS = 16_384;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH = 1_048_576;
+// Compatibility names for internal tests and diagnostics. These are aggregate limits, not
+// per-expression budgets.
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES: number =
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES;
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS: number =
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
 const ROOT_ENTRIES_OVER_BUDGET = Symbol("BrunoTable root filter entries over budget");
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
@@ -1569,21 +1779,50 @@ type FilterSanitizationContext = {
   readonly capturedArrays: WeakMap<object, CapturedFilterArray | undefined>;
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
+  readonly admittedNodes: WeakSet<object>;
+  readonly compiledOperands: Map<object, CompiledFilterOperandPlan>;
+  hasSharedNodes: boolean;
+  nodes: number;
+  operands: number;
+  textLength: number;
   overBudget: boolean;
-  remainingNodes: number;
 };
 
+function createFilterSanitizationContext(
+  initial: Readonly<{
+    readonly nodes?: number;
+    readonly operands?: number;
+    readonly textLength?: number;
+  }> = {},
+  compiledOperands: Map<object, CompiledFilterOperandPlan> = new Map(),
+  captured: WeakMap<object, Readonly<Record<string, unknown>> | undefined> = new WeakMap(),
+  capturedArrays: WeakMap<object, CapturedFilterArray | undefined> = new WeakMap(),
+): FilterSanitizationContext {
+  return {
+    captured,
+    capturedArrays,
+    completed: new WeakMap(),
+    visited: new WeakSet(),
+    admittedNodes: new WeakSet(),
+    compiledOperands,
+    hasSharedNodes: false,
+    nodes: initial.nodes ?? 0,
+    operands: initial.operands ?? 0,
+    textLength: initial.textLength ?? 0,
+    overBudget: false,
+  };
+}
+
 function isBoundedFilterOperand(value: unknown, context: FilterSanitizationContext): boolean {
+  // These per-operand object/property/depth checks are structural readability guards. They stop
+  // an accessor-backed or cyclic value before decoding; they are deliberately not complexity
+  // budgets and never replace or reset the collection-wide node/operand/text ledger below.
   const visited = new WeakSet<object>();
   let objectCount = 0;
   let propertyCount = 0;
 
   const visit = (candidate: unknown, depth: number): boolean => {
-    if (typeof candidate === "string") {
-      if (candidate.length <= BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH) return true;
-      context.overBudget = true;
-      return false;
-    }
+    if (typeof candidate === "string") return true;
     if (
       candidate === null ||
       candidate === undefined ||
@@ -1641,4 +1880,5 @@ type CapturedFilterArray = {
 type SanitizedFilterNode = {
   readonly columnIds: ReadonlySet<string>;
   readonly filter: Readonly<Record<string, unknown>>;
+  readonly signature?: string;
 };

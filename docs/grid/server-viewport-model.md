@@ -134,7 +134,7 @@ All Server row identity is source-owned. BrunoTable requires the additive key-de
 
 effect-view-server is a first-party collaborating module at this seam. If BrunoTable needs another missing source-owned semantic, change the upstream contract and require the compatible release. Do not add a compensating consumer prop, duplicate schema semantics, reconstruct canonical source values or keys, or ship a weaker local fallback.
 
-Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share half-open `inRange` semantics: `filter <= value < filterTo`.
+Runtime Grid Filter operands remain native values. Translation changes `columnId` to the current Query Field and passes native `bigint` or BigDecimal operands to `viewport.replace`; effect-view-server owns schema-aware wire encoding. Client and Server Tables share strict half-open `inRange` semantics: `filter < filterTo` and `filter <= value < filterTo`.
 
 Quick Filter uses the caller's explicit non-empty `quickFilterFields` tuple of string-valued Query Fields, never Column Identities or an inference from visible columns. TypeScript enforces the field shape and non-empty tuple; runtime configuration snapshotting defensively caps the tuple at 256 entries. The Adapter emits one `contains` leaf per field, combines those leaves with `OR`, and combines that group with External Filters and Grid Filters through `AND`. These fields need not have visible columns. Neither the tuple nor committed Quick Filter text is persisted.
 

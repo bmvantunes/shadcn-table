@@ -12,7 +12,14 @@ import {
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
 } from "./client-row-model";
-import { compileClientFilterPlan } from "./grid-query";
+import {
+  compileClientFilterCollection,
+  compileClientFilterPlan,
+  removeClientFilterColumn,
+  restoreClientFilterColumn,
+  replaceClientFilterColumn,
+  replaceClientFilterRoot,
+} from "./grid-query";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -347,7 +354,7 @@ describe("Client row model", () => {
     ).toEqual(["blank", "middle", "upper"]);
   });
 
-  it("retains empty text operands with their exact predicate semantics", () => {
+  it("drops empty text search operands at the admission boundary", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -363,17 +370,23 @@ describe("Client row model", () => {
     ] as const;
 
     for (const type of ["contains", "startsWith", "endsWith"] as const) {
-      expect(
-        filterClientRows(rows, columns, [{ columnId: "COL_ID_NAME", type, filter: "" }]).map(
-          (row) => row.id,
-        ),
-      ).toEqual(["empty", "value"]);
+      const filters = sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", type, filter: "" }],
+        columns,
+      );
+      expect(filters).toEqual([]);
+      expect(filterClientRows(rows, columns, filters).map((row) => row.id)).toEqual([
+        "blank",
+        "empty",
+        "value",
+      ]);
     }
     expect(
-      filterClientRows(rows, columns, [
-        { columnId: "COL_ID_NAME", type: "notContains", filter: "" },
-      ]).map((row) => row.id),
-    ).toEqual(["blank"]);
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", type: "notContains", filter: "" }],
+        columns,
+      ),
+    ).toEqual([]);
   });
 
   it("excludes nullish Number and BigInt values from every ordered filter", () => {
@@ -524,7 +537,7 @@ describe("Client row model", () => {
     ]);
   });
 
-  it("retains empty ranges and strings while dropping invalid text operands and arrays", () => {
+  it("drops empty ranges and text searches while retaining invalid-free collections", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -561,6 +574,12 @@ describe("Client row model", () => {
       filter: "\u0301",
     } as const;
     const emptyIn = { columnId: "COL_ID_NAME", type: "in", filter: [] } as const;
+    const emptyTextIn = { columnId: "COL_ID_NAME", type: "in", filter: [""] } as const;
+    const normalizedEmptyTextIn = {
+      columnId: "COL_ID_NAME",
+      type: "in",
+      filter: ["\u0301"],
+    } as const;
     expect(
       sanitizeClientInitialFilters(
         [
@@ -584,13 +603,15 @@ describe("Client row model", () => {
         ],
         columns,
       ),
-    ).toEqual([...emptyRanges, emptyText, normalizedEmptyText]);
+    ).toEqual([]);
     const rows = [{ id: "middle", name: "Ada", score: 5, count: 5n }] as const;
     for (const range of emptyRanges) {
-      expect(filterClientRows(rows, columns, [range])).toEqual([]);
+      expect(filterClientRows(rows, columns, [range])).toEqual(rows);
     }
     expect(filterClientRows(rows, columns, [normalizedEmptyText])).toEqual(rows);
     expect(filterClientRows(rows, columns, [emptyIn])).toEqual(rows);
+    expect(sanitizeClientInitialFilters([emptyTextIn, normalizedEmptyTextIn], columns)).toEqual([]);
+    expect(filterClientRows(rows, columns, [emptyTextIn, normalizedEmptyTextIn])).toEqual(rows);
 
     expect(
       sanitizeClientInitialFilters(
@@ -718,6 +739,31 @@ describe("Client row model", () => {
     ]);
   });
 
+  it("uses the decomposed accent-sensitive text form shared with the Server", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const rows = [{ name: "é" }, { name: "e" }] as const;
+    const filters = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_NAME",
+          type: "contains",
+          filter: "e",
+          accentSensitive: true,
+        },
+      ],
+      columns,
+    );
+
+    expect(filterClientRows(rows, columns, filters)).toEqual(rows);
+  });
+
   it("sanitizes compound filters and tracks nested column references", () => {
     const columns = compileColumns([
       {
@@ -811,7 +857,7 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([deep], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
     );
   });
 
@@ -1291,6 +1337,126 @@ describe("Client row model", () => {
     ).toThrow(/root contains more than 16384 entries/u);
   });
 
+  it("admits one aggregate node and operand ledger for the complete filter collection", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    const largeRoots = [
+      {
+        conditions: Array.from({ length: 8_191 }, () => leaf),
+        type: "AND" as const,
+      },
+      {
+        conditions: Array.from({ length: 8_191 }, () => leaf),
+        type: "AND" as const,
+      },
+    ];
+    const nodeCollection = compileClientFilterCollection(largeRoots, columns);
+    expect(nodeCollection.roots).toHaveLength(2);
+    expect(nodeCollection.complexity.nodes).toBe(16_384);
+    expect(nodeCollection.rootsByColumn.get("COL_ID_NAME")).toHaveLength(2);
+    expect(nodeCollection.byColumn.get("COL_ID_NAME")).toHaveLength(2);
+    expect(() =>
+      compileClientFilterCollection([...largeRoots, largeRoots[0]!], columns, {
+        rejectOverBudget: true,
+      }),
+    ).toThrow(/16384 nodes/u);
+
+    const operandRoots = Array.from({ length: 5 }, () => ({
+      columnId: "COL_ID_SCORE",
+      filter: Array.from({ length: 4_096 }, (_, index) => index),
+      type: "in" as const,
+    }));
+    const operandCollection = compileClientFilterCollection(operandRoots, columns);
+    expect(operandCollection.complexity.operands).toBe(16_384);
+    expect(operandCollection.roots).toHaveLength(4);
+    expect(operandCollection.rootsByColumn.get("COL_ID_SCORE")).toHaveLength(4);
+  });
+
+  it("prunes compiled operand metadata when a column root is replaced or cleared", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const collection = compileClientFilterCollection(
+      [
+        { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+        { columnId: "COL_ID_NAME", filter: "Grace", type: "equals" },
+      ],
+      columns,
+    );
+    expect(collection.compiledOperands.size).toBe(2);
+
+    const replacement = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      filter: "Lin",
+      type: "equals",
+    });
+    expect(replacement?.compiledOperands.size).toBe(1);
+    expect(removeClientFilterColumn(replacement!, "COL_ID_NAME").compiledOperands.size).toBe(0);
+  });
+
+  it("replaces one retained root without re-decoding unchanged roots", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const valueType = {
+      codecId: "test/root-replacement",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType,
+      },
+    ] as never);
+    const roots = Array.from({ length: 256 }, (_, index) => ({
+      columnId: "COL_ID_NAME",
+      type: "equals" as const,
+      filter: `Name-${String(index)}`,
+    }));
+    const collection = compileClientFilterCollection(roots, columns);
+    const decodeCallsAfterAdmission = decodeRuntime.mock.calls.length;
+    const replacement = replaceClientFilterRoot(
+      collection,
+      "COL_ID_NAME",
+      collection.roots[100]!.filter,
+      { columnId: "COL_ID_NAME", type: "equals", filter: "Updated" },
+    );
+
+    expect(replacement?.roots).toHaveLength(256);
+    expect(decodeRuntime).toHaveBeenCalledTimes(decodeCallsAfterAdmission + 1);
+  });
+
   it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
@@ -1383,7 +1549,7 @@ describe("Client row model", () => {
     expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
   });
 
-  it("bounds each in operand before materializing hostile values", () => {
+  it("bounds aggregate in operands before materializing hostile values", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_SCORE",
@@ -1396,7 +1562,7 @@ describe("Client row model", () => {
       [
         {
           columnId: "COL_ID_SCORE",
-          filter: Array.from({ length: 4_096 }, (_, index) => index),
+          filter: Array.from({ length: 16_384 }, (_, index) => index),
           type: "in",
         },
       ],
@@ -1404,11 +1570,11 @@ describe("Client row model", () => {
     );
     expect(
       (atLimit[0] as { readonly filter: readonly unknown[] } | undefined)?.filter,
-    ).toHaveLength(4_096);
+    ).toHaveLength(16_384);
 
     const ownKeys = vi.fn(Reflect.ownKeys);
     const overBudgetOperand = new Proxy(
-      Array.from({ length: 4_097 }, (_, index) => index),
+      Array.from({ length: 16_385 }, (_, index) => index),
       { ownKeys },
     );
     const filter = {
@@ -1422,12 +1588,12 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([filter], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
     );
     expect(ownKeys).not.toHaveBeenCalled();
   });
 
-  it("bounds text operands at the initial-filter boundary", () => {
+  it("admits text operands beyond the UI draft bound while the aggregate allows them", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1443,20 +1609,13 @@ describe("Client row model", () => {
         [{ columnId: "COL_ID_NAME", filter: overlong, type: "equals" }],
         columns,
       ),
-    ).toEqual([]);
+    ).toEqual([{ columnId: "COL_ID_NAME", filter: overlong, type: "equals" }]);
     expect(
       sanitizeClientInitialFilters(
         [{ columnId: "COL_ID_NAME", filter: ["ok", overlong], type: "in" }],
         columns,
       ),
-    ).toEqual([]);
-    expect(() =>
-      sanitizeClientInitialFilters(
-        [{ columnId: "COL_ID_NAME", filter: overlong, type: "contains" }],
-        columns,
-        { rejectOverBudget: true },
-      ),
-    ).toThrow();
+    ).toEqual([{ columnId: "COL_ID_NAME", filter: ["ok", overlong], type: "in" }]);
 
     const numericColumns = compileColumns([
       {
@@ -1466,16 +1625,16 @@ describe("Client row model", () => {
         valueType: "number",
       },
     ]);
-    expect(() =>
+    expect(
       sanitizeClientInitialFilters(
         [{ columnId: "COL_ID_SCORE", filter: overlong, type: "equals" }],
         numericColumns,
         { rejectOverBudget: true },
       ),
-    ).toThrow();
+    ).toEqual([]);
   });
 
-  it("rejects overlong custom operands before invoking the decoder", () => {
+  it("charges long custom text through the aggregate ledger before retaining it", () => {
     const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
     const customTextValueType = {
       codecId: "test/bounded-text",
@@ -1503,13 +1662,68 @@ describe("Client row model", () => {
       },
     ]);
 
+    const operand = "x".repeat(1_025);
     expect(
       sanitizeClientInitialFilters(
-        [{ columnId: "COL_ID_CUSTOM_TEXT", filter: "x".repeat(1_025), type: "equals" }],
+        [{ columnId: "COL_ID_CUSTOM_TEXT", filter: operand, type: "equals" }],
         columns,
       ),
-    ).toEqual([]);
-    expect(decodeRuntime).not.toHaveBeenCalled();
+    ).toEqual([{ columnId: "COL_ID_CUSTOM_TEXT", filter: operand, type: "equals" }]);
+    expect(decodeRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("shares one aggregate retained-text budget across roots", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const operand = "x".repeat(300_000);
+    const filters = [
+      { columnId: "COL_ID_NAME", filter: operand, type: "equals" as const },
+      { columnId: "COL_ID_NAME", filter: operand, type: "equals" as const },
+    ];
+
+    expect(compileClientFilterCollection(filters, columns).roots).toHaveLength(1);
+    expect(() =>
+      compileClientFilterCollection(filters, columns, { rejectOverBudget: true }),
+    ).toThrowError(/1048576 UTF-16 text units/u);
+  });
+
+  it("rejects a reset whose retained baseline would exceed the aggregate budget", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const baseline = compileClientFilterCollection(
+      [{ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" }],
+      columns,
+    );
+    const current = compileClientFilterCollection(
+      [
+        {
+          columnId: "COL_ID_SCORE",
+          filter: Array.from({ length: 16_384 }, (_, index) => index),
+          type: "in",
+        },
+      ],
+      columns,
+    );
+
+    expect(restoreClientFilterColumn(current, baseline, "COL_ID_NAME")).toBeUndefined();
   });
 
   it("rejects unreadable custom object operands before invoking the decoder", () => {
@@ -1757,7 +1971,7 @@ describe("Client row model", () => {
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     const ownKeys = vi.fn(Reflect.ownKeys);
     const overBudgetConditions = new Proxy(
-      Array.from({ length: 1_024 }, () => leaf),
+      Array.from({ length: 16_385 }, () => leaf),
       { ownKeys },
     );
 
@@ -1770,12 +1984,12 @@ describe("Client row model", () => {
         rejectOverBudget: true,
       }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
     );
 
     expect(
       sanitizeClientInitialFilters(
-        [{ conditions: Array.from({ length: 1_023 }, () => leaf), type: "AND" }],
+        [{ conditions: Array.from({ length: 16_383 }, () => leaf), type: "AND" }],
         columns,
       ),
     ).toHaveLength(1);
@@ -1792,14 +2006,14 @@ describe("Client row model", () => {
     ]);
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     const lastOwnKeys = vi.fn(Reflect.ownKeys);
-    const groups = Array.from({ length: 32 }, (_, index) => ({
+    const groups = Array.from({ length: 128 }, (_, index) => ({
       conditions:
-        index === 30
+        index === 126
           ? new Proxy(
-              Array.from({ length: 32 }, () => leaf),
+              Array.from({ length: 128 }, () => leaf),
               { ownKeys: lastOwnKeys },
             )
-          : Array.from({ length: 32 }, () => leaf),
+          : Array.from({ length: 128 }, () => leaf),
       type: "AND",
     }));
 

@@ -43,7 +43,9 @@ describe("BrunoTableClient server rendering", () => {
       },
     ] as const;
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
-    const initialFilters = [{ conditions: Array.from({ length: 1_024 }, () => leaf), type: "AND" }];
+    const initialFilters = [
+      { conditions: Array.from({ length: 16_385 }, () => leaf), type: "AND" },
+    ];
 
     expect(() =>
       renderToStaticMarkup(
@@ -57,11 +59,11 @@ describe("BrunoTableClient server rendering", () => {
         />,
       ),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
     );
   });
 
-  it("rejects an over-budget in operand at the public construction boundary", () => {
+  it("rejects an over-budget aggregate in operand at the public construction boundary", () => {
     const rows = [{ id: "ada", score: 1 }] as const;
     const columns = [
       {
@@ -83,7 +85,7 @@ describe("BrunoTableClient server rendering", () => {
             [
               {
                 columnId: "COL_ID_SCORE",
-                filter: Array.from({ length: 4_097 }, (_, index) => index),
+                filter: Array.from({ length: 16_385 }, (_, index) => index),
                 type: "in",
               },
             ] as never
@@ -92,7 +94,7 @@ describe("BrunoTableClient server rendering", () => {
         />,
       ),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, and nesting depth 64.",
     );
   });
 

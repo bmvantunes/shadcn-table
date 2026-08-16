@@ -199,6 +199,53 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(runtime.getQuerySnapshot().quickFilter).toBe("ada");
   });
 
+  it("rejects a replacement that exceeds the remaining aggregate operand budget atomically", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "name-0" }]),
+      (row) => row.id,
+      columns,
+      [
+        {
+          columnId: "COL_ID_NAME",
+          filter: Array.from({ length: 16_383 }, (_, index) => `name-${String(index)}`),
+          type: "in",
+        },
+        { columnId: "COL_ID_SCORE", filter: 1, type: "equals" },
+      ],
+      [{ columnId: "COL_ID_SCORE", direction: "asc" }],
+    );
+    const before = runtime.getQuerySnapshot();
+    expect(before.filterCollection.complexity.operands).toBe(16_384);
+
+    expect(
+      runtime.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_SCORE",
+        filter: {
+          columnId: "COL_ID_SCORE",
+          filter: [1, 2],
+          type: "in",
+        },
+      }),
+    ).toBe(false);
+    expect(runtime.getQuerySnapshot()).toBe(before);
+    expect(runtime.getQuerySnapshot().generation).toBe(before.generation);
+  });
+
   it("sanitizes Boolean notEqual operands", () => {
     const columns = compileColumns([
       {
@@ -397,8 +444,7 @@ describe("BrunoTable filter runtime primitives", () => {
     const next = [...previous].reverse();
 
     expect(sameBrunoTableFilterCollection(previous, next, columnsById)).toBe(false);
-    expect(equivalent.mock.calls.length).toBeGreaterThan(0);
-    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
+    expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();
     const operands = Array.from({ length: 4_096 }, (_, id) => Object.freeze({ id }));
@@ -407,8 +453,7 @@ describe("BrunoTable filter runtime primitives", () => {
       { columnId: "COL_ID_OPAQUE", type: "in" as const, filter: [...operands].reverse() },
     ];
     expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(false);
-    expect(equivalent.mock.calls.length).toBeGreaterThan(0);
-    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
+    expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();
     const multiplePrevious = Array.from({ length: 16_384 }, (_, id) => ({
@@ -421,7 +466,7 @@ describe("BrunoTable filter runtime primitives", () => {
       filter: entry.filter.map((operand) => Object.freeze({ id: operand.id })),
     }));
     expect(sameBrunoTableFilterCollection(multiplePrevious, multipleNext, columnsById)).toBe(false);
-    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
+    expect(equivalent.mock.calls.length).toBe(0);
 
     equivalent.mockClear();
     const snapshotOperands = Array.from({ length: 2_048 }, (_, id) => Object.freeze({ id }));
@@ -549,6 +594,50 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a multi-root column snapshot stable when another column changes", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada", note: "first" }]),
+      (row) => row.id,
+      columns,
+      [
+        { columnId: "COL_ID_NOTE", type: "equals", filter: "first" },
+        { columnId: "COL_ID_NOTE", type: "notEqual", filter: "second" },
+      ],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const view = runtime.getView();
+    const noteSnapshot = view.getColumnFilterSnapshot("COL_ID_NOTE");
+    const noteVersion = view.getColumnFilterVersionSnapshot("COL_ID_NOTE");
+    const noteListener = vi.fn();
+    view.subscribeColumnFilter("COL_ID_NOTE", noteListener);
+
+    expect(
+      view.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_NAME",
+        filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Grace" },
+      }),
+    ).toBe(true);
+
+    expect(view.getColumnFilterSnapshot("COL_ID_NOTE")).toBe(noteSnapshot);
+    expect(view.getColumnFilterVersionSnapshot("COL_ID_NOTE")).toBe(noteVersion);
+    expect(noteListener).not.toHaveBeenCalled();
+  });
+
   it("invalidates only columns whose filter baseline changed during reconciliation", () => {
     const columns = compileColumns([
       {
@@ -591,7 +680,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE")).toBe(noteEpoch + 1);
   });
 
-  it("bounds Quick Filter text at the command boundary", () => {
+  it("rejects over-limit Quick Filter text at the command boundary", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
       (row) => row.id,
@@ -600,11 +689,13 @@ describe("BrunoTable filter runtime primitives", () => {
       [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
     const view = runtime.getView();
-    view.dispatchGridCommand({
-      type: "quick-filter.replace",
-      text: "x".repeat(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH + 50),
-    });
-    expect(view.getQuickFilterSnapshot()).toHaveLength(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
+    expect(
+      view.dispatchGridCommand({
+        type: "quick-filter.replace",
+        text: "x".repeat(BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH + 50),
+      }),
+    ).toBe(false);
+    expect(view.getQuickFilterSnapshot()).toBe("");
   });
 
   it("invalidates queued Quick Filter candidates for every replacement command", () => {
@@ -692,8 +783,8 @@ describe("BrunoTable filter runtime primitives", () => {
       filter: { columnId: "COL_ID_VECTOR", type: "equals", filter: ["a", "b"] },
     });
 
-    expect(view.getQuerySnapshot()).toBe(query);
-    expect(queryListener).not.toHaveBeenCalled();
+    expect(view.getQuerySnapshot()).not.toBe(query);
+    expect(queryListener).toHaveBeenCalledTimes(1);
   });
 
   it("compares same-column compound conditions as an unordered set", () => {
@@ -887,6 +978,50 @@ describe("BrunoTable filter runtime primitives", () => {
 
     expect(runtime.getQuerySnapshot()).toBe(query);
     expect(queryListener).not.toHaveBeenCalled();
+  });
+
+  it("rejects an over-budget Reset without reporting success or publishing", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada", note: "first" }]),
+      (row) => row.id,
+      columns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    expect(
+      runtime.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" }),
+    ).toBe(true);
+    expect(
+      runtime.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_SCORE",
+        filter: {
+          columnId: "COL_ID_SCORE",
+          type: "in",
+          filter: Array.from({ length: 16_384 }, (_, index) => index),
+        },
+      }),
+    ).toBe(true);
+    const before = runtime.getQuerySnapshot();
+
+    expect(
+      runtime.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" }),
+    ).toBe(false);
+    expect(runtime.getQuerySnapshot()).toBe(before);
   });
 
   it("snapshots Quick Filter fields as immutable table configuration", () => {

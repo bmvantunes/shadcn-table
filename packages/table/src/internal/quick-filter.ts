@@ -10,8 +10,12 @@ export const BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH = 1_024;
 /** Internal configuration bound shared by Client configuration and predicate construction. */
 export const BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS = 256;
 
+export function isBrunoTableQuickFilterTextWithinLimit(text: string): boolean {
+  return text.length <= BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH;
+}
+
 export function boundBrunoTableQuickFilterText(text: string): string {
-  return text.length <= BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH
+  return isBrunoTableQuickFilterTextWithinLimit(text)
     ? text
     : text.slice(0, BRUNO_TABLE_MAX_QUICK_FILTER_LENGTH);
 }
@@ -28,7 +32,8 @@ export function createClientQuickFilterPredicate<TRow>(
   readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
 ): ((row: TRow) => boolean) | undefined {
   if (text === undefined || text.length === 0) return undefined;
-  const normalizedQuery = normalizeBrunoTableFilterText(boundBrunoTableQuickFilterText(text));
+  if (!isBrunoTableQuickFilterTextWithinLimit(text)) return undefined;
+  const normalizedQuery = normalizeBrunoTableFilterText(text);
   if (normalizedQuery.length === 0) return undefined;
   const quickFilterFields = snapshotQuickFilterFieldsForPredicate(fields);
   if (quickFilterFields.length === 0) return undefined;
@@ -78,6 +83,9 @@ const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 function snapshotQuickFilterFieldsForPredicate(
   fields: readonly string[] | undefined,
 ): readonly string[] {
+  // Public Client configuration is validated and rejected by the Adapter before this predicate
+  // seam. The defensive empty result here is only for hostile internal/direct predicate callers;
+  // it must never be used as the public configuration admission path.
   if (fields === undefined) return EMPTY_QUICK_FILTER_FIELDS;
   try {
     if (!Array.isArray(fields)) return EMPTY_QUICK_FILTER_FIELDS;

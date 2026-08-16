@@ -1366,7 +1366,7 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
-  test("counts repeated shared filter nodes toward the editor complexity budget", async () => {
+  test("retains repeated shared filter nodes within the aggregate collection budget", async () => {
     const sharedLeaf = {
       columnId: "COL_ID_FILTER_NAME",
       type: "equals",
@@ -1390,10 +1390,17 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
     const dialog = screen.getByRole("dialog", { name: "Filter Name" });
     await userEvent.click(dialog.getByRole("button", { name: "Add condition for Name" }));
-    await expect.element(dialog.getByRole("alert")).toHaveTextContent("too complex");
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value for Name (condition 1024)" }),
+      "Ada",
+    );
+    await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
     await expect
       .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
       .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .not.toBeInTheDocument();
   });
 
   test("preserves a NOT subtree when changing to a same-column compound", async () => {
@@ -1697,7 +1704,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(second).toHaveValue("");
   });
 
-  test("reconciles a surviving active cell after a Quick Filter query", async () => {
+  test("resets a surviving body active cell to row zero after a Quick Filter query", async () => {
     const screen = await render(
       <BrunoTableClient<FilterRow, typeof filterColumns>
         tableId="TABLE_ID_QUICK_FILTER_ACTIVE_CELL"
@@ -1725,13 +1732,13 @@ describe("BrunoTableClient browser surface", () => {
     });
     const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
 
-    await userEvent.fill(quickFilter, "ra");
+    await userEvent.fill(quickFilter, "a");
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeInTheDocument();
     await vi.waitFor(() => {
       expect(grid.element().getAttribute("aria-activedescendant")).toBe(
-        screen.getByRole("gridcell", { name: "Grace", exact: true }).element().id,
+        screen.getByRole("gridcell", { name: "Ada", exact: true }).element().id,
       );
     });
   });
@@ -1908,6 +1915,39 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("dialog", { name: "Active filters" }))
       .not.toBeInTheDocument();
+  });
+
+  test("removes one active filter root without clearing its sibling on the same column", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_ACTIVE_FILTER_SAME_COLUMN_ROOTS"
+        columns={filterColumns}
+        initialFilters={[
+          { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+          { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+        ]}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Active filters (2)" }));
+    const review = screen.getByRole("dialog", { name: "Active filters" });
+    await expect
+      .element(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }))
+      .toBeInTheDocument();
+    await expect
+      .element(review.getByRole("button", { name: 'Remove Name: notEqual "Grace"' }))
+      .toBeInTheDocument();
+
+    await userEvent.click(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }));
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (1)" }))
+      .toBeInTheDocument();
+    await expect
+      .element(review.getByRole("button", { name: 'Remove Name: notEqual "Grace"' }))
+      .toBeInTheDocument();
   });
 
   test("restores grid focus when an open filter owner is removed", async () => {

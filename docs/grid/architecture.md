@@ -109,12 +109,12 @@ The private TanStack Adapter may implement TanStack-owned parts with `table.Subs
 
 Grid Filter, Quick Filter, Clear, and Reset commands enter the same editor commit gate used by sorting before mutating filter state. Rejection returns focus to the editor and publishes no filter command. Batch acceptance records the local transaction first; Immediate acceptance creates the operation first. The filter command then proceeds without awaiting transport, while sparse drafts and operation notifications remain independent of row visibility.
 
-The compact column-management menu exposes its Filter action only when the column has an
-Initial Grid Filter baseline. It is a reversible Clear/Reset command surface, not a generic
-filter editor: Clear removes the active Grid Filters and Reset returns the column to its declared
-baseline. A filter-capable column with no baseline therefore has no column-specific Clear/Reset
-action to expose; future filter-editor surfaces may add a new typed command without changing this
-ownership rule.
+The compact column-management menu exposes an `Open filter` action for every filter-capable Field
+Column, while its reversible Clear/Reset actions appear only when the column has an active filter or
+an Initial Grid Filter baseline. Clear removes the active Grid Filters and Reset returns the column
+to its declared baseline. A filter-capable column with no baseline therefore still has an editor,
+but has no baseline-dependent Reset action to expose; future filter-editor surfaces may add a new
+typed command without changing this ownership rule.
 
 Each typed filter overlay owns an ephemeral raw candidate outside persisted filter state. Exact Value Type parsing precedes Pacer publication. Parse failure updates only that overlay's compact validation snapshot; the last committed filter atom and row pipeline remain untouched. Closing discards the candidate. This validation state never enters table-root React state, query compilation, or `onPersistChange`.
 
@@ -237,7 +237,7 @@ Held-key repeat is semantic input, not scroll sampling. Every valid Arrow comman
 
 Do not allocate a placeholder row object or TanStack row for every server index. The virtualizer owns total scroll geometry; the sparse store owns only loaded, loading, retained, or failed slots. Internal window alignment and buffer sizing are transport optimizations, not pagination state.
 
-Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window. In a Server Table the new generation renders loading rows rather than retained values from the old query. A sort change applies the reset rule to both Client and Server pipelines, preserves horizontal geometry and column layout, clears position-based Active Cell state, reconciles a Client Linear Cell Range against its exact selected identity span, and retains identity-keyed drafts and conflicts.
+Scroll events update geometry outside React state and publish range changes at most once per animation frame. A filter or sort change creates a new logical index generation, clears incompatible positional mappings, resets vertical scroll to the start, and requests the first required window. In a Server Table the new generation renders loading rows rather than retained values from the old query. A sort change applies the reset rule to both Client and Server pipelines, preserves horizontal geometry and column layout, clears position-based Active Cell state, reconciles a Client Linear Cell Range against its exact selected identity span, and retains identity-keyed drafts and conflicts. Issue #12 applies the same command-specific row-zero Active Cell reset to committed Client Grid Filter and Quick Filter changes: the new projection starts at row zero, an empty result has no body Active Cell, and the initiating filter or toolbar control retains DOM focus. Passive live publications remain identity-first and do not invoke this reset.
 
 A live row publication that changes current sort-key values is not a sorting command and never resets scroll. Reconcile navigation by stable Row Identity plus Column Identity rather than retaining an absolute index that may now contain a different row. When the new position is known, update the logical coordinate without auto-revealing it. During a Client Cell Edit Session, install a geometry-owned row anchor: allow the row model to place the edited Row Identity at its correct new sorted index, calculate the fixed-height offset delta, and compensate `scrollTop` in the same animation frame so the editor retains its visual Y-coordinate while surrounding rows move. Coalesce rapid moves to the latest frame and never implement this as row freezing, delayed smooth-scroll chasing, React state, or XState frame events. When a Server row moves outside the known sparse window, clear the Active Cell while keeping DOM focus on the grid root.
 
@@ -514,7 +514,7 @@ The internal semantics interface is deep: one small column selection hides rende
 - BigDecimal equality is numeric, so differently scaled representations such as `1.5` and `1.50` converge.
 - The Effect preset admits only values compatible with effect-view-server's injective JSON wire rules and uses a comparator whose work depends on coefficient digits, not scale difference.
 - BrunoTable must not use Effect's general scale-aligning `BigDecimal.Order` or `BigDecimal.Equivalence` for unrestricted View Server values, because extreme safe-integer scale differences can attempt to materialize an impossible power of ten.
-- `inRange` is half-open everywhere: `lower <= value < upper`.
+- `inRange` is half-open everywhere: `lower < upper` and `lower <= value < upper`.
 - Client exact filters and sorts are explicit TanStack functions or grid-owned processing. TanStack automatic functions are never the semantic authority.
 - Runtime filter state retains native operands. Only preference persistence encodes them, and restoration requires the current Column Identity, codec ID, codec version, operator, and capability to agree.
 - Default clipboard text is canonical and round-trippable. Display-formatted copy is an explicit paired capability.

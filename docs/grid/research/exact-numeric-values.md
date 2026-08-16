@@ -302,7 +302,7 @@ Do not pre-encode server filter operands as persistence strings and do not conve
 
 ### `inRange` must be half-open
 
-BrunoTable's public docs already choose effect-view-server's operator vocabulary, but the endpoint rule must be made explicit. effect-view-server defines `inRange` as:
+BrunoTable's public docs already choose effect-view-server's operator vocabulary, but the endpoint rule must be made explicit. effect-view-server defines `inRange` as a strict range whose lower bound must be below its upper bound:
 
 ```text
 filter <= value < filterTo

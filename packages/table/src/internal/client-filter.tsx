@@ -30,11 +30,10 @@ import type { CompositionEvent, NamedExoticComponent, ReactElement } from "react
 import type { CompiledColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
-  BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
-  BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS,
   BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
   boundBrunoTableFilterOperandText,
+  normalizeBrunoTableFilterText,
 } from "./grid-query";
 import type { BrunoTableRuntimeView } from "./grid-runtime";
 import {
@@ -87,6 +86,7 @@ type FilterDraft =
       readonly operator: "AND" | "OR";
       readonly conditions: readonly [FilterDraft, ...FilterDraft[]];
       readonly rootCollection?: boolean;
+      readonly rootEntries?: readonly FilterNode[];
     }>
   | Readonly<{
       readonly kind: "not";
@@ -101,6 +101,7 @@ type FilterNode = Readonly<Record<string, unknown>>;
 
 type FilterCandidate = Readonly<{
   readonly filter: FilterNode | readonly FilterNode[] | undefined;
+  readonly root?: FilterNode;
   readonly error?: string;
 }>;
 
@@ -392,13 +393,34 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       if (candidate.filter === undefined) return;
       if (candidate.draftRevision !== draftRevisionRef.current) return;
       if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== commandEpoch) return;
-      runtime.dispatchGridCommand({
-        type: "column.filter.replace",
-        columnId: column.columnId,
-        filter: candidate.filter,
+      const accepted =
+        candidate.root === undefined
+          ? runtime.dispatchGridCommand({
+              type: "column.filter.replace",
+              columnId: column.columnId,
+              filter: candidate.filter,
+            })
+          : candidate.filter === undefined || Array.isArray(candidate.filter)
+            ? false
+            : runtime.dispatchGridCommand({
+                type: "column.filter.replace-root",
+                columnId: column.columnId,
+                root: candidate.root,
+                filter: candidate.filter,
+              });
+      if (accepted) return;
+      // The runtime is the sole aggregate admission boundary. A rejected candidate must not
+      // remain visually ahead of the committed filter, or a later stale Pacer callback could make
+      // the overlay claim a state the row model never accepted.
+      draftRevisionRef.current += 1;
+      setLocalState({
+        column,
+        version: editorVersion,
+        draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
+        error: "This filter collection is too complex.",
       });
     },
-    [column, commandEpoch, runtime],
+    [column, commandEpoch, editorVersion, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
 
@@ -464,22 +486,12 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         setLocalState({ column, version: editorVersion, draft: nextDraft, error: undefined });
         return;
       }
-      if (!isFilterDraftWithinBudget(nextDraft)) {
-        debouncer.cancel();
-        setLocalState({
-          column,
-          version: editorVersion,
-          draft,
-          error: "This filter expression is too complex.",
-        });
-        return;
-      }
       const candidate =
         mode === "continuous"
           ? badInput
             ? { filter: undefined, error: "Enter a valid value." }
-            : buildFilterCandidate(column, nextDraft, parseCache)
-          : buildFilterCandidate(column, nextDraft, parseCache);
+            : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache)
+          : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache);
       setLocalState({ column, version: editorVersion, draft: nextDraft, error: candidate.error });
       const committedCandidate = Object.freeze({ ...candidate, draftRevision });
       if (mode === "continuous") commitContinuous(committedCandidate);
@@ -558,12 +570,7 @@ function FilterExpressionEditor({
 }): ReactElement {
   const draft =
     inputDraft.kind === "opaque"
-      ? draftFromNode(
-          column,
-          inputDraft.committed,
-          createFilterDraftMaterializationState(Math.max(1, renderBudget)),
-          0,
-        )
+      ? draftFromNode(column, inputDraft.committed, createFilterDraftMaterializationState(), 0)
       : inputDraft;
   const expressionMode =
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
@@ -1427,15 +1434,13 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
 type FilterDraftMaterializationState = {
   readonly memo: WeakMap<object, FilterDraft>;
   readonly active: WeakSet<object>;
-  readonly maxNodes: number;
-  nodes: number;
 };
 
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
   if (Array.isArray(committed)) {
     const state = createFilterDraftMaterializationState();
-    const conditions = committed.map((condition, index) => {
-      const record = asRecord(condition);
+    const rootEntries = committed.map((condition) => asRecord(condition));
+    const conditions = rootEntries.map((record, index) => {
       return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
         ? draftFromNode(column, record, state, 0)
         : createOpaqueFilterDraft(record);
@@ -1450,6 +1455,7 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
           ...FilterDraft[],
         ],
         rootCollection: true,
+        rootEntries: Object.freeze(rootEntries),
       });
     }
     return conditions[0] ?? createDefaultLeaf(column);
@@ -1461,14 +1467,10 @@ function createOpaqueFilterDraft(record: Readonly<Record<string, unknown>>): Fil
   return Object.freeze({ kind: "opaque", committed: record });
 }
 
-function createFilterDraftMaterializationState(
-  maxNodes = BRUNO_TABLE_CLIENT_FILTER_MAX_NODES,
-): FilterDraftMaterializationState {
+function createFilterDraftMaterializationState(): FilterDraftMaterializationState {
   return {
     memo: new WeakMap<object, FilterDraft>(),
     active: new WeakSet<object>(),
-    maxNodes,
-    nodes: 0,
   };
 }
 
@@ -1480,14 +1482,9 @@ function draftFromNode(
 ): FilterDraft {
   const cached = state.memo.get(record);
   if (cached !== undefined) return cached;
-  if (
-    depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH ||
-    state.nodes >= state.maxNodes ||
-    state.active.has(record)
-  ) {
+  if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH || state.active.has(record)) {
     return createOpaqueFilterDraft(record);
   }
-  state.nodes += 1;
   state.active.add(record);
   const type = record["type"];
   try {
@@ -1597,46 +1594,41 @@ function buildFilterCandidate(
   return buildLeafFilterCandidate(column, draft, parseCache);
 }
 
-function isFilterDraftWithinBudget(draft: FilterDraft): boolean {
-  const state = { active: new WeakSet<object>(), nodes: 0 };
-  if (draft.kind === "compound" && draft.rootCollection === true) {
-    if (draft.conditions.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) return false;
-    return draft.conditions.every(
-      (condition) =>
-        countFilterDraftNodes(condition, 0, { active: new WeakSet<object>(), nodes: 0 }) !==
-        undefined,
-    );
-  }
-  return countFilterDraftNodes(draft, 0, state) !== undefined;
-}
-
-function countFilterDraftNodes(
-  draft: FilterDraft,
-  depth: number,
-  state: { active: WeakSet<object>; nodes: number },
-): number | undefined {
-  if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) return undefined;
-  if (state.active.has(draft)) return undefined;
-  state.active.add(draft);
-  state.nodes += 1;
-  try {
-    if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
-    if (draft.kind === "opaque") return 1;
-    if (draft.kind === "leaf") {
-      return draft.inValues.length <= BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS ? 1 : undefined;
+function buildFilterCandidateForDraftChange(
+  column: CompiledColumn,
+  previous: FilterDraft,
+  next: FilterDraft,
+  parseCache?: FilterParseCache,
+): FilterCandidate {
+  if (
+    previous.kind === "compound" &&
+    next.kind === "compound" &&
+    previous.rootCollection === true &&
+    next.rootCollection === true &&
+    previous.rootEntries !== undefined &&
+    next.rootEntries !== undefined &&
+    previous.rootEntries.length === next.rootEntries.length &&
+    previous.conditions.length === next.conditions.length
+  ) {
+    let changedIndex = -1;
+    for (let index = 0; index < previous.conditions.length; index += 1) {
+      if (previous.conditions[index] === next.conditions[index]) continue;
+      if (changedIndex !== -1) {
+        changedIndex = -2;
+        break;
+      }
+      changedIndex = index;
     }
-    const childDrafts = draft.kind === "not" ? [draft.condition] : draft.conditions;
-    let nodes = 1;
-    for (const child of childDrafts) {
-      const childNodes = countFilterDraftNodes(child, depth + 1, state);
-      if (childNodes === undefined) return undefined;
-      nodes += childNodes;
-      if (state.nodes > BRUNO_TABLE_CLIENT_FILTER_MAX_NODES) return undefined;
+    const root = changedIndex >= 0 ? previous.rootEntries[changedIndex] : undefined;
+    if (root !== undefined && changedIndex >= 0) {
+      const candidate = buildFilterCandidate(column, next.conditions[changedIndex]!, parseCache);
+      if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
+        return { ...candidate, root };
+      }
+      return candidate;
     }
-    return nodes;
-  } finally {
-    state.active.delete(draft);
   }
+  return buildFilterCandidate(column, next, parseCache);
 }
 
 function parseFilterText(
@@ -1671,9 +1663,15 @@ function buildLeafFilterCandidate(
     return { filter: Object.freeze(base) };
   }
   if (isSubstringFilterOperator(draft.operator)) {
-    return draft.firstAuthored
-      ? { filter: Object.freeze({ ...base, filter: draft.first }) }
-      : { filter: undefined, error: "Enter one or more valid values." };
+    if (!draft.firstAuthored)
+      return { filter: undefined, error: "Enter one or more valid values." };
+    if (
+      normalizeBrunoTableFilterText(draft.first, draft.caseSensitive, draft.accentSensitive)
+        .length === 0
+    ) {
+      return { filter: undefined, error: "Enter a non-empty search value." };
+    }
+    return { filter: Object.freeze({ ...base, filter: draft.first }) };
   }
   if (draft.operator === "in") {
     if (!draft.inValuesExplicit && !draft.firstAuthored) {
@@ -1690,6 +1688,28 @@ function buildLeafFilterCandidate(
     const decoded = values.map((value) => parseFilterText(column, value, parseCache));
     const invalid = decoded.find((result) => result._tag === "Failure");
     if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };
+    if (
+      column.semantics.filterFamily === "text" &&
+      decoded.some(
+        (result) =>
+          result._tag === "Success" &&
+          (() => {
+            try {
+              return (
+                normalizeBrunoTableFilterText(
+                  column.semantics.formatCanonicalText(result.value),
+                  draft.caseSensitive,
+                  draft.accentSensitive,
+                ).length === 0
+              );
+            } catch {
+              return true;
+            }
+          })(),
+      )
+    ) {
+      return { filter: undefined, error: "Enter non-empty values." };
+    }
     return {
       filter: Object.freeze({
         ...base,
@@ -1716,6 +1736,13 @@ function buildLeafFilterCandidate(
     }
     const second = parseFilterText(column, draft.second, parseCache);
     if (second._tag === "Failure") return { filter: undefined, error: second.message };
+    try {
+      if (column.semantics.compare(first.value, second.value) >= 0) {
+        return { filter: undefined, error: "Upper bound must be greater than the lower bound." };
+      }
+    } catch {
+      return { filter: undefined, error: "Enter an ordered range." };
+    }
     return {
       filter: Object.freeze({ ...base, filter: first.value, filterTo: second.value }),
     };

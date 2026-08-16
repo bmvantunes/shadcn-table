@@ -2,7 +2,11 @@ import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
-import { compileClientFilterPlan, type ClientFilterPlan } from "./grid-query";
+import {
+  compileClientFilterPlan,
+  type BrunoTableClientFilterCollection,
+  type ClientFilterPlan,
+} from "./grid-query";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type {
   BrunoTableInvalidCellValue,
@@ -40,6 +44,7 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
 > & {
   readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly filters: readonly unknown[];
+  readonly filterCollection: BrunoTableClientFilterCollection;
   readonly quickFilter: string;
   readonly quickFilterFields: readonly string[];
   readonly queryGeneration: number;
@@ -77,6 +82,7 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
       columnLayout={columnLayout}
       columns={query.columns}
       filters={query.filters}
+      filterCollection={query.filterCollection}
       quickFilter={query.quickFilter}
       quickFilterFields={props.runtime.getQuickFilterFieldsSnapshot()}
       orderBy={query.orderBy}
@@ -93,6 +99,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   rowPipelineAdapter,
   children,
   filters,
+  filterCollection,
   quickFilter,
   quickFilterFields,
   orderBy,
@@ -100,7 +107,10 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   preserveActiveCellOnQueryChange,
   columnLayout,
 }: ClientResolvedRowOrderProps) {
-  const filterPlan = useMemo(() => compileClientFilterPlan(columns, filters), [columns, filters]);
+  const filterPlan = useMemo(
+    () => compileClientFilterPlan(columns, filters, filterCollection),
+    [columns, filterCollection, filters],
+  );
   const createDetector = useMemo(
     () => () =>
       createRowOrderChangeDetector(

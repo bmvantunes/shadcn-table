@@ -91,14 +91,14 @@ describe("BrunoTable Client Quick Filter", () => {
     expect(nonStringPredicate?.({})).toBe(false);
   });
 
-  it("bounds standalone predicate text and field snapshots", () => {
+  it("rejects over-limit predicate text and bounds field snapshots", () => {
     const boundedText = "a".repeat(1_024);
     const longTextPredicate = createClientQuickFilterPredicate(
       `${boundedText}x`,
       ["description"],
       readField,
     );
-    expect(longTextPredicate?.({ ...rows[0], description: boundedText })).toBe(true);
+    expect(longTextPredicate).toBeUndefined();
 
     expect(
       createClientQuickFilterPredicate(
