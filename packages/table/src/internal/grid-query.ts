@@ -1266,18 +1266,23 @@ function sameFilterOperand(
       const previousSet = new Set(previousKeys as string[]);
       return previousSet.size === nextSet.size && [...previousSet].every((key) => nextSet.has(key));
     }
-    return (
-      previous.every((value) =>
-        next.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      ) &&
-      next.every((value) =>
-        previous.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      )
-    );
+    let remainingComparisons = BRUNO_TABLE_CLIENT_FILTER_COMPARISON_BUDGET;
+    const hasEveryMatch = (values: readonly unknown[], candidates: readonly unknown[]): boolean => {
+      for (const value of values) {
+        let matched = false;
+        for (const candidate of candidates) {
+          if (remainingComparisons <= 0) return false;
+          remainingComparisons -= 1;
+          if (sameFilterOperand(value, candidate, column, { ...options, unordered: false })) {
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) return false;
+      }
+      return true;
+    };
+    return hasEveryMatch(previous, next) && hasEveryMatch(next, previous);
   }
   if (previous === null || next === null || previous === undefined || next === undefined) {
     return false;

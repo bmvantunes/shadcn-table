@@ -398,6 +398,16 @@ describe("BrunoTable filter runtime primitives", () => {
 
     expect(sameBrunoTableFilterCollection(previous, next, columnsById)).toBe(false);
     expect(equivalent).toHaveBeenCalledTimes(4_097);
+
+    equivalent.mockClear();
+    const operands = Array.from({ length: 4_096 }, (_, id) => Object.freeze({ id }));
+    const previousIn = [{ columnId: "COL_ID_OPAQUE", type: "in" as const, filter: operands }];
+    const nextIn = [
+      { columnId: "COL_ID_OPAQUE", type: "in" as const, filter: [...operands].reverse() },
+    ];
+    expect(sameBrunoTableFilterCollection(previousIn, nextIn, columnsById)).toBe(false);
+    expect(equivalent.mock.calls.length).toBeGreaterThan(4_000);
+    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(8_192);
   });
 
   it("replaces a column's implicit root filter collection without wrapping it", () => {
