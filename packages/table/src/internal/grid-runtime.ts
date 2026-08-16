@@ -1033,6 +1033,9 @@ export class BrunoTableGridRuntime<TRow> {
       (filterCollectionChanged || quickFilterSemanticsChanged);
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
+    const filterColumnIdentitiesChanged =
+      filterCollectionChanged &&
+      !sameStringSet(collectFilterColumnIds(this.query.filters), collectFilterColumnIds(filters));
     if (queryChanged) {
       this.query = Object.freeze({
         columns: this.columns,
@@ -1047,7 +1050,7 @@ export class BrunoTableGridRuntime<TRow> {
     }
     if (filterChanged) this.filterSnapshot = createFilterSnapshot(this.query);
     this.columnCommands =
-      quickFilterChanged && !filterCollectionChanged && !sortingChanged && !forceColumnRefresh
+      !sortingChanged && !forceColumnRefresh && !filterColumnIdentitiesChanged
         ? previousCommands
         : createColumnCommandSnapshots(
             this.columns,
@@ -1368,6 +1371,10 @@ function collectFilterColumnIds(filters: readonly unknown[]): ReadonlySet<string
   const columnIds = new Set<string>();
   for (const filter of filters) collectClientFilterColumnIds(filter, columnIds);
   return columnIds;
+}
+
+function sameStringSet(previous: ReadonlySet<string>, next: ReadonlySet<string>): boolean {
+  return previous.size === next.size && [...previous].every((value) => next.has(value));
 }
 
 function indexFilterCollections(

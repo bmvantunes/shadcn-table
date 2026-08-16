@@ -319,6 +319,37 @@ describe("compileColumns", () => {
     );
   });
 
+  it("bounds Select option snapshotting before decoding", () => {
+    const select = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const options = Array.from({ length: 16_385 }, (_, index) => String(index));
+
+    expect(() => compileColumns([{ ...select, options }])).toThrow(
+      /options must contain at most 16384 values/u,
+    );
+
+    let lengthReads = 0;
+    const stableOptions = new Proxy(["open", "closed"], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          return lengthReads === 1 ? 2 : 16_385;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const [compiled] = compileColumns([{ ...select, options: stableOptions }]);
+
+    expect(compiled?.selectOptions).toHaveLength(2);
+    expect(lengthReads).toBe(1);
+  });
+
   it("rejects malformed widened Field Columns", () => {
     for (const column of [
       null,

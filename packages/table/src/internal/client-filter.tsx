@@ -106,6 +106,16 @@ type FilterParseCache = Map<string, FilterParseResult>;
 const FILTER_IN_VISIBLE_OPERANDS = 64;
 const FILTER_SELECT_VISIBLE_OPTIONS = 64;
 const FILTER_COMPOUND_VISIBLE_CONDITIONS = 64;
+const FILTER_EDITOR_RENDER_NODE_LIMIT = 256;
+
+function filterEditorBudgetMessage(column: CompiledColumn): ReactElement {
+  return (
+    <p role="status" className="text-sm text-muted-foreground">
+      Additional conditions for {column.headerName} are hidden to keep this filter responsive. Clear
+      or Reset the column filter to replace this expression.
+    </p>
+  );
+}
 
 function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn): boolean {
   if (
@@ -484,6 +494,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           errorId={errorId}
           inputRef={inputRef}
           selectRef={selectRef}
+          renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
           onChange={commitDraft}
         />
         {error === undefined ? null : (
@@ -503,6 +514,7 @@ function FilterExpressionEditor({
   inputRef,
   onChange,
   path = "root",
+  renderBudget,
   rootSelectRef,
   selectRef,
 }: {
@@ -512,6 +524,7 @@ function FilterExpressionEditor({
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
   readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
   readonly path?: string;
+  readonly renderBudget: number;
   readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
   readonly selectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
 }): ReactElement {
@@ -568,6 +581,98 @@ function FilterExpressionEditor({
   };
   const updateLeaf = (nextLeaf: FilterLeafDraft, mode: FilterChangeMode, badInput = false) =>
     onChange(nextLeaf, mode, badInput);
+  const canRenderThisEditor = renderBudget > 0;
+  const childRenderBudget = Math.max(0, renderBudget - 1);
+  const canRenderNotCondition = draft.kind === "not" && childRenderBudget > 0;
+  let omittedCompoundConditionCount = 0;
+  const renderedCompoundConditions: ReactElement[] = [];
+  if (draft.kind === "compound") {
+    const visibleConditions = draft.conditions.slice(
+      visibleConditionWindowStart,
+      visibleConditionWindowEnd,
+    );
+    let remainingChildBudget = childRenderBudget;
+    for (const [offset, condition] of visibleConditions.entries()) {
+      const remainingConditionCount = visibleConditions.length - offset;
+      if (remainingChildBudget < remainingConditionCount) {
+        omittedCompoundConditionCount = remainingConditionCount;
+        break;
+      }
+      const conditionRenderBudget = Math.floor(remainingChildBudget / remainingConditionCount);
+      if (conditionRenderBudget < 1) {
+        omittedCompoundConditionCount = remainingConditionCount;
+        break;
+      }
+      remainingChildBudget -= conditionRenderBudget;
+      const index = visibleConditionWindowStart + offset;
+      const conditionPath = `${path}-${String(index)}`;
+      const conditionLabel = filterExpressionPathLabel(conditionPath);
+      renderedCompoundConditions.push(
+        <div
+          key={conditionPath}
+          className="flex flex-col gap-2 rounded-md border p-2"
+          role="group"
+          aria-label={`Filter ${conditionLabel ?? "condition"} for ${column.headerName}`}
+        >
+          <FilterExpressionEditor
+            column={column}
+            draft={condition}
+            errorId={errorId}
+            onChange={(nextCondition, mode, badInput) => {
+              const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
+              conditions[index] = nextCondition;
+              onChange(
+                Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
+                mode,
+                badInput,
+              );
+            }}
+            path={conditionPath}
+            renderBudget={conditionRenderBudget}
+            rootSelectRef={rootSelectRef ?? selectRef}
+          />
+          {draft.conditions.length > 1 ? (
+            <Button
+              ref={(element) => {
+                if (element === null) removeConditionRefs.current.delete(index);
+                else removeConditionRefs.current.set(index, element);
+              }}
+              aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
+              size="xs"
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                const conditions = draft.conditions.filter((_, candidate) => candidate !== index);
+                onChange(
+                  conditions.length === 1
+                    ? conditions[0]!
+                    : Object.freeze({
+                        ...draft,
+                        conditions: Object.freeze(conditions) as readonly [
+                          FilterDraft,
+                          ...FilterDraft[],
+                        ],
+                      }),
+                  "immediate",
+                );
+                focusAfterConditionRemoval(
+                  conditions.length === 1
+                    ? -1
+                    : index < draft.conditions.length - 1
+                      ? index
+                      : index - 1,
+                );
+              }}
+            >
+              Remove condition
+            </Button>
+          ) : null}
+        </div>,
+      );
+    }
+  }
+
+  if (!canRenderThisEditor) return filterEditorBudgetMessage(column);
 
   return (
     <div className="flex flex-col gap-3">
@@ -605,22 +710,21 @@ function FilterExpressionEditor({
                   value={leaf.operator}
                   onChange={(event) => {
                     const operator = event.currentTarget.value as FilterOperator;
+                    const enteringImplicitIn = operator === "in" && !leaf.inValuesExplicit;
                     updateLeaf(
                       Object.freeze({
                         ...leaf,
                         operator,
-                        inValues:
-                          operator === "in" && leaf.inValues.length === 0
-                            ? leaf.firstAuthored
-                              ? Object.freeze([leaf.first])
-                              : Object.freeze([])
-                            : leaf.inValues,
-                        inValuesAuthored:
-                          operator === "in" && leaf.inValues.length === 0
-                            ? leaf.firstAuthored
-                              ? Object.freeze([true])
-                              : Object.freeze([])
-                            : leaf.inValuesAuthored,
+                        inValues: enteringImplicitIn
+                          ? leaf.firstAuthored
+                            ? Object.freeze([leaf.first])
+                            : Object.freeze([])
+                          : leaf.inValues,
+                        inValuesAuthored: enteringImplicitIn
+                          ? leaf.firstAuthored
+                            ? Object.freeze([true])
+                            : Object.freeze([])
+                          : leaf.inValuesAuthored,
                         inValuesExplicit: operator === "in" ? leaf.inValuesExplicit : false,
                       }),
                       "immediate",
@@ -685,17 +789,22 @@ function FilterExpressionEditor({
           );
         })()
       ) : draft.kind === "not" ? (
-        <FilterExpressionEditor
-          column={column}
-          draft={draft.condition}
-          errorId={errorId}
-          inputRef={inputRef}
-          onChange={(condition, mode, badInput) =>
-            onChange(Object.freeze({ ...draft, condition }), mode, badInput)
-          }
-          path={`${path}-not`}
-          rootSelectRef={rootSelectRef ?? selectRef}
-        />
+        canRenderNotCondition ? (
+          <FilterExpressionEditor
+            column={column}
+            draft={draft.condition}
+            errorId={errorId}
+            inputRef={inputRef}
+            onChange={(condition, mode, badInput) =>
+              onChange(Object.freeze({ ...draft, condition }), mode, badInput)
+            }
+            path={`${path}-not`}
+            renderBudget={childRenderBudget}
+            rootSelectRef={rootSelectRef ?? selectRef}
+          />
+        ) : (
+          filterEditorBudgetMessage(column)
+        )
       ) : (
         <div className="flex flex-col gap-3">
           {conditionCount > FILTER_COMPOUND_VISIBLE_CONDITIONS ? (
@@ -738,79 +847,12 @@ function FilterExpressionEditor({
               </div>
             </div>
           ) : null}
-          {draft.conditions
-            .slice(visibleConditionWindowStart, visibleConditionWindowEnd)
-            .map((condition, offset) => {
-              const index = visibleConditionWindowStart + offset;
-              const conditionPath = `${path}-${String(index)}`;
-              const conditionLabel = filterExpressionPathLabel(conditionPath);
-              return (
-                <div
-                  key={conditionPath}
-                  className="flex flex-col gap-2 rounded-md border p-2"
-                  role="group"
-                  aria-label={`Filter ${conditionLabel ?? "condition"} for ${column.headerName}`}
-                >
-                  <FilterExpressionEditor
-                    column={column}
-                    draft={condition}
-                    errorId={errorId}
-                    onChange={(nextCondition, mode, badInput) => {
-                      const conditions = draft.conditions.slice() as [
-                        FilterDraft,
-                        ...FilterDraft[],
-                      ];
-                      conditions[index] = nextCondition;
-                      onChange(
-                        Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
-                        mode,
-                        badInput,
-                      );
-                    }}
-                    path={conditionPath}
-                    rootSelectRef={rootSelectRef ?? selectRef}
-                  />
-                  {draft.conditions.length > 1 ? (
-                    <Button
-                      ref={(element) => {
-                        if (element === null) removeConditionRefs.current.delete(index);
-                        else removeConditionRefs.current.set(index, element);
-                      }}
-                      aria-label={`Remove condition ${String(index + 1)} for ${column.headerName}${labelSuffix}`}
-                      size="xs"
-                      type="button"
-                      variant="ghost"
-                      onClick={() => {
-                        const conditions = draft.conditions.filter(
-                          (_, candidate) => candidate !== index,
-                        );
-                        onChange(
-                          conditions.length === 1
-                            ? conditions[0]!
-                            : Object.freeze({
-                                ...draft,
-                                conditions: Object.freeze(conditions) as readonly [
-                                  FilterDraft,
-                                  ...FilterDraft[],
-                                ],
-                              }),
-                          "immediate",
-                        );
-                        focusAfterConditionRemoval(
-                          conditions.length === 1
-                            ? -1
-                            : index < draft.conditions.length - 1
-                              ? index
-                              : index - 1,
-                        );
-                      }}
-                    >
-                      Remove condition
-                    </Button>
-                  ) : null}
-                </div>
-              );
-            })}
+          {renderedCompoundConditions}
+          {omittedCompoundConditionCount > 0 ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {`${String(omittedCompoundConditionCount)} additional condition${omittedCompoundConditionCount === 1 ? "" : "s"} hidden to keep this filter responsive.`}
+            </p>
+          ) : null}
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
             disabled={

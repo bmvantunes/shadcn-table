@@ -128,6 +128,8 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const draftEpochRef = useRef(0);
   const composingRef = useRef(false);
+  const compositionSessionRef = useRef(0);
+  const invalidatedCompositionSessionRef = useRef<number | null>(null);
   const publish = useCallback(
     (
       candidate: Readonly<{
@@ -154,6 +156,11 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   useEffect(() => {
     return runtime.registerQuickFilterInvalidation(() => {
       debouncer.cancel();
+      draftEpochRef.current += 1;
+      if (composingRef.current) {
+        invalidatedCompositionSessionRef.current = compositionSessionRef.current;
+        composingRef.current = false;
+      }
       const committed = runtime.getQuickFilterSnapshot();
       lastCommittedRef.current = committed;
       if (draftRef.current === committed) return;
@@ -172,6 +179,12 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         type="search"
         value={draft}
         onCompositionEnd={(event) => {
+          const compositionSession = compositionSessionRef.current;
+          if (invalidatedCompositionSessionRef.current === compositionSession) {
+            invalidatedCompositionSessionRef.current = null;
+            composingRef.current = false;
+            return;
+          }
           composingRef.current = false;
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           const draftEpoch = draftEpochRef.current + 1;
@@ -185,6 +198,8 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           });
         }}
         onCompositionStart={() => {
+          compositionSessionRef.current += 1;
+          invalidatedCompositionSessionRef.current = null;
           composingRef.current = true;
           draftEpochRef.current += 1;
           debouncer.cancel();

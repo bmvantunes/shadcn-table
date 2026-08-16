@@ -1250,6 +1250,67 @@ describe("BrunoTableClient browser surface", () => {
       .not.toBeInTheDocument();
   });
 
+  test("rebuilds implicit in operands after an incomplete operator round trip", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_IN_OPERATOR_ROUND_TRIP"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    let dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter expression for Name", exact: true }),
+      "AND",
+    );
+    dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value for Name (condition 1)" }),
+      "Ada",
+    );
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Name (condition 1)" }),
+      "in",
+    );
+    dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Add filter value for Name (condition 1)" }),
+    );
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Name (condition 1)" }),
+      "equals",
+    );
+    dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Name (condition 1)" }),
+      "in",
+    );
+    dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Add filter value for Name (condition 1)" }),
+    );
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value 2 for Name (condition 1)" }),
+      "Ada",
+    );
+    await userEvent.fill(
+      dialog.getByRole("textbox", { name: "Filter value for Name (condition 2)" }),
+      "Ada",
+    );
+
+    await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
   test("counts repeated shared filter nodes toward the editor complexity budget", async () => {
     const sharedLeaf = {
       columnId: "COL_ID_FILTER_NAME",

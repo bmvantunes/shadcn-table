@@ -7,6 +7,7 @@ import {
 
 const columnIdPrefix = "COL_ID_";
 const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS";
+const BRUNO_TABLE_MAX_SELECT_OPTIONS = 16_384;
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
 const columnIdWhitespacePattern = /\s/u;
 type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
@@ -128,13 +129,24 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   let selectOptions: readonly unknown[] | undefined;
   if (semantics.filterFamily === "select" && Object.hasOwn(candidate, "options")) {
     const options = candidate["options"];
-    if (!Array.isArray(options) || options.length === 0) {
+    if (!Array.isArray(options)) {
       throw new ColumnConfigurationError(
         `BrunoTable Select column options must be a non-empty array: ${columnId}`,
       );
     }
+    const optionCount = options.length;
+    if (optionCount === 0) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must be a non-empty array: ${columnId}`,
+      );
+    }
+    if (optionCount > BRUNO_TABLE_MAX_SELECT_OPTIONS) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must contain at most ${String(BRUNO_TABLE_MAX_SELECT_OPTIONS)} values: ${columnId}`,
+      );
+    }
     const decodedOptions: unknown[] = [];
-    for (let optionIndex = 0; optionIndex < options.length; optionIndex += 1) {
+    for (let optionIndex = 0; optionIndex < optionCount; optionIndex += 1) {
       if (!Object.hasOwn(options, optionIndex)) {
         throw new ColumnConfigurationError(
           `BrunoTable Select column options must be dense: ${columnId}`,
