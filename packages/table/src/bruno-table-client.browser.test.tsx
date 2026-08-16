@@ -469,6 +469,7 @@ describe("BrunoTableClient browser surface", () => {
   });
 
   test("uses a trailing 150 ms Pacer commit and cancels pending filter drafts", async () => {
+    vi.useFakeTimers();
     const commands: BrunoTableGridCommand[] = [];
     const removeCommandListener = installBrunoTableGridCommandListener(
       "TABLE_ID_FILTER_PACER",
@@ -495,7 +496,6 @@ describe("BrunoTableClient browser surface", () => {
       await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
       const dialog = screen.getByRole("dialog", { name: "Filter Name" });
       const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
-      const startedAt = performance.now();
       await userEvent.fill(input, "x".repeat(BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH + 100));
       await expect.element(input).toHaveValue("x".repeat(BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH));
       await userEvent.fill(input, "G");
@@ -503,16 +503,16 @@ describe("BrunoTableClient browser surface", () => {
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         0,
       );
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await vi.advanceTimersByTimeAsync(149);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         0,
       );
+      await vi.advanceTimersByTimeAsync(1);
       await vi.waitFor(() =>
         expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
           1,
         ),
       );
-      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(140);
       expect(commands.at(-1)).toMatchObject({
         type: "column.filter.replace",
         columnId: "COL_ID_FILTER_NAME",
@@ -521,7 +521,7 @@ describe("BrunoTableClient browser surface", () => {
 
       await userEvent.fill(input, "Ada");
       await userEvent.keyboard("{Escape}");
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.advanceTimersByTimeAsync(200);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
       );
@@ -539,7 +539,7 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("dialog", { name: "Filter Name" }))
         .not.toBeInTheDocument();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.advanceTimersByTimeAsync(200);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
       );
@@ -555,7 +555,7 @@ describe("BrunoTableClient browser surface", () => {
         "Ada",
       );
       await screen.getByRole("button", { name: "Clear filter for Name" }).click();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.advanceTimersByTimeAsync(200);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
       );
@@ -568,7 +568,7 @@ describe("BrunoTableClient browser surface", () => {
         "Grace",
       );
       await screen.getByRole("button", { name: "Reset filter for Name" }).click();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.advanceTimersByTimeAsync(200);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
       );
@@ -577,6 +577,45 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
     } finally {
       removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
+  test("cancels a valid Pacer candidate when the next draft is invalid", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PACER_INVALIDATION",
+      (command) => commands.push(command),
+    );
+
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PACER_INVALIDATION"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Quantity" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+      const input = dialog.getByRole("textbox", { name: "Filter value for Quantity" });
+      await userEvent.fill(input, "123");
+      await userEvent.fill(input, "1.2");
+      await expect
+        .element(dialog.getByRole("alert"))
+        .toHaveTextContent("Expected signed base-10 integer digits.");
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        0,
+      );
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
     }
   });
 

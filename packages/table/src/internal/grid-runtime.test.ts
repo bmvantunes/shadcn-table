@@ -689,10 +689,12 @@ describe("BrunoTable filter runtime primitives", () => {
     const queryListener = vi.fn();
     const filterListener = vi.fn();
     const quickFilterListener = vi.fn();
+    const filterPositionResetListener = vi.fn();
     const columnFilterListener = vi.fn();
     view.subscribeQuery(queryListener);
     view.subscribeFilter(filterListener);
     view.subscribeQuickFilter(quickFilterListener);
+    view.subscribeFilterPositionReset(filterPositionResetListener);
     view.subscribeColumnFilter("COL_ID_NAME", columnFilterListener);
     const before = view.getQuerySnapshot();
 
@@ -710,6 +712,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(columnFilterListener).not.toHaveBeenCalled();
 
     const committedGeneration = view.getQuerySnapshot().generation;
+    const committedPositionResetEpoch = view.getFilterPositionResetEpochSnapshot();
     queryListener.mockClear();
     filterListener.mockClear();
     quickFilterListener.mockClear();
@@ -719,6 +722,8 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
     expect(filterListener).toHaveBeenCalledOnce();
     expect(quickFilterListener).toHaveBeenCalledOnce();
+    expect(view.getFilterPositionResetEpochSnapshot()).toBe(committedPositionResetEpoch + 1);
+    expect(filterPositionResetListener).toHaveBeenCalledOnce();
 
     filterListener.mockClear();
     queryListener.mockClear();
@@ -2773,7 +2778,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.clearColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toEqual([]);
-    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(true);
+    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(false);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME")).toMatchObject({
       filterActive: false,
       filterBaselineAvailable: true,
@@ -2782,7 +2787,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.resetColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toHaveLength(1);
-    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(true);
+    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(false);
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME").filterActive).toBe(true);
     expect(runtime.getQuerySnapshot().generation).toBe(3);
     expect(queryListener).toHaveBeenCalledTimes(3);

@@ -26,7 +26,7 @@ import type { ReactElement, ReactNode } from "react";
 import { BrunoTableColumnFilter } from "./client-filter";
 import type { BrunoTableColumnFilterRendererProps } from "./bruno-table-view";
 import type { CompiledColumn } from "./compile-columns";
-import { collectClientFilterColumnIds, normalizeBrunoTableFilterText } from "./grid-query";
+import { normalizeBrunoTableFilterText } from "./grid-query";
 import type {
   BrunoTableFilterSnapshot,
   BrunoTableRowPipelineRuntimeView,
@@ -513,7 +513,6 @@ function activeFilterProjection(
   requestedWindowStart: number,
 ): ActiveFilterProjection {
   const quickFilterActive = normalizeBrunoTableFilterText(query.quickFilter).length > 0;
-  const filtersByColumn = collectActiveFilterColumnFilters(query);
   const headerCounts = new Map<string, number>();
   for (const column of query.columns) {
     headerCounts.set(column.headerName, (headerCounts.get(column.headerName) ?? 0) + 1);
@@ -524,7 +523,9 @@ function activeFilterProjection(
     readonly columnLabel: string;
   }> = [];
   for (const [columnIndex, column] of query.columns.entries()) {
-    const filters = filtersByColumn.get(column.columnId) ?? [];
+    const snapshot = query.filtersByColumn.get(column.columnId);
+    const filters =
+      snapshot === undefined ? [] : Array.isArray(snapshot) ? snapshot : Object.freeze([snapshot]);
     if (filters.length === 0) continue;
     const columnLabel =
       headerCounts.get(column.headerName) === 1
@@ -582,20 +583,6 @@ function activeFilterProjection(
     visibleEntryWindowEnd,
     visibleEntryWindowStart,
   };
-}
-
-function collectActiveFilterColumnFilters(query: BrunoTableFilterSnapshot): Map<string, unknown[]> {
-  const filtersByColumn = new Map<string, unknown[]>();
-  for (const filter of query.filters) {
-    const columnIds = new Set<string>();
-    collectClientFilterColumnIds(filter, columnIds);
-    for (const columnId of columnIds) {
-      const filters = filtersByColumn.get(columnId);
-      if (filters === undefined) filtersByColumn.set(columnId, [filter]);
-      else filters.push(filter);
-    }
-  }
-  return filtersByColumn;
 }
 
 type ActiveFilterDescriptionState = {

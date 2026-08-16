@@ -21,6 +21,8 @@ import {
   collectClientFilterColumnIds,
   normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
+  sameBrunoTableFilterCollection,
+  sameBrunoTableFilterValue,
   sanitizeBrunoTableFilters,
 } from "./grid-query";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
@@ -149,6 +151,8 @@ export type BrunoTableRuntimeView = {
   /** Optional query-transition policy used by Client navigation reconciliation. */
   readonly getPreserveActiveCellOnQueryChangeSnapshot?: () => boolean;
   readonly getQuickFilterSnapshot: () => string;
+  /** Resets Client filter position for committed raw text changes that preserve semantics. */
+  readonly getFilterPositionResetEpochSnapshot: () => number;
   /** Invalidates queued Quick Filter candidates when any Quick Filter command commits. */
   readonly getQuickFilterCommandEpochSnapshot: () => number;
   readonly getQuickFilterFieldsSnapshot: () => readonly string[];
@@ -171,6 +175,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
   readonly subscribeColumnFilterCommandEpoch: (columnId: string, listener: Listener) => () => void;
   readonly subscribeQuickFilter: (listener: Listener) => () => void;
+  readonly subscribeFilterPositionReset: (listener: Listener) => () => void;
   readonly subscribeQuickFilterCommandEpoch: (listener: Listener) => () => void;
   /** Imperative invalidation sink for same-value Quick Filter command cancellation. */
   readonly registerQuickFilterInvalidation: (listener: Listener) => () => void;
@@ -198,6 +203,10 @@ export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
 export type BrunoTableFilterSnapshot = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly filters: readonly unknown[];
+  /** Runtime-owned immutable lookup used by active-filter review without reparsing the root AST. */
+  readonly filtersByColumn: Readonly<{
+    readonly get: (columnId: string) => unknown;
+  }>;
   readonly quickFilter: string;
 }>;
 
@@ -209,12 +218,23 @@ export type BrunoTableQuerySnapshot = Readonly<{
   readonly generation: number;
 }>;
 
-function createFilterSnapshot(query: BrunoTableQuerySnapshot): BrunoTableFilterSnapshot {
+function createFilterSnapshot(
+  query: BrunoTableQuerySnapshot,
+  filtersByColumn: ReadonlyMap<string, unknown>,
+): BrunoTableFilterSnapshot {
   return Object.freeze({
     columns: query.columns,
     filters: query.filters,
+    filtersByColumn: createFilterColumnIndex(filtersByColumn),
     quickFilter: query.quickFilter,
   });
+}
+
+function createFilterColumnIndex(
+  filtersByColumn: ReadonlyMap<string, unknown>,
+): Readonly<{ readonly get: (columnId: string) => unknown }> {
+  const snapshot = new Map(filtersByColumn);
+  return Object.freeze({ get: (columnId: string): unknown => snapshot.get(columnId) });
 }
 
 export type BrunoTableQueryConfiguration = Readonly<{
@@ -317,6 +337,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly queryListeners = new Set<Listener>();
   private readonly filterListeners = new Set<Listener>();
   private readonly quickFilterListeners = new Set<Listener>();
+  private readonly filterPositionResetListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
@@ -339,6 +360,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnFilterVersions = new Map<string, number>();
   private readonly columnFilterCommandEpochs = new Map<string, number>();
   private quickFilterCommandEpoch = 0;
+  private filterPositionResetEpoch = 0;
   private preserveActiveCellOnQueryChange = false;
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -375,8 +397,8 @@ export class BrunoTableGridRuntime<TRow> {
       orderBy: this.baselineOrderBy,
       generation: 0,
     });
-    this.filterSnapshot = createFilterSnapshot(this.query);
     this.columnFilterSnapshots = createColumnFilterSnapshots(this.query.filters, columns);
+    this.filterSnapshot = createFilterSnapshot(this.query, this.columnFilterSnapshots);
     for (const columnId of this.columnFilterSnapshots.keys()) {
       this.columnFilterVersions.set(columnId, 0);
       this.columnFilterCommandEpochs.set(columnId, 0);
@@ -410,6 +432,7 @@ export class BrunoTableGridRuntime<TRow> {
         getPreserveActiveCellOnQueryChangeSnapshot: this.getPreserveActiveCellOnQueryChangeSnapshot,
         getFilterSnapshot: this.getFilterSnapshot,
         getQuickFilterSnapshot: this.getQuickFilterSnapshot,
+        getFilterPositionResetEpochSnapshot: this.getFilterPositionResetEpochSnapshot,
         getQuickFilterFieldsSnapshot: this.getQuickFilterFieldsSnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
         getColumnFilterSnapshot: this.getColumnFilterSnapshot,
@@ -429,6 +452,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeQuery: this.subscribeQuery,
         subscribeFilter: this.subscribeFilter,
         subscribeQuickFilter: this.subscribeQuickFilter,
+        subscribeFilterPositionReset: this.subscribeFilterPositionReset,
         registerQuickFilterInvalidation: this.registerQuickFilterInvalidation,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
@@ -485,10 +509,8 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
       this.preserveActiveCellOnQueryChange = false;
-      if (configuration.transition.filterChanged) {
-        this.filterSnapshot = createFilterSnapshot(this.query);
-      }
       this.updateColumnFilterSnapshots();
+      this.filterSnapshot = createFilterSnapshot(this.query, this.columnFilterSnapshots);
       this.columnLayout = configuration.columnLayout;
       this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
       this.columnCommands = configuration.columnCommands;
@@ -593,6 +615,8 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly getQuickFilterSnapshot = (): string => this.query.quickFilter;
 
+  public readonly getFilterPositionResetEpochSnapshot = (): number => this.filterPositionResetEpoch;
+
   public readonly getQuickFilterCommandEpochSnapshot = (): number => this.quickFilterCommandEpoch;
 
   public readonly getQuickFilterFieldsSnapshot = (): readonly string[] => this.quickFilterFields;
@@ -691,6 +715,9 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterListeners, listener);
+
+  public readonly subscribeFilterPositionReset = (listener: Listener): (() => void) =>
+    subscribe(this.filterPositionResetListeners, listener);
 
   public readonly subscribeQuickFilterCommandEpoch = (listener: Listener): (() => void) =>
     subscribe(this.quickFilterCommandEpochListeners, listener);
@@ -917,7 +944,7 @@ export class BrunoTableGridRuntime<TRow> {
       brunoTableFilterReferencesColumn(filter, columnId),
     );
     if (replacement.length === 0 && currentColumnFilters.length === 0) return;
-    if (sameFilterCollection(currentColumnFilters, replacement, this.columnsById)) return;
+    if (sameBrunoTableFilterCollection(currentColumnFilters, replacement, this.columnsById)) return;
     const withoutColumn = this.query.filters.filter(
       (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
     );
@@ -937,7 +964,7 @@ export class BrunoTableGridRuntime<TRow> {
       brunoTableFilterReferencesColumn(filter, columnId),
     );
     const next = Object.freeze([...withoutColumn, ...baseline]);
-    if (sameFilterCollection(this.query.filters, next, this.columnsById)) return;
+    if (sameBrunoTableFilterCollection(this.query.filters, next, this.columnsById)) return;
     this.publishQuery(next, this.query.orderBy);
   };
 
@@ -985,7 +1012,7 @@ export class BrunoTableGridRuntime<TRow> {
       if (
         next === undefined ||
         !sameFilterCommandSemantics(column, next) ||
-        !sameFilterCollection(previousBaseline, nextBaseline, this.columnsById)
+        !sameBrunoTableFilterCollection(previousBaseline, nextBaseline, this.columnsById)
       ) {
         invalidatedColumnIds.add(column.columnId);
       }
@@ -1072,11 +1099,9 @@ export class BrunoTableGridRuntime<TRow> {
     const queryChanged = filterCollectionChanged || sortingChanged || quickFilterSemanticsChanged;
     const filterChanged = filterCollectionChanged || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
-    this.preserveActiveCellOnQueryChange =
-      queryChanged &&
-      !sortingChanged &&
-      !forceColumnRefresh &&
-      (filterCollectionChanged || quickFilterSemanticsChanged);
+    // A filter projection replaces the logical row space. The view resets its geometry and
+    // installs a fresh row-zero Active Cell instead of retaining an identity that may be off-screen.
+    this.preserveActiveCellOnQueryChange = false;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
     const filterColumnIdentitiesChanged =
@@ -1094,7 +1119,9 @@ export class BrunoTableGridRuntime<TRow> {
     } else if (quickFilterChanged) {
       this.query = Object.freeze({ ...this.query, quickFilter });
     }
-    if (filterChanged) this.filterSnapshot = createFilterSnapshot(this.query);
+    if (filterChanged) {
+      this.filterSnapshot = createFilterSnapshot(this.query, this.columnFilterSnapshots);
+    }
     this.columnCommands =
       !sortingChanged && !forceColumnRefresh && !filterColumnIdentitiesChanged
         ? previousCommands
@@ -1122,6 +1149,10 @@ export class BrunoTableGridRuntime<TRow> {
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
     if (transition.filterChanged) {
       firstError = firstListenerError(firstError, notify(this.filterListeners));
+    }
+    if (transition.filterChanged && !transition.queryChanged) {
+      this.filterPositionResetEpoch += 1;
+      firstError = firstListenerError(firstError, notify(this.filterPositionResetListeners));
     }
     if (transition.quickFilterChanged) {
       firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
@@ -1393,7 +1424,7 @@ function createColumnFilterSnapshots(
         columnId,
         previous !== undefined &&
           !Array.isArray(previous) &&
-          sameFilterValue(previous, values[0], columnsById)
+          sameBrunoTableFilterValue(previous, values[0], columnsById)
           ? previous
           : values[0],
       );
@@ -1403,7 +1434,7 @@ function createColumnFilterSnapshots(
     if (
       Array.isArray(previous) &&
       previous.length === values.length &&
-      values.every((value, index) => sameFilterValue(previous[index], value, columnsById))
+      values.every((value, index) => sameBrunoTableFilterValue(previous[index], value, columnsById))
     ) {
       snapshots.set(columnId, previous);
     } else {
@@ -1630,415 +1661,6 @@ function sameColumnCommand(
 
 function sameReferences(previous: readonly unknown[], next: readonly unknown[]): boolean {
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
-}
-
-function sameFilterCollection(
-  previous: readonly unknown[],
-  next: readonly unknown[],
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  unordered = true,
-): boolean {
-  if (previous.length !== next.length) return false;
-  if (previous.every((value, index) => sameFilterValue(value, next[index], columnsById))) {
-    return true;
-  }
-  if (!unordered) return false;
-  const previousInspection = inspectFilterNodesForComparison(previous);
-  const nextInspection = inspectFilterNodesForComparison(next);
-  if (!previousInspection.hasSharedNodes && !nextInspection.hasSharedNodes) {
-    const nextCounts = new Map<string, number>();
-    const nextKeys = next.map((value) => filterValueComparisonKey(value, columnsById));
-    if (nextKeys.every((key): key is string => key !== undefined)) {
-      for (const key of nextKeys) nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1);
-      for (const value of previous) {
-        const key = filterValueComparisonKey(value, columnsById);
-        if (key === undefined) break;
-        const count = nextCounts.get(key) ?? 0;
-        if (count === 0) break;
-        if (count === 1) nextCounts.delete(key);
-        else nextCounts.set(key, count - 1);
-      }
-      if (nextCounts.size === 0) return true;
-    }
-  }
-  // Never fall back to the nested matching path after the bounded comparison walk gives up.
-  // Returning false is conservative and keeps an admitted large root on a linear work bound.
-  if (previousInspection.overBudget || nextInspection.overBudget) return false;
-  const matched = new Set<number>();
-  return previous.every((value) => {
-    for (let index = 0; index < next.length; index += 1) {
-      if (matched.has(index)) continue;
-      if (!sameFilterValue(value, next[index], columnsById)) continue;
-      matched.add(index);
-      return true;
-    }
-    return false;
-  });
-}
-
-type FilterNodeComparisonInspection = Readonly<{
-  readonly hasSharedNodes: boolean;
-  readonly overBudget: boolean;
-}>;
-
-function inspectFilterNodesForComparison(
-  filters: readonly unknown[],
-): FilterNodeComparisonInspection {
-  const visited = new WeakSet<object>();
-  const pending = Array.from(filters);
-  let nodes = 0;
-  while (pending.length > 0) {
-    const candidate = pending.pop();
-    if (typeof candidate !== "object" || candidate === null) continue;
-    if (visited.has(candidate)) return { hasSharedNodes: true, overBudget: false };
-    visited.add(candidate);
-    nodes += 1;
-    if (nodes > 1_024) return { hasSharedNodes: false, overBudget: true };
-    if (Array.isArray(candidate)) {
-      for (const condition of candidate) pending.push(condition);
-      continue;
-    }
-    try {
-      const filter = candidate as Readonly<Record<string, unknown>>;
-      const type = filter["type"];
-      if ((type === "AND" || type === "OR") && Array.isArray(filter["conditions"])) {
-        pending.push(filter["conditions"]);
-      } else if (type === "NOT" && filter["condition"] !== undefined) {
-        pending.push(filter["condition"]);
-      }
-    } catch {
-      return { hasSharedNodes: false, overBudget: true };
-    }
-  }
-  return { hasSharedNodes: false, overBudget: false };
-}
-
-function filterValueComparisonKey(
-  value: unknown,
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  seen: WeakMap<object, string | undefined> = new WeakMap(),
-): string | undefined {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return `string:${JSON.stringify(value)}`;
-  if (typeof value === "number")
-    return Number.isFinite(value) ? `number:${String(value)}` : undefined;
-  if (typeof value === "bigint") return `bigint:${value.toString(10)}`;
-  if (typeof value === "boolean") return `boolean:${String(value)}`;
-  if (typeof value !== "object") return undefined;
-  const existing = seen.get(value);
-  if (existing !== undefined || seen.has(value)) return existing;
-  seen.set(value, undefined);
-  if (Array.isArray(value)) {
-    const keys = value.map((item) => filterValueComparisonKey(item, columnsById, seen));
-    if (keys.some((key) => key === undefined)) return undefined;
-    const result = `array:${JSON.stringify(keys)}`;
-    seen.set(value, result);
-    return result;
-  }
-  if (!isPlainFilterRecord(value)) return undefined;
-  const record = value as Readonly<Record<PropertyKey, unknown>>;
-  const columnId = record["columnId"];
-  const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
-  const type = typeof record["type"] === "string" ? record["type"] : undefined;
-  const keys = Reflect.ownKeys(record)
-    .filter((key) => !isImplicitFalseTextSensitivity(record, key))
-    .sort((left, right) => {
-      const leftText = String(left);
-      const rightText = String(right);
-      return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
-    });
-  const parts: Array<readonly [string, string]> = [];
-  for (const key of keys) {
-    const child = record[key];
-    if ((key === "filter" || key === "filterTo") && column !== undefined) {
-      if (key === "filter" && type === "in" && Array.isArray(child)) {
-        const operands = child.map((operand) =>
-          filterOperandComparisonKey(operand, column, {
-            accentSensitive: record["accentSensitive"] === true,
-            caseSensitive: record["caseSensitive"] === true,
-            raw: false,
-            text: column.semantics.filterFamily === "text",
-            unordered: true,
-          }),
-        );
-        if (operands.some((operand) => operand === undefined)) return undefined;
-        parts.push([
-          String(key),
-          JSON.stringify([...new Set(operands as string[])].sort(compareStringValues)),
-        ]);
-      } else {
-        const operand = filterOperandComparisonKey(child, column, {
-          accentSensitive: record["accentSensitive"] === true,
-          caseSensitive: record["caseSensitive"] === true,
-          raw:
-            type === "contains" ||
-            type === "notContains" ||
-            type === "startsWith" ||
-            type === "endsWith",
-          text:
-            column.semantics.filterFamily === "text" &&
-            (type === "equals" ||
-              type === "notEqual" ||
-              type === "in" ||
-              type === "contains" ||
-              type === "notContains" ||
-              type === "startsWith" ||
-              type === "endsWith"),
-          unordered: false,
-        });
-        if (operand === undefined) return undefined;
-        parts.push([String(key), operand]);
-      }
-      continue;
-    }
-    if (key === "conditions" && (type === "AND" || type === "OR") && Array.isArray(child)) {
-      const conditions = child.map((condition) =>
-        filterValueComparisonKey(condition, columnsById, seen),
-      );
-      if (conditions.some((condition) => condition === undefined)) return undefined;
-      parts.push([String(key), JSON.stringify((conditions as string[]).sort(compareStringValues))]);
-      continue;
-    }
-    const childKey = filterValueComparisonKey(child, columnsById, seen);
-    if (childKey === undefined) return undefined;
-    parts.push([String(key), childKey]);
-  }
-  const result = `record:${JSON.stringify(parts)}`;
-  seen.set(value, result);
-  return result;
-}
-
-function compareStringValues(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function sameFilterValue(
-  previous: unknown,
-  next: unknown,
-  columnsById: ReadonlyMap<string, CompiledColumn>,
-  column?: CompiledColumn,
-  seen: WeakMap<object, object> = new WeakMap(),
-): boolean {
-  try {
-    if (Object.is(previous, next)) return true;
-    if (Array.isArray(previous) && Array.isArray(next)) {
-      return (
-        previous.length === next.length &&
-        previous.every((value, index) =>
-          sameFilterValue(value, next[index], columnsById, column, seen),
-        )
-      );
-    }
-    if (
-      typeof previous !== "object" ||
-      previous === null ||
-      typeof next !== "object" ||
-      next === null
-    ) {
-      return false;
-    }
-    const previousRecord = previous as Readonly<Record<PropertyKey, unknown>>;
-    const nextRecord = next as Readonly<Record<PropertyKey, unknown>>;
-    const previousColumnId = previousRecord["columnId"];
-    const nextColumnId = nextRecord["columnId"];
-    const valueColumn =
-      column ??
-      (typeof previousColumnId === "string" && previousColumnId === nextColumnId
-        ? columnsById.get(previousColumnId)
-        : undefined);
-    const remembered = seen.get(previous);
-    if (remembered !== undefined) return remembered === next;
-    seen.set(previous, next);
-    if (Object.getPrototypeOf(previous) !== Object.getPrototypeOf(next)) return false;
-    if (!isPlainFilterRecord(previous) || !isPlainFilterRecord(next)) return false;
-    const previousKeys = Reflect.ownKeys(previous).filter(
-      (key) => !isImplicitFalseTextSensitivity(previousRecord, key),
-    );
-    const nextKeys = Reflect.ownKeys(next).filter(
-      (key) => !isImplicitFalseTextSensitivity(nextRecord, key),
-    );
-    if (previousKeys.length !== nextKeys.length) return false;
-    const operator =
-      previousRecord["type"] === nextRecord["type"] && typeof previousRecord["type"] === "string"
-        ? previousRecord["type"]
-        : undefined;
-    const rawTextOperand =
-      valueColumn?.semantics.filterFamily === "text" &&
-      (operator === "contains" ||
-        operator === "notContains" ||
-        operator === "startsWith" ||
-        operator === "endsWith");
-    const textOperand =
-      valueColumn?.semantics.filterFamily === "text" &&
-      (operator === "equals" ||
-        operator === "notEqual" ||
-        operator === "in" ||
-        operator === "contains" ||
-        operator === "notContains" ||
-        operator === "startsWith" ||
-        operator === "endsWith");
-    const operandOptions = {
-      accentSensitive: previousRecord["accentSensitive"] === true,
-      caseSensitive: previousRecord["caseSensitive"] === true,
-      raw: rawTextOperand,
-      text: textOperand,
-    } as const;
-    return previousKeys.every((key) => {
-      if (!nextKeys.includes(key)) return false;
-      const previousValue = previousRecord[key];
-      const nextValue = nextRecord[key];
-      if (
-        key === "conditions" &&
-        (operator === "AND" || operator === "OR") &&
-        Array.isArray(previousValue) &&
-        Array.isArray(nextValue)
-      ) {
-        return sameFilterCollection(previousValue, nextValue, columnsById, true);
-      }
-      if ((key === "filter" || key === "filterTo") && valueColumn !== undefined) {
-        return sameFilterOperand(
-          previousValue,
-          nextValue,
-          valueColumn,
-          key === "filter" && operator === "in"
-            ? { ...operandOptions, unordered: true }
-            : { ...operandOptions, unordered: false },
-        );
-      }
-      return sameFilterValue(previousValue, nextValue, columnsById, valueColumn, seen);
-    });
-  } catch {
-    return false;
-  }
-}
-
-function isImplicitFalseTextSensitivity(
-  record: Readonly<Record<PropertyKey, unknown>>,
-  key: PropertyKey,
-): boolean {
-  return (key === "caseSensitive" || key === "accentSensitive") && record[key] === false;
-}
-
-function sameFilterOperand(
-  previous: unknown,
-  next: unknown,
-  column: CompiledColumn,
-  options: Readonly<{
-    readonly accentSensitive: boolean;
-    readonly caseSensitive: boolean;
-    readonly raw: boolean;
-    readonly text: boolean;
-    readonly unordered: boolean;
-  }>,
-): boolean {
-  if (Object.is(previous, next)) return true;
-  if (options.unordered && Array.isArray(previous) && Array.isArray(next)) {
-    const previousKeys = previous.map((value) =>
-      filterOperandComparisonKey(value, column, options),
-    );
-    const nextKeys = next.map((value) => filterOperandComparisonKey(value, column, options));
-    if (
-      previousKeys.every((key) => key !== undefined) &&
-      nextKeys.every((key) => key !== undefined)
-    ) {
-      const nextSet = new Set(nextKeys as string[]);
-      const previousSet = new Set(previousKeys as string[]);
-      return previousSet.size === nextSet.size && [...previousSet].every((key) => nextSet.has(key));
-    }
-    return (
-      previous.every((value) =>
-        next.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      ) &&
-      next.every((value) =>
-        previous.some((candidate) =>
-          sameFilterOperand(value, candidate, column, { ...options, unordered: false }),
-        ),
-      )
-    );
-  }
-  if (previous === null || next === null || previous === undefined || next === undefined) {
-    return false;
-  }
-  if (options.raw) {
-    if (typeof previous !== "string" || typeof next !== "string") return false;
-    return (
-      normalizeBrunoTableFilterText(previous, options.caseSensitive, options.accentSensitive) ===
-      normalizeBrunoTableFilterText(next, options.caseSensitive, options.accentSensitive)
-    );
-  }
-  if (options.text) {
-    try {
-      return (
-        normalizeBrunoTableFilterText(
-          column.semantics.formatCanonicalText(previous),
-          options.caseSensitive,
-          options.accentSensitive,
-        ) ===
-        normalizeBrunoTableFilterText(
-          column.semantics.formatCanonicalText(next),
-          options.caseSensitive,
-          options.accentSensitive,
-        )
-      );
-    } catch {
-      return false;
-    }
-  }
-  try {
-    return column.semantics.equivalent(previous, next);
-  } catch {
-    return false;
-  }
-}
-
-function filterOperandComparisonKey(
-  value: unknown,
-  column: CompiledColumn,
-  options: Readonly<{
-    readonly accentSensitive: boolean;
-    readonly caseSensitive: boolean;
-    readonly raw: boolean;
-    readonly text: boolean;
-    readonly unordered: boolean;
-  }>,
-): string | undefined {
-  if (options.raw) {
-    return typeof value === "string"
-      ? `text:${normalizeBrunoTableFilterText(value, options.caseSensitive, options.accentSensitive)}`
-      : undefined;
-  }
-  if (options.text) {
-    try {
-      return `text:${normalizeBrunoTableFilterText(
-        column.semantics.formatCanonicalText(value),
-        options.caseSensitive,
-        options.accentSensitive,
-      )}`;
-    } catch {
-      return undefined;
-    }
-  }
-  switch (column.semantics.editorFamily) {
-    case "number":
-      if (column.valueType !== "number") return undefined;
-      return typeof value === "number" ? `number:${String(value)}` : undefined;
-    case "bigint":
-      if (column.valueType !== "bigint") return undefined;
-      return typeof value === "bigint" ? `bigint:${value.toString()}` : undefined;
-    case "boolean":
-      if (column.valueType !== "boolean") return undefined;
-      return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
-    default:
-      return undefined;
-  }
-}
-
-function isPlainFilterRecord(value: object): boolean {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 function sameColumnProjection(

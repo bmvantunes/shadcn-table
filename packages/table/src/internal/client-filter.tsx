@@ -104,6 +104,11 @@ type FilterCandidate = Readonly<{
   readonly error?: string;
 }>;
 
+type CommittedFilterCandidate = FilterCandidate &
+  Readonly<{
+    readonly draftRevision: number;
+  }>;
+
 type FilterParseResult = ReturnType<CompiledColumn["semantics"]["parseCanonicalText"]>;
 type FilterParseCache = Map<string, FilterParseResult>;
 
@@ -379,11 +384,13 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
+  const draftRevisionRef = useRef(0);
   const errorId = useId();
 
   const dispatchCandidate = useCallback(
-    (candidate: FilterCandidate): void => {
+    (candidate: CommittedFilterCandidate): void => {
       if (candidate.filter === undefined) return;
+      if (candidate.draftRevision !== draftRevisionRef.current) return;
       if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== commandEpoch) return;
       runtime.dispatchGridCommand({
         type: "column.filter.replace",
@@ -401,6 +408,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       localState.version !== editorVersion
     ) {
       debouncer.cancel();
+      draftRevisionRef.current += 1;
     }
   }, [column, debouncer, editorVersion, localState.column, localState.version]);
 
@@ -410,11 +418,12 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       // Outside/Escape close must not manufacture a command from a local draft. Releasing the
       // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
       debouncer.cancel();
+      draftRevisionRef.current += 1;
     };
   }, [debouncer]);
 
   const commitImmediately = useCallback(
-    (candidate: FilterCandidate): void => {
+    (candidate: CommittedFilterCandidate): void => {
       debouncer.cancel();
       if (candidate.filter !== undefined) dispatchCandidate(candidate);
     },
@@ -422,7 +431,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
 
   const commitContinuous = useCallback(
-    (candidate: FilterCandidate): void => {
+    (candidate: CommittedFilterCandidate): void => {
       if (candidate.filter === undefined) {
         debouncer.cancel();
         return;
@@ -434,6 +443,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
 
   const commitDraft = useCallback(
     (nextDraft: FilterDraft, mode: FilterChangeMode, badInput = false): void => {
+      const draftRevision = draftRevisionRef.current + 1;
+      draftRevisionRef.current = draftRevision;
       if (mode === "clear") {
         debouncer.cancel();
         const accepted = runtime.dispatchGridCommand({
@@ -470,8 +481,9 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
             : buildFilterCandidate(column, nextDraft, parseCache)
           : buildFilterCandidate(column, nextDraft, parseCache);
       setLocalState({ column, version: editorVersion, draft: nextDraft, error: candidate.error });
-      if (mode === "continuous") commitContinuous(candidate);
-      else commitImmediately(candidate);
+      const committedCandidate = Object.freeze({ ...candidate, draftRevision });
+      if (mode === "continuous") commitContinuous(committedCandidate);
+      else commitImmediately(committedCandidate);
     },
     [
       column,
@@ -1272,7 +1284,7 @@ function FilterOperand({
                           inValuesExplicit: true,
                           inValuesAuthored: nextValuesAuthored,
                         }),
-                        continuous ? "continuous" : "immediate",
+                        "immediate",
                       );
                       focusAddedControl(nextFocusId);
                     }}
@@ -1304,7 +1316,7 @@ function FilterOperand({
                   ]),
                   inValuesExplicit: true,
                 }),
-                continuous ? "continuous" : "immediate",
+                "immediate",
               );
               focusAddedControl(`${errorId}-${path}-value-${String(nextIndex)}`);
             }}

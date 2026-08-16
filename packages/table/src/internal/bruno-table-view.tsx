@@ -1183,6 +1183,12 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       viewport.getSnapshot,
       viewport.getSnapshot,
     );
+    const filterPositionResetEpoch = useSyncExternalStore(
+      runtime.subscribeFilterPositionReset,
+      runtime.getFilterPositionResetEpochSnapshot,
+      runtime.getFilterPositionResetEpochSnapshot,
+    );
+    const filterPositionResetEpochRef = useRef(filterPositionResetEpoch);
     useLayoutEffect(() => {
       if (queryGenerationRef.current === queryGeneration) return;
       queryGenerationRef.current = queryGeneration;
@@ -1206,6 +1212,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         } else {
           navigation.clearForQuery();
           navigation.setShape(rowSpace, logicalColumns);
+          navigation.activateForFocus();
         }
       } else {
         navigation.setShape(rowSpace, logicalColumns);
@@ -1219,6 +1226,28 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       runtime,
       viewport,
     ]);
+    useLayoutEffect(() => {
+      if (filterPositionResetEpochRef.current === filterPositionResetEpoch) return;
+      filterPositionResetEpochRef.current = filterPositionResetEpoch;
+      viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
+      viewport.resetVertical();
+      const resetWindow = viewport.getSnapshot().virtualWindow;
+      rowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
+      publishedRangeRef.current = Object.freeze({
+        rowSpace,
+        generation: queryGeneration,
+        start: resetWindow.rowStart,
+        end: resetWindow.rowEnd,
+      });
+      const activeCell = navigation.getSnapshot();
+      if (activeCell?.region === "header") {
+        navigation.setShape(rowSpace, logicalColumns);
+      } else {
+        navigation.clearForQuery();
+        navigation.setShape(rowSpace, logicalColumns);
+        navigation.activateForFocus();
+      }
+    }, [filterPositionResetEpoch, logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
     useLayoutEffect(() => {
       const columnsChanged =
         appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;

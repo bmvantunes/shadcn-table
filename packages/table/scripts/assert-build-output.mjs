@@ -82,7 +82,7 @@ if (
     (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
   ) ||
   /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
-  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription)/u.test(
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription)/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
   /installTableScopedListener/u.test(rootRuntime) ||
@@ -587,7 +587,7 @@ async function assertPackedRootConsumer(tarball, shadcnTarball) {
   try {
     await writeFile(
       join(consumerRoot, "index.tsx"),
-      `import { BrunoTableClient, BrunoTableTextColumn, BrunoTableToolbar } from "@bruno/table";
+      `import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableTextColumn, BrunoTableToolbar } from "@bruno/table";
 import type { BrunoTableColumns } from "@bruno/table";
 
 type Row = { readonly symbol: string; readonly revision: bigint };
@@ -607,8 +607,13 @@ const rendered = (
     columns={columns}
     initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
     getRowId={(row) => row.symbol}
+    quickFilterFields={["symbol"]}
     clientSource={source}
-  />
+  >
+    <BrunoTableToolbar>
+      <BrunoTableQuickFilter />
+    </BrunoTableToolbar>
+  </BrunoTableClient>
 );
 void rendered;
 const missingOrder = (
