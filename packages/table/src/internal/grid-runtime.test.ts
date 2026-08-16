@@ -422,6 +422,27 @@ describe("BrunoTable filter runtime primitives", () => {
     }));
     expect(sameBrunoTableFilterCollection(multiplePrevious, multipleNext, columnsById)).toBe(false);
     expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
+
+    equivalent.mockClear();
+    const snapshotOperands = Array.from({ length: 2_048 }, (_, id) => Object.freeze({ id }));
+    const snapshotFilters = [
+      { columnId: "COL_ID_OPAQUE", type: "in" as const, filter: snapshotOperands },
+      {
+        columnId: "COL_ID_OPAQUE",
+        type: "in" as const,
+        filter: snapshotOperands.map((operand) => Object.freeze({ id: operand.id })),
+      },
+    ];
+    const snapshotRuntime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      columns,
+      snapshotFilters,
+      [{ columnId: "COL_ID_OPAQUE", direction: "asc" }],
+    );
+    equivalent.mockClear();
+    snapshotRuntime.configure((row) => row.id, [...columns]);
+    expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
   });
 
   it("replaces a column's implicit root filter collection without wrapping it", () => {

@@ -1434,7 +1434,7 @@ function createColumnFilterSnapshots(
     if (
       Array.isArray(previous) &&
       previous.length === values.length &&
-      values.every((value, index) => sameBrunoTableFilterValue(previous[index], value, columnsById))
+      sameBrunoTableFilterCollection(previous, values, columnsById, false)
     ) {
       snapshots.set(columnId, previous);
     } else {
