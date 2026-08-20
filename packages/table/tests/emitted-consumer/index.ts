@@ -199,6 +199,12 @@ const emittedComputedPresetColumns = [
 type ComputedPresetOmitsFiltering = Expect<
   Equal<(typeof emittedComputedPresetColumns)[0]["enableFilter"], undefined>
 >;
+type ComputedPresetOmitsSetFiltering = Expect<
+  Equal<
+    "enableSetFilter" extends keyof (typeof emittedComputedPresetColumns)[0] ? true : false,
+    false
+  >
+>;
 type ComputedPresetOmitsSorting = Expect<
   Equal<(typeof emittedComputedPresetColumns)[0]["enableSorting"], undefined>
 >;
@@ -314,6 +320,28 @@ const exactAmountColumns = [
     valueType: exactAmountValueType,
   },
 ] satisfies BrunoTableColumns<AmountRow>;
+
+const exactEqualityValueType = {
+  ...exactAmountValueType,
+  filterFamily: "equality",
+} satisfies BrunoTableValueType<ExactAmount, "equality", "text">;
+
+const optedInEqualitySetColumns = [
+  {
+    columnId: "COL_ID_AMOUNT",
+    enableSetFilter: true,
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactEqualityValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+
+const acceptedEqualitySetFilters = [
+  { columnId: "COL_ID_AMOUNT", type: "in", filter: [{ minor: 1n }] },
+  { columnId: "COL_ID_AMOUNT", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof optedInEqualitySetColumns>;
+
+void acceptedEqualitySetFilters;
 
 const exactAmountComputedColumns = [
   BrunoTableComputedColumn({
@@ -860,6 +888,55 @@ const invalidBooleanSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
+const acceptedBooleanSetFilters = [
+  { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
+  { columnId: "COL_ID_ENABLED", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
+
+const optedOutBooleanSetFilterColumns = [
+  {
+    columnId: "COL_ID_ENABLED",
+    enableSetFilter: false,
+    field: "enabled",
+    headerName: "Enabled",
+    valueType: "boolean",
+  },
+] satisfies BrunoTableColumns<FeatureFlag>;
+
+const acceptedOptedOutBooleanInFilter = [
+  { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof optedOutBooleanSetFilterColumns>;
+
+const invalidOptedOutBooleanMatchNone = [
+  // @ts-expect-error emitted Match None remains gated by the Set Filter surface.
+  { columnId: "COL_ID_ENABLED", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof optedOutBooleanSetFilterColumns>;
+
+void acceptedOptedOutBooleanInFilter;
+void invalidOptedOutBooleanMatchNone;
+
+const acceptedSelectSetFilters = [
+  { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+  { columnId: "COL_ID_STATUS", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidDefaultTextMatchNone = [
+  // @ts-expect-error emitted Text Set Filters require explicit opt-in.
+  { columnId: "COL_ID_SYMBOL", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const invalidSetFilterCapability = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    enableFilter: false,
+    // @ts-expect-error emitted declarations reject Set Filter when filtering is disabled.
+    enableSetFilter: true,
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Order>;
+
 const invalidEmptyInFilter = [
   // @ts-expect-error emitted declarations require non-empty `in` operands.
   { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
@@ -1077,6 +1154,7 @@ void (0 as unknown as HelperStatus);
 void (0 as unknown as HelperWeightedPrice);
 void (0 as unknown as ExactComputedAmount);
 void (0 as unknown as ComputedPresetOmitsFiltering);
+void (0 as unknown as ComputedPresetOmitsSetFiltering);
 void (0 as unknown as ComputedPresetOmitsSorting);
 void (0 as unknown as ComputedPresetOmitsEditing);
 void filters;
@@ -1102,6 +1180,10 @@ void invalidBooleanSensitivity;
 void invalidEmptyInFilter;
 void acceptedTextInFilter;
 void acceptedNumericInFilter;
+void acceptedBooleanSetFilters;
+void acceptedSelectSetFilters;
+void invalidDefaultTextMatchNone;
+void invalidSetFilterCapability;
 void invalidMixedColumnCompoundFilter;
 void invalidEmptySort;
 void invalidOptedOutSort;

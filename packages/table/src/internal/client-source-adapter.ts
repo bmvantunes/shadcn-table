@@ -123,6 +123,16 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly getPublication = (): BrunoTableRowPipelinePublication<TRow> => this.publication;
 
+  public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {
+    const sequence = this.coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+    return Object.freeze({
+      rows: sequence.asArray(),
+      token: sequence.token,
+      ...(sequence.parentToken === undefined ? {} : { parentToken: sequence.parentToken }),
+      changedIndexes: sequence.changedIndexes,
+    });
+  };
+
   public readonly getQueryConfiguration = (
     columns: readonly CompiledColumn[],
   ): BrunoTableQueryConfiguration => {
@@ -424,6 +434,17 @@ export type BrunoTableClientRowOrderChange = Readonly<{
 export type BrunoTableClientRowsStore = Readonly<{
   readonly getSnapshot: () => readonly BrunoTableClientAdmittedRow[];
   readonly subscribe: (listener: () => void) => () => void;
+}>;
+
+export type BrunoTableClientFacetRowsSource = Readonly<{
+  readonly getFacetRowsSnapshot: () => BrunoTableClientFacetRowsSnapshot;
+}>;
+
+export type BrunoTableClientFacetRowsSnapshot = Readonly<{
+  readonly rows: readonly BrunoTableClientAdmittedRow[];
+  readonly token: object;
+  readonly parentToken?: object;
+  readonly changedIndexes: readonly number[];
 }>;
 
 export type BrunoTableClientAdmittedRow = Readonly<{

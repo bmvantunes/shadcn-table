@@ -140,6 +140,7 @@ type PresetDefaults = {
   readonly cellAlign?: BrunoTableCellAlign;
   readonly editorLayout?: BrunoTableEditorLayout;
   readonly enableFilter?: boolean;
+  readonly enableSetFilter?: boolean;
   readonly enableSorting?: boolean;
   readonly isEditable?: boolean;
   readonly cellClassName?: string;
@@ -149,7 +150,7 @@ type NumberPresetDefaults = PresetDefaults & {
   readonly format?: BrunoTableNumberFormat;
 };
 
-type FieldOnlyPresetKey = "enableFilter" | "enableSorting" | "isEditable";
+type FieldOnlyPresetKey = "enableFilter" | "enableSetFilter" | "enableSorting" | "isEditable";
 
 type ComputedPresetDefaults<TDefaults> = Omit<TDefaults, FieldOnlyPresetKey>;
 
@@ -252,6 +253,7 @@ const presetDefaultKeys = new Set<PropertyKey>([
   "cellAlign",
   "editorLayout",
   "enableFilter",
+  "enableSetFilter",
   "enableSorting",
   "isEditable",
   "cellClassName",
@@ -272,6 +274,7 @@ const commonColumnOptionKeys = new Set<PropertyKey>([
 const fieldColumnOptionKeys = new Set<PropertyKey>([
   "field",
   "enableFilter",
+  "enableSetFilter",
   "enableSorting",
   "isEditable",
   "groupBy",
@@ -398,6 +401,7 @@ function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeCol
       .filter(
         (key) =>
           key !== "enableFilter" &&
+          key !== "enableSetFilter" &&
           key !== "enableSorting" &&
           key !== "isEditable" &&
           key !== "groupBy" &&

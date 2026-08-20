@@ -31,10 +31,8 @@ export function createClientQuickFilterPredicate<TRow>(
   fields: readonly string[] | undefined,
   readField: BrunoTableClientQuickFilterFieldReader<TRow> = readClientQuickFilterField,
 ): ((row: TRow) => boolean) | undefined {
-  if (text === undefined || text.length === 0) return undefined;
-  if (!isBrunoTableQuickFilterTextWithinLimit(text)) return undefined;
-  const normalizedQuery = normalizeBrunoTableFilterText(text);
-  if (normalizedQuery.length === 0) return undefined;
+  const normalizedQuery = normalizeClientQuickFilterQuery(text);
+  if (normalizedQuery === undefined) return undefined;
   const quickFilterFields = snapshotQuickFilterFieldsForPredicate(fields);
   if (quickFilterFields.length === 0) return undefined;
   return (row) =>
@@ -49,6 +47,15 @@ export function createClientQuickFilterPredicate<TRow>(
         return false;
       }
     });
+}
+
+/** Returns the exact normalized query used to decide whether Quick Filter has dependencies. */
+export function normalizeClientQuickFilterQuery(text: string | undefined): string | undefined {
+  if (text === undefined || text.length === 0 || !isBrunoTableQuickFilterTextWithinLimit(text)) {
+    return undefined;
+  }
+  const normalizedQuery = normalizeBrunoTableFilterText(text);
+  return normalizedQuery.length === 0 ? undefined : normalizedQuery;
 }
 
 /** Composes the two independent query predicates without representing Quick Filter as a Grid Filter. */

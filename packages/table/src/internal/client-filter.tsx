@@ -1,8 +1,11 @@
 import { Button } from "@bruno/shadcn/button";
+import { Badge } from "@bruno/shadcn/badge";
 import { Checkbox } from "@bruno/shadcn/checkbox";
 import { DirectionProvider } from "@bruno/shadcn/direction";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@bruno/shadcn/empty";
 import { Input } from "@bruno/shadcn/input";
 import { NativeSelect, NativeSelectOption } from "@bruno/shadcn/native-select";
+import { Separator } from "@bruno/shadcn/separator";
 import {
   Popover,
   PopoverContent,
@@ -29,6 +32,13 @@ import type { CompositionEvent, NamedExoticComponent, ReactElement } from "react
 
 import type { CompiledColumn } from "./compile-columns";
 import {
+  applyBrunoTableSetFilterCommand,
+  createBrunoTableClientFacetStore,
+  isBrunoTableSetFilterExpression,
+  type BrunoTableSetFilterIntent,
+} from "./client-facet";
+import { useBrunoTableClientFilterContext } from "./client-filter-context";
+import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
@@ -41,6 +51,11 @@ import {
   recordBrunoTableClientColumnFilterRender,
   recordBrunoTableClientColumnFilterTriggerRender,
 } from "./render-instrumentation";
+import {
+  createBrunoTableSetValueIndex,
+  hasBrunoTableSetValue,
+  type BrunoTableSetValueIndex,
+} from "./set-value-identity";
 
 export {
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
@@ -316,6 +331,7 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
   readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
+  const { facetRows, runtime: facetRuntime } = useBrunoTableClientFilterContext();
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
     recordBrunoTableClientColumnFilterRender(column.columnId);
   }
@@ -333,6 +349,8 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
       column={column}
       committed={runtime.getColumnFilterSnapshot(column.columnId)}
       direction={direction}
+      facetRows={facetRows}
+      facetRuntime={facetRuntime}
       onEscape={onEscape}
       runtime={runtime}
       version={version}
@@ -377,6 +395,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   column,
   committed,
   direction,
+  facetRows,
+  facetRuntime,
   onEscape,
   runtime,
   version,
@@ -384,6 +404,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   readonly column: CompiledColumn;
   readonly committed: unknown;
   readonly direction: "ltr" | "rtl";
+  readonly facetRows: import("./client-source-adapter").BrunoTableClientFacetRowsSource;
+  readonly facetRuntime: import("./grid-runtime").BrunoTableRowPipelineRuntimeView;
   readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly version: number;
@@ -431,6 +453,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const errorId = useId();
+  const setExpressionActive =
+    column.enableSetFilter && isBrunoTableSetFilterExpression(column, committed);
 
   const dispatchCandidate = useCallback(
     (candidate: CommittedFilterCandidate): void => {
@@ -473,13 +497,15 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   }, [cancelPendingCandidate, column, editorIdentity, localState.column, localState.identity]);
 
   useLayoutEffect(() => {
-    (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
+    if (!column.enableSetFilter) {
+      (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
+    }
     return () => {
       // Outside/Escape close must not manufacture a command from a local draft. Releasing the
       // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
       cancelPendingCandidate();
     };
-  }, [cancelPendingCandidate]);
+  }, [cancelPendingCandidate, column.enableSetFilter]);
 
   const commitImmediately = useCallback(
     (candidate: FilterCandidate): void => {
@@ -603,19 +629,50 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         </PopoverDescription>
       </PopoverHeader>
       <div className="flex flex-col gap-3">
-        <FilterExpressionEditor
-          column={column}
-          draft={draft}
-          errorId={errorId}
-          compositionIdentity={editorIdentity}
-          invalidControl={invalidControl}
-          inputRef={inputRef}
-          canAddCondition={projectedNodes < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES}
-          canAddFilterValue={projectedOperands < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS}
-          selectRef={selectRef}
-          renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
-          onChange={commitDraft}
-        />
+        {column.enableSetFilter ? (
+          <BrunoTableSetFilter column={column} rows={facetRows} runtime={facetRuntime} />
+        ) : null}
+        {column.enableSetFilter ? (
+          <div className="flex items-center gap-2" aria-hidden="true">
+            <Separator className="flex-1" />
+            <span className="text-xs text-muted-foreground">Conditions</span>
+            <Separator className="flex-1" />
+          </div>
+        ) : null}
+        {setExpressionActive ? (
+          <div className="flex items-center justify-between gap-2 rounded-md border p-2">
+            <p className="text-xs text-muted-foreground">
+              Value selection owns this column expression.
+            </p>
+            <Button
+              size="xs"
+              type="button"
+              variant="outline"
+              onClick={() => {
+                runtime.dispatchGridCommand({
+                  type: "column.filter.clear",
+                  columnId: column.columnId,
+                });
+              }}
+            >
+              Use conditions
+            </Button>
+          </div>
+        ) : (
+          <FilterExpressionEditor
+            column={column}
+            draft={draft}
+            errorId={errorId}
+            compositionIdentity={editorIdentity}
+            invalidControl={invalidControl}
+            inputRef={inputRef}
+            canAddCondition={projectedNodes < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES}
+            canAddFilterValue={projectedOperands < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS}
+            selectRef={selectRef}
+            renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
+            onChange={commitDraft}
+          />
+        )}
         {error === undefined ? null : (
           <p id={errorId} aria-live="polite" className="text-sm text-destructive" role="alert">
             {error}
@@ -625,6 +682,234 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     </PopoverContent>
   );
 });
+
+const SET_FILTER_VISIBLE_OPTIONS = 64;
+
+const BrunoTableSetFilter = memo(function BrunoTableSetFilter({
+  column,
+  rows,
+  runtime,
+}: {
+  readonly column: CompiledColumn;
+  readonly rows: import("./client-source-adapter").BrunoTableClientFacetRowsSource;
+  readonly runtime: import("./grid-runtime").BrunoTableRowPipelineRuntimeView;
+}): ReactElement {
+  const store = useMemo(
+    () => createBrunoTableClientFacetStore({ column, rows, runtime }),
+    [column, rows, runtime],
+  );
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const [search, setSearch] = useState("");
+  const [windowStart, setWindowStart] = useState(0);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const headingId = useId();
+  useLayoutEffect(() => {
+    searchRef.current?.focus({ preventScroll: true });
+  }, []);
+  const normalizedSearch = normalizeBrunoTableFilterText(search);
+  const matchingOptions = useMemo(
+    () =>
+      normalizedSearch.length === 0
+        ? snapshot.options
+        : snapshot.options.filter((option) =>
+            normalizeBrunoTableFilterText(option.display).includes(normalizedSearch),
+          ),
+    [normalizedSearch, snapshot.options],
+  );
+  const maxWindowStart = Math.max(0, matchingOptions.length - SET_FILTER_VISIBLE_OPTIONS);
+  const visibleWindowStart = Math.min(windowStart, maxWindowStart);
+  const visibleOptions = matchingOptions.slice(
+    visibleWindowStart,
+    visibleWindowStart + SET_FILTER_VISIBLE_OPTIONS,
+  );
+  const intentValueIndex = useMemo(
+    () =>
+      createBrunoTableSetValueIndex(
+        column,
+        snapshot.intent.kind === "all" ? [] : snapshot.intent.values,
+      ),
+    [column, snapshot.intent],
+  );
+  const selectedOptions = snapshot.options.filter((option) =>
+    isBrunoTableFacetOptionSelected(column, snapshot.intent, intentValueIndex, option.value),
+  );
+  const accessibleOptionEvidence = useMemo(() => {
+    const displayCounts = new Map<string, number>();
+    const indexesByKey = new Map<string, number>();
+    snapshot.options.forEach((option, index) => {
+      const normalizedDisplay = normalizeBrunoTableFilterText(option.display);
+      displayCounts.set(normalizedDisplay, (displayCounts.get(normalizedDisplay) ?? 0) + 1);
+      indexesByKey.set(facetOptionKey(column, option.value), index);
+    });
+    return { displayCounts, indexesByKey };
+  }, [column, snapshot.options]);
+  const publish = (command: Parameters<typeof applyBrunoTableSetFilterCommand>[3]): void => {
+    const filter = applyBrunoTableSetFilterCommand(
+      column,
+      snapshot.intent,
+      snapshot.options.filter((option) => option.count > 0).map((option) => option.value),
+      command,
+    );
+    runtime.dispatchGridCommand(
+      filter === undefined
+        ? { type: "column.filter.clear", columnId: column.columnId }
+        : { type: "column.filter.replace", columnId: column.columnId, filter },
+    );
+  };
+
+  return (
+    <section className="flex flex-col gap-2" aria-labelledby={headingId}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 id={headingId} className="text-sm font-medium">
+          Values
+        </h3>
+        <Badge aria-live="polite" variant="secondary">
+          {`${String(selectedOptions.length)} selected`}
+        </Badge>
+      </div>
+      {selectedOptions.length === 0 ? null : (
+        <div className="flex flex-wrap gap-1" aria-label="Selected values">
+          {selectedOptions.slice(0, 3).map((option) => (
+            <Badge key={facetOptionKey(column, option.value)} variant="outline">
+              {`${option.display} · ${String(option.count)}`}
+            </Badge>
+          ))}
+          {selectedOptions.length <= 3 ? null : (
+            <Badge variant="outline">{`+${String(selectedOptions.length - 3)}`}</Badge>
+          )}
+        </div>
+      )}
+      <div className="flex gap-1">
+        <Button
+          size="xs"
+          type="button"
+          variant="outline"
+          onClick={() => publish({ type: "select-all" })}
+        >
+          Select All
+        </Button>
+        <Button
+          size="xs"
+          type="button"
+          variant="outline"
+          onClick={() => publish({ type: "clear-all" })}
+        >
+          Clear All
+        </Button>
+      </div>
+      <Input
+        ref={searchRef}
+        aria-label={`Search values for ${column.headerName}`}
+        placeholder="Search values"
+        type="search"
+        value={search}
+        onChange={(event) => {
+          setSearch(event.currentTarget.value);
+          setWindowStart(0);
+        }}
+      />
+      {matchingOptions.length === 0 ? (
+        <Empty className="min-h-24 p-3" role="status">
+          <EmptyHeader>
+            <EmptyTitle>No values found</EmptyTitle>
+            <EmptyDescription>Try a different search.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div
+          className="flex max-h-56 flex-col gap-1 overflow-y-auto"
+          role="group"
+          aria-label="Filter values"
+        >
+          {visibleOptions.map((option) => {
+            const selected = isBrunoTableFacetOptionSelected(
+              column,
+              snapshot.intent,
+              intentValueIndex,
+              option.value,
+            );
+            const label = `${option.display}, ${String(option.count)}`;
+            const normalizedDisplay = normalizeBrunoTableFilterText(option.display);
+            const optionIndex =
+              accessibleOptionEvidence.indexesByKey.get(facetOptionKey(column, option.value)) ?? 0;
+            const accessibleLabel =
+              (accessibleOptionEvidence.displayCounts.get(normalizedDisplay) ?? 0) > 1
+                ? `Select ${label}, option ${String(optionIndex + 1)} of ${String(snapshot.options.length)}`
+                : `Select ${label}`;
+            return (
+              <label
+                key={facetOptionKey(column, option.value)}
+                className="flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-muted"
+              >
+                <Checkbox
+                  aria-label={accessibleLabel}
+                  checked={selected}
+                  onCheckedChange={(checked) =>
+                    publish({ type: "toggle", value: option.value, selected: checked })
+                  }
+                />
+                <span className="min-w-0 flex-1 truncate">{option.display}</span>
+                <Badge variant={option.count === 0 ? "outline" : "secondary"}>
+                  {String(option.count)}
+                </Badge>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {matchingOptions.length <= SET_FILTER_VISIBLE_OPTIONS ? null : (
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            disabled={visibleWindowStart === 0}
+            size="xs"
+            type="button"
+            variant="ghost"
+            onClick={() =>
+              setWindowStart(Math.max(0, visibleWindowStart - SET_FILTER_VISIBLE_OPTIONS))
+            }
+          >
+            Previous values
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {`${String(visibleWindowStart + 1)}–${String(Math.min(matchingOptions.length, visibleWindowStart + SET_FILTER_VISIBLE_OPTIONS))} of ${String(matchingOptions.length)}`}
+          </span>
+          <Button
+            disabled={visibleWindowStart >= maxWindowStart}
+            size="xs"
+            type="button"
+            variant="ghost"
+            onClick={() =>
+              setWindowStart(
+                Math.min(maxWindowStart, visibleWindowStart + SET_FILTER_VISIBLE_OPTIONS),
+              )
+            }
+          >
+            Next values
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+});
+
+function isBrunoTableFacetOptionSelected(
+  column: CompiledColumn,
+  intent: BrunoTableSetFilterIntent,
+  intentValueIndex: BrunoTableSetValueIndex,
+  value: unknown,
+): boolean {
+  if (intent.kind === "all") return true;
+  const present = hasBrunoTableSetValue(column, intentValueIndex, value);
+  return intent.kind === "include" ? present : !present;
+}
+
+function facetOptionKey(column: CompiledColumn, value: unknown): string {
+  try {
+    return `${column.semantics.codecId}:${column.semantics.formatCanonicalText(value)}`;
+  } catch {
+    return `${typeof value}:${String(value)}`;
+  }
+}
 
 function FilterExpressionEditor({
   column,
@@ -2105,7 +2390,7 @@ function countCommittedFilterDraftComplexity(
     complexity = {
       nodes: 1,
       operands:
-        type === "blank" || type === "notBlank"
+        type === "blank" || type === "notBlank" || type === "matchNone"
           ? 0
           : type === "in" && Array.isArray(filter)
             ? filter.length

@@ -363,6 +363,7 @@ type BigDecimalPresetBaseDefaults = {
   readonly cellAlign?: BrunoTableCellAlign;
   readonly editorLayout?: BrunoTableEditorLayout;
   readonly enableFilter?: boolean;
+  readonly enableSetFilter?: boolean;
   readonly enableSorting?: boolean;
   readonly isEditable?: boolean;
   readonly cellClassName?: string;
@@ -374,6 +375,7 @@ type BrunoTableBigDecimalColumnPresetDefaults = BigDecimalPresetBaseDefaults &
 
 type FieldOnlyPresetKey =
   | "enableFilter"
+  | "enableSetFilter"
   | "enableSorting"
   | "isEditable"
   | "groupBy"
@@ -632,6 +634,7 @@ const presetDefaultKeys = new Set<PropertyKey>([
   "cellAlign",
   "editorLayout",
   "enableFilter",
+  "enableSetFilter",
   "enableSorting",
   "isEditable",
   "cellClassName",
@@ -659,6 +662,7 @@ const commonOptionKeys = new Set<PropertyKey>([
 const fieldOptionKeys = new Set<PropertyKey>([
   "field",
   "enableFilter",
+  "enableSetFilter",
   "enableSorting",
   "isEditable",
   "groupBy",
@@ -686,6 +690,7 @@ function omitFieldOnlyDefaults(defaults: RuntimeColumnOptions): RuntimeColumnOpt
       .filter(
         (key) =>
           key !== "enableFilter" &&
+          key !== "enableSetFilter" &&
           key !== "enableSorting" &&
           key !== "isEditable" &&
           key !== "groupBy" &&

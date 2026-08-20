@@ -10,13 +10,12 @@ import {
 } from "@bruno/shadcn/popover";
 import { useDebouncer } from "@tanstack/react-pacer";
 import {
-  createContext,
   memo,
   useCallback,
-  useContext,
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -25,7 +24,12 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import { BrunoTableColumnFilter } from "./client-filter";
+import {
+  BrunoTableClientFilterContextProvider,
+  useBrunoTableClientFilterContext,
+} from "./client-filter-context";
 import type { BrunoTableColumnFilterRendererProps } from "./bruno-table-view";
+import type { BrunoTableClientFacetRowsSource } from "./client-source-adapter";
 import { normalizeBrunoTableFilterText } from "./grid-query";
 import type {
   BrunoTableFilterSnapshot,
@@ -39,23 +43,36 @@ import {
 } from "./quick-filter";
 import { recordBrunoTableClientQuickFilterRender } from "./render-instrumentation";
 
-const BrunoTableClientFilterRuntimeContext = createContext<
-  BrunoTableRowPipelineRuntimeView | undefined
->(undefined);
-
 export type BrunoTableClientFilterProviderProps = {
   readonly runtime: BrunoTableRowPipelineRuntimeView;
+  readonly facetRows?: BrunoTableClientFacetRowsSource;
   readonly children: ReactNode;
 };
 
+const EMPTY_FACET_ROW_VALUES = Object.freeze([]);
+const EMPTY_FACET_ROW_TOKEN = Object.freeze({});
+const EMPTY_FACET_ROW_SNAPSHOT = Object.freeze({
+  rows: EMPTY_FACET_ROW_VALUES,
+  token: EMPTY_FACET_ROW_TOKEN,
+  changedIndexes: EMPTY_FACET_ROW_VALUES,
+});
+const EMPTY_FACET_ROWS: BrunoTableClientFacetRowsSource = Object.freeze({
+  getFacetRowsSnapshot: () => EMPTY_FACET_ROW_SNAPSHOT,
+});
+
 export function BrunoTableClientFilterProvider({
   runtime,
+  facetRows,
   children,
 }: BrunoTableClientFilterProviderProps): ReactElement {
+  const contextValue = useMemo(
+    () => ({ runtime, facetRows: facetRows ?? EMPTY_FACET_ROWS }),
+    [facetRows, runtime],
+  );
   return (
-    <BrunoTableClientFilterRuntimeContext.Provider value={runtime}>
+    <BrunoTableClientFilterContextProvider value={contextValue}>
       {children}
-    </BrunoTableClientFilterRuntimeContext.Provider>
+    </BrunoTableClientFilterContextProvider>
   );
 }
 
@@ -76,18 +93,12 @@ export const renderBrunoTableClientColumnFilter = (
 };
 
 export function BrunoTableQuickFilter(): ReactElement | null {
-  const runtime = useContext(BrunoTableClientFilterRuntimeContext);
-  if (runtime === undefined) {
-    throw new Error("BrunoTableQuickFilter must be rendered inside BrunoTableClient.");
-  }
+  const { runtime } = useBrunoTableClientFilterContext();
   return <BrunoTableQuickFilterConnected runtime={runtime} />;
 }
 
 export function BrunoTableActiveFilters(): ReactElement | null {
-  const runtime = useContext(BrunoTableClientFilterRuntimeContext);
-  if (runtime === undefined) {
-    throw new Error("BrunoTableActiveFilters must be rendered inside BrunoTableClient.");
-  }
+  const { runtime } = useBrunoTableClientFilterContext();
   return <BrunoTableActiveFiltersConnected runtime={runtime} />;
 }
 

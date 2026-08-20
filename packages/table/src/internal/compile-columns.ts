@@ -24,6 +24,7 @@ type CompiledColumnBase = {
   readonly selectOptionIndexes?: ReadonlyMap<unknown, number>;
   readonly selectOptionCanonicalIndexes?: ReadonlyMap<string, number>;
   readonly enableFilter: boolean;
+  readonly enableSetFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
   readonly cellClassName?: string | RuntimeCallback;
@@ -70,6 +71,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasFields = Object.hasOwn(candidate, "fields");
   const hasValueGetter = Object.hasOwn(candidate, "valueGetter");
   const hasEnableFilter = Object.hasOwn(candidate, "enableFilter");
+  const hasEnableSetFilter = Object.hasOwn(candidate, "enableSetFilter");
   const hasEnableSorting = Object.hasOwn(candidate, "enableSorting");
   const hasIsEditable = Object.hasOwn(candidate, "isEditable");
   const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
@@ -240,6 +242,21 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
 
+    const enableSetFilter = hasEnableSetFilter
+      ? candidate["enableSetFilter"]
+      : enableFilter &&
+        (semantics.filterFamily === "boolean" || semantics.filterFamily === "select");
+    if (typeof enableSetFilter !== "boolean") {
+      throw new ColumnConfigurationError(
+        `BrunoTable enableSetFilter must be a boolean when provided: ${columnId}`,
+      );
+    }
+    if (!enableFilter && enableSetFilter) {
+      throw new ColumnConfigurationError(
+        `BrunoTable enableSetFilter requires enableFilter: ${columnId}`,
+      );
+    }
+
     const enableSorting = hasEnableSorting ? candidate["enableSorting"] : true;
     if (typeof enableSorting !== "boolean") {
       throw new ColumnConfigurationError(
@@ -289,6 +306,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       field,
       groupBy,
       enableFilter,
+      enableSetFilter,
       enableSorting,
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
@@ -311,6 +329,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   if (!hasFields || !hasValueGetter) {
     throw new ColumnConfigurationError(
       `BrunoTable column must define either field or both fields and valueGetter: ${columnId}`,
+    );
+  }
+
+  if (hasEnableSetFilter) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot configure enableSetFilter: ${columnId}`,
     );
   }
 
@@ -374,6 +398,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     ...(selectOptionIndexes === undefined ? {} : { selectOptionIndexes }),
     ...(selectOptionCanonicalIndexes === undefined ? {} : { selectOptionCanonicalIndexes }),
     enableFilter: false,
+    enableSetFilter: false,
     enableSorting: false,
     fields,
     valueGetter: valueGetter as RuntimeCallback,

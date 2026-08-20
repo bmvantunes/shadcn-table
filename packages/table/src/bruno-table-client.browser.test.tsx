@@ -5,6 +5,7 @@ import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwri
 import { act, Suspense, useEffect, useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
+import * as BigDecimal from "effect/BigDecimal";
 
 import {
   BrunoTableClient,
@@ -18,6 +19,7 @@ import type {
   BrunoTableFilterExpressions,
   BrunoTableValueType,
 } from "./public-types";
+import { BrunoTableBigDecimalColumn } from "./effect";
 import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
@@ -44,6 +46,7 @@ import {
 } from "./internal/bruno-table-view";
 import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
+import { installBrunoTableClientFacetSubscriptionListener } from "./internal/client-facet";
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { BrunoTableClientFilterProvider } from "./internal/client-filter-controls";
@@ -135,6 +138,165 @@ const filterRows = [
     description: "Microsoft",
   },
 ] satisfies readonly [FilterRow, FilterRow];
+
+type ExactFacetToken = Readonly<{ readonly raw: string }>;
+type ExactFacetRow = Readonly<{
+  readonly id: string;
+  readonly score: number;
+  readonly quantity: bigint;
+  readonly token: ExactFacetToken;
+  readonly price: BigDecimal.BigDecimal;
+}>;
+
+const exactFacetTokenValueType = {
+  codecId: "browser/token",
+  codecVersion: 1,
+  filterFamily: "equality",
+  editorFamily: "text",
+  cellAlign: "start",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "object" && input !== null && "raw" in input
+      ? ({ _tag: "Success", value: input as ExactFacetToken } as const)
+      : ({ _tag: "Failure", message: "Expected token." } as const),
+  equivalent: (left: ExactFacetToken, right: ExactFacetToken) =>
+    left.raw.toLocaleLowerCase() === right.raw.toLocaleLowerCase(),
+  compare: (left: ExactFacetToken, right: ExactFacetToken) => {
+    const leftCanonical = left.raw.toLocaleLowerCase();
+    const rightCanonical = right.raw.toLocaleLowerCase();
+    return leftCanonical === rightCanonical ? 0 : leftCanonical < rightCanonical ? -1 : 1;
+  },
+  formatCanonicalText: (value: ExactFacetToken) => value.raw.toLocaleLowerCase(),
+  parseCanonicalText: (text: string) => ({ _tag: "Success", value: { raw: text } }) as const,
+  formatDisplay: (value: ExactFacetToken) => `Token ${value.raw.toLocaleUpperCase()}`,
+  encodePersisted: (value: ExactFacetToken) => value.raw,
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: { raw: input } } as const)
+      : ({ _tag: "Failure", message: "Expected token." } as const),
+} as const satisfies BrunoTableValueType<ExactFacetToken, "equality", "text">;
+
+const exactFacetColumns = [
+  {
+    columnId: "COL_ID_EXACT_ID",
+    field: "id",
+    headerName: "Id",
+    valueType: "text",
+  },
+  {
+    columnId: "COL_ID_EXACT_SCORE",
+    enableSetFilter: true,
+    field: "score",
+    headerName: "Score",
+    valueType: "number",
+  },
+  {
+    columnId: "COL_ID_EXACT_QUANTITY",
+    enableSetFilter: true,
+    field: "quantity",
+    headerName: "Quantity",
+    valueType: "bigint",
+  },
+  {
+    columnId: "COL_ID_EXACT_TOKEN",
+    enableSetFilter: true,
+    field: "token",
+    headerName: "Token",
+    valueType: exactFacetTokenValueType,
+  },
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_EXACT_PRICE",
+    enableSetFilter: true,
+    field: "price",
+    headerName: "Price",
+  }),
+] satisfies BrunoTableColumns<ExactFacetRow>;
+
+const exactFacetRows = [
+  {
+    id: "first",
+    score: 1.5,
+    quantity: 9_007_199_254_740_993n,
+    token: { raw: "a" },
+    price: BigDecimal.make(15n, 1),
+  },
+  {
+    id: "second",
+    score: 2.25,
+    quantity: 9_007_199_254_740_994n,
+    token: { raw: "A" },
+    price: BigDecimal.make(225n, 2),
+  },
+] satisfies readonly [ExactFacetRow, ExactFacetRow];
+
+type ExactTextFacetRow = Readonly<{ readonly id: string; readonly label: string }>;
+const exactTextFacetColumns = [
+  {
+    columnId: "COL_ID_EXACT_TEXT_ID",
+    field: "id",
+    headerName: "Id",
+    valueType: "text",
+  },
+  {
+    columnId: "COL_ID_EXACT_TEXT_LABEL",
+    enableSetFilter: true,
+    field: "label",
+    headerName: "Label",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<ExactTextFacetRow>;
+const exactTextFacetRows = [
+  { id: "upper", label: "A" },
+  { id: "lower", label: "a" },
+  { id: "accent", label: "é" },
+  { id: "decomposed", label: "e\u0301" },
+  { id: "plain", label: "e" },
+] satisfies readonly ExactTextFacetRow[];
+
+const caseFoldedTextValueType = {
+  codecId: "browser/case-folded-text",
+  codecVersion: 1,
+  filterFamily: "text",
+  editorFamily: "text",
+  cellAlign: "start",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const),
+  equivalent: (left: string, right: string) => left.toLowerCase() === right.toLowerCase(),
+  compare: (left: string, right: string) => {
+    const normalizedLeft = left.toLowerCase();
+    const normalizedRight = right.toLowerCase();
+    return normalizedLeft === normalizedRight ? 0 : normalizedLeft < normalizedRight ? -1 : 1;
+  },
+  formatCanonicalText: (value: string) => value.toLowerCase(),
+  parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+  formatDisplay: (value: string) => value,
+  encodePersisted: (value: string) => value,
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const),
+} as const satisfies BrunoTableValueType<string, "text", "text">;
+
+const caseFoldedTextFacetColumns = [
+  {
+    columnId: "COL_ID_EXACT_TEXT_ID",
+    field: "id",
+    headerName: "Id",
+    valueType: "text",
+  },
+  {
+    columnId: "COL_ID_CASE_FOLDED_LABEL",
+    enableSetFilter: true,
+    field: "label",
+    headerName: "Case-folded Label",
+    valueType: caseFoldedTextValueType,
+  },
+] satisfies BrunoTableColumns<ExactTextFacetRow>;
 
 type LargeSelectRow = {
   readonly id: string;
@@ -1345,6 +1507,270 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("dialog", { name: "Filter Name" }))
       .not.toBeInTheDocument();
     await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveFocus();
+  });
+
+  test("keeps live Set Filter intent exact, searchable, and subscribed only while open", async () => {
+    const tableId = "TABLE_ID_LIVE_SET_FILTER";
+    const events: Array<{ readonly columnId: string; readonly phase: string }> = [];
+    const viewRenders = vi.fn();
+    const rowRenders = vi.fn();
+    const cellRenders = vi.fn();
+    const removeListener = installBrunoTableClientFacetSubscriptionListener((event) =>
+      events.push(event),
+    );
+    const removeViewListener = installBrunoTableClientViewRenderListenerForTable(
+      tableId,
+      viewRenders,
+    );
+    const removeRowListener = installBrunoTableClientRowRenderListenerForTable(tableId, rowRenders);
+    const removeCellListener = installBrunoTableClientCellRenderListenerForTable(
+      tableId,
+      cellRenders,
+    );
+    const renderTable = (rows: readonly FilterRow[], version: number) => (
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId={tableId}
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{ rows, totalRows: rows.length, version, status: "ready" }}
+      />
+    );
+
+    try {
+      const screen = await render(renderTable(filterRows, 1));
+      expect(events).toEqual([]);
+
+      await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Active" });
+      await expect
+        .element(dialog.getByRole("searchbox", { name: "Search values for Active" }))
+        .toHaveFocus();
+      await expect.element(dialog.getByRole("checkbox", { name: "Select true, 1" })).toBeChecked();
+      await expect.element(dialog.getByRole("checkbox", { name: "Select false, 1" })).toBeChecked();
+      expect(events).toContainEqual({
+        columnId: "COL_ID_FILTER_ACTIVE",
+        phase: "subscribe",
+      });
+
+      await userEvent.click(dialog.getByRole("checkbox", { name: "Select false, 1" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .not.toBeInTheDocument();
+
+      const search = dialog.getByRole("searchbox", { name: "Search values for Active" });
+      viewRenders.mockClear();
+      rowRenders.mockClear();
+      cellRenders.mockClear();
+      await userEvent.fill(search, "missing");
+      await expect.element(dialog.getByRole("status")).toHaveTextContent("No values found");
+      expect(viewRenders).not.toHaveBeenCalled();
+      expect(rowRenders).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+      await userEvent.fill(search, "");
+
+      events.length = 0;
+      viewRenders.mockClear();
+      rowRenders.mockClear();
+      cellRenders.mockClear();
+      await screen.rerender(renderTable([filterRows[0]], 2));
+      await expect
+        .element(dialog.getByRole("checkbox", { name: "Select false, 0" }))
+        .not.toBeChecked();
+      expect(events).toEqual([{ columnId: "COL_ID_FILTER_ACTIVE", phase: "notify" }]);
+      expect(viewRenders).not.toHaveBeenCalled();
+      expect(rowRenders).not.toHaveBeenCalled();
+      expect(cellRenders).not.toHaveBeenCalled();
+      events.length = 0;
+      await screen.rerender(renderTable(filterRows, 3));
+      await expect
+        .element(dialog.getByRole("checkbox", { name: "Select false, 1" }))
+        .not.toBeChecked();
+      expect(events).toEqual([{ columnId: "COL_ID_FILTER_ACTIVE", phase: "notify" }]);
+
+      await userEvent.click(dialog.getByRole("button", { name: "Clear All" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+      const futureRow: FilterRow = {
+        ...filterRows[0],
+        id: "future",
+        name: "Future",
+      };
+      await screen.rerender(renderTable([...filterRows, futureRow], 4));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Future", exact: true }))
+        .not.toBeInTheDocument();
+
+      await userEvent.click(dialog.getByRole("button", { name: "Select All" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Future", exact: true }))
+        .toBeInTheDocument();
+
+      await userEvent.click(dialog.getByRole("button", { name: "Clear All" }));
+      await userEvent.click(dialog.getByRole("checkbox", { name: "Select true, 2" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .not.toBeInTheDocument();
+      await userEvent.click(dialog.getByRole("checkbox", { name: "Select false, 1" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+
+      await userEvent.keyboard("{Escape}");
+      await expect.element(dialog).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Filter Status" }));
+      const statusDialog = screen.getByRole("dialog", { name: "Filter Status" });
+      await expect
+        .element(statusDialog.getByRole("checkbox", { name: "Select open, 2" }))
+        .toBeChecked();
+      await expect
+        .element(statusDialog.getByRole("checkbox", { name: "Select closed, 1" }))
+        .toBeChecked();
+      await userEvent.click(statusDialog.getByRole("checkbox", { name: "Select closed, 1" }));
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .not.toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(statusDialog).not.toBeInTheDocument();
+      expect(events).toContainEqual({
+        columnId: "COL_ID_FILTER_ACTIVE",
+        phase: "unsubscribe",
+      });
+      events.length = 0;
+      await screen.rerender(renderTable(filterRows, 5));
+      expect(events).toEqual([]);
+    } finally {
+      removeCellListener();
+      removeRowListener();
+      removeViewListener();
+      removeListener();
+    }
+  });
+
+  test("toggles exact opted-in Number, BigInt, BigDecimal, and custom Set values", async () => {
+    const screen = await render(
+      <BrunoTableClient<ExactFacetRow, typeof exactFacetColumns>
+        tableId="TABLE_ID_EXACT_SET_FILTERS"
+        columns={exactFacetColumns}
+        initialOrderBy={[{ columnId: "COL_ID_EXACT_ID", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: exactFacetRows,
+          totalRows: exactFacetRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Score" }));
+    let dialog = screen.getByRole("dialog", { name: "Filter Score" });
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select 1.5, 1" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "first", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Select All" }));
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity" }));
+    dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select 9007199254740993, 1" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "first", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Select All" }));
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Token" }));
+    dialog = screen.getByRole("dialog", { name: "Filter Token" });
+    await expect.element(dialog.getByRole("checkbox", { name: "Select Token A, 2" })).toBeChecked();
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select Token A, 2" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "first", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Select All" }));
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Price" }));
+    dialog = screen.getByRole("dialog", { name: "Filter Price" });
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select 1.5, 1" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "first", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  test("keeps opted-in Text Set choices exact across case and accent variants", async () => {
+    const screen = await render(
+      <BrunoTableClient<ExactTextFacetRow, typeof exactTextFacetColumns>
+        tableId="TABLE_ID_EXACT_TEXT_SET_FILTER"
+        columns={exactTextFacetColumns}
+        initialOrderBy={[{ columnId: "COL_ID_EXACT_TEXT_ID", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: exactTextFacetRows,
+          totalRows: exactTextFacetRows.length,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Label" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Label" });
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select A, 1, option 1 of 5" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "upper", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "lower", exact: true }))
+      .toBeInTheDocument();
+
+    await userEvent.click(dialog.getByRole("button", { name: "Select All" }));
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select é, 1, option 3 of 5" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "accent", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "plain", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "decomposed", exact: true }))
+      .toBeInTheDocument();
+  });
+
+  test("uses a custom Text Value Type equality for Set membership", async () => {
+    const rows = [
+      { id: "upper", label: "A" },
+      { id: "lower", label: "a" },
+      { id: "other", label: "B" },
+    ] satisfies readonly ExactTextFacetRow[];
+    const screen = await render(
+      <BrunoTableClient<ExactTextFacetRow, typeof caseFoldedTextFacetColumns>
+        tableId="TABLE_ID_CUSTOM_TEXT_SET_FILTER"
+        columns={caseFoldedTextFacetColumns}
+        initialOrderBy={[{ columnId: "COL_ID_EXACT_TEXT_ID", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Case-folded Label" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Case-folded Label" });
+    await expect.element(dialog.getByRole("checkbox", { name: "Select A, 2" })).toBeChecked();
+    await userEvent.click(dialog.getByRole("checkbox", { name: "Select A, 2" }));
+    await expect
+      .element(screen.getByRole("gridcell", { name: "upper", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "lower", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "other", exact: true }))
+      .toBeInTheDocument();
   });
 
   test("windows high-cardinality Select filter options while retaining the committed choice", async () => {

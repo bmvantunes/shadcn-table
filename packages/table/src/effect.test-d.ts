@@ -25,6 +25,7 @@ const priceColumn = BrunoTableBigDecimalColumn.withDefaults({
 const columns = [
   priceColumn({
     columnId: "COL_ID_PRICE",
+    enableSetFilter: true,
     field: "price",
     valueFormatter: ({ row, value }) =>
       `${row.symbol}: ${value === undefined ? "" : BigDecimal.format(value)}`,
@@ -70,8 +71,20 @@ const filters = [
     filter: BigDecimal.make(100n, 2),
     filterTo: BigDecimal.make(200n, 2),
   },
+  {
+    columnId: "COL_ID_PRICE",
+    type: "in",
+    filter: [BigDecimal.make(100n, 2)],
+  },
+  { columnId: "COL_ID_PRICE", type: "matchNone" },
 ] satisfies BrunoTableFilterExpressions<PriceRow, typeof columns>;
 void filters;
+
+const invalidDefaultBigDecimalSetFilter = [
+  // @ts-expect-error BigDecimal Set Filter requires explicit opt-in.
+  { columnId: "COL_ID_REFERENCE_PRICE", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<PriceRow, typeof columns>;
+void invalidDefaultBigDecimalSetFilter;
 
 const invalidFilter: BrunoTableFilterExpressions<PriceRow, typeof columns> = [
   // @ts-expect-error BigDecimal numeric filters never accept JavaScript number operands.

@@ -387,7 +387,7 @@ Type tests must prove that helpers and presets preserve literal Column Identity,
 
 ## Column value semantics and exact numeric values
 
-Every column capability that interprets a value must use one compiled Column Value Semantics plan. The same plan governs equality, ordering, canonical text, editing, client filters, clipboard exchange, preference codecs, and conflict reconciliation. `valueFormatter` is visual presentation only.
+Every column capability that interprets a value must use one compiled Column Value Semantics plan. The same plan governs equality, ordering, canonical text, editing, client filters, clipboard exchange, preference codecs, and conflict reconciliation. For a lawful custom Value Type, canonical texts are equal exactly when values are semantically equivalent, and comparison returns zero exactly when values are semantically equivalent. `valueFormatter` is visual presentation only.
 
 Exact numeric raw columns declare their Value Type explicitly; their corresponding helpers supply the same selection. Do not inspect or sample rows to discover it:
 
@@ -562,17 +562,17 @@ The filters panel should support:
 - removing individual filters
 - clearing all filters
 
-Each eligible Field Column exposes every operator supported by its Value Type and the View Server contract. Text includes equality, `in`, contains/not-contains, starts/ends-with, blank/not-blank, and case/accent sensitivity; text-search operands are non-empty after the selected normalization policy. Number, BigInt, and BigDecimal include equality, `in`, ordered comparisons, half-open `inRange` (`filter <= value < filterTo`, with `filter < filterTo` required), and blank/not-blank. Boolean and other scalar domains include equality and blank/not-blank in this Client slice. Issue #12 is the pre-faceting Client slice: Boolean/Select `in` and live inclusion/exclusion Set Filter intent are explicitly deferred to issue #13, so its exact typed Boolean/Select controls expose equality and blank/not-blank only.
+Each eligible Field Column exposes every operator supported by its Value Type and the View Server contract. Text includes equality, `in`, contains/not-contains, starts/ends-with, blank/not-blank, and case/accent sensitivity; text-search operands are non-empty after the selected normalization policy. Number, BigInt, and BigDecimal include equality, `in`, ordered comparisons, half-open `inRange` (`filter <= value < filterTo`, with `filter < filterTo` required), and blank/not-blank. Boolean and Select domains include exact equality, `in`, and blank/not-blank. Their Client Set Filter is enabled by default; Text, Number, BigInt, and BigDecimal require `enableSetFilter: true` for live facets while retaining their programmatic `in` operator.
 
 Every admitted `in` operand is non-empty. Type checking, runtime sanitization, and editor validation reject an empty `in` expression rather than assigning it Match-None semantics.
 
-The live Set Filter and facet design is a future target owned by issue #13, not by the issue #12 Client slice. Issue #13 will decide which Boolean, Select, Text, Number, BigInt, and BigDecimal columns mount live distinct-value controls, how unbounded cardinality is opted into, and how complete Client and whole-result Server facet subscriptions behave. No issue #12 implementation may infer a facet domain from visible columns or loaded sparse blocks.
+The Client live Set Filter derives its complete facet domain from admitted resident Client rows after Quick Filter and every other Grid Filter, excluding the current Column Identity's expression. It never infers the domain from visible or virtualized rows. Server faceting remains a later capability and must never infer a whole-result domain from loaded sparse blocks.
 
-Issue #13 may render checkbox options and value-level Select All inside a Set Filter overlay. In a Server Table those future controls will select filter values only and will not violate the separate prohibition on row checkboxes, Row Selection, or row Select All.
+Set Filter checkbox options and value-level Select All select filter values only and do not install Row Selection, selected-row state, body checkboxes, or row Select All.
 
-Issue #13 owns Set Filter partial state, including `only these` inclusion, `everything except these` exclusion, Select All, and future-facet behavior. Those semantics are intentionally absent from issue #12; its Boolean/Select controls publish only the exact typed scalar operators admitted by the Client filter model.
+Set Filter partial state preserves compact `only these` inclusion and `everything except these` exclusion intent. Starting at All and deselecting records exclusion; starting at None and selecting records inclusion. Select All or manually selecting the final available value removes the column filter atomically. Passive facet updates never normalize or rewrite intent.
 
-Issue #13 will define empty Set Filter inclusion (`Match None`) and the source-native Server translation tracked in [effect-view-server#409](https://github.com/bmvantunes/effect-view-server/issues/409). Issue #12 does not enumerate or negate a facet domain and does not use an empty `in` expression as a substitute for that future intent.
+Clear All records empty Set Filter inclusion as an explicit Match-None Filter Expression. Client evaluates it as false for present and future values. It is never `undefined`, an empty `in`, or a negation of the current facet domain. A later Server implementation requires the source-native translation tracked in [effect-view-server#409](https://github.com/bmvantunes/effect-view-server/issues/409).
 
 Continuous text and numeric filter input auto-applies through a 150 ms TanStack Pacer debounce. Discrete Boolean/Select choices and operator changes with valid required operands apply immediately. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
 

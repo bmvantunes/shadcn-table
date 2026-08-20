@@ -887,6 +887,28 @@ const customValueColumns = [
   },
 ] satisfies BrunoTableColumns<AmountRow>;
 
+const exactEqualityValueType = {
+  ...exactAmountValueType,
+  filterFamily: "equality",
+} satisfies BrunoTableValueType<ExactAmount, "equality", "text">;
+
+const optedInEqualitySetColumns = [
+  {
+    columnId: "COL_ID_AMOUNT",
+    enableSetFilter: true,
+    field: "amount",
+    headerName: "Amount",
+    valueType: exactEqualityValueType,
+  },
+] satisfies BrunoTableColumns<AmountRow>;
+
+const acceptedEqualitySetFilters = [
+  { columnId: "COL_ID_AMOUNT", type: "in", filter: [{ minor: 1n }] },
+  { columnId: "COL_ID_AMOUNT", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<AmountRow, typeof optedInEqualitySetColumns>;
+
+void acceptedEqualitySetFilters;
+
 const customComputedValueColumns = [
   BrunoTableComputedColumn({
     columnId: "COL_ID_AMOUNT_COPY",
@@ -1077,27 +1099,88 @@ const invalidBooleanSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
-const invalidBooleanSetFilter = [
-  // @ts-expect-error Boolean Set Filter inclusion is deferred to issue #13.
+const acceptedBooleanSetFilter = [
   { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
+  { columnId: "COL_ID_ENABLED", type: "matchNone" },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
+
+const optedOutBooleanSetFilterColumns = [
+  {
+    columnId: "COL_ID_ENABLED",
+    enableSetFilter: false,
+    field: "enabled",
+    headerName: "Enabled",
+    valueType: "boolean",
+  },
+] satisfies BrunoTableColumns<FeatureFlag>;
+
+const acceptedOptedOutBooleanInFilter = [
+  { columnId: "COL_ID_ENABLED", type: "in", filter: [true] },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof optedOutBooleanSetFilterColumns>;
+
+const invalidOptedOutBooleanMatchNone = [
+  // @ts-expect-error Match None belongs to the explicitly disabled Set Filter surface.
+  { columnId: "COL_ID_ENABLED", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof optedOutBooleanSetFilterColumns>;
+
+void acceptedOptedOutBooleanInFilter;
+void invalidOptedOutBooleanMatchNone;
+
+const setFilterColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    enableSetFilter: true,
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    enableSetFilter: true,
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+  },
+] as const satisfies BrunoTableColumns<Order>;
 
 const invalidEmptyInFilter = [
   // @ts-expect-error `in` operands must be a non-empty tuple.
   { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
-] satisfies BrunoTableFilterExpressions<Order, Columns>;
+] satisfies BrunoTableFilterExpressions<Order, typeof setFilterColumns>;
 
 const acceptedTextInFilter = [
   { columnId: "COL_ID_SYMBOL", type: "in", filter: ["AAPL"] },
-] satisfies BrunoTableFilterExpressions<Order, Columns>;
+] satisfies BrunoTableFilterExpressions<Order, typeof setFilterColumns>;
 
 const acceptedNumericInFilter = [
   { columnId: "COL_ID_PRICE", type: "in", filter: [10] },
+] satisfies BrunoTableFilterExpressions<Order, typeof setFilterColumns>;
+
+const invalidDefaultTextSetFilter = [
+  // @ts-expect-error Text Set Filter requires explicit opt-in.
+  { columnId: "COL_ID_SYMBOL", type: "matchNone" },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
-const invalidSelectSetFilter = [
-  // @ts-expect-error Select Set Filter inclusion is deferred to issue #13.
+const invalidDefaultNumberSetFilter = [
+  // @ts-expect-error Number Set Filter requires explicit opt-in.
+  { columnId: "COL_ID_PRICE", type: "matchNone" },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const invalidSetFilterCapability = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    enableFilter: false,
+    // @ts-expect-error Set Filter cannot be enabled when filtering is disabled.
+    enableSetFilter: true,
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Order>;
+
+const acceptedSelectSetFilter = [
   { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+  { columnId: "COL_ID_STATUS", type: "matchNone" },
 ] satisfies BrunoTableFilterExpressions<HelperRow, HelperColumns>;
 
 const invalidComputedFilter = [
@@ -1552,8 +1635,11 @@ void invalidEmptyComputedDependencies;
 void invalidNumericFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
-void invalidBooleanSetFilter;
-void invalidSelectSetFilter;
+void acceptedBooleanSetFilter;
+void acceptedSelectSetFilter;
+void invalidDefaultTextSetFilter;
+void invalidDefaultNumberSetFilter;
+void invalidSetFilterCapability;
 void invalidEmptyInFilter;
 void acceptedTextInFilter;
 void acceptedNumericInFilter;

@@ -1,7 +1,16 @@
 import { bench, describe } from "vite-plus/test";
+import * as BigDecimal from "effect/BigDecimal";
 
+import { BrunoTableBigDecimalColumn } from "../effect";
+import type { BrunoTableColumns } from "../public-types";
+import {
+  createBrunoTableClientFacetSnapshot,
+  createBrunoTableClientFacetStore,
+} from "./client-facet";
 import { compileColumns } from "./compile-columns";
-import { BrunoTableGridRuntime } from "./grid-runtime";
+import { compileClientFilterCollection } from "./grid-query";
+import { BrunoTableGridRuntime, type BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
+import { createClientQueryPredicate } from "./quick-filter";
 
 const columnCount = 240;
 const referenceFrameBudgetMs = 8.33;
@@ -176,6 +185,211 @@ describe("BrunoTable column management runtime benchmark (8.33 ms/120 Hz referen
           })}\n`,
         );
       }
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+});
+
+describe("BrunoTable open-facet live publication benchmark (8.33 ms/120 Hz reference)", () => {
+  const facetColumns = compileColumns([
+    {
+      columnId: "COL_ID_FACET_VALUE",
+      enableSetFilter: true,
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+    },
+  ]);
+  const filterCollection = compileClientFilterCollection([], facetColumns);
+  const residentRowCount = 10_000;
+  const baseRows = Array.from({ length: residentRowCount }, (_unused, rowIndex) => {
+    const raw = Object.freeze({ value: `value-${String(rowIndex)}`, unrelated: Number(0) });
+    return Object.freeze({
+      raw,
+      rowId: `row-${String(rowIndex)}`,
+      rowIndex,
+      values: Object.freeze({
+        read: (row: unknown) => (row as typeof raw).value,
+      }),
+    });
+  });
+  const activeIntentValues = Object.freeze(
+    baseRows.slice(0, residentRowCount / 2).map((row) => row.raw.value),
+  );
+  const activeFilterCollection = compileClientFilterCollection(
+    [
+      {
+        columnId: "COL_ID_FACET_VALUE",
+        type: "in",
+        filter: activeIntentValues,
+        caseSensitive: true,
+        accentSensitive: true,
+      },
+    ],
+    facetColumns,
+  );
+  const activeFilterPredicate = createClientQueryPredicate(
+    facetColumns,
+    activeFilterCollection.filters,
+    "",
+    [],
+    (_column, row: (typeof baseRows)[number]) => row.raw.value,
+    undefined,
+    activeFilterCollection,
+  );
+  type BigDecimalRow = { readonly price: BigDecimal.BigDecimal };
+  const bigDecimalDefinitions = [
+    BrunoTableBigDecimalColumn({
+      columnId: "COL_ID_FACET_DECIMAL",
+      enableSetFilter: true,
+      field: "price",
+      headerName: "Price",
+    }),
+  ] satisfies BrunoTableColumns<BigDecimalRow>;
+  const bigDecimalColumns = compileColumns(bigDecimalDefinitions);
+  const bigDecimalRows = Array.from({ length: residentRowCount }, (_unused, rowIndex) =>
+    Object.freeze({
+      price: BigDecimal.fromStringUnsafe(`${String(rowIndex)}.0000000000000000001`),
+    }),
+  );
+  const activeBigDecimalValues = Object.freeze(
+    bigDecimalRows.slice(0, residentRowCount / 2).map((row) => row.price),
+  );
+  const activeBigDecimalFilters = compileClientFilterCollection(
+    [
+      {
+        columnId: "COL_ID_FACET_DECIMAL",
+        type: "in",
+        filter: activeBigDecimalValues,
+      },
+    ],
+    bigDecimalColumns,
+  );
+  const activeBigDecimalPredicate = createClientQueryPredicate(
+    bigDecimalColumns,
+    activeBigDecimalFilters.filters,
+    "",
+    [],
+    (_column, row: (typeof bigDecimalRows)[number]) => row.price,
+    undefined,
+    activeBigDecimalFilters,
+  );
+  const publicationCount = 256;
+  const tokens = Array.from({ length: publicationCount }, () => Object.freeze({}));
+  let previousRows = Object.freeze(baseRows);
+  const snapshots = Array.from({ length: publicationCount }, (_unused, iteration) => {
+    if (iteration === 0) {
+      return Object.freeze({
+        rows: previousRows,
+        token: tokens[0]!,
+        changedIndexes: Object.freeze([] as number[]),
+      });
+    }
+    const rowIndex = (iteration - 1) % residentRowCount;
+    const previous = baseRows[rowIndex]!;
+    const rows = Array.from(previousRows);
+    rows[rowIndex] = Object.freeze({
+      ...previous,
+      raw: Object.freeze({ ...previous.raw, unrelated: iteration }),
+    });
+    previousRows = Object.freeze(rows);
+    return Object.freeze({
+      rows: previousRows,
+      token: tokens[iteration]!,
+      parentToken: tokens[iteration - 1]!,
+      changedIndexes: Object.freeze([rowIndex]),
+    });
+  });
+  let snapshotIndex = 0;
+  let rowListener: (() => void) | undefined;
+  const runtime = {
+    getQuerySnapshot: () => ({
+      columns: facetColumns,
+      filters: filterCollection.filters,
+      filterCollection,
+      quickFilter: "",
+      orderBy: [{ columnId: "COL_ID_FACET_VALUE", direction: "asc" as const }],
+      generation: 1,
+      navigationMode: "reset" as const,
+    }),
+    getQuickFilterFieldsSnapshot: () => [],
+    subscribeFilter: () => () => undefined,
+    subscribeRowSpace: (listener: () => void) => {
+      rowListener = listener;
+      return () => undefined;
+    },
+  } as unknown as BrunoTableRowPipelineRuntimeView;
+  const facetStore = createBrunoTableClientFacetStore({
+    column: facetColumns[0]!,
+    rows: { getFacetRowsSnapshot: () => snapshots[snapshotIndex]! },
+    runtime,
+  });
+  facetStore.getSnapshot();
+  facetStore.subscribe(() => undefined);
+
+  bench(
+    "opens 10,000 distinct built-in Text facet values with indexed identity",
+    () => {
+      createBrunoTableClientFacetSnapshot({
+        column: facetColumns[0]!,
+        columns: facetColumns,
+        filterCollection,
+        quickFilter: "",
+        quickFilterFields: [],
+        rows: baseRows,
+        readColumnValue: (_column, row) => row.raw.value,
+        readQuickFilterField: () => undefined,
+      });
+    },
+    { iterations: 20, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "projects 10,000 values while retaining 5,000 active exact inclusions",
+    () => {
+      createBrunoTableClientFacetSnapshot({
+        column: facetColumns[0]!,
+        columns: facetColumns,
+        filterCollection: activeFilterCollection,
+        quickFilter: "",
+        quickFilterFields: [],
+        rows: baseRows,
+        readColumnValue: (_column, row) => row.raw.value,
+        readQuickFilterField: () => undefined,
+      });
+    },
+    { iterations: 20, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "evaluates 5,000 active exact inclusions over 10,000 rows with indexed membership",
+    () => {
+      let matches = 0;
+      for (const row of baseRows) if (activeFilterPredicate?.(row) === true) matches += 1;
+      if (matches !== activeIntentValues.length) throw new Error("Unexpected benchmark result.");
+    },
+    { iterations: 20, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "evaluates 5,000 active Effect BigDecimal inclusions over 10,000 exact rows",
+    () => {
+      let matches = 0;
+      for (const row of bigDecimalRows) {
+        if (activeBigDecimalPredicate?.(row) === true) matches += 1;
+      }
+      if (matches !== activeBigDecimalValues.length) {
+        throw new Error("Unexpected BigDecimal benchmark result.");
+      }
+    },
+    { iterations: 20, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "proves one unrelated changed row cannot rescan 10,000 resident rows",
+    () => {
+      snapshotIndex += 1;
+      rowListener?.();
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );

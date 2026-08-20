@@ -74,7 +74,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   );
 
   return (
-    <BrunoTableClientFilterProvider runtime={runtimeView}>
+    <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableView
         runtime={runtimeView}
         tableId={tableId}
