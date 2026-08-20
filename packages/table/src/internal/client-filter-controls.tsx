@@ -62,14 +62,14 @@ export function BrunoTableClientFilterProvider({
 export const renderBrunoTableClientColumnFilter = (
   props: BrunoTableColumnFilterRendererProps,
 ): ReactElement => {
-  const { column, runtime, activateHeaderCommand, focusFallback, registerColumnFilterOpener } =
+  const { column, runtime, activateHeaderCommand, restoreColumnFocus, registerColumnFilterOpener } =
     props;
   return (
     <BrunoTableColumnFilter
       column={column}
       runtime={runtime}
       activateHeaderCommand={activateHeaderCommand}
-      focusFallback={focusFallback}
+      restoreColumnFocus={restoreColumnFocus}
       registerColumnFilterOpener={registerColumnFilterOpener}
     />
   );

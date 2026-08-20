@@ -590,7 +590,7 @@ A visual Base UI Scroll Area is permitted only as decoration around that same na
 
 ### React Compiler virtualization boundary
 
-TanStack Table, and a future optional TanStack Virtual Adapter, expose stable objects with mutable internals and getter methods. A compiled component can memoize a getter call against the stable object reference and render stale geometry. The current vendored TanStack Table experimental column-virtualization example keeps React Compiler disabled specifically because `header.getSize()` can be frozen this way. The first live Client slice instead uses a BrunoTable-owned custom viewport runtime that publishes immutable geometry snapshots. Its React seam currently isolates two DOM-attachment paths—`BrunoTableViewportAdapter` and `LoadingRows`—behind local `"use no memo"` directives; the runtime and all downstream render islands remain compiler-managed.
+TanStack Table, and a future optional TanStack Virtual Adapter, expose stable objects with mutable internals and getter methods. A compiled component can memoize a getter call against the stable object reference and render stale geometry. The current vendored TanStack Table experimental column-virtualization example keeps React Compiler disabled specifically because `header.getSize()` can be frozen this way. The first live Client slice instead uses a BrunoTable-owned custom viewport runtime that publishes immutable geometry snapshots. Its private `react-compiler-adapters.ts` seam captures stable runtime bindings during component initialization, so the DOM-attachment paths and all downstream render islands remain compiler-managed without opt-out directives or transform exclusions.
 
 Treat compiler isolation as an initial correctness requirement, not an emergency whole-grid opt-out:
 
@@ -606,7 +606,7 @@ If BrunoTable adopts TanStack Virtual, React options such as `directDomUpdates`,
 
 The public variants must be separate unconditional hook compositions. Do not choose `useClientGridRuntime` versus `useViewportGridRuntime` behind a runtime flag. Provide `BrunoTableView` with a stable runtime reference, and let cells and headers subscribe to narrow external-store selectors instead of placing changing table snapshots in one React context value.
 
-On every TanStack Table, React, or React Compiler upgrade—and every TanStack Virtual upgrade if that Adapter is adopted—rerun the compiler-on geometry suite. Remove either current DOM-attachment escape hatch only after compiler-on tests prove loading geometry, column resize, reorder, pinning, scrolling, keyboard reveal, and both virtual ranges remain live with compilation enabled.
+On every TanStack Table, React, or React Compiler upgrade—and every TanStack Virtual upgrade if that Adapter is adopted—rerun the compiler-on geometry suite. The former DOM-attachment escape hatches were removed only after those tests proved loading geometry, column resize, reorder, pinning, scrolling, keyboard reveal, and both virtual ranges remain live with compilation enabled; keep that coverage as the gate against reintroducing an opt-out.
 
 ### XState
 

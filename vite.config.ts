@@ -57,7 +57,7 @@ const config: UserConfig = defineConfig({
         files: ["packages/shadcn/**/*.{ts,tsx}", "packages/table/**/*.{ts,tsx}"],
         plugins: ["typescript", "react"],
         rules: {
-          "react/react-compiler": "error",
+          "react/react-compiler": ["error", { reportAllBailouts: true }],
         },
       },
     ],

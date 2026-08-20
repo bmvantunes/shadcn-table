@@ -1,21 +1,23 @@
-import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
 
+import { reactCompilerOptions } from "../../config/react-compiler-options.mjs";
 import { shadcnSourceAliases } from "../../config/shadcn-source-aliases.js";
-
-const reactCompiler = await babel({
-  presets: [reactCompilerPreset({ compilationMode: "infer", target: "19" })],
-});
 
 export default defineConfig({
   define: {
     __BRUNO_TABLE_DEVELOPMENT__: "true",
     __BRUNO_TABLE_TEST_DIAGNOSTICS__: "true",
   },
-  plugins: [react(), reactCompiler, tailwindcss()],
+  plugins: [
+    react({
+      compiler: reactCompilerOptions,
+      exclude: [/\/node_modules\//, /\.d\.[cm]?tsx?$/],
+    }),
+    tailwindcss(),
+  ],
   resolve: { alias: shadcnSourceAliases, dedupe: ["react", "react-dom"] },
   optimizeDeps: {
     include: [

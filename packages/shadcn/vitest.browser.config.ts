@@ -1,20 +1,18 @@
-import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
 
-const reactCompilerOptions = {
-  compilationMode: "infer",
-  target: "19",
-} as const;
-
-const reactCompiler = await babel({
-  presets: [reactCompilerPreset(reactCompilerOptions)],
-});
+import { reactCompilerOptions } from "../../config/react-compiler-options.mjs";
 
 export default defineConfig({
-  plugins: [react(), reactCompiler, tailwindcss()],
+  plugins: [
+    react({
+      compiler: reactCompilerOptions,
+      exclude: [/\/node_modules\//, /\.d\.[cm]?tsx?$/],
+    }),
+    tailwindcss(),
+  ],
   optimizeDeps: {
     include: ["vite-plus/test/browser", "vitest-browser-react"],
   },

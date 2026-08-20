@@ -640,7 +640,6 @@ Potential later work:
 - pivot
 - server-assisted bulk operations
 - per-cell subscriptions for hot columns
-- compiler-on removal tests for the custom viewport and loading DOM-attachment escape hatches
 
 ## Exact-numeric verification gates
 

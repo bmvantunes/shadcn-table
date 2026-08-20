@@ -3,6 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { transformSync } from "oxc-transform-react";
+
+import { assertReactCompilerStrictness } from "../../../config/react-compiler-options.mjs";
+
+assertReactCompilerStrictness(transformSync);
 
 const [buttonOutput, compilerOutput, packageJsonSource, componentFiles] = await Promise.all([
   readFile(new URL("../dist/button.mjs", import.meta.url), "utf8"),

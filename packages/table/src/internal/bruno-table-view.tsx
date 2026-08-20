@@ -49,7 +49,6 @@ import {
   useCallback,
   memo,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -120,10 +119,13 @@ import {
   hasBrunoTableClientColumnGestureFrameListener,
 } from "./render-instrumentation";
 import {
+  BrunoTableLoadingViewportAdapterBoundary,
+  BrunoTableViewportAdapterBoundary,
+} from "./react-compiler-adapters";
+import {
   BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
   BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS,
-  BrunoTableViewportRuntime,
   type BrunoTableViewportSnapshot,
 } from "./virtual-viewport";
 
@@ -199,12 +201,6 @@ const VISUALLY_HIDDEN: CSSProperties = {
 
 function totalColumnWidth(columns: readonly CompiledColumn[]): number {
   return columns.reduce((total, column) => total + column.semantics.width, 0);
-}
-
-function columnLayoutSignature(columns: readonly CompiledColumn[]): string {
-  return JSON.stringify(
-    columns.map((column) => [column.columnId, column.pinned ?? null, column.semantics.width]),
-  );
 }
 
 function columnHeaderName(columns: readonly CompiledColumn[], columnId: string): string {
@@ -322,36 +318,6 @@ function activeDomId(
       : cellDomId(instanceId, tableId, activeCell.rowId, activeCell.columnId);
 }
 
-const documentInstanceCounters = new WeakMap<Document, number>();
-
-function allocateDocumentInstanceId(ownerDocument: Document): string {
-  const next = (documentInstanceCounters.get(ownerDocument) ?? 0) + 1;
-  documentInstanceCounters.set(ownerDocument, next);
-  return `document-${String(next)}`;
-}
-
-class BrunoTableInstanceIdStore {
-  private hydrated = false;
-  private snapshot: string;
-
-  public constructor(private readonly serverId: string) {
-    this.snapshot = serverId;
-  }
-
-  public readonly getSnapshot = (): string => this.snapshot;
-
-  public readonly getServerSnapshot = (): string => this.serverId;
-
-  public readonly subscribe = (listener: () => void): (() => void) => {
-    if (!this.hydrated) {
-      this.hydrated = true;
-      this.snapshot = `${this.serverId}-${allocateDocumentInstanceId(document)}`;
-      listener();
-    }
-    return () => undefined;
-  };
-}
-
 export function BrunoTableToolbar({ children }: { readonly children?: ReactNode }): ReactNode {
   if (!hasRenderableChildren(children)) return null;
   return (
@@ -385,7 +351,7 @@ export type BrunoTableColumnFilterRendererProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
-  readonly focusFallback: (columnId: string) => void;
+  readonly restoreColumnFocus: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
@@ -1092,8 +1058,6 @@ function FocusFallbackOnUnmount({
   );
 }
 
-// DOM attachment and measurement are isolated here from the compiler-managed render surface.
-// oxlint-disable react/react-compiler
 type BrunoTableViewportAdapterProps = {
   readonly tableId: string;
   readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -1120,193 +1084,46 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     queryNavigationMode,
     renderColumnFilter,
   }: BrunoTableViewportAdapterProps): ReactElement {
-    "use no memo";
-    const reactInstanceId = useId();
-    const [instanceIdStore] = useState(() => new BrunoTableInstanceIdStore(reactInstanceId));
-    const instanceId = useSyncExternalStore(
-      instanceIdStore.subscribe,
-      instanceIdStore.getSnapshot,
-      instanceIdStore.getServerSnapshot,
-    );
-    const columnLayout = useSyncExternalStore(
-      runtime.subscribeColumnLayout,
-      runtime.getColumnLayoutSnapshot,
-      runtime.getColumnLayoutSnapshot,
-    );
-    const stableColumns = useRef<readonly CompiledColumn[] | undefined>(undefined);
-    const visibleColumnIds = useMemo(
-      () => new Set(columnLayout.visibleColumnIds),
-      [columnLayout.visibleColumnIds],
-    );
-    const layoutColumnsById = useMemo(
-      () => new Map(columnLayout.allColumns.map((column) => [column.columnId, column])),
-      [columnLayout.allColumns],
-    );
-    const logicalColumns = useMemo(() => {
-      const nextColumns = columns.flatMap((column) => {
-        if (!visibleColumnIds.has(column.columnId)) return [];
-        return [layoutColumnsById.get(column.columnId) ?? column];
-      });
-      const previousColumns = stableColumns.current;
-      if (
-        previousColumns !== undefined &&
-        previousColumns.length === nextColumns.length &&
-        previousColumns.every((column, index) => column === nextColumns[index])
-      ) {
-        return previousColumns;
-      }
-      const next = Object.freeze(nextColumns);
-      stableColumns.current = next;
-      return next;
-    }, [columns, layoutColumnsById, visibleColumnIds]);
-    const logicalColumnLayoutSignature = useMemo(
-      () => columnLayoutSignature(logicalColumns),
-      [logicalColumns],
-    );
-    const [viewport] = useState(() => {
-      const next = new BrunoTableViewportRuntime();
-      next.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-      return next;
-    });
-    const queryGenerationRef = useRef(queryGeneration);
-    const appliedColumnLayoutSignatureRef = useRef<string | undefined>(undefined);
-    const publishedRangeRef = useRef<
-      | {
-          readonly rowSpace: BrunoTableLogicalRowSpace;
-          readonly generation: number;
-          readonly start: number;
-          readonly end: number;
-        }
-      | undefined
-    >(undefined);
-    const viewportSnapshot = useSyncExternalStore(
-      viewport.subscribe,
-      viewport.getSnapshot,
-      viewport.getSnapshot,
-    );
-    const filterPositionResetEpoch = useSyncExternalStore(
-      runtime.subscribeFilterPositionReset,
-      runtime.getFilterPositionResetEpochSnapshot,
-      runtime.getFilterPositionResetEpochSnapshot,
-    );
-    const filterPositionResetEpochRef = useRef(filterPositionResetEpoch);
-    useLayoutEffect(() => {
-      if (queryGenerationRef.current === queryGeneration) return;
-      queryGenerationRef.current = queryGeneration;
-      viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-      viewport.resetVertical();
-      const resetWindow = viewport.getSnapshot().virtualWindow;
-      rowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
-      publishedRangeRef.current = Object.freeze({
-        rowSpace,
-        generation: queryGeneration,
-        start: resetWindow.rowStart,
-        end: resetWindow.rowEnd,
-      });
-      if (queryNavigationMode === "reconcile") {
-        navigation.reconcileForQuery(rowSpace, logicalColumns);
-      } else if (queryNavigationMode === "clear") {
-        navigation.clearForCommittedSort(rowSpace, logicalColumns);
-      } else {
-        // Issue #12 resets body position without retaining a hidden/non-zero row. A header
-        // origin remains a header origin, so its DOM focus and logical header navigation survive.
-        navigation.resetForCommittedQuery(rowSpace, logicalColumns);
-      }
-    }, [
-      logicalColumns,
-      navigation,
-      queryNavigationMode,
-      queryGeneration,
-      rowSpace,
-      runtime,
-      viewport,
-    ]);
-    useLayoutEffect(() => {
-      if (filterPositionResetEpochRef.current === filterPositionResetEpoch) return;
-      filterPositionResetEpochRef.current = filterPositionResetEpoch;
-      viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-      viewport.resetVertical();
-      const resetWindow = viewport.getSnapshot().virtualWindow;
-      rowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
-      publishedRangeRef.current = Object.freeze({
-        rowSpace,
-        generation: queryGeneration,
-        start: resetWindow.rowStart,
-        end: resetWindow.rowEnd,
-      });
-      navigation.resetForCommittedQuery(rowSpace, logicalColumns);
-    }, [filterPositionResetEpoch, logicalColumns, navigation, queryGeneration, rowSpace, viewport]);
-    useLayoutEffect(() => {
-      const columnsChanged =
-        appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;
-      viewport.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-      navigation.setShape(rowSpace, logicalColumns);
-      if (columnsChanged) {
-        const activeCell = navigation.getSnapshot();
-        if (activeCell !== undefined) {
-          viewport.revealCell(
-            activeCell.rowIndex,
-            activeCell.columnId,
-            activeCell.region,
-            activeCell.rowId,
-          );
-        }
-      }
-      appliedColumnLayoutSignatureRef.current = logicalColumnLayoutSignature;
-    }, [logicalColumnLayoutSignature, logicalColumns, navigation, rowSpace, viewport]);
-    useLayoutEffect(() => {
-      if (viewportSnapshot !== viewport.getSnapshot()) return;
-      const start = viewportSnapshot.virtualWindow.rowStart;
-      const end = viewportSnapshot.virtualWindow.rowEnd;
-      const previous = publishedRangeRef.current;
-      if (
-        previous?.rowSpace === rowSpace &&
-        previous.generation === queryGeneration &&
-        previous.start === start &&
-        previous.end === end
-      ) {
-        return;
-      }
-      rowSpace.setRequiredRange(start, end);
-      publishedRangeRef.current = Object.freeze({
-        rowSpace,
-        generation: queryGeneration,
-        start,
-        end,
-      });
-    }, [queryGeneration, rowSpace, viewport, viewportSnapshot]);
-    useEffect(() => () => viewport.dispose(), [viewport]);
-
     return (
-      <BrunoTableGridSurface
-        instanceId={instanceId}
-        tableId={tableId}
+      <BrunoTableViewportAdapterBoundary
+        columns={columns}
+        navigation={navigation}
+        queryGeneration={queryGeneration}
+        queryNavigationMode={queryNavigationMode}
         rowSpace={rowSpace}
         runtime={runtime}
-        columns={logicalColumns}
-        allColumns={columnLayout.allColumns}
-        visibleColumnIds={columnLayout.visibleColumnIds}
-        columnLayout={columnLayout}
-        queryGeneration={queryGeneration}
-        viewportSnapshot={viewportSnapshot}
-        attach={viewport.attach}
-        attachBodyLayer={viewport.attachBodyLayer}
-        attachRowLayer={viewport.attachRowLayer}
-        attachScrollbarOverlay={viewport.attachScrollbarOverlay}
-        subscribeViewportEnvironment={viewport.subscribeEnvironment}
-        scrollByLogical={viewport.scrollByLogical}
-        previewColumnWidth={viewport.previewColumnWidth}
-        clearColumnWidthPreview={viewport.clearColumnWidthPreview}
-        focusFallback={focusFallback}
-        focusHandoff={focusHandoff}
-        navigation={navigation}
-        revealCell={viewport.revealCell}
-        renderColumnFilter={renderColumnFilter}
-      />
+      >
+        {(adapter) => (
+          <BrunoTableGridSurface
+            instanceId={adapter.instanceId}
+            tableId={tableId}
+            rowSpace={rowSpace}
+            runtime={runtime}
+            columns={adapter.columns}
+            allColumns={adapter.columnLayout.allColumns}
+            visibleColumnIds={adapter.columnLayout.visibleColumnIds}
+            columnLayout={adapter.columnLayout}
+            queryGeneration={queryGeneration}
+            viewportSnapshot={adapter.viewportSnapshot}
+            attach={adapter.attach}
+            attachBodyLayer={adapter.attachBodyLayer}
+            attachRowLayer={adapter.attachRowLayer}
+            attachScrollbarOverlay={adapter.attachScrollbarOverlay}
+            subscribeViewportEnvironment={adapter.subscribeViewportEnvironment}
+            scrollByLogical={adapter.scrollByLogical}
+            previewColumnWidth={adapter.previewColumnWidth}
+            clearColumnWidthPreview={adapter.clearColumnWidthPreview}
+            focusFallback={focusFallback}
+            focusHandoff={focusHandoff}
+            navigation={navigation}
+            revealCell={adapter.revealCell}
+            renderColumnFilter={renderColumnFilter}
+          />
+        )}
+      </BrunoTableViewportAdapterBoundary>
     );
   },
 );
-// oxlint-enable react/react-compiler
 
 const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   instanceId,
@@ -2679,6 +2496,55 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   );
 });
 
+type BrunoTableMenuFilterTransfer = Readonly<{
+  closeMenu: (preserveFocus?: boolean) => void;
+  onOpenChange: (nextOpen: boolean) => void;
+  openHeaderFilterFromMenu: (columnId: string) => void;
+}>;
+
+function useBrunoTableMenuFilterTransfer({
+  columnId,
+  onOpen,
+  openHeaderFilter,
+  restoreColumnFocus,
+  setOpen,
+}: {
+  readonly columnId: string;
+  readonly onOpen?: () => void;
+  readonly openHeaderFilter: (columnId: string) => void;
+  readonly restoreColumnFocus: (columnId: string) => void;
+  readonly setOpen: (open: boolean) => void;
+}): BrunoTableMenuFilterTransfer {
+  const menuFilterTransfer = useRef(false);
+  const openHeaderFilterFromMenu = useCallback(
+    (nextColumnId: string): void => {
+      menuFilterTransfer.current = true;
+      openHeaderFilter(nextColumnId);
+    },
+    [openHeaderFilter],
+  );
+  const closeMenu = useCallback(
+    (preserveFocus = false): void => {
+      if (preserveFocus) menuFilterTransfer.current = true;
+      setOpen(false);
+    },
+    [setOpen],
+  );
+  const onOpenChange = useCallback(
+    (nextOpen: boolean): void => {
+      if (nextOpen) onOpen?.();
+      setOpen(nextOpen);
+      if (!nextOpen) {
+        const transferred = menuFilterTransfer.current;
+        menuFilterTransfer.current = false;
+        if (!transferred) restoreColumnFocus(columnId);
+      }
+    },
+    [columnId, onOpen, restoreColumnFocus, setOpen],
+  );
+  return { closeMenu, onOpenChange, openHeaderFilterFromMenu };
+}
+
 const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   allColumns,
   activeCell,
@@ -2708,14 +2574,13 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
 }) {
   const [open, setOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
-  const menuFilterTransfer = useRef(false);
-  const openHeaderFilterFromMenu = useCallback(
-    (columnId: string): void => {
-      menuFilterTransfer.current = true;
-      openHeaderFilter(columnId);
-    },
-    [openHeaderFilter],
-  );
+  const { closeMenu, onOpenChange, openHeaderFilterFromMenu } = useBrunoTableMenuFilterTransfer({
+    columnId: column?.columnId ?? "",
+    onOpen: () => setMenuDirection(readBrunoTableMenuDirection()),
+    openHeaderFilter,
+    restoreColumnFocus,
+    setOpen,
+  });
   const columnId = column?.columnId ?? "";
   const subscribe = useMemo(
     () => (listener: () => void) => runtime.subscribeColumnCommands(columnId, listener),
@@ -2739,18 +2604,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
         tableId={tableId}
       />
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu
-          open={open}
-          onOpenChange={(nextOpen) => {
-            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-            setOpen(nextOpen);
-            if (!nextOpen) {
-              const transferred = menuFilterTransfer.current;
-              menuFilterTransfer.current = false;
-              if (!transferred) restoreColumnFocus(column.columnId);
-            }
-          }}
-        >
+        <DropdownMenu open={open} onOpenChange={onOpenChange}>
           <DropdownMenuTrigger
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
@@ -2770,10 +2624,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
-              closeMenu={(preserveFocus) => {
-                if (preserveFocus) menuFilterTransfer.current = true;
-                setOpen(false);
-              }}
+              closeMenu={closeMenu}
               column={column}
               command={command}
               direction={menuDirection}
@@ -3031,14 +2882,13 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       : `Sort by ${column.headerName}, currently ${presentation.direction}${sortPriorityLabel(command.sortPriority)}`;
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
-  const menuFilterTransfer = useRef(false);
-  const openHeaderFilterFromMenu = useCallback(
-    (columnId: string): void => {
-      menuFilterTransfer.current = true;
-      openHeaderFilter(columnId);
-    },
-    [openHeaderFilter],
-  );
+  const { closeMenu, onOpenChange, openHeaderFilterFromMenu } = useBrunoTableMenuFilterTransfer({
+    columnId: column.columnId,
+    onOpen: () => setMenuDirection(readBrunoTableMenuDirection()),
+    openHeaderFilter,
+    restoreColumnFocus,
+    setOpen: setMenuOpen,
+  });
   const pinLabel = command.pinned === undefined ? "unpinned" : `pinned ${command.pinned}`;
   const subscribeActiveResize = useMemo(
     () => (listener: () => void) => navigation.subscribeColumn(column.columnId, listener),
@@ -3086,7 +2936,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               activateHeaderCommand,
               column,
               command,
-              focusFallback: restoreColumnFocus,
+              restoreColumnFocus,
               runtime,
               registerColumnFilterOpener,
             })
@@ -3135,18 +2985,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         <ArrowsHorizontalIcon aria-hidden="true" />
       </button>
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu
-          open={menuOpen}
-          onOpenChange={(nextOpen) => {
-            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-            setMenuOpen(nextOpen);
-            if (!nextOpen) {
-              const transferred = menuFilterTransfer.current;
-              menuFilterTransfer.current = false;
-              if (!transferred) restoreColumnFocus(column.columnId);
-            }
-          }}
-        >
+        <DropdownMenu open={menuOpen} onOpenChange={onOpenChange}>
           <DropdownMenuTrigger
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
@@ -3173,10 +3012,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
-              closeMenu={(preserveFocus) => {
-                if (preserveFocus) menuFilterTransfer.current = true;
-                setMenuOpen(false);
-              }}
+              closeMenu={closeMenu}
               column={column}
               command={command}
               direction={menuDirection}
@@ -4392,8 +4228,6 @@ function resolveCellRenderer(
 
 const DEFAULT_LOADING_ROW_COUNT = 5;
 
-// Loading scroll attachment stays outside the compiler-managed render surface.
-// oxlint-disable react/react-compiler
 const LoadingRows = memo(function LoadingRows({
   runtime,
   totalRows,
@@ -4409,159 +4243,125 @@ const LoadingRows = memo(function LoadingRows({
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly tableId: string;
 }) {
-  "use no memo";
-  const columnLayout = useSyncExternalStore(
-    runtime.subscribeColumnLayout,
-    runtime.getColumnLayoutSnapshot,
-    runtime.getColumnLayoutSnapshot,
-  );
-  const columns = columnLayout.columns.length > 0 ? columnLayout.columns : compiledColumns;
-  const reactInstanceId = useId();
-  const [instanceIdStore] = useState(() => new BrunoTableInstanceIdStore(reactInstanceId));
-  const instanceId = useSyncExternalStore(
-    instanceIdStore.subscribe,
-    instanceIdStore.getSnapshot,
-    instanceIdStore.getServerSnapshot,
-  );
-  const logicalRowCount =
-    Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : DEFAULT_LOADING_ROW_COUNT;
-  const [viewport] = useState(() => {
-    const next = new BrunoTableViewportRuntime(0);
-    next.setLayout(logicalRowCount, columns);
-    return next;
-  });
-  const viewportSnapshot = useSyncExternalStore(
-    viewport.subscribe,
-    viewport.getSnapshot,
-    viewport.getSnapshot,
-  );
-  useLayoutEffect(
-    () => viewport.setLayout(logicalRowCount, columns),
-    [columns, logicalRowCount, viewport],
-  );
-  useEffect(() => () => viewport.dispose(), [viewport]);
-  const gridElement = useRef<HTMLDivElement | null>(null);
-  const attachGrid = useMemo(
-    () => (element: HTMLDivElement | null) => {
-      if (
-        element === null &&
-        document.activeElement !== null &&
-        gridElement.current?.contains(document.activeElement)
-      ) {
-        focusHandoff.release();
-        focusFallback();
-      }
-      gridElement.current = element;
-      viewport.attach(element);
-      if (element !== null && focusHandoff.claim()) element.focus({ preventScroll: true });
-    },
-    [focusFallback, focusHandoff, viewport],
-  );
-  const virtualWindow = viewportSnapshot.virtualWindow;
-  const tableWidth = virtualWindow.totalWidth;
-  const viewportFill =
-    virtualWindow.pinnedEnd.length === 0 ? 0 : Math.max(0, viewportSnapshot.width - tableWidth);
-  const renderedTableWidth = tableWidth + viewportFill;
   return (
-    <div style={{ position: "relative" }}>
-      <div
-        ref={attachGrid}
-        aria-busy="true"
-        aria-colcount={columns.length}
-        aria-label="Loading table rows"
-        aria-rowcount={logicalRowCount}
-        data-bruno-scroll-owner=""
-        role="grid"
-        tabIndex={0}
-        style={{
-          maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
-          overflow: "auto",
-          position: "relative",
-        }}
-      >
-        <div
-          ref={viewport.attachRowLayer}
-          data-bruno-row-layer=""
-          style={{
-            position: "relative",
-            width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
-          }}
-        >
-          <table
-            role="presentation"
-            style={{
-              tableLayout: "fixed",
-              width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
-            }}
-          >
-            <tbody
-              role="rowgroup"
+    <BrunoTableLoadingViewportAdapterBoundary
+      compiledColumns={compiledColumns}
+      defaultLoadingRowCount={DEFAULT_LOADING_ROW_COUNT}
+      focusFallback={focusFallback}
+      focusHandoff={focusHandoff}
+      runtime={runtime}
+      totalRows={totalRows}
+    >
+      {(adapter) => {
+        const virtualWindow = adapter.viewportSnapshot.virtualWindow;
+        const tableWidth = virtualWindow.totalWidth;
+        const viewportFill =
+          virtualWindow.pinnedEnd.length === 0
+            ? 0
+            : Math.max(0, adapter.viewportSnapshot.width - tableWidth);
+        const renderedTableWidth = tableWidth + viewportFill;
+        return (
+          <div style={{ position: "relative" }}>
+            <div
+              ref={adapter.attachGrid}
+              aria-busy="true"
+              aria-colcount={adapter.columns.length}
+              aria-label="Loading table rows"
+              aria-rowcount={adapter.logicalRowCount}
+              data-bruno-scroll-owner=""
+              role="grid"
+              tabIndex={0}
               style={{
-                display: "block",
-                height: virtualWindow.totalHeight,
+                maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+                overflow: "auto",
                 position: "relative",
-                width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
               }}
             >
-              {Array.from(
-                { length: virtualWindow.rowEnd - virtualWindow.rowStart },
-                (_, offset) => (
-                  <LoadingRow
-                    key={`loading-slot-${String(offset)}`}
-                    attachBodyLayer={viewport.attachBodyLayer}
-                    center={virtualWindow.center}
-                    centerStartIndex={virtualWindow.centerStartIndex}
-                    instanceId={instanceId}
-                    leftPadding={virtualWindow.leftPadding}
-                    logicalRowIndex={virtualWindow.rowStart + offset}
-                    pinnedEnd={virtualWindow.pinnedEnd}
-                    pinnedStart={virtualWindow.pinnedStart}
-                    rightPadding={virtualWindow.rightPadding}
+              <div
+                ref={adapter.attachRowLayer}
+                data-bruno-row-layer=""
+                style={{
+                  position: "relative",
+                  width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                }}
+              >
+                <table
+                  role="presentation"
+                  style={{
+                    tableLayout: "fixed",
+                    width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                  }}
+                >
+                  <tbody
+                    role="rowgroup"
+                    style={{
+                      display: "block",
+                      height: virtualWindow.totalHeight,
+                      position: "relative",
+                      width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                    }}
+                  >
+                    {Array.from(
+                      { length: virtualWindow.rowEnd - virtualWindow.rowStart },
+                      (_, offset) => (
+                        <LoadingRow
+                          key={`loading-slot-${String(offset)}`}
+                          attachBodyLayer={adapter.attachBodyLayer}
+                          center={virtualWindow.center}
+                          centerStartIndex={virtualWindow.centerStartIndex}
+                          instanceId={adapter.instanceId}
+                          leftPadding={virtualWindow.leftPadding}
+                          logicalRowIndex={virtualWindow.rowStart + offset}
+                          pinnedEnd={virtualWindow.pinnedEnd}
+                          pinnedStart={virtualWindow.pinnedStart}
+                          rightPadding={virtualWindow.rightPadding}
+                          tableId={tableId}
+                          top={offset * ROW_HEIGHT}
+                          viewportFill={viewportFill}
+                          width={renderedTableWidth}
+                        />
+                      ),
+                    )}
+                  </tbody>
+                </table>
+                {virtualWindow.pinnedStart.length > 0 ? (
+                  <LoadingPinnedBodyRegion
+                    attachBodyLayer={adapter.attachBodyLayer}
+                    columns={virtualWindow.pinnedStart}
+                    instanceId={adapter.instanceId}
+                    layerWidth={renderedTableWidth}
+                    pinnedStartCount={virtualWindow.pinnedStart.length}
+                    rowEnd={virtualWindow.rowEnd}
+                    rowStart={virtualWindow.rowStart}
+                    side="start"
                     tableId={tableId}
-                    top={offset * ROW_HEIGHT}
-                    viewportFill={viewportFill}
-                    width={renderedTableWidth}
+                    totalHeight={virtualWindow.totalHeight}
                   />
-                ),
-              )}
-            </tbody>
-          </table>
-          {virtualWindow.pinnedStart.length > 0 ? (
-            <LoadingPinnedBodyRegion
-              attachBodyLayer={viewport.attachBodyLayer}
-              columns={virtualWindow.pinnedStart}
-              instanceId={instanceId}
-              layerWidth={renderedTableWidth}
-              pinnedStartCount={virtualWindow.pinnedStart.length}
-              rowEnd={virtualWindow.rowEnd}
-              rowStart={virtualWindow.rowStart}
-              side="start"
-              tableId={tableId}
-              totalHeight={virtualWindow.totalHeight}
-            />
-          ) : null}
-          {virtualWindow.pinnedEnd.length > 0 ? (
-            <LoadingPinnedBodyRegion
-              attachBodyLayer={viewport.attachBodyLayer}
-              columns={virtualWindow.pinnedEnd}
-              instanceId={instanceId}
-              layerWidth={renderedTableWidth}
-              pinnedStartCount={virtualWindow.pinnedStart.length}
-              precedingColumnCount={virtualWindow.centerCount}
-              rowEnd={virtualWindow.rowEnd}
-              rowStart={virtualWindow.rowStart}
-              side="end"
-              tableId={tableId}
-              totalHeight={virtualWindow.totalHeight}
-            />
-          ) : null}
-        </div>
-      </div>
-      <BrunoTableScrollbarOverlay attach={viewport.attachScrollbarOverlay} />
-    </div>
+                ) : null}
+                {virtualWindow.pinnedEnd.length > 0 ? (
+                  <LoadingPinnedBodyRegion
+                    attachBodyLayer={adapter.attachBodyLayer}
+                    columns={virtualWindow.pinnedEnd}
+                    instanceId={adapter.instanceId}
+                    layerWidth={renderedTableWidth}
+                    pinnedStartCount={virtualWindow.pinnedStart.length}
+                    precedingColumnCount={virtualWindow.centerCount}
+                    rowEnd={virtualWindow.rowEnd}
+                    rowStart={virtualWindow.rowStart}
+                    side="end"
+                    tableId={tableId}
+                    totalHeight={virtualWindow.totalHeight}
+                  />
+                ) : null}
+              </div>
+            </div>
+            <BrunoTableScrollbarOverlay attach={adapter.attachScrollbarOverlay} />
+          </div>
+        );
+      }}
+    </BrunoTableLoadingViewportAdapterBoundary>
   );
 });
-// oxlint-enable react/react-compiler
 
 const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
   attachBodyLayer,
