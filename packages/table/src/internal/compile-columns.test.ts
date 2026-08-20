@@ -54,6 +54,58 @@ describe("compileColumns", () => {
     ]);
   });
 
+  it("defaults bounded Boolean and Select facets on and requires explicit opt-in otherwise", () => {
+    type FacetRow = {
+      readonly active: boolean;
+      readonly status: "open" | "closed";
+      readonly name: string;
+      readonly score: number;
+    };
+    const definitions = [
+      {
+        columnId: "COL_ID_ACTIVE",
+        field: "active",
+        headerName: "Active",
+        valueType: "boolean",
+      },
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"] as const,
+      }),
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        enableSetFilter: true,
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_DISABLED_BOOLEAN",
+        enableFilter: false,
+        field: "active",
+        headerName: "Disabled Boolean",
+        valueType: "boolean",
+      },
+    ] satisfies import("../public-types").BrunoTableColumns<FacetRow>;
+    const compiled = compileColumns(definitions);
+
+    expect(compiled.map((column) => column.enableSetFilter)).toEqual([
+      true,
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
   it("snapshots accessor-backed definition properties once", () => {
     const reads = new Map<string, number>();
     const valueGetter = () => 42;
@@ -94,6 +146,7 @@ describe("compileColumns", () => {
       headerName: "Computed",
       valueType: "number",
       enableFilter: false,
+      enableSetFilter: false,
       enableSorting: false,
       fields: ["price"],
       valueGetter,
@@ -166,6 +219,7 @@ describe("compileColumns", () => {
       field: "price",
       groupBy: false,
       enableFilter: false,
+      enableSetFilter: false,
       enableSorting: true,
       isEditable: true,
       semantics: expect.objectContaining({
@@ -426,6 +480,14 @@ describe("compileColumns", () => {
         headerName: "Price",
         valueType: "number",
         field: "price",
+        enableFilter: false,
+        enableSetFilter: true,
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        headerName: "Price",
+        valueType: "number",
+        field: "price",
         enableSorting: 1,
       },
       {
@@ -524,6 +586,14 @@ describe("compileColumns", () => {
         fields: ["price"],
         valueGetter: () => 1,
         enableFilter: false,
+      },
+      {
+        columnId: "COL_ID_NOTIONAL",
+        headerName: "Notional",
+        valueType: "number",
+        fields: ["price"],
+        valueGetter: () => 1,
+        enableSetFilter: false,
       },
       {
         columnId: "COL_ID_NOTIONAL",

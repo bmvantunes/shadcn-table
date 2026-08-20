@@ -527,6 +527,8 @@ const columns = [
 
 The raw built-in Value Types initially include `"text"`, `"number"`, `"bigint"`, and `"boolean"`. Select columns add typed option semantics over their actual value domain. Date/time and other built-ins may be added only with explicit runtime semantics. A custom `BrunoTableValueType<TValue>` supplies a typed, declarative selection that is compiled into the internal Column Value Semantics plan.
 
+A custom Value Type is lawful only when `formatCanonicalText(left) === formatCanonicalText(right)` exactly when `equivalent(left, right)` is true, and `compare(left, right) === 0` exactly when `equivalent(left, right)` is true. BrunoTable uses that collision-free stable identity to keep exact filtering, persistence, reconciliation, React reconciliation, and high-cardinality facet indexing coherent without quadratic pairwise comparison.
+
 Most consumers should prefer the optional built-in Column Helpers:
 
 ```ts
@@ -991,17 +993,19 @@ The built-in filter UI exposes the complete operator vocabulary supported by the
 
 - Text: `equals`, `notEqual`, `in`, `contains`, `notContains`, `startsWith`, `endsWith`, `blank`, and `notBlank`, plus case-sensitive and accent-sensitive options. Search operands must remain non-empty after normalization.
 - Number, BigInt, and BigDecimal: `equals`, `notEqual`, `in`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, half-open `inRange`, `blank`, and `notBlank`.
-- Boolean and other supported scalars: `equals`, `notEqual`, `blank`, and `notBlank`. The live Boolean/Select Set Filter `in` surface is deferred to issue #13.
+- Boolean and Select scalars: `equals`, `notEqual`, `in`, `blank`, and `notBlank`. Their live Set Filter is installed by default.
 
 Every admitted `in` operand is a non-empty tuple. An empty `in` expression is rejected during type checking, runtime sanitization, and editor candidate construction; it is never used as a Match-None substitute.
 
 Select option arrays are snapshotted once during column normalization and are bounded to 16,384 values; the Client filter editor mounts only a 64-option window at a time. An oversized captured length is rejected, and a later runtime length change cannot extend the bounded decode loop.
 
-The complete target design gives Boolean and Select Field Columns a live Set Filter for `in` by default. Issue #12 intentionally stops before live faceting and inclusion/exclusion intent: its Client Boolean/Select surface uses exact typed choices and does not admit `in`. Text, Number, BigInt, and BigDecimal Field Columns still expose `in`, but live distinct-value faceting requires explicit column opt-in so a high-cardinality field does not silently create an expensive subscription. The exact opt-in property belongs to the final column filter configuration design.
+Boolean and Select Field Columns have a live Set Filter for `in` by default. Setting `enableSetFilter: false` removes only that live surface; it never removes their programmatic `in` operator. Text, Number, BigInt, and BigDecimal Field Columns also expose programmatic `in`, but live distinct-value faceting requires `enableSetFilter: true` so a high-cardinality field does not silently create an expensive subscription. An opted-in custom equality Value Type gains the same exact `in` vocabulary so every rendered Set command remains valid. `enableSetFilter` is valid only on filterable Field Columns; Computed Columns cannot opt in.
 
 Set Filter overlays in both Client and Server Tables may use checkbox options and a value-level Select All control. These are local filter affordances and do not install Row Selection, selected-row state, a body checkbox column, or a server row-selection command.
 
 Set Filter state preserves inclusion versus exclusion intent while the selection is partial. Select All means no column filter, not a frozen `in` list. Deselecting from All creates compact exclusion intent so future live values remain selected unless explicitly excluded; selecting upward from none creates inclusion intent so future values remain unselected unless explicitly included. Any user command that selects the final currently unselected facet value normalizes immediately to the same no-filter state as Select All, regardless of the click history. Passive facet updates never perform this normalization or otherwise rewrite intent.
+
+An opted-in Text Set Filter emits a case-sensitive and accent-sensitive `in` form that the Client compiles as exact Column Value Semantics membership rather than normalized text-search equality. Built-in Text therefore distinguishes case, accents, and composed versus decomposed Unicode, while a custom Text Value Type retains its own declared equivalence. A programmatic insensitive Text `in` expression remains a valid Grid Filter, but the Set surface does not reinterpret it as exact selection intent.
 
 Clear All stores empty inclusion intent and matches no current or future row. Client compilation emits an explicit false predicate; Server compilation emits the source-native Match-None Filter Expression tracked in [effect-view-server#409](https://github.com/bmvantunes/effect-view-server/issues/409). BrunoTable never substitutes an empty View Server `in` no-op, freezes the current facet domain, or negates only the values visible when the command occurred.
 

@@ -283,13 +283,14 @@ describe("BrunoTable filter runtime primitives", () => {
     ).toEqual([{ columnId: "COL_ID_ACTIVE", type: "notEqual", filter: true }]);
   });
 
-  it("defers Boolean and Select in operands to Set Filter semantics", () => {
+  it("admits exact Boolean and Select inclusion independently of the Set Filter surface", () => {
     const selectColumn = Reflect.apply(BrunoTableSelectColumn, undefined, [
       {
         columnId: "COL_ID_STATUS",
         field: "status",
         headerName: "Status",
         options: ["open", "closed"],
+        enableSetFilter: false,
       },
     ]) as Readonly<Record<string, unknown>>;
     const columns = compileColumns([
@@ -298,6 +299,7 @@ describe("BrunoTable filter runtime primitives", () => {
         field: "active",
         headerName: "Active",
         valueType: "boolean",
+        enableSetFilter: false,
       },
       selectColumn,
     ]);
@@ -310,7 +312,57 @@ describe("BrunoTable filter runtime primitives", () => {
         ],
         columns,
       ),
+    ).toEqual([
+      { columnId: "COL_ID_ACTIVE", type: "in", filter: [true] },
+      { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+    ]);
+    expect(
+      sanitizeClientInitialFilters([{ columnId: "COL_ID_ACTIVE", type: "matchNone" }], columns),
     ).toEqual([]);
+  });
+
+  it("admits membership for an explicitly opted-in custom equality Value Type", () => {
+    type Token = Readonly<{ readonly id: number }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_TOKEN",
+        enableSetFilter: true,
+        field: "token",
+        headerName: "Token",
+        valueType: {
+          codecId: "test/equality-set-filter",
+          codecVersion: 1,
+          filterFamily: "equality",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 120,
+          decodeRuntime: (input: unknown) =>
+            typeof input === "object" && input !== null && "id" in input
+              ? ({ _tag: "Success", value: input as Token } as const)
+              : ({ _tag: "Failure", message: "Expected token." } as const),
+          equivalent: (left: Token, right: Token) => left.id === right.id,
+          compare: (left: Token, right: Token) => left.id - right.id,
+          formatCanonicalText: (value: Token) => String(value.id),
+          parseCanonicalText: (text: string) =>
+            ({ _tag: "Success", value: { id: Number(text) } }) as const,
+          formatDisplay: (value: Token) => String(value.id),
+          encodePersisted: (value: Token) => value.id,
+          decodePersisted: (input: unknown) =>
+            typeof input === "number"
+              ? ({ _tag: "Success", value: { id: input } } as const)
+              : ({ _tag: "Failure", message: "Expected token." } as const),
+        },
+      },
+    ]);
+    const selected = Object.freeze({ id: 1 });
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_TOKEN", type: "in", filter: [selected] }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_TOKEN", type: "in", filter: [selected] }]);
   });
 
   it("does not publish an equivalent text filter when sensitivity defaults are omitted", () => {

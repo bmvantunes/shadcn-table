@@ -107,6 +107,54 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
     .toHaveFocus();
 });
 
+test("applies emitted live Set Filter inclusion and normalization", async () => {
+  type SetRow = Readonly<{ id: string; active: boolean }>;
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_SET_ID",
+      field: "id",
+      headerName: "Id",
+      valueType: "text",
+    },
+    BrunoTableBooleanColumn({
+      columnId: "COL_ID_EMITTED_SET_ACTIVE",
+      field: "active",
+      headerName: "Active",
+    }),
+  ] satisfies BrunoTableColumns<SetRow>;
+  const screen = await render(
+    <BrunoTableClient<SetRow, typeof columns>
+      tableId="TABLE_ID_EMITTED_SET_FILTER"
+      getRowId={(row) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_SET_ID", direction: "asc" }]}
+      clientSource={{
+        rows: [
+          { id: "active", active: true },
+          { id: "inactive", active: false },
+        ],
+        totalRows: 2,
+        version: 1,
+        status: "ready",
+      }}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Filter Active" }));
+  const dialog = screen.getByRole("dialog", { name: "Filter Active" });
+  await userEvent.click(dialog.getByRole("button", { name: "Clear All" }));
+  dialog.getByRole("checkbox", { name: "Select true, 1" }).element().focus();
+  await userEvent.keyboard(" ");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "inactive", exact: true }))
+    .not.toBeInTheDocument();
+  dialog.getByRole("checkbox", { name: "Select false, 1" }).element().focus();
+  await userEvent.keyboard(" ");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "inactive", exact: true }))
+    .toBeInTheDocument();
+});
+
 test("windows emitted Select filter options while retaining a selected value", async () => {
   const options = [
     "option-0",

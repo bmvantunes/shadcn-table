@@ -142,8 +142,11 @@ export type BrunoTableValueType<
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
   readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
+  /** Must agree exactly with both zero ordering and canonical-text identity. */
   readonly equivalent: (this: void, left: TValue, right: TValue) => boolean;
+  /** Must return zero exactly when `equivalent(left, right)` is true. */
   readonly compare: (this: void, left: TValue, right: TValue) => BrunoTableOrdering;
+  /** Must return equal text exactly when two values are semantically equivalent. */
   readonly formatCanonicalText: (this: void, value: TValue) => string;
   readonly parseCanonicalText: (this: void, text: string) => BrunoTableDecodeResult<TValue>;
   readonly formatDisplay: (this: void, value: TValue) => string;
@@ -384,6 +387,17 @@ type ColumnLayout = {
   readonly pinned?: "start" | "end";
 };
 
+type FieldColumnFilteringCapability =
+  | {
+      readonly enableFilter: false;
+      readonly enableSetFilter?: never;
+    }
+  | {
+      readonly enableFilter?: true;
+      /** Enables the live Set Filter. Boolean and Select Field Columns default this to true. */
+      readonly enableSetFilter?: boolean;
+    };
+
 type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
   readonly row: Pick<TRow, TFields[number]>;
 };
@@ -399,13 +413,13 @@ type FieldColumn<
     readonly field: TField;
     readonly headerName: string;
     readonly valueType: TValueType;
-    readonly enableFilter?: boolean;
     readonly enableSorting?: boolean;
     readonly isEditable?: boolean | ((parameters: ValueParams<TRow, TRow[TField]>) => boolean);
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
-  } & GroupKeyPresentation<TRow[TField], TColumnId> &
+  } & FieldColumnFilteringCapability &
+  GroupKeyPresentation<TRow[TField], TColumnId> &
   AggregatePresentation<TRow[TField], TValueType, TColumnId>;
 
 type RawCustomFieldValueType<
@@ -849,19 +863,53 @@ type TextSensitivity<TFilterFamily> = TFilterFamily extends "text"
       readonly accentSensitive?: never;
     };
 
-type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue, TFilterFamily> =
+type EqualityFilter<
+  TColumnId extends BrunoTableColumnId,
+  TValue,
+  TFilterFamily,
+  TSetFilterEnabled extends boolean,
+> =
   | ({
       readonly columnId: TColumnId;
       readonly type: "equals" | "notEqual";
       readonly filter: ScalarFilterValue<TValue>;
     } & TextSensitivity<TFilterFamily>)
-  | (TFilterFamily extends "text" | "numeric"
+  | (TSetFilterEnabled extends true
       ? {
           readonly columnId: TColumnId;
           readonly type: "in";
           readonly filter: NonEmptyScalarFilterValues<TValue>;
         } & TextSensitivity<TFilterFamily>
       : never);
+
+type ColumnSetFilterEnabled<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TColumnId extends BrunoTableColumnIdOf<TColumns>,
+> =
+  ColumnForId<TColumns, TColumnId> extends { readonly enableFilter: false }
+    ? false
+    : ColumnForId<TColumns, TColumnId> extends { readonly enableSetFilter: infer TEnabled }
+      ? TEnabled extends true
+        ? true
+        : false
+      : ColumnFilterFamily<TColumns, TColumnId> extends "boolean" | "select"
+        ? true
+        : false;
+
+type ColumnInFilterEnabled<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TColumnId extends BrunoTableColumnIdOf<TColumns>,
+> =
+  ColumnFilterFamily<TColumns, TColumnId> extends "text" | "numeric" | "boolean" | "select"
+    ? true
+    : ColumnSetFilterEnabled<TColumns, TColumnId>;
+
+type MatchNoneFilter<
+  TColumnId extends BrunoTableColumnId,
+  TSetFilterEnabled extends boolean,
+> = TSetFilterEnabled extends true
+  ? { readonly columnId: TColumnId; readonly type: "matchNone" }
+  : never;
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TFilterFamily> = TFilterFamily extends "text"
   ? {
@@ -906,7 +954,8 @@ type FilterLeaf<
   | EqualityFilter<
       TColumnId,
       BrunoTableColumnValue<TRow, TColumns, TColumnId>,
-      ColumnFilterFamily<TColumns, TColumnId>
+      ColumnFilterFamily<TColumns, TColumnId>,
+      ColumnInFilterEnabled<TColumns, TColumnId>
     >
   | TextFilter<TColumnId, ColumnFilterFamily<TColumns, TColumnId>>
   | NumericFilter<
@@ -914,7 +963,8 @@ type FilterLeaf<
       BrunoTableColumnValue<TRow, TColumns, TColumnId>,
       ColumnFilterFamily<TColumns, TColumnId>
     >
-  | BlankFilter<TColumnId>;
+  | BlankFilter<TColumnId>
+  | MatchNoneFilter<TColumnId, ColumnSetFilterEnabled<TColumns, TColumnId>>;
 
 type FilterExpressionForColumn<
   TRow,

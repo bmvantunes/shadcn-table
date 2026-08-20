@@ -23,6 +23,7 @@ const emittedPriceColumn = BrunoTableBigDecimalColumn.withDefaults({
 const emittedColumns = [
   emittedPriceColumn({
     columnId: "COL_ID_PRICE",
+    enableSetFilter: true,
     field: "price",
     valueFormatter: ({ value }) => BigDecimal.format(value),
   }),
@@ -44,6 +45,12 @@ const emittedFilters = [
     type: "lessThan",
     filter: BigDecimal.make(200n, 2),
   },
+  {
+    columnId: "COL_ID_PRICE",
+    type: "in",
+    filter: [BigDecimal.make(200n, 2)],
+  },
+  { columnId: "COL_ID_PRICE", type: "matchNone" },
 ] satisfies BrunoTableFilterExpressions<EmittedPriceRow, typeof emittedColumns>;
 void emittedFilters;
 void BrunoTableBigDecimalValueType;

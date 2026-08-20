@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "./effect";
 import type { BrunoTableColumns } from "./public-types";
+import { createBrunoTableClientFacetSnapshot } from "./internal/client-facet";
+import { compileColumns } from "./internal/compile-columns";
+import { compileClientFilterCollection } from "./internal/grid-query";
 
 const decimal = BigDecimal.fromStringUnsafe;
 
@@ -208,6 +211,46 @@ describe("Effect BigDecimal Value Type", () => {
 });
 
 describe("BrunoTableBigDecimalColumn", () => {
+  it("keeps live facet values and counts in the exact BigDecimal domain", () => {
+    type PriceRow = { readonly price: BigDecimal.BigDecimal };
+    const definitions = [
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_PRICE",
+        enableSetFilter: true,
+        field: "price",
+        headerName: "Price",
+      }),
+    ] satisfies BrunoTableColumns<PriceRow>;
+    const columns = compileColumns(definitions);
+    const column = columns[0]!;
+    const one = decimal("1.0000000000000000000000000001");
+    const two = decimal("2.0000000000000000000000000002");
+    const snapshot = createBrunoTableClientFacetSnapshot({
+      column,
+      columns,
+      filterCollection: compileClientFilterCollection(
+        [{ columnId: "COL_ID_PRICE", type: "in", filter: [two] }],
+        columns,
+      ),
+      quickFilter: "",
+      quickFilterFields: [],
+      rows: [{ price: one }, { price: one }],
+      readColumnValue: (compiled, row) =>
+        compiled.kind === "field" ? row[compiled.field as keyof PriceRow] : undefined,
+      readQuickFilterField: () => undefined,
+    });
+
+    expect(snapshot.options).toHaveLength(2);
+    expect(snapshot.options[0]).toMatchObject({ count: 2 });
+    expect(BrunoTableBigDecimalValueType.equivalent(snapshot.options[0]!.value as never, one)).toBe(
+      true,
+    );
+    expect(snapshot.options[1]).toMatchObject({ count: 0 });
+    expect(BrunoTableBigDecimalValueType.equivalent(snapshot.options[1]!.value as never, two)).toBe(
+      true,
+    );
+  });
+
   it("applies exact numeric defaults and preset then column override precedence", () => {
     const priceColumn = BrunoTableBigDecimalColumn.withDefaults({
       headerName: "Price",

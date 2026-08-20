@@ -1,5 +1,11 @@
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
+import {
+  brunoTableSetValueKey,
+  createBrunoTableSetValueIndex,
+  hasBrunoTableSetValue,
+  type BrunoTableSetValueIndex,
+} from "./set-value-identity";
 
 export type ClientOrderBy = readonly {
   readonly columnId: string;
@@ -12,6 +18,7 @@ type CompiledFilterOperandPlan = Readonly<{
   readonly normalizedOperand?: string | undefined;
   readonly normalizedOperands?: readonly (string | undefined)[] | undefined;
   readonly membershipKeys?: ReadonlySet<string> | undefined;
+  readonly exactMembershipIndex?: BrunoTableSetValueIndex | undefined;
   readonly normalizedSubstringOperand?: string | undefined;
 }>;
 
@@ -971,7 +978,7 @@ function memoizeSanitizedFilter(
 function filterCaptureKeys(type: unknown): readonly string[] | undefined {
   if (type === "AND" || type === "OR") return ["conditions"];
   if (type === "NOT") return ["condition"];
-  if (type === "blank" || type === "notBlank") return ["columnId"];
+  if (type === "blank" || type === "notBlank" || type === "matchNone") return ["columnId"];
   if (type === "inRange") return ["columnId", "filter", "filterTo"];
   if (
     type === "in" ||
@@ -1100,13 +1107,20 @@ function sanitizeFilterRecord(
       return { _tag: "Failure" as const, message: "Value decoding failed." };
     }
   };
+  if (type === "matchNone") {
+    return column.enableSetFilter ? node(snapshotFilter(filter, ["columnId", "type"])) : undefined;
+  }
   if (type === "blank" || type === "notBlank") {
     return node(snapshotFilter(filter, ["columnId", "type"]));
   }
   if (type === "in") {
-    // Boolean and Select filters intentionally remain exact equality surfaces
-    // until issue #13 owns Set Filter inclusion semantics and its live facets.
-    if (column.semantics.filterFamily !== "text" && column.semantics.filterFamily !== "numeric") {
+    if (
+      column.semantics.filterFamily !== "text" &&
+      column.semantics.filterFamily !== "numeric" &&
+      column.semantics.filterFamily !== "boolean" &&
+      column.semantics.filterFamily !== "select" &&
+      !(column.semantics.filterFamily === "equality" && column.enableSetFilter)
+    ) {
       return undefined;
     }
     const captured = captureDenseFilterArray(operand, context, false, true);
@@ -1281,7 +1295,7 @@ function compileClientFilterDescription(
           : meterAndTruncateClientFilterDescription(`${columnLabel}: NOT (${condition})`, context);
     } else {
       const operand = record["filter"];
-      if (type === "blank" || type === "notBlank") {
+      if (type === "blank" || type === "notBlank" || type === "matchNone") {
         description = meterAndTruncateClientFilterDescription(`${columnLabel}: ${type}`, context);
       } else if (type === "inRange") {
         const from = formatClientFilterOperand(column, operand, type, context);
@@ -1526,6 +1540,15 @@ function compileFilterOperandPlan(
       };
     }
     if (type === "in" && Array.isArray(operand)) {
+      if (isExactTextSetMembership(column, filter)) {
+        const membershipKeys = compileExactSetMembershipKeys(column, operand, context);
+        return membershipKeys === undefined
+          ? undefined
+          : {
+              membershipKeys,
+              exactMembershipIndex: createBrunoTableSetValueIndex(column, operand),
+            };
+      }
       const normalizedOperands = operand.map((item) =>
         normalizeCanonicalTextOperand(column, item, caseSensitive, accentSensitive, context),
       );
@@ -1558,15 +1581,33 @@ function compileFilterOperandPlan(
       );
       return normalizedSubstringOperand === undefined ? undefined : { normalizedSubstringOperand };
     }
-  } else if (
-    column.semantics.filterFamily === "numeric" &&
-    type === "in" &&
-    Array.isArray(operand)
-  ) {
+  } else if (type === "in" && Array.isArray(operand)) {
     const membershipKeys = compileFilterMembershipKeys(column, operand, [], context);
     if (membershipKeys !== undefined) return { membershipKeys };
+    const exactMembershipKeys = compileExactSetMembershipKeys(column, operand, context);
+    if (exactMembershipKeys !== undefined) {
+      return {
+        membershipKeys: exactMembershipKeys,
+        exactMembershipIndex: createBrunoTableSetValueIndex(column, operand),
+      };
+    }
   }
   return undefined;
+}
+
+function compileExactSetMembershipKeys(
+  column: CompiledColumn,
+  operands: readonly unknown[],
+  context?: FilterSanitizationContext,
+): ReadonlySet<string> | undefined {
+  const keys = new Set<string>();
+  for (const operand of operands) {
+    const key = brunoTableSetValueKey(column, operand);
+    if (key === undefined) return undefined;
+    if (context !== undefined && !reserveFilterText(key.length, context)) return undefined;
+    keys.add(key);
+  }
+  return keys;
 }
 
 function normalizeCanonicalTextOperand(
@@ -1632,6 +1673,15 @@ function filterMembershipKey(
   if (column.valueType === "bigint") {
     return typeof value === "bigint" ? `bigint:${value.toString(10)}` : undefined;
   }
+  if (column.semantics.filterFamily === "boolean") {
+    return typeof value === "boolean" ? `boolean:${String(value)}` : undefined;
+  }
+  if (column.semantics.filterFamily === "select") {
+    const index = column.selectOptionIndexes?.get(value);
+    return index === undefined || !Object.is(column.selectOptions?.[index], value)
+      ? undefined
+      : `select:${String(index)}`;
+  }
   return undefined;
 }
 
@@ -1645,7 +1695,9 @@ function createLeafFilterSignature(
   const parts = ["leaf", column.columnId, typeof type === "string" ? type : "unknown"];
   if (filter["caseSensitive"] === true) parts.push("caseSensitive");
   if (filter["accentSensitive"] === true) parts.push("accentSensitive");
-  if (type === "blank" || type === "notBlank") return createFilterSignature(parts, context);
+  if (type === "blank" || type === "notBlank" || type === "matchNone") {
+    return createFilterSignature(parts, context);
+  }
   if (type === "in") {
     if (plan?.membershipKeys === undefined) return undefined;
     parts.push(...Array.from(plan.membershipKeys).sort(compareStringValues));
@@ -1804,6 +1856,7 @@ function evaluateFilterRecord(
     return false;
   }
 
+  if (filter["type"] === "matchNone") return false;
   const value = readValue(column, row);
   const operand = filter["filter"];
   const caseSensitive = filter["caseSensitive"] === true;
@@ -1835,6 +1888,15 @@ function evaluateFilterRecord(
     );
   }
   if (filter["type"] === "in") {
+    if (isExactTextSetMembership(column, filter)) {
+      return (
+        plan?.exactMembershipIndex !== undefined &&
+        hasBrunoTableSetValue(column, plan.exactMembershipIndex, value)
+      );
+    }
+    if (plan?.exactMembershipIndex !== undefined) {
+      return hasBrunoTableSetValue(column, plan.exactMembershipIndex, value);
+    }
     if (plan?.membershipKeys !== undefined) {
       const key = filterMembershipKey(
         column,
@@ -1894,6 +1956,19 @@ function evaluateFilterRecord(
   if (filter["type"] === "startsWith") return left.startsWith(right);
   if (filter["type"] === "endsWith") return left.endsWith(right);
   return false;
+}
+
+function isExactTextSetMembership(
+  column: CompiledColumn,
+  filter: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    column.enableSetFilter &&
+    column.semantics.filterFamily === "text" &&
+    filter["type"] === "in" &&
+    filter["caseSensitive"] === true &&
+    filter["accentSensitive"] === true
+  );
 }
 
 function compareEquality(
