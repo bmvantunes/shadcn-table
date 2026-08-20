@@ -8,5 +8,5 @@ export declare const reactCompilerOptions: Readonly<{
 export declare const reactCompilerStrictnessFixture: string;
 
 export declare function assertReactCompilerStrictness(
-  transformSync: (...args: never[]) => unknown,
+  transformSync: typeof import("oxc-transform-react").transformSync,
 ): void;
