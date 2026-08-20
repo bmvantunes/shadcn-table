@@ -154,6 +154,8 @@ export type BrunoTableBodySnapshot =
   | Readonly<{ readonly kind: "invalid" }>
   | Readonly<{ readonly kind: "empty" }>;
 
+export type BrunoTableQueryNavigationMode = "reset" | "reconcile" | "clear";
+
 export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
   readonly totalRows: number;
   readonly loadedRows: number;
@@ -177,8 +179,6 @@ export type BrunoTableRuntimeView = {
   /** Invalidates queued editor candidates even when a Clear/Reset command is a semantic no-op. */
   readonly getColumnFilterCommandEpochSnapshot: (columnId: string) => number;
   readonly getFilterComplexitySnapshot: () => BrunoTableFilterComplexity;
-  /** Optional query-transition policy used by Client navigation reconciliation. */
-  readonly getPreserveActiveCellOnQueryChangeSnapshot?: () => boolean;
   readonly getQuickFilterSnapshot: () => string;
   /** Resets Client filter position for committed raw text changes that preserve semantics. */
   readonly getFilterPositionResetEpochSnapshot: () => number;
@@ -222,8 +222,6 @@ export type BrunoTableRuntimeView = {
 export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   readonly getFilterSnapshot: () => BrunoTableFilterSnapshot;
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
-  /** The next query-generation transition may reconcile a surviving active row. */
-  readonly getPreserveActiveCellOnQueryChangeSnapshot: () => boolean;
   readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
@@ -254,6 +252,8 @@ export type BrunoTableQuerySnapshot = Readonly<{
   readonly quickFilter: string;
   readonly orderBy: BrunoTableOrderBy;
   readonly generation: number;
+  /** Immutable Active Cell policy for this exact query generation. */
+  readonly navigationMode: BrunoTableQueryNavigationMode;
 }>;
 
 function createFilterSnapshot(
@@ -303,6 +303,7 @@ function createQuerySnapshot(
   quickFilter: string,
   orderBy: BrunoTableOrderBy,
   generation: number,
+  navigationMode: BrunoTableQueryNavigationMode = "reset",
 ): BrunoTableQuerySnapshot {
   const snapshot = {
     columns,
@@ -315,6 +316,12 @@ function createQuerySnapshot(
     configurable: false,
     enumerable: false,
     value: filterCollection,
+    writable: false,
+  });
+  Object.defineProperty(snapshot, "navigationMode", {
+    configurable: false,
+    enumerable: false,
+    value: navigationMode,
     writable: false,
   });
   return Object.freeze(snapshot);
@@ -447,7 +454,6 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnFilterCommandEpochs = new Map<string, number>();
   private quickFilterCommandEpoch = 0;
   private filterPositionResetEpoch = 0;
-  private preserveActiveCellOnQueryChange = false;
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -520,7 +526,6 @@ export class BrunoTableGridRuntime<TRow> {
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
-        getPreserveActiveCellOnQueryChangeSnapshot: this.getPreserveActiveCellOnQueryChangeSnapshot,
         getFilterSnapshot: this.getFilterSnapshot,
         getQuickFilterSnapshot: this.getQuickFilterSnapshot,
         getFilterPositionResetEpochSnapshot: this.getFilterPositionResetEpochSnapshot,
@@ -603,7 +608,6 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
       this.filterCollection = this.query.filterCollection;
-      this.preserveActiveCellOnQueryChange = false;
       this.updateColumnFilterSnapshots();
       this.filterSnapshot = createFilterSnapshot(
         this.query,
@@ -707,9 +711,6 @@ export class BrunoTableGridRuntime<TRow> {
     this.currentCellSnapshot(rowId, columnId).value;
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
-
-  public readonly getPreserveActiveCellOnQueryChangeSnapshot = (): boolean =>
-    this.preserveActiveCellOnQueryChange;
 
   public readonly getFilterSnapshot = (): BrunoTableFilterSnapshot => this.filterSnapshot;
 
@@ -1168,6 +1169,11 @@ export class BrunoTableGridRuntime<TRow> {
       nextQuickFilter,
       nextOrderBy,
       semanticsChanged ? this.query.generation + 1 : this.query.generation,
+      semanticsChanged
+        ? !sameOrderBy(this.query.orderBy, nextOrderBy)
+          ? "clear"
+          : "reconcile"
+        : this.query.navigationMode,
     );
     const columnLayout = reconcileBrunoTableColumnLayout(
       this.columnLayout,
@@ -1234,14 +1240,6 @@ export class BrunoTableGridRuntime<TRow> {
     const queryChanged = filterCollectionChanged || sortingChanged || quickFilterSemanticsChanged;
     const filterChanged = filterCollectionChanged || quickFilterChanged;
     if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
-    // Issue #12 explicitly requires every committed filter change to reset the logical row
-    // position and vertical scroll to zero, then reconcile Active Cell against that new row-zero
-    // projection. This intentionally disputes Codex P1 review thread
-    // https://github.com/bmvantunes/shadcn-table/pull/46#discussion_r3791204520, which applied the
-    // passive live-publication identity-preservation rule to a committed filter command. Keeping
-    // the old body identity here could leak a hidden/non-zero row; initiating DOM focus remains
-    // with the filter control while header navigation stays available for an empty result.
-    this.preserveActiveCellOnQueryChange = false;
     const previousCommands = this.columnCommands;
     const previousColumnFilters = this.columnFilterSnapshots;
     const filterColumnIdentitiesChanged =
@@ -1254,6 +1252,7 @@ export class BrunoTableGridRuntime<TRow> {
         quickFilter,
         orderBy,
         this.query.generation + 1,
+        sortingChanged ? "clear" : "reset",
       );
       this.filterCollection = filterCollection;
       this.updateColumnFilterSnapshots();

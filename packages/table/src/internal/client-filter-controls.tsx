@@ -209,6 +209,7 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           if (invalidatedCompositionSessionRef.current === compositionSession) {
             invalidatedCompositionSessionRef.current = null;
             composingRef.current = false;
+            event.currentTarget.value = draftRef.current;
             return;
           }
           composingRef.current = false;
@@ -253,7 +254,6 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           variant="ghost"
           onClick={() => {
             const previousDraft = draftRef.current;
-            composingRef.current = false;
             debouncer.cancel();
             const draftEpoch = draftEpochRef.current + 1;
             draftEpochRef.current = draftEpoch;

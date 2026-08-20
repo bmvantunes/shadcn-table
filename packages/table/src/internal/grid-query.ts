@@ -208,11 +208,8 @@ export function compileClientFilterCollection(
       comparisonBudgetExhausted: context.comparisonBudgetExhausted,
     });
     const next = sanitizeFilter(filter, columnsById, rootContext, 0);
-    // Admission work is not retained filter state. Charge every bounded counter to the parent
-    // even when the candidate is rejected so a hostile root cannot reopen the shared allowance.
-    context.nodes = rootContext.nodes;
-    context.operands = rootContext.operands;
-    context.textLength = rootContext.textLength;
+    // Retained node, operand, and text cost commits only with an accepted root. Custom semantic
+    // comparisons are admission work and remain monotonic across the complete transaction.
     context.comparisons = rootContext.comparisons;
     context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
     if (rootContext.overBudget && options?.rejectOverBudget === true) {
@@ -224,9 +221,6 @@ export function compileClientFilterCollection(
       continue;
     }
     const root = retainClientFilterRoot(next, columnsById, rootContext, previous);
-    context.nodes = rootContext.nodes;
-    context.operands = rootContext.operands;
-    context.textLength = rootContext.textLength;
     context.comparisons = rootContext.comparisons;
     context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
     if (rootContext.overBudget && options?.rejectOverBudget === true) {
@@ -235,6 +229,9 @@ export function compileClientFilterCollection(
       );
     }
     if (root === undefined || rootContext.overBudget) continue;
+    context.nodes = rootContext.nodes;
+    context.operands = rootContext.operands;
+    context.textLength = rootContext.textLength;
     mergeClientFilterDescriptionMemo(context.descriptionMemo, rootContext.pendingDescriptionMemo);
     context.hasSharedNodes ||= rootContext.hasSharedNodes;
     for (const [node, plan] of rootContext.compiledOperands) {
@@ -1099,7 +1096,11 @@ function sanitizeFilterRecord(
   const decode = (value: unknown) => {
     try {
       const decoded = column.semantics.decodeRuntime(value);
-      if (decoded._tag === "Success" && !isBoundedFilterOperand(decoded.value, context)) {
+      if (
+        decoded._tag === "Success" &&
+        !Object.is(decoded.value, value) &&
+        !isBoundedFilterOperand(decoded.value, context)
+      ) {
         return { _tag: "Failure" as const, message: "Decoded value is not safely readable." };
       }
       return decoded;
@@ -2239,9 +2240,8 @@ type FilterSanitizationContext = {
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
   readonly admittedNodes: WeakSet<object>;
-  /** Raw operand objects and strings already metered during this root admission transaction. */
+  /** Raw operand objects already traversed during this root admission transaction. */
   readonly meteredOperandObjects: WeakSet<object>;
-  readonly meteredOperandStrings: Set<string>;
   readonly compiledOperands: Map<object, CompiledFilterOperandPlan>;
   readonly compiledOperandLookup: ReadonlyMap<object, CompiledFilterOperandPlan>;
   readonly columnLabelsById: ReadonlyMap<string, string>;
@@ -2289,7 +2289,6 @@ function createFilterSanitizationContext(
     visited: new WeakSet(),
     admittedNodes: new WeakSet(),
     meteredOperandObjects: new WeakSet(),
-    meteredOperandStrings: new Set(),
     compiledOperands,
     compiledOperandLookup: options.compiledOperandLookup ?? compiledOperands,
     columnLabelsById: options.columnLabelsById ?? new Map(),
@@ -2326,13 +2325,13 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
   // budgets and never replace or reset the collection-wide node/operand/text ledger below.
   const visited = new WeakSet<object>();
   const discoveredObjects: object[] = [];
-  const discoveredStrings = new Set<string>();
+  const discoveredStrings: string[] = [];
   let objectCount = 0;
   let propertyCount = 0;
 
   const visit = (candidate: unknown, depth: number): boolean => {
     if (typeof candidate === "string") {
-      if (!context.meteredOperandStrings.has(candidate)) discoveredStrings.add(candidate);
+      discoveredStrings.push(candidate);
       return true;
     }
     if (
@@ -2370,9 +2369,7 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
       return false;
     }
     for (const key of keys) {
-      if (typeof key === "string" && !context.meteredOperandStrings.has(key)) {
-        discoveredStrings.add(key);
-      }
+      if (typeof key === "string") discoveredStrings.push(key);
       let descriptor: PropertyDescriptor | undefined;
       try {
         descriptor = Object.getOwnPropertyDescriptor(candidate, key);
@@ -2390,7 +2387,6 @@ function isBoundedFilterOperand(value: unknown, context: FilterSanitizationConte
   for (const text of discoveredStrings) textLength += text.length;
   if (!reserveFilterText(textLength, context)) return false;
   for (const object of discoveredObjects) context.meteredOperandObjects.add(object);
-  for (const text of discoveredStrings) context.meteredOperandStrings.add(text);
   return true;
 }
 

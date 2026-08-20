@@ -10,6 +10,7 @@ import {
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type {
   BrunoTableInvalidCellValue,
+  BrunoTableQueryNavigationMode,
   BrunoTableRowPipelinePublication,
   BrunoTableRowPipelineRuntimeView,
 } from "./grid-runtime";
@@ -48,7 +49,7 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
   readonly quickFilter: string;
   readonly quickFilterFields: readonly string[];
   readonly queryGeneration: number;
-  readonly preserveActiveCellOnQueryChange: boolean;
+  readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   readonly orderBy: readonly {
     readonly columnId: string;
     readonly direction: "asc" | "desc";
@@ -87,7 +88,7 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
       quickFilterFields={props.runtime.getQuickFilterFieldsSnapshot()}
       orderBy={query.orderBy}
       queryGeneration={query.generation}
-      preserveActiveCellOnQueryChange={props.runtime.getPreserveActiveCellOnQueryChangeSnapshot()}
+      queryNavigationMode={query.navigationMode}
     />
   );
 });
@@ -104,7 +105,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   quickFilterFields,
   orderBy,
   queryGeneration,
-  preserveActiveCellOnQueryChange,
+  queryNavigationMode,
   columnLayout,
 }: ClientResolvedRowOrderProps) {
   const filterPlan = useMemo(
@@ -176,7 +177,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
           kind: "rows" as const,
           ...orderSnapshot,
           columns: rowModel.columns,
-          preserveActiveCellOnQueryChange,
+          queryNavigationMode,
         }),
   );
 });

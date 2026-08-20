@@ -107,6 +107,7 @@ import type {
   BrunoTableCellSnapshot,
   BrunoTableChromeSnapshot,
   BrunoTableColumnCommandSnapshot,
+  BrunoTableQueryNavigationMode,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -418,7 +419,7 @@ export type BrunoTableRowPipelineSnapshot =
       readonly columns: readonly CompiledColumn[];
       readonly rowSpace: BrunoTableLogicalRowSpace;
       readonly queryGeneration: number;
-      readonly preserveActiveCellOnQueryChange?: boolean;
+      readonly queryNavigationMode: BrunoTableQueryNavigationMode;
     }>
   | Readonly<{
       readonly kind: "invalid";
@@ -963,7 +964,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             focusHandoff={focusHandoff}
             navigation={navigation}
             queryGeneration={snapshot.queryGeneration}
-            preserveActiveCellOnQueryChange={snapshot.preserveActiveCellOnQueryChange === true}
+            queryNavigationMode={snapshot.queryNavigationMode}
             renderColumnFilter={renderColumnFilter}
           />
         )
@@ -1102,7 +1103,7 @@ type BrunoTableViewportAdapterProps = {
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
-  readonly preserveActiveCellOnQueryChange: boolean;
+  readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
 };
 
@@ -1116,7 +1117,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     focusHandoff,
     navigation,
     queryGeneration,
-    preserveActiveCellOnQueryChange,
+    queryNavigationMode,
     renderColumnFilter,
   }: BrunoTableViewportAdapterProps): ReactElement {
     "use no memo";
@@ -1202,11 +1203,10 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         start: resetWindow.rowStart,
         end: resetWindow.rowEnd,
       });
-      const shouldReconcileActiveCell =
-        preserveActiveCellOnQueryChange ||
-        runtime.getPreserveActiveCellOnQueryChangeSnapshot?.() === true;
-      if (shouldReconcileActiveCell) {
+      if (queryNavigationMode === "reconcile") {
         navigation.reconcileForQuery(rowSpace, logicalColumns);
+      } else if (queryNavigationMode === "clear") {
+        navigation.clearForCommittedSort(rowSpace, logicalColumns);
       } else {
         // Issue #12 resets body position without retaining a hidden/non-zero row. A header
         // origin remains a header origin, so its DOM focus and logical header navigation survive.
@@ -1215,7 +1215,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     }, [
       logicalColumns,
       navigation,
-      preserveActiveCellOnQueryChange,
+      queryNavigationMode,
       queryGeneration,
       rowSpace,
       runtime,
@@ -2107,7 +2107,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const toggleHeaderSort = useMemo(
     () =>
       (columnId: string, multi: boolean): void => {
-        runtime.dispatchGridCommand({ type: "column.sort.toggle", columnId, multi });
+        const accepted = runtime.dispatchGridCommand({
+          type: "column.sort.toggle",
+          columnId,
+          multi,
+        });
+        if (!accepted) return;
         const next = runtime.getColumnCommandSnapshot(columnId);
         const column = logicalColumns.find((candidate) => candidate.columnId === columnId);
         if (column === undefined) return;
@@ -2703,6 +2708,14 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
 }) {
   const [open, setOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
+  const menuFilterTransfer = useRef(false);
+  const openHeaderFilterFromMenu = useCallback(
+    (columnId: string): void => {
+      menuFilterTransfer.current = true;
+      openHeaderFilter(columnId);
+    },
+    [openHeaderFilter],
+  );
   const columnId = column?.columnId ?? "";
   const subscribe = useMemo(
     () => (listener: () => void) => runtime.subscribeColumnCommands(columnId, listener),
@@ -2731,7 +2744,11 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
           onOpenChange={(nextOpen) => {
             if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
             setOpen(nextOpen);
-            if (!nextOpen) restoreColumnFocus(column.columnId);
+            if (!nextOpen) {
+              const transferred = menuFilterTransfer.current;
+              menuFilterTransfer.current = false;
+              if (!transferred) restoreColumnFocus(column.columnId);
+            }
           }}
         >
           <DropdownMenuTrigger
@@ -2753,10 +2770,14 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
+              closeMenu={(preserveFocus) => {
+                if (preserveFocus) menuFilterTransfer.current = true;
+                setOpen(false);
+              }}
               column={column}
               command={command}
               direction={menuDirection}
-              openHeaderFilter={openHeaderFilter}
+              openHeaderFilter={openHeaderFilterFromMenu}
               preventMenuFinalFocus
               renderColumnFilter={renderColumnFilter}
               restoreColumnFocus={restoreColumnFocus}
@@ -3010,6 +3031,14 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       : `Sort by ${column.headerName}, currently ${presentation.direction}${sortPriorityLabel(command.sortPriority)}`;
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
+  const menuFilterTransfer = useRef(false);
+  const openHeaderFilterFromMenu = useCallback(
+    (columnId: string): void => {
+      menuFilterTransfer.current = true;
+      openHeaderFilter(columnId);
+    },
+    [openHeaderFilter],
+  );
   const pinLabel = command.pinned === undefined ? "unpinned" : `pinned ${command.pinned}`;
   const subscribeActiveResize = useMemo(
     () => (listener: () => void) => navigation.subscribeColumn(column.columnId, listener),
@@ -3072,11 +3101,24 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
-              activateHeaderCommand(column.columnId);
+              event.currentTarget.focus({ preventScroll: true });
+              navigation.activateHeader(column.columnId);
             }}
-            onClick={() => {
-              activateHeaderCommand(column.columnId);
+            onClick={(event) => {
+              const header = event.currentTarget.closest("th");
+              event.currentTarget.focus({ preventScroll: true });
+              navigation.activateHeader(column.columnId);
               toggleHeaderFilter(column.columnId);
+              const next = runtime.getColumnCommandSnapshot(column.columnId);
+              if (!next.filterActive && !next.filterBaselineAvailable) {
+                requestAnimationFrame(() => {
+                  const label = `Filter ${column.headerName}`;
+                  const trigger = [
+                    ...(header?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+                  ].find((candidate) => candidate.getAttribute("aria-label")?.startsWith(label));
+                  trigger?.focus({ preventScroll: true });
+                });
+              }
             }}
           >
             {command.filterActive ? "Clear" : "Reset"}
@@ -3098,7 +3140,11 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           onOpenChange={(nextOpen) => {
             if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
             setMenuOpen(nextOpen);
-            if (!nextOpen) restoreColumnFocus(column.columnId);
+            if (!nextOpen) {
+              const transferred = menuFilterTransfer.current;
+              menuFilterTransfer.current = false;
+              if (!transferred) restoreColumnFocus(column.columnId);
+            }
           }}
         >
           <DropdownMenuTrigger
@@ -3127,10 +3173,14 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
+              closeMenu={(preserveFocus) => {
+                if (preserveFocus) menuFilterTransfer.current = true;
+                setMenuOpen(false);
+              }}
               column={column}
               command={command}
               direction={menuDirection}
-              openHeaderFilter={openHeaderFilter}
+              openHeaderFilter={openHeaderFilterFromMenu}
               renderColumnFilter={renderColumnFilter}
               restoreColumnFocus={restoreColumnFocus}
               runtime={runtime}
@@ -3188,6 +3238,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
 const ColumnManagementMenu = memo(function ColumnManagementMenu({
   allColumns,
   announce,
+  closeMenu,
   column,
   command,
   direction,
@@ -3200,6 +3251,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
 }: {
   readonly allColumns: readonly CompiledColumn[];
   readonly announce: (message: string) => void;
+  readonly closeMenu: (preserveFocus?: boolean) => void;
   readonly column: CompiledColumn;
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly direction: "ltr" | "rtl";
@@ -3221,6 +3273,23 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   const groupEnd = groupIndexes.at(-1) ?? index;
   const isFirst = index < 0 || index <= groupStart;
   const isLast = index < 0 || index >= groupEnd;
+  const filterTransfer = useRef(false);
+  const finalFocus = preventMenuFinalFocus
+    ? false
+    : () => {
+        if (!filterTransfer.current) return null;
+        filterTransfer.current = false;
+        return false;
+      };
+  const closeMenuPreservingActiveFocus = (): void => {
+    const focusTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    filterTransfer.current = true;
+    closeMenu(true);
+    requestAnimationFrame(() => {
+      if (focusTarget?.isConnected) focusTarget.focus({ preventScroll: true });
+    });
+  };
   const dispatch = (commandToDispatch: BrunoTableGridCommand): void => {
     runtime.dispatchGridCommand(commandToDispatch);
     restoreColumnFocus(column.columnId);
@@ -3248,11 +3317,12 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
     announce(`${column.headerName} width ${String(width)} pixels`);
   };
   return (
-    <DropdownMenuContent align="start" finalFocus={preventMenuFinalFocus ? false : undefined}>
+    <DropdownMenuContent align="start" finalFocus={finalFocus}>
       {command.sortable ? (
         <DropdownMenuGroup>
           <DropdownMenuLabel>Sort</DropdownMenuLabel>
           <DropdownMenuItem
+            closeOnClick={false}
             aria-label={
               command.sortDirection === undefined
                 ? `Sort by ${column.headerName}`
@@ -3261,13 +3331,18 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
                   }${sortPriorityLabel(command.sortPriority)}`
             }
             onClick={() => {
-              runtime.dispatchGridCommand({
+              const accepted = runtime.dispatchGridCommand({
                 type: "column.sort.toggle",
                 columnId: column.columnId,
                 multi: false,
               });
+              if (!accepted) {
+                closeMenuPreservingActiveFocus();
+                return;
+              }
               const next = runtime.getColumnCommandSnapshot(column.columnId);
               announce(columnSortAnnouncement(column.headerName, next));
+              closeMenu();
               restoreColumnFocus(column.columnId);
             }}
           >
@@ -3283,6 +3358,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           {supportsBrunoTableCustomColumnFilter(column, renderColumnFilter) ? (
             <DropdownMenuItem
               onClick={() => {
+                filterTransfer.current = true;
                 openHeaderFilter(column.columnId);
               }}
             >
@@ -3291,17 +3367,19 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           ) : null}
           {command.filterActive || command.filterBaselineAvailable ? (
             <DropdownMenuItem
-              onClick={(event) => {
+              closeOnClick={false}
+              onClick={() => {
                 const action = command.filterActive ? "cleared" : "reset";
                 const accepted = runtime.dispatchGridCommand({
                   type: command.filterActive ? "column.filter.clear" : "column.filter.reset",
                   columnId: column.columnId,
                 });
                 if (!accepted) {
-                  event.preventDefault();
+                  closeMenuPreservingActiveFocus();
                   return;
                 }
                 announce(`${column.headerName} filter ${action}`);
+                closeMenu();
                 restoreColumnFocus(column.columnId);
               }}
             >

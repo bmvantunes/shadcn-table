@@ -31,6 +31,7 @@ import type { CompiledColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
   boundBrunoTableFilterOperandText,
@@ -79,6 +80,7 @@ type FilterLeafDraft = Readonly<{
 }>;
 
 type FilterChangeMode = "continuous" | "immediate" | "clear" | "local";
+type FilterDraftPathSegment = number | "not";
 
 type FilterEditorIdentity = Readonly<{
   readonly version: number;
@@ -112,10 +114,15 @@ type FilterDraft =
 
 type FilterNode = Readonly<Record<string, unknown>>;
 
+function isFilterNodeArray(value: unknown): value is readonly FilterNode[] {
+  return Array.isArray(value);
+}
+
 type FilterCandidate = Readonly<{
   readonly filter: FilterNode | readonly FilterNode[] | undefined;
   readonly root?: FilterNode;
   readonly error?: string;
+  readonly invalidControl?: string;
 }>;
 
 type CommittedFilterCandidate = FilterCandidate &
@@ -345,8 +352,34 @@ type LocalFilterDraftState = Readonly<{
   readonly column: CompiledColumn;
   readonly identity: FilterEditorIdentity;
   readonly draft: FilterDraft;
+  readonly complexityDelta: FilterDraftComplexity;
   readonly error: string | undefined;
+  readonly invalidControl: string | undefined;
 }>;
+
+type FilterDraftComplexity = Readonly<{
+  readonly nodes: number;
+  readonly operands: number;
+}>;
+
+const FILTER_DRAFT_COMPLEXITY = new WeakMap<FilterDraft, FilterDraftComplexity>();
+const FILTER_DRAFT_CANDIDATE = new WeakMap<FilterDraft, FilterNode | readonly FilterNode[]>();
+
+function createLocalFilterDraftState(
+  column: CompiledColumn,
+  identity: FilterEditorIdentity,
+  draft: FilterDraft,
+  error?: string,
+): LocalFilterDraftState {
+  return {
+    column,
+    identity,
+    draft,
+    complexityDelta: Object.freeze({ nodes: 0, operands: 0 }),
+    error,
+    invalidControl: undefined,
+  };
+}
 
 const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor({
   column,
@@ -380,24 +413,25 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     () => Object.freeze({ version, commandEpoch }),
     [commandEpoch, version],
   );
-  const [localState, setLocalState] = useState<LocalFilterDraftState>(() => ({
-    column,
-    identity: editorIdentity,
-    draft: draftFromCommitted(column, committed),
-    error: undefined,
-  }));
+  const [localState, setLocalState] = useState<LocalFilterDraftState>(() =>
+    createLocalFilterDraftState(column, editorIdentity, draftFromCommitted(column, committed)),
+  );
   const currentState =
     sameFilterEditorColumn(localState.column, column) &&
     sameFilterEditorIdentity(localState.identity, editorIdentity)
       ? localState
-      : {
+      : createLocalFilterDraftState(
           column,
-          identity: editorIdentity,
-          draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
-          error: undefined,
-        };
+          editorIdentity,
+          draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
+        );
   const draft = currentState.draft;
   const error = currentState.error;
+  const invalidControl = currentState.invalidControl;
+  const draftComplexity = countFilterDraftComplexity(draft);
+  const retainedComplexity = runtime.getFilterComplexitySnapshot();
+  const projectedNodes = retainedComplexity.nodes + currentState.complexityDelta.nodes;
+  const projectedOperands = retainedComplexity.operands + currentState.complexityDelta.operands;
   const parseCache = useMemo(
     () => createFilterParseCache(column.semantics, editorIdentity),
     [column.semantics, editorIdentity],
@@ -432,12 +466,14 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       // remain visually ahead of the committed filter, or a later stale Pacer callback could make
       // the overlay claim a state the row model never accepted.
       draftRevisionRef.current += 1;
-      setLocalState({
-        column,
-        identity: editorIdentity,
-        draft: draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
-        error: "This filter collection is too complex.",
-      });
+      setLocalState(
+        createLocalFilterDraftState(
+          column,
+          editorIdentity,
+          draftFromCommitted(column, runtime.getColumnFilterSnapshot(column.columnId)),
+          "This filter collection is too complex.",
+        ),
+      );
     },
     [column, commandEpoch, editorIdentity, runtime],
   );
@@ -483,9 +519,23 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
 
   const commitDraft = useCallback(
-    (nextDraft: FilterDraft, mode: FilterChangeMode, badInput = false): void => {
+    (
+      nextDraft: FilterDraft,
+      mode: FilterChangeMode,
+      badInput = false,
+      changedPath?: readonly FilterDraftPathSegment[],
+    ): void => {
       const draftRevision = draftRevisionRef.current + 1;
       draftRevisionRef.current = draftRevision;
+      const nextDraftComplexity = countFilterDraftComplexity(nextDraft);
+      const nextComplexityDelta = Object.freeze({
+        nodes:
+          currentState.complexityDelta.nodes + nextDraftComplexity.nodes - draftComplexity.nodes,
+        operands:
+          currentState.complexityDelta.operands +
+          nextDraftComplexity.operands -
+          draftComplexity.operands,
+      });
       if (mode === "clear") {
         debouncer.cancel();
         const accepted = runtime.dispatchGridCommand({
@@ -496,22 +546,42 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           column,
           identity: editorIdentity,
           draft: accepted ? nextDraft : draft,
+          complexityDelta: accepted ? nextComplexityDelta : currentState.complexityDelta,
           error: undefined,
+          invalidControl: undefined,
         });
         return;
       }
       if (mode === "local") {
         debouncer.cancel();
-        setLocalState({ column, identity: editorIdentity, draft: nextDraft, error: undefined });
+        setLocalState({
+          column,
+          identity: editorIdentity,
+          draft: nextDraft,
+          complexityDelta: nextComplexityDelta,
+          error: undefined,
+          invalidControl: undefined,
+        });
         return;
       }
-      const candidate =
-        mode === "continuous"
-          ? badInput
-            ? { filter: undefined, error: "Enter a valid value." }
-            : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache)
-          : buildFilterCandidateForDraftChange(column, draft, nextDraft, parseCache);
-      setLocalState({ column, identity: editorIdentity, draft: nextDraft, error: candidate.error });
+      const parsed = buildFilterCandidateForDraftChange(
+        column,
+        draft,
+        nextDraft,
+        parseCache,
+        changedPath,
+      );
+      const candidate = badInput
+        ? { ...parsed, filter: undefined, error: "Enter a valid value." }
+        : parsed;
+      setLocalState({
+        column,
+        identity: editorIdentity,
+        draft: nextDraft,
+        complexityDelta: nextComplexityDelta,
+        error: candidate.error,
+        invalidControl: candidate.invalidControl,
+      });
       const committedCandidate = Object.freeze({ ...candidate, draftRevision });
       if (mode === "continuous") commitContinuous(committedCandidate);
       else commitImmediately(committedCandidate);
@@ -522,9 +592,11 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       commitImmediately,
       debouncer,
       draft,
+      draftComplexity,
       editorIdentity,
       parseCache,
       runtime,
+      currentState.complexityDelta,
     ],
   );
 
@@ -552,12 +624,10 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           draft={draft}
           errorId={errorId}
           compositionIdentity={editorIdentity}
-          invalid={error !== undefined}
+          invalidControl={invalidControl}
           inputRef={inputRef}
-          canAddFilterValue={
-            runtime.getFilterComplexitySnapshot().operands <
-            BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
-          }
+          canAddCondition={projectedNodes < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES}
+          canAddFilterValue={projectedOperands < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS}
           selectRef={selectRef}
           renderBudget={FILTER_EDITOR_RENDER_NODE_LIMIT}
           onChange={commitDraft}
@@ -577,8 +647,9 @@ function FilterExpressionEditor({
   draft: inputDraft,
   compositionIdentity,
   errorId,
-  invalid,
+  invalidControl,
   inputRef,
+  canAddCondition,
   canAddFilterValue,
   onChange,
   path = "root",
@@ -590,10 +661,16 @@ function FilterExpressionEditor({
   readonly draft: FilterDraft;
   readonly compositionIdentity: FilterEditorIdentity;
   readonly errorId: string;
-  readonly invalid: boolean;
+  readonly invalidControl: string | undefined;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
+  readonly canAddCondition: boolean;
   readonly canAddFilterValue: boolean;
-  readonly onChange: (draft: FilterDraft, mode: FilterChangeMode, badInput?: boolean) => void;
+  readonly onChange: (
+    draft: FilterDraft,
+    mode: FilterChangeMode,
+    badInput?: boolean,
+    changedPath?: readonly FilterDraftPathSegment[],
+  ) => void;
   readonly path?: string;
   readonly renderBudget: number;
   readonly rootSelectRef?: React.RefObject<HTMLSelectElement | null> | undefined;
@@ -603,7 +680,6 @@ function FilterExpressionEditor({
     inputDraft.kind === "opaque"
       ? draftFromNode(column, inputDraft.committed, createFilterDraftMaterializationState(), 0)
       : inputDraft;
-  const draftOperandCount = countFilterDraftOperands(draft);
   const expressionMode =
     draft.kind === "leaf" ? "leaf" : draft.kind === "compound" ? draft.operator : "NOT";
   const pathLabel = filterExpressionPathLabel(path);
@@ -655,7 +731,7 @@ function FilterExpressionEditor({
     scheduleFocus(() => document.getElementById(controlId));
   };
   const updateLeaf = (nextLeaf: FilterLeafDraft, mode: FilterChangeMode, badInput = false) =>
-    onChange(nextLeaf, mode, badInput);
+    onChange(nextLeaf, mode, badInput, []);
   const canRenderThisEditor = renderBudget > 0;
   const childRenderBudget = Math.max(0, renderBudget - 1);
   const canRenderNotCondition = draft.kind === "not" && childRenderBudget > 0;
@@ -694,18 +770,18 @@ function FilterExpressionEditor({
             draft={condition}
             compositionIdentity={compositionIdentity}
             errorId={errorId}
-            invalid={invalid}
-            canAddFilterValue={
-              canAddFilterValue && draftOperandCount < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
-            }
-            onChange={(nextCondition, mode, badInput) => {
+            invalidControl={invalidControl}
+            canAddCondition={canAddCondition}
+            canAddFilterValue={canAddFilterValue}
+            onChange={(nextCondition, mode, badInput, changedPath) => {
               const conditions = draft.conditions.slice() as [FilterDraft, ...FilterDraft[]];
               conditions[index] = nextCondition;
-              onChange(
-                Object.freeze({ ...draft, conditions: Object.freeze(conditions) }),
-                mode,
-                badInput,
-              );
+              const nextDraft = Object.freeze({
+                ...draft,
+                conditions: Object.freeze(conditions),
+              });
+              cacheFilterDraftComplexityDelta(nextDraft, draft, condition, nextCondition);
+              onChange(nextDraft, mode, badInput, [index, ...(changedPath ?? [])]);
             }}
             path={conditionPath}
             renderBudget={conditionRenderBudget}
@@ -723,7 +799,7 @@ function FilterExpressionEditor({
               variant="ghost"
               onClick={() => {
                 const conditions = draft.conditions.filter((_, candidate) => candidate !== index);
-                onChange(
+                const nextDraft =
                   conditions.length === 1
                     ? conditions[0]!
                     : Object.freeze({
@@ -732,9 +808,11 @@ function FilterExpressionEditor({
                           FilterDraft,
                           ...FilterDraft[],
                         ],
-                      }),
-                  "immediate",
-                );
+                      });
+                if (conditions.length !== 1) {
+                  cacheFilterDraftComplexityDelta(nextDraft, draft, draft.conditions[index]);
+                }
+                onChange(nextDraft, "immediate", false, []);
                 focusAfterConditionRemoval(
                   conditions.length === 1
                     ? -1
@@ -765,7 +843,12 @@ function FilterExpressionEditor({
             aria-label={modeLabel}
             value={expressionMode}
             onChange={(event) => {
-              onChange(changeExpressionMode(column, draft, event.currentTarget.value), "immediate");
+              onChange(
+                changeExpressionMode(column, draft, event.currentTarget.value),
+                "immediate",
+                false,
+                [],
+              );
             }}
           >
             <NativeSelectOption value="leaf">Single condition</NativeSelectOption>
@@ -828,11 +911,8 @@ function FilterExpressionEditor({
                   draft={leaf}
                   compositionIdentity={compositionIdentity}
                   errorId={errorId}
-                  invalid={invalid}
-                  canAddFilterValue={
-                    canAddFilterValue &&
-                    draftOperandCount < BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS
-                  }
+                  invalidControl={invalidControl}
+                  canAddFilterValue={canAddFilterValue}
                   inputRef={inputRef}
                   path={path}
                   selectRef={selectRef}
@@ -885,12 +965,15 @@ function FilterExpressionEditor({
             draft={draft.condition}
             compositionIdentity={compositionIdentity}
             errorId={errorId}
-            invalid={invalid}
+            invalidControl={invalidControl}
+            canAddCondition={canAddCondition}
             canAddFilterValue={canAddFilterValue}
             inputRef={inputRef}
-            onChange={(condition, mode, badInput) =>
-              onChange(Object.freeze({ ...draft, condition }), mode, badInput)
-            }
+            onChange={(condition, mode, badInput, changedPath) => {
+              const nextDraft = Object.freeze({ ...draft, condition });
+              cacheFilterDraftComplexityDelta(nextDraft, draft, draft.condition, condition);
+              onChange(nextDraft, mode, badInput, ["not", ...(changedPath ?? [])]);
+            }}
             path={`${path}-not`}
             renderBudget={childRenderBudget}
             rootSelectRef={rootSelectRef ?? selectRef}
@@ -949,6 +1032,7 @@ function FilterExpressionEditor({
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
             disabled={
+              !canAddCondition ||
               omittedCompoundConditionCount > 0 ||
               (draft.rootCollection === true &&
                 draft.conditions.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
@@ -959,6 +1043,7 @@ function FilterExpressionEditor({
             onClick={() => {
               const nextIndex = draft.conditions.length;
               if (
+                !canAddCondition ||
                 omittedCompoundConditionCount > 0 ||
                 (draft.rootCollection === true &&
                   nextIndex >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
@@ -968,16 +1053,16 @@ function FilterExpressionEditor({
               setConditionWindowStart(
                 Math.max(0, nextIndex - FILTER_COMPOUND_VISIBLE_CONDITIONS + 1),
               );
-              onChange(
-                Object.freeze({
-                  ...draft,
-                  conditions: Object.freeze([
-                    ...draft.conditions,
-                    createDefaultLeaf(column),
-                  ]) as readonly [FilterDraft, ...FilterDraft[]],
-                }),
-                "immediate",
-              );
+              const condition = createDefaultLeaf(column);
+              const nextDraft = Object.freeze({
+                ...draft,
+                conditions: Object.freeze([...draft.conditions, condition]) as readonly [
+                  FilterDraft,
+                  ...FilterDraft[],
+                ],
+              });
+              cacheFilterDraftComplexityDelta(nextDraft, draft, undefined, condition);
+              onChange(nextDraft, "immediate", false, []);
               focusAddedControl(`${errorId}-${path}-${String(nextIndex)}-mode`);
             }}
           >
@@ -1004,7 +1089,7 @@ function FilterOperand({
   draft,
   compositionIdentity,
   errorId,
-  invalid,
+  invalidControl,
   canAddFilterValue,
   focusAddedControl,
   inputLabel,
@@ -1018,7 +1103,7 @@ function FilterOperand({
   readonly draft: FilterLeafDraft;
   readonly compositionIdentity: FilterEditorIdentity;
   readonly errorId: string;
-  readonly invalid: boolean;
+  readonly invalidControl: string | undefined;
   readonly canAddFilterValue: boolean;
   readonly inputLabel: string;
   readonly inputRef?: React.RefObject<HTMLInputElement | null> | undefined;
@@ -1082,6 +1167,7 @@ function FilterOperand({
   };
   const pathLabel = filterExpressionPathLabel(path);
   const labelSuffix = pathLabel === undefined ? "" : ` (${pathLabel})`;
+  const isInvalidControl = (control: string): boolean => invalidControl === `${path}-${control}`;
   if (isBuiltInBooleanColumn(column)) {
     return (
       <label className="flex flex-col gap-1 text-sm" htmlFor={`${errorId}-${path}-value`}>
@@ -1090,8 +1176,8 @@ function FilterOperand({
           ref={selectRef}
           id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
-          aria-invalid={invalid ? "true" : undefined}
-          aria-describedby={invalid ? errorId : undefined}
+          aria-invalid={isInvalidControl("value") ? "true" : undefined}
+          aria-describedby={isInvalidControl("value") ? errorId : undefined}
           value={draft.first}
           onChange={(event) =>
             onChange(
@@ -1178,8 +1264,8 @@ function FilterOperand({
           ref={selectRef}
           id={`${errorId}-${path}-value`}
           aria-label={inputLabel}
-          aria-invalid={invalid ? "true" : undefined}
-          aria-describedby={invalid ? errorId : undefined}
+          aria-invalid={isInvalidControl("value") ? "true" : undefined}
+          aria-describedby={isInvalidControl("value") ? errorId : undefined}
           value={draft.selectIndex === undefined ? "" : selectOptionToken(draft.selectIndex)}
           onChange={(event) => {
             const token = event.currentTarget.value;
@@ -1282,8 +1368,10 @@ function FilterOperand({
                   <Input
                     ref={index === 0 ? inputRef : undefined}
                     id={`${errorId}-${path}-value-${String(index)}`}
-                    aria-describedby={invalid ? errorId : undefined}
-                    aria-invalid={invalid ? "true" : undefined}
+                    aria-describedby={
+                      isInvalidControl(`value-${String(index)}`) ? errorId : undefined
+                    }
+                    aria-invalid={isInvalidControl(`value-${String(index)}`) ? "true" : undefined}
                     aria-label={
                       index === 0
                         ? inputLabel
@@ -1422,8 +1510,8 @@ function FilterOperand({
           <Input
             ref={inputRef}
             id={`${errorId}-${path}-value`}
-            aria-describedby={invalid ? errorId : undefined}
-            aria-invalid={invalid ? "true" : undefined}
+            aria-describedby={isInvalidControl("value") ? errorId : undefined}
+            aria-invalid={isInvalidControl("value") ? "true" : undefined}
             aria-label={inputLabel}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
@@ -1452,8 +1540,8 @@ function FilterOperand({
           Less than
           <Input
             id={`${errorId}-${path}-value-to`}
-            aria-describedby={invalid ? errorId : undefined}
-            aria-invalid={invalid ? "true" : undefined}
+            aria-describedby={isInvalidControl("value-to") ? errorId : undefined}
+            aria-invalid={isInvalidControl("value-to") ? "true" : undefined}
             aria-label={`Filter upper bound for ${column.headerName}${labelSuffix}`}
             inputMode={inputMode}
             maxLength={BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH}
@@ -1521,6 +1609,7 @@ function filterOperators(column: CompiledColumn): readonly FilterOperator[] {
 type FilterDraftMaterializationState = {
   readonly memo: WeakMap<object, FilterDraft>;
   readonly active: WeakSet<object>;
+  readonly complexityMemo: WeakMap<object, FilterDraftComplexity>;
 };
 
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
@@ -1530,10 +1619,10 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
     const conditions = rootEntries.map((record, index) => {
       return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
         ? draftFromNode(column, record, state, 0)
-        : createOpaqueFilterDraft(record);
+        : createOpaqueFilterDraft(record, state);
     });
     if (conditions.length >= 2) {
-      return Object.freeze({
+      const draft = Object.freeze({
         kind: "compound",
         operator: "AND",
         conditions: Object.freeze(conditions) as readonly [
@@ -1544,20 +1633,33 @@ function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterD
         rootCollection: true,
         rootEntries: Object.freeze(rootEntries),
       });
+      countFilterDraftComplexity(draft);
+      FILTER_DRAFT_CANDIDATE.set(draft, draft.rootEntries);
+      return draft;
     }
     return conditions[0] ?? createDefaultLeaf(column);
   }
   return draftFromNode(column, asRecord(committed), createFilterDraftMaterializationState(), 0);
 }
 
-function createOpaqueFilterDraft(record: Readonly<Record<string, unknown>>): FilterDraft {
-  return Object.freeze({ kind: "opaque", committed: record });
+function createOpaqueFilterDraft(
+  record: Readonly<Record<string, unknown>>,
+  state: FilterDraftMaterializationState,
+): FilterDraft {
+  const draft = Object.freeze({ kind: "opaque", committed: record });
+  FILTER_DRAFT_COMPLEXITY.set(
+    draft,
+    countCommittedFilterDraftComplexity(record, state.complexityMemo),
+  );
+  FILTER_DRAFT_CANDIDATE.set(draft, record);
+  return draft;
 }
 
 function createFilterDraftMaterializationState(): FilterDraftMaterializationState {
   return {
     memo: new WeakMap<object, FilterDraft>(),
     active: new WeakSet<object>(),
+    complexityMemo: new WeakMap<object, FilterDraftComplexity>(),
   };
 }
 
@@ -1570,7 +1672,7 @@ function draftFromNode(
   const cached = state.memo.get(record);
   if (cached !== undefined) return cached;
   if (depth > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH || state.active.has(record)) {
-    return createOpaqueFilterDraft(record);
+    return createOpaqueFilterDraft(record, state);
   }
   state.active.add(record);
   const type = record["type"];
@@ -1580,7 +1682,7 @@ function draftFromNode(
         const childRecord = asRecord(condition);
         return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
           ? draftFromNode(column, childRecord, state, depth + 1)
-          : createOpaqueFilterDraft(childRecord);
+          : createOpaqueFilterDraft(childRecord, state);
       });
       if (conditions.length >= 1) {
         const draft = Object.freeze({
@@ -1589,6 +1691,8 @@ function draftFromNode(
           conditions: Object.freeze(conditions) as readonly [FilterDraft, ...FilterDraft[]],
         });
         state.memo.set(record, draft);
+        countFilterDraftComplexity(draft);
+        FILTER_DRAFT_CANDIDATE.set(draft, record);
         return draft;
       }
     }
@@ -1598,6 +1702,8 @@ function draftFromNode(
         condition: draftFromNode(column, asRecord(record["condition"]), state, depth + 1),
       });
       state.memo.set(record, draft);
+      countFilterDraftComplexity(draft);
+      FILTER_DRAFT_CANDIDATE.set(draft, record);
       return draft;
     }
     const operator = isFilterOperator(type) ? type : defaultFilterOperator(column);
@@ -1637,6 +1743,8 @@ function draftFromNode(
       accentSensitive: record["accentSensitive"] === true,
     });
     state.memo.set(record, draft);
+    countFilterDraftComplexity(draft);
+    FILTER_DRAFT_CANDIDATE.set(draft, record);
     return draft;
   } finally {
     state.active.delete(record);
@@ -1647,34 +1755,52 @@ function buildFilterCandidate(
   column: CompiledColumn,
   draft: FilterDraft,
   parseCache?: FilterParseCache,
+  path = "root",
 ): FilterCandidate {
+  const cached = FILTER_DRAFT_CANDIDATE.get(draft);
+  if (cached !== undefined) return { filter: cached };
   if (draft.kind === "opaque") return { filter: draft.committed };
   if (draft.kind === "not") {
-    const condition = buildFilterCandidate(column, draft.condition, parseCache);
+    const condition = buildFilterCandidate(column, draft.condition, parseCache, `${path}-not`);
     if (condition.filter === undefined) return condition;
     const conditionFilter = Array.isArray(condition.filter)
       ? Object.freeze({ type: "AND", conditions: condition.filter })
       : condition.filter;
-    return { filter: Object.freeze({ type: "NOT", condition: conditionFilter }) };
+    const filter = Object.freeze({ type: "NOT", condition: conditionFilter });
+    FILTER_DRAFT_CANDIDATE.set(draft, filter);
+    return { filter };
   }
   if (draft.kind === "compound") {
     const conditions: FilterNode[] = [];
-    for (const conditionDraft of draft.conditions) {
-      const condition = buildFilterCandidate(column, conditionDraft, parseCache);
+    for (const [index, conditionDraft] of draft.conditions.entries()) {
+      const condition = buildFilterCandidate(
+        column,
+        conditionDraft,
+        parseCache,
+        `${path}-${String(index)}`,
+      );
       if (condition.filter === undefined) return condition;
       const conditionFilter = condition.filter;
       if (Array.isArray(conditionFilter)) return { filter: undefined };
       conditions.push(conditionFilter as FilterNode);
     }
-    if (draft.rootCollection) return { filter: Object.freeze(conditions) };
-    return {
-      filter: Object.freeze({
-        type: draft.operator,
-        conditions: Object.freeze(conditions),
-      }),
-    };
+    if (draft.rootCollection) {
+      const filter = Object.freeze(conditions);
+      FILTER_DRAFT_CANDIDATE.set(draft, filter);
+      return { filter };
+    }
+    const filter = Object.freeze({
+      type: draft.operator,
+      conditions: Object.freeze(conditions),
+    });
+    FILTER_DRAFT_CANDIDATE.set(draft, filter);
+    return { filter };
   }
-  return buildLeafFilterCandidate(column, draft, parseCache);
+  const candidate = buildLeafFilterCandidate(column, draft, parseCache, path);
+  if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
+    FILTER_DRAFT_CANDIDATE.set(draft, candidate.filter);
+  }
+  return candidate;
 }
 
 function buildFilterCandidateForDraftChange(
@@ -1682,7 +1808,39 @@ function buildFilterCandidateForDraftChange(
   previous: FilterDraft,
   next: FilterDraft,
   parseCache?: FilterParseCache,
+  changedPath?: readonly FilterDraftPathSegment[],
 ): FilterCandidate {
+  if (changedPath !== undefined) {
+    const [rootIndex, ...rootPath] = changedPath;
+    if (
+      typeof rootIndex === "number" &&
+      previous.kind === "compound" &&
+      next.kind === "compound" &&
+      previous.rootCollection === true &&
+      next.rootCollection === true &&
+      previous.rootEntries !== undefined &&
+      previous.conditions.length === next.conditions.length
+    ) {
+      const root = previous.rootEntries[rootIndex];
+      const previousRoot = previous.conditions[rootIndex];
+      const nextRoot = next.conditions[rootIndex];
+      if (root !== undefined && previousRoot !== undefined && nextRoot !== undefined) {
+        const candidate = buildFilterCandidateAlongPath(
+          column,
+          previousRoot,
+          nextRoot,
+          rootPath,
+          parseCache,
+          `root-${String(rootIndex)}`,
+        );
+        if (candidate.filter !== undefined && !isFilterNodeArray(candidate.filter)) {
+          return { ...candidate, root };
+        }
+        return candidate;
+      }
+    }
+    return buildFilterCandidateAlongPath(column, previous, next, changedPath, parseCache, "root");
+  }
   if (
     previous.kind === "compound" &&
     next.kind === "compound" &&
@@ -1704,7 +1862,12 @@ function buildFilterCandidateForDraftChange(
     }
     const root = changedIndex >= 0 ? previous.rootEntries[changedIndex] : undefined;
     if (root !== undefined && changedIndex >= 0) {
-      const candidate = buildFilterCandidate(column, next.conditions[changedIndex]!, parseCache);
+      const candidate = buildFilterCandidate(
+        column,
+        next.conditions[changedIndex]!,
+        parseCache,
+        `root-${String(changedIndex)}`,
+      );
       if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
         return { ...candidate, root };
       }
@@ -1712,6 +1875,98 @@ function buildFilterCandidateForDraftChange(
     }
   }
   return buildFilterCandidate(column, next, parseCache);
+}
+
+function buildFilterCandidateAlongPath(
+  column: CompiledColumn,
+  previous: FilterDraft,
+  next: FilterDraft,
+  path: readonly FilterDraftPathSegment[],
+  parseCache: FilterParseCache | undefined,
+  controlPath: string,
+): FilterCandidate {
+  const [segment, ...remaining] = path;
+  if (segment === undefined) {
+    if (
+      previous.kind === "compound" &&
+      next.kind === "compound" &&
+      previous.conditions === next.conditions
+    ) {
+      const conditions = getFilterDraftCandidateConditions(previous);
+      if (conditions !== undefined) {
+        const filter = next.rootCollection
+          ? conditions
+          : Object.freeze({ type: next.operator, conditions });
+        FILTER_DRAFT_CANDIDATE.set(next, filter);
+        return { filter };
+      }
+    }
+    if (next.kind === "not" && next.condition === previous) {
+      const condition = FILTER_DRAFT_CANDIDATE.get(previous);
+      if (condition !== undefined && !Array.isArray(condition)) {
+        const filter = Object.freeze({ type: "NOT", condition });
+        FILTER_DRAFT_CANDIDATE.set(next, filter);
+        return { filter };
+      }
+    }
+    return buildFilterCandidate(column, next, parseCache, controlPath);
+  }
+  if (typeof segment === "number" && previous.kind === "compound" && next.kind === "compound") {
+    const previousCondition = previous.conditions[segment];
+    const nextCondition = next.conditions[segment];
+    const conditions = getFilterDraftCandidateConditions(previous);
+    if (
+      previousCondition === undefined ||
+      nextCondition === undefined ||
+      conditions === undefined
+    ) {
+      return buildFilterCandidate(column, next, parseCache, controlPath);
+    }
+    const candidate = buildFilterCandidateAlongPath(
+      column,
+      previousCondition,
+      nextCondition,
+      remaining,
+      parseCache,
+      `${controlPath}-${String(segment)}`,
+    );
+    if (candidate.filter === undefined || isFilterNodeArray(candidate.filter)) return candidate;
+    const nextConditions = conditions.slice();
+    nextConditions[segment] = candidate.filter;
+    const frozenConditions = Object.freeze(nextConditions);
+    const filter = next.rootCollection
+      ? frozenConditions
+      : Object.freeze({ type: next.operator, conditions: frozenConditions });
+    FILTER_DRAFT_CANDIDATE.set(next, filter);
+    return { filter };
+  }
+  if (segment === "not" && previous.kind === "not" && next.kind === "not") {
+    const candidate = buildFilterCandidateAlongPath(
+      column,
+      previous.condition,
+      next.condition,
+      remaining,
+      parseCache,
+      `${controlPath}-not`,
+    );
+    if (candidate.filter === undefined) return candidate;
+    const condition = Array.isArray(candidate.filter)
+      ? Object.freeze({ type: "AND", conditions: candidate.filter })
+      : candidate.filter;
+    const filter = Object.freeze({ type: "NOT", condition });
+    FILTER_DRAFT_CANDIDATE.set(next, filter);
+    return { filter };
+  }
+  return buildFilterCandidate(column, next, parseCache, controlPath);
+}
+
+function getFilterDraftCandidateConditions(draft: FilterDraft): readonly FilterNode[] | undefined {
+  if (draft.kind !== "compound") return undefined;
+  const candidate = FILTER_DRAFT_CANDIDATE.get(draft);
+  if (candidate === undefined) return undefined;
+  if (isFilterNodeArray(candidate)) return candidate;
+  const conditions = candidate["conditions"];
+  return Array.isArray(conditions) ? (conditions as readonly FilterNode[]) : undefined;
 }
 
 function parseFilterText(
@@ -1731,6 +1986,7 @@ function buildLeafFilterCandidate(
   column: CompiledColumn,
   draft: FilterLeafDraft,
   parseCache?: FilterParseCache,
+  path = "root",
 ): FilterCandidate {
   const base = {
     columnId: column.columnId,
@@ -1747,36 +2003,62 @@ function buildLeafFilterCandidate(
   }
   if (isSubstringFilterOperator(draft.operator)) {
     if (!draft.firstAuthored)
-      return { filter: undefined, error: "Enter one or more valid values." };
+      return {
+        filter: undefined,
+        error: "Enter one or more valid values.",
+        invalidControl: `${path}-value`,
+      };
     if (
       normalizeBrunoTableFilterText(draft.first, draft.caseSensitive, draft.accentSensitive)
         .length === 0
     ) {
-      return { filter: undefined, error: "Enter a non-empty search value." };
+      return {
+        filter: undefined,
+        error: "Enter a non-empty search value.",
+        invalidControl: `${path}-value`,
+      };
     }
     return { filter: Object.freeze({ ...base, filter: draft.first }) };
   }
   if (draft.operator === "in") {
     if (!draft.inValuesExplicit && !draft.firstAuthored) {
-      return { filter: undefined, error: "Enter one or more valid values." };
+      return {
+        filter: undefined,
+        error: "Enter one or more valid values.",
+        invalidControl: `${path}-value-0`,
+      };
     }
     const authored = draft.inValuesExplicit ? draft.inValuesAuthored : [draft.firstAuthored];
-    if (authored.some((value) => !value)) {
-      return { filter: undefined, error: "Enter one or more valid values." };
+    const unauthoredIndex = authored.findIndex((value) => !value);
+    if (unauthoredIndex >= 0) {
+      return {
+        filter: undefined,
+        error: "Enter one or more valid values.",
+        invalidControl: `${path}-value-${String(unauthoredIndex)}`,
+      };
     }
     const values = draft.inValuesExplicit ? draft.inValues : [draft.first];
     if (values.length === 0) {
-      return { filter: undefined, error: "Enter one or more valid values." };
+      return {
+        filter: undefined,
+        error: "Enter one or more valid values.",
+        invalidControl: `${path}-value-0`,
+      };
     }
     const decoded = values.map((value) => parseFilterText(column, value, parseCache));
-    const invalid = decoded.find((result) => result._tag === "Failure");
-    if (invalid?._tag === "Failure") return { filter: undefined, error: invalid.message };
-    if (
-      column.semantics.filterFamily === "text" &&
-      decoded.some(
-        (result) =>
-          result._tag === "Success" &&
-          (() => {
+    const invalidIndex = decoded.findIndex((result) => result._tag === "Failure");
+    const invalid = decoded[invalidIndex];
+    if (invalid?._tag === "Failure") {
+      return {
+        filter: undefined,
+        error: invalid.message,
+        invalidControl: `${path}-value-${String(invalidIndex)}`,
+      };
+    }
+    const emptyIndex =
+      column.semantics.filterFamily === "text"
+        ? decoded.findIndex((result) => {
+            if (result._tag !== "Success") return false;
             try {
               return (
                 normalizeBrunoTableFilterText(
@@ -1788,10 +2070,14 @@ function buildLeafFilterCandidate(
             } catch {
               return true;
             }
-          })(),
-      )
-    ) {
-      return { filter: undefined, error: "Enter non-empty values." };
+          })
+        : -1;
+    if (emptyIndex >= 0) {
+      return {
+        filter: undefined,
+        error: "Enter non-empty values.",
+        invalidControl: `${path}-value-${String(emptyIndex)}`,
+      };
     }
     return {
       filter: Object.freeze({
@@ -1805,26 +2091,48 @@ function buildLeafFilterCandidate(
   if (column.semantics.filterFamily === "select" && column.selectOptions !== undefined) {
     const option =
       draft.selectIndex === undefined ? undefined : column.selectOptions?.[draft.selectIndex];
-    if (option === undefined) return { filter: undefined, error: "Choose a value." };
+    if (option === undefined) {
+      return { filter: undefined, error: "Choose a value.", invalidControl: `${path}-value` };
+    }
     return { filter: Object.freeze({ ...base, filter: option }) };
   }
   if (!draft.firstAuthored) {
-    return { filter: undefined, error: "Enter one or more valid values." };
+    return {
+      filter: undefined,
+      error: "Enter one or more valid values.",
+      invalidControl: `${path}-value`,
+    };
   }
   const first = parseFilterText(column, draft.first, parseCache);
-  if (first._tag === "Failure") return { filter: undefined, error: first.message };
+  if (first._tag === "Failure") {
+    return { filter: undefined, error: first.message, invalidControl: `${path}-value` };
+  }
   if (draft.operator === "inRange") {
     if (!draft.secondAuthored) {
-      return { filter: undefined, error: "Enter an upper bound." };
+      return {
+        filter: undefined,
+        error: "Enter an upper bound.",
+        invalidControl: `${path}-value-to`,
+      };
     }
     const second = parseFilterText(column, draft.second, parseCache);
-    if (second._tag === "Failure") return { filter: undefined, error: second.message };
+    if (second._tag === "Failure") {
+      return { filter: undefined, error: second.message, invalidControl: `${path}-value-to` };
+    }
     try {
       if (column.semantics.compare(first.value, second.value) >= 0) {
-        return { filter: undefined, error: "Upper bound must be greater than the lower bound." };
+        return {
+          filter: undefined,
+          error: "Upper bound must be greater than the lower bound.",
+          invalidControl: `${path}-value-to`,
+        };
       }
     } catch {
-      return { filter: undefined, error: "Enter an ordered range." };
+      return {
+        filter: undefined,
+        error: "Enter an ordered range.",
+        invalidControl: `${path}-value-to`,
+      };
     }
     return {
       filter: Object.freeze({ ...base, filter: first.value, filterTo: second.value }),
@@ -1843,42 +2151,51 @@ function changeExpressionMode(
     return firstFilterLeaf(column, draft);
   }
   if (mode === "NOT") {
-    return draft.kind === "not"
-      ? draft
-      : Object.freeze({
-          kind: "not",
-          condition: draft,
-        });
+    if (draft.kind === "not") return draft;
+    const next = Object.freeze({ kind: "not", condition: draft });
+    const current = countFilterDraftComplexity(draft);
+    cacheKnownFilterDraftComplexity(
+      next,
+      current.nodes + (draft.kind === "compound" && draft.rootCollection === true ? 2 : 1),
+      current.operands,
+    );
+    return next;
   }
   if (mode !== "AND" && mode !== "OR") return draft;
   if (draft.kind === "compound") {
     if (draft.rootCollection === true && mode === "AND") return draft;
     if (draft.rootCollection === true) {
-      return Object.freeze({ kind: "compound", operator: mode, conditions: draft.conditions });
+      const next = Object.freeze({
+        kind: "compound",
+        operator: mode,
+        conditions: draft.conditions,
+      });
+      const current = countFilterDraftComplexity(draft);
+      cacheKnownFilterDraftComplexity(next, current.nodes + 1, current.operands);
+      return next;
     }
-    return Object.freeze({
+    const next = Object.freeze({
       ...draft,
       operator: mode,
     });
+    const current = countFilterDraftComplexity(draft);
+    cacheKnownFilterDraftComplexity(next, current.nodes, current.operands);
+    return next;
   }
-  if (draft.kind === "not") {
-    return Object.freeze({
-      kind: "compound",
-      operator: mode,
-      conditions: Object.freeze([draft, createDefaultLeaf(column)]) as readonly [
-        FilterDraft,
-        FilterDraft,
-      ],
-    });
-  }
-  return Object.freeze({
+  const condition = createDefaultLeaf(column);
+  const next = Object.freeze({
     kind: "compound",
     operator: mode,
-    conditions: Object.freeze([draft, createDefaultLeaf(column)]) as readonly [
-      FilterDraft,
-      FilterDraft,
-    ],
+    conditions: Object.freeze([draft, condition]) as readonly [FilterDraft, FilterDraft],
   });
+  const current = countFilterDraftComplexity(draft);
+  const added = countFilterDraftComplexity(condition);
+  cacheKnownFilterDraftComplexity(
+    next,
+    current.nodes + added.nodes + 1,
+    current.operands + added.operands,
+  );
+  return next;
 }
 
 function firstFilterLeaf(column: CompiledColumn, draft: FilterDraft): FilterLeafDraft {
@@ -1889,7 +2206,7 @@ function firstFilterLeaf(column: CompiledColumn, draft: FilterDraft): FilterLeaf
 }
 
 function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
-  return Object.freeze({
+  const draft = Object.freeze({
     kind: "leaf",
     operator: defaultFilterOperator(column),
     first: defaultOperand(column),
@@ -1903,19 +2220,109 @@ function createDefaultLeaf(column: CompiledColumn): FilterLeafDraft {
     caseSensitive: false,
     accentSensitive: false,
   });
+  countFilterDraftComplexity(draft);
+  return draft;
 }
 
-function countFilterDraftOperands(draft: FilterDraft): number {
-  if (draft.kind === "opaque") return 0;
-  if (draft.kind === "not") return countFilterDraftOperands(draft.condition);
-  if (draft.kind === "compound") {
-    return draft.conditions.reduce(
-      (total, condition) => total + countFilterDraftOperands(condition),
-      0,
+function countCommittedFilterDraftComplexity(
+  record: Readonly<Record<string, unknown>>,
+  memo: WeakMap<object, FilterDraftComplexity>,
+): FilterDraftComplexity {
+  const cached = memo.get(record);
+  if (cached !== undefined) return cached;
+  const type = record["type"];
+  let complexity: FilterDraftComplexity;
+  if ((type === "AND" || type === "OR") && Array.isArray(record["conditions"])) {
+    complexity = record["conditions"].reduce<FilterDraftComplexity>(
+      (total, condition) => {
+        const next = countCommittedFilterDraftComplexity(asRecord(condition), memo);
+        return { nodes: total.nodes + next.nodes, operands: total.operands + next.operands };
+      },
+      { nodes: 1, operands: 0 },
     );
+  } else if (type === "NOT" && record["condition"] !== undefined) {
+    const condition = countCommittedFilterDraftComplexity(asRecord(record["condition"]), memo);
+    complexity = { nodes: condition.nodes + 1, operands: condition.operands };
+  } else {
+    const filter = record["filter"];
+    complexity = {
+      nodes: 1,
+      operands:
+        type === "blank" || type === "notBlank"
+          ? 0
+          : type === "in" && Array.isArray(filter)
+            ? filter.length
+            : Number(filter !== undefined) +
+              Number(type === "inRange" && record["filterTo"] !== undefined),
+    };
   }
-  if (draft.operator !== "in") return 0;
-  return draft.inValuesExplicit ? draft.inValues.length : draft.firstAuthored ? 1 : 0;
+  const frozen = Object.freeze(complexity);
+  memo.set(record, frozen);
+  return frozen;
+}
+
+function cacheFilterDraftComplexityDelta(
+  next: FilterDraft,
+  previous: FilterDraft,
+  removed?: FilterDraft,
+  added?: FilterDraft,
+): void {
+  const previousComplexity = countFilterDraftComplexity(previous);
+  const removedComplexity =
+    removed === undefined ? { nodes: 0, operands: 0 } : countFilterDraftComplexity(removed);
+  const addedComplexity =
+    added === undefined ? { nodes: 0, operands: 0 } : countFilterDraftComplexity(added);
+  FILTER_DRAFT_COMPLEXITY.set(
+    next,
+    Object.freeze({
+      nodes: previousComplexity.nodes - removedComplexity.nodes + addedComplexity.nodes,
+      operands: previousComplexity.operands - removedComplexity.operands + addedComplexity.operands,
+    }),
+  );
+}
+
+function cacheKnownFilterDraftComplexity(
+  draft: FilterDraft,
+  nodes: number,
+  operands: number,
+): void {
+  FILTER_DRAFT_COMPLEXITY.set(draft, Object.freeze({ nodes, operands }));
+}
+
+function countFilterDraftComplexity(draft: FilterDraft): FilterDraftComplexity {
+  const cached = FILTER_DRAFT_COMPLEXITY.get(draft);
+  if (cached !== undefined) return cached;
+  let complexity: FilterDraftComplexity;
+  if (draft.kind === "opaque") {
+    complexity = { nodes: 1, operands: 0 };
+  } else if (draft.kind === "not") {
+    const condition = countFilterDraftComplexity(draft.condition);
+    complexity = { nodes: condition.nodes + 1, operands: condition.operands };
+  } else if (draft.kind === "compound") {
+    complexity = draft.conditions.reduce<FilterDraftComplexity>(
+      (total, condition) => {
+        const next = countFilterDraftComplexity(condition);
+        return { nodes: total.nodes + next.nodes, operands: total.operands + next.operands };
+      },
+      { nodes: draft.rootCollection === true ? 0 : 1, operands: 0 },
+    );
+  } else if (draft.operator === "blank" || draft.operator === "notBlank") {
+    complexity = { nodes: 1, operands: 0 };
+  } else if (draft.operator === "in") {
+    complexity = {
+      nodes: 1,
+      operands: draft.inValuesExplicit ? draft.inValues.length : draft.firstAuthored ? 1 : 0,
+    };
+  } else {
+    complexity = {
+      nodes: 1,
+      operands:
+        Number(draft.firstAuthored) + Number(draft.operator === "inRange" && draft.secondAuthored),
+    };
+  }
+  const frozen = Object.freeze(complexity);
+  FILTER_DRAFT_COMPLEXITY.set(draft, frozen);
+  return frozen;
 }
 
 function formatOperand(column: CompiledColumn, value: unknown): string | undefined {

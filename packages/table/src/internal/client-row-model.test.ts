@@ -1707,6 +1707,41 @@ describe("Client row model", () => {
     );
   });
 
+  it("does not let a rejected root consume the retained collection ledger", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_REJECTED",
+        field: "rejected",
+        headerName: "Rejected",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ] as never);
+    const collection = compileClientFilterCollection(
+      [
+        {
+          type: "AND",
+          conditions: [
+            { columnId: "COL_ID_REJECTED", type: "blank" },
+            { columnId: "COL_ID_NAME", type: "blank" },
+          ],
+        },
+        { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+      ],
+      columns,
+    );
+
+    expect(collection.filters).toEqual([
+      { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+    ]);
+    expect(collection.complexity).toMatchObject({ nodes: 1, operands: 1 });
+  });
+
   it("charges structural text for opaque roots through the aggregate ledger", () => {
     const columnId = `COL_ID_${"A".repeat(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH)}`;
     const columns = compileColumns([

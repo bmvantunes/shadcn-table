@@ -50,6 +50,10 @@ import {
   BRUNO_TABLE_FILTER_COMPOUND_VISIBLE_CONDITIONS,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
 } from "./internal/client-filter";
+import {
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
+} from "./internal/grid-query";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnFilterSubscriptionListener } from "./internal/grid-subscription-instrumentation";
 import type { BrunoTableGridCommand } from "./internal/column-management";
@@ -239,6 +243,7 @@ function SparseRowPipeline({
     columns,
     rowSpace: rowPipelineAdapter.rowSpace,
     queryGeneration: rowPipelineAdapter.queryGeneration,
+    queryNavigationMode: "reset",
   });
 }
 
@@ -551,13 +556,16 @@ describe("BrunoTableClient browser surface", () => {
         .toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
-      await userEvent.fill(
-        screen.getByRole("dialog", { name: "Filter Name" }).getByRole("textbox", {
-          name: "Filter value for Name",
-        }),
-        "Ada",
-      );
+      const composingInput = screen
+        .getByRole("dialog", { name: "Filter Name" })
+        .getByRole("textbox", { name: "Filter value for Name" });
+      const composingElement = composingInput.element();
+      composingElement.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      await userEvent.fill(composingInput, "Ada");
       await screen.getByRole("button", { name: "Clear filter for Name" }).click();
+      composingElement.dispatchEvent(
+        new CompositionEvent("compositionend", { bubbles: true, data: "Ada" }),
+      );
       await vi.advanceTimersByTimeAsync(200);
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         1,
@@ -841,6 +849,91 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("closes rejected menu commands only after restoring the editor gate focus", async () => {
+    const compiledColumns = compileColumns(columns);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      readySource(),
+      (row: Row) => row.id,
+      compiledColumns,
+      undefined,
+      [{ columnId: "COL_ID_SCORE", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      compiledColumns,
+      adapter.getQueryConfiguration(compiledColumns),
+      "TABLE_ID_REJECTED_MENU_SORT",
+    );
+    expect(
+      runtime.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_NAME",
+        filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
+      }),
+    ).toBe(true);
+    let invalidEditor: HTMLInputElement | null = null;
+    const gate = vi.fn(() => {
+      invalidEditor?.focus({ preventScroll: true });
+      return false;
+    });
+    const unregister = runtime.registerActiveEditorCommitGate(gate);
+
+    try {
+      const screen = await render(
+        <>
+          <input
+            ref={(element) => {
+              invalidEditor = element;
+            }}
+            aria-label="Invalid editor"
+          />
+          <BrunoTableView
+            runtime={runtime.getView()}
+            tableId="TABLE_ID_REJECTED_MENU_SORT"
+            compiledColumns={compiledColumns}
+            toolbar={new BrunoTableToolbarStore(undefined)}
+            rowPipeline={BrunoTableClientRowPipeline}
+            rowPipelineAdapter={adapter}
+          />
+        </>,
+      );
+
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_REJECTED_MENU_SORT" });
+      await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
+      expect(gate).toHaveBeenCalledOnce();
+      expect(grid.element().ownerDocument.body.textContent).not.toContain("Name sorting cleared");
+      await expect.element(screen.getByRole("textbox", { name: "Invalid editor" })).toHaveFocus();
+
+      grid.element().focus();
+      grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(grid.element().ownerDocument.body.textContent).not.toContain("Name sorting cleared");
+      await expect.element(screen.getByRole("textbox", { name: "Invalid editor" })).toHaveFocus();
+
+      await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Sort by Name" }));
+
+      expect(gate).toHaveBeenCalledTimes(3);
+      await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+      await expect.element(screen.getByRole("textbox", { name: "Invalid editor" })).toHaveFocus();
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Name" }))
+        .not.toHaveAttribute("aria-sort");
+
+      await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Clear filter" }));
+
+      expect(gate).toHaveBeenCalledTimes(4);
+      await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+      await expect.element(screen.getByRole("textbox", { name: "Invalid editor" })).toHaveFocus();
+      await expect
+        .element(screen.getByRole("button", { name: "Clear filter for Name" }))
+        .toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
   test("plans one query transition and row recomputation for one Grid Filter commit", async () => {
     const tableId = "TABLE_ID_FILTER_PLAN";
     const queryTransitions = vi.fn();
@@ -971,6 +1064,37 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("identifies only the invalid operand in a multi-value filter", async () => {
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_OPERAND_ERROR_IDENTITY"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_QUANTITY", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", { name: "Filter operator for Quantity" }),
+      "in",
+    );
+    const first = dialog.getByRole("textbox", { name: "Filter value for Quantity" });
+    await expect.element(first).toHaveAttribute("aria-invalid", "true");
+    await expect.element(first).toHaveAttribute("aria-describedby");
+    await userEvent.fill(first, "9007199254740993");
+    await userEvent.click(dialog.getByRole("button", { name: "Add filter value for Quantity" }));
+    const second = dialog.getByRole("textbox", { name: "Filter value 2 for Quantity" });
+    await userEvent.fill(second, "1.5");
+
+    await expect.element(first).not.toHaveAttribute("aria-invalid");
+    await expect.element(first).not.toHaveAttribute("aria-describedby");
+    await expect.element(second).toHaveAttribute("aria-invalid", "true");
+    await expect.element(second).toHaveAttribute("aria-describedby");
   });
 
   test("does not recompute or transition for invalid Number and BigInt drafts", async () => {
@@ -1406,6 +1530,236 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  test("bounds nested condition growth by the remaining aggregate node capacity", async () => {
+    const sharedNameLeaf = Object.freeze({
+      columnId: "COL_ID_FILTER_NAME",
+      type: "blank" as const,
+    });
+    const nameRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze(
+        Array.from({ length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES - 4 }, () => sharedNameLeaf),
+      ),
+    });
+    const quantityRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze([
+        { columnId: "COL_ID_FILTER_QUANTITY", type: "greaterThan", filter: 0n },
+        { columnId: "COL_ID_FILTER_QUANTITY", type: "lessThan", filter: 10n },
+      ]),
+    });
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_REMAINING_NODE_CAPACITY"
+        columns={filterColumns}
+        initialFilters={[nameRoot, quantityRoot] as never}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+    await expect
+      .element(
+        screen
+          .getByRole("dialog", { name: "Filter Quantity" })
+          .getByRole("button", { name: "Add condition for Quantity" }),
+      )
+      .toBeDisabled();
+  });
+
+  test("does not charge the implicit root collection against remaining node capacity", async () => {
+    const sharedNameLeaf = Object.freeze({
+      columnId: "COL_ID_FILTER_NAME",
+      type: "blank" as const,
+    });
+    const nameRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze(
+        Array.from({ length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES - 4 }, () => sharedNameLeaf),
+      ),
+    });
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_ROOT_COLLECTION_CAPACITY"
+        columns={filterColumns}
+        initialFilters={
+          [
+            nameRoot,
+            { columnId: "COL_ID_FILTER_QUANTITY", type: "greaterThan", filter: 0n },
+            { columnId: "COL_ID_FILTER_QUANTITY", type: "lessThan", filter: 10n },
+          ] as never
+        }
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+    const addCondition = screen
+      .getByRole("dialog", { name: "Filter Quantity" })
+      .getByRole("button", { name: "Add condition for Quantity" });
+    await expect.element(addCondition).toBeEnabled();
+    await userEvent.click(addCondition);
+    await expect.element(addCondition).toBeDisabled();
+  });
+
+  test("retains exact capacity when an opaque root is materialized and edited", async () => {
+    const nameLeaf = Object.freeze({
+      columnId: "COL_ID_FILTER_NAME",
+      type: "blank" as const,
+    });
+    const quantityLeaf = Object.freeze({
+      columnId: "COL_ID_FILTER_QUANTITY",
+      type: "blank" as const,
+    });
+    const nameRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze(
+        Array.from({ length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES - 167 }, () => nameLeaf),
+      ),
+    });
+    const pagedQuantityRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze(Array.from({ length: 100 }, () => quantityLeaf)),
+    });
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_OPAQUE_ROOT_CAPACITY"
+        columns={filterColumns}
+        initialFilters={
+          [nameRoot, ...Array.from({ length: 64 }, () => quantityLeaf), pagedQuantityRoot] as never
+        }
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+    await userEvent.click(
+      dialog.getByRole("button", { name: "Next filter conditions for Quantity" }),
+    );
+    await userEvent.selectOptions(
+      dialog.getByRole("combobox", {
+        name: "Filter expression for Quantity (condition 65)",
+      }),
+      "OR",
+    );
+    await expect
+      .element(dialog.getByRole("button", { name: "Add condition for Quantity", exact: true }))
+      .toBeEnabled();
+  });
+
+  test("uses retained admission capacity for an aliased operand subtree", async () => {
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_FILTER_NAME",
+      type: "in" as const,
+      filter: Object.freeze(["Ada", "Grace"]),
+    });
+    const sharedRoot = Object.freeze({
+      type: "AND" as const,
+      conditions: Object.freeze(
+        Array.from({ length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES - 1 }, () => sharedLeaf),
+      ),
+    });
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_ALIASED_OPERAND_CAPACITY"
+        columns={filterColumns}
+        initialFilters={[sharedRoot] as never}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+    const addValue = screen
+      .getByRole("dialog", { name: "Filter Name" })
+      .getByRole("button", { name: "Add filter value for Name (condition 1)" });
+    await expect.element(addValue).toBeEnabled();
+    await userEvent.click(addValue);
+    await expect.element(addValue).toBeEnabled();
+  });
+
+  test("carries the retained root handle through an ordinary overlay edit", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_RETAINED_ROOT_EDIT",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_RETAINED_ROOT_EDIT"
+          columns={filterColumns}
+          initialFilters={[
+            { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      await userEvent.fill(
+        screen
+          .getByRole("dialog", { name: "Filter Name" })
+          .getByRole("textbox", { name: "Filter value for Name (condition 1)" }),
+        "Grace",
+      );
+      await vi.waitFor(() =>
+        expect(commands.some((command) => command.type === "column.filter.replace-root")).toBe(
+          true,
+        ),
+      );
+      expect(commands.some((command) => command.type === "column.filter.replace")).toBe(false);
+    } finally {
+      removeCommandListener();
+    }
+  });
+
+  test("bounds multi-value growth by the remaining aggregate operand capacity", async () => {
+    const nameRoot = Object.freeze({
+      columnId: "COL_ID_FILTER_NAME",
+      type: "in" as const,
+      filter: Object.freeze(
+        Array.from(
+          { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS - 1 },
+          (_, index) => `name-${String(index)}`,
+        ),
+      ),
+    });
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_FILTER_REMAINING_OPERAND_CAPACITY"
+        columns={filterColumns}
+        initialFilters={
+          [nameRoot, { columnId: "COL_ID_FILTER_QUANTITY", type: "in", filter: [1n] }] as never
+        }
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+    await expect
+      .element(
+        screen
+          .getByRole("dialog", { name: "Filter Quantity" })
+          .getByRole("button", { name: "Add filter value for Quantity" }),
+      )
+      .toBeDisabled();
   });
 
   test("preserves a NOT subtree when changing to a same-column compound", async () => {
@@ -2230,6 +2584,54 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
         .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+    }
+  });
+
+  test("does not resurrect Quick Filter text from a late composition end after Clear", async () => {
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_QUICK_FILTER_IME_CLEAR",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_QUICK_FILTER_IME_CLEAR"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+          quickFilterFields={["symbol", "description"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+      quickFilter
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      await userEvent.fill(quickFilter, "micro");
+      await userEvent.click(screen.getByRole("button", { name: "Clear Quick Filter" }));
+      const commandCountAfterClear = commands.length;
+
+      (quickFilter.element() as HTMLInputElement).value = "micro";
+      quickFilter
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "micro" }));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      await expect.element(quickFilter).toHaveValue("");
+      expect(commands).toHaveLength(commandCountAfterClear);
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
     } finally {
       removeCommandListener();
     }

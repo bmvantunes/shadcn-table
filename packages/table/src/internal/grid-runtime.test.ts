@@ -167,7 +167,7 @@ describe("BrunoTableGridRuntime sorting invariant", () => {
 });
 
 describe("BrunoTable filter runtime primitives", () => {
-  it("gates every filter command through the optional active editor seam", () => {
+  it("gates every filter and sorting command through the optional active editor seam", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),
       (row) => row.id,
@@ -194,8 +194,15 @@ describe("BrunoTable filter runtime primitives", () => {
       }),
     ).toBe(false);
     expect(runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" })).toBe(false);
+    expect(
+      runtime.dispatchGridCommand({
+        type: "column.sort.toggle",
+        columnId: "COL_ID_NAME",
+        multi: false,
+      }),
+    ).toBe(false);
 
-    expect(gate).toHaveBeenCalledTimes(5);
+    expect(gate).toHaveBeenCalledTimes(6);
     expect(runtime.getQuerySnapshot()).toBe(before);
 
     const gateCallsBeforeRejectedQuickFilter = gate.mock.calls.length;
@@ -3026,6 +3033,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getQuerySnapshot().orderBy).toEqual([
       { columnId: "COL_ID_NAME", direction: "desc" },
     ]);
+    expect(runtime.getQuerySnapshot().navigationMode).toBe("clear");
+    runtime.reconcile(source([{ id: "first", name: "Ada" }]), (row) => row.id, columns);
+    expect(runtime.getQuerySnapshot().navigationMode).toBe("clear");
     expect(nameListener).toHaveBeenCalledOnce();
     expect(aliasListener).not.toHaveBeenCalled();
     expect(sortingListener).toHaveBeenCalledOnce();
@@ -3033,7 +3043,9 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.clearColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toEqual([]);
-    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(false);
+    expect(runtime.getQuerySnapshot().navigationMode).toBe("reset");
+    runtime.reconcile(source([{ id: "first", name: "Ada" }]), (row) => row.id, columns);
+    expect(runtime.getQuerySnapshot().navigationMode).toBe("reset");
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME")).toMatchObject({
       filterActive: false,
       filterBaselineAvailable: true,
@@ -3042,7 +3054,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
 
     runtime.resetColumnFilters("COL_ID_NAME");
     expect(runtime.getQuerySnapshot().filters).toHaveLength(1);
-    expect(runtime.getPreserveActiveCellOnQueryChangeSnapshot()).toBe(false);
+    expect(runtime.getQuerySnapshot().navigationMode).toBe("reset");
     expect(runtime.getColumnCommandSnapshot("COL_ID_NAME").filterActive).toBe(true);
     expect(runtime.getQuerySnapshot().generation).toBe(3);
     expect(queryListener).toHaveBeenCalledTimes(3);

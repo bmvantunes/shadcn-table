@@ -138,6 +138,31 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("clears a position-based body Active Cell for sorting but preserves a header origin", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("down");
+
+    navigation.clearForCommittedSort(["second", "first"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+
+    navigation.activateHeader("COL_ID_NAME");
+    navigation.clearForCommittedSort(["first", "second"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+    });
+  });
+
   it("falls back to the prior display position when a query projection removes its identity", () => {
     const columns = compileColumns([
       {

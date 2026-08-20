@@ -1173,10 +1173,38 @@ describe("BrunoTable column management browser surface", () => {
         .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
         .toBeInTheDocument();
       await expectAnnouncement(screen, "Name filter cleared");
-      expect(document.activeElement).toBe(grid);
+      await vi.waitFor(() =>
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: "Reset filter for Name" }).element(),
+        ),
+      );
     } finally {
       removeCommand();
     }
+  });
+
+  test("moves focus to the filter trigger when Clear removes its own header control", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    await userEvent.fill(
+      screen
+        .getByRole("dialog", { name: "Filter Name" })
+        .getByRole("textbox", { name: "Filter value for Name" }),
+      "Ada",
+    );
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    const clear = screen.getByRole("button", { name: "Clear filter for Name" });
+    clear.element().focus();
+    await userEvent.keyboard("{Enter}");
+
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Filter Name" }).element(),
+      ),
+    );
   });
 
   test("preserves the typed multi-sort command payload", async () => {
@@ -1231,7 +1259,11 @@ describe("BrunoTable column management browser surface", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Open filter for Name", exact: true }),
     );
-    await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    await expect.element(dialog).toBeInTheDocument();
+    await expect
+      .element(dialog.getByRole("combobox", { name: "Filter expression for Name" }))
+      .toHaveFocus();
     await userEvent.keyboard("{Escape}");
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_COLUMN_MANAGEMENT" }))
