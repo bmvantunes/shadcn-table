@@ -47,6 +47,19 @@ class BrunoTableInstanceIdStore {
   };
 }
 
+function useBrunoTableInstanceId(): string {
+  const reactInstanceId = useId();
+  const [{ subscribeInstanceId, getInstanceId, getServerInstanceId }] = useState(() => {
+    const store = new BrunoTableInstanceIdStore(reactInstanceId);
+    return {
+      subscribeInstanceId: store.subscribe,
+      getInstanceId: store.getSnapshot,
+      getServerInstanceId: store.getServerSnapshot,
+    };
+  });
+  return useSyncExternalStore(subscribeInstanceId, getInstanceId, getServerInstanceId);
+}
+
 export type BrunoTableViewportAdapterState = Readonly<{
   instanceId: string;
   columns: readonly CompiledColumn[];
@@ -83,16 +96,7 @@ export function BrunoTableViewportAdapterBoundary({
   readonly queryGeneration: number;
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
-  const reactInstanceId = useId();
-  const [{ subscribeInstanceId, getInstanceId, getServerInstanceId }] = useState(() => {
-    const store = new BrunoTableInstanceIdStore(reactInstanceId);
-    return {
-      subscribeInstanceId: store.subscribe,
-      getInstanceId: store.getSnapshot,
-      getServerInstanceId: store.getServerSnapshot,
-    };
-  });
-  const instanceId = useSyncExternalStore(subscribeInstanceId, getInstanceId, getServerInstanceId);
+  const instanceId = useBrunoTableInstanceId();
   const columnLayout = useSyncExternalStore(
     runtime.subscribeColumnLayout,
     runtime.getColumnLayoutSnapshot,
@@ -246,10 +250,18 @@ class BrunoTableGridAttachment {
   private element: HTMLDivElement | null = null;
 
   public constructor(
-    private readonly focusFallback: () => void,
-    private readonly focusHandoff: BrunoTableFocusHandoff,
+    private focusFallback: () => void,
+    private focusHandoff: BrunoTableFocusHandoff,
     private readonly attachViewport: (element: HTMLDivElement | null) => void,
   ) {}
+
+  public updateFocusBindings(
+    focusFallback: () => void,
+    focusHandoff: BrunoTableFocusHandoff,
+  ): void {
+    this.focusFallback = focusFallback;
+    this.focusHandoff = focusHandoff;
+  }
 
   public readonly attach = (element: HTMLDivElement | null): void => {
     if (
@@ -300,16 +312,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
     runtime.getColumnLayoutSnapshot,
   );
   const columns = columnLayout.columns.length > 0 ? columnLayout.columns : compiledColumns;
-  const reactInstanceId = useId();
-  const [{ subscribeInstanceId, getInstanceId, getServerInstanceId }] = useState(() => {
-    const store = new BrunoTableInstanceIdStore(reactInstanceId);
-    return {
-      subscribeInstanceId: store.subscribe,
-      getInstanceId: store.getSnapshot,
-      getServerInstanceId: store.getServerSnapshot,
-    };
-  });
-  const instanceId = useSyncExternalStore(subscribeInstanceId, getInstanceId, getServerInstanceId);
+  const instanceId = useBrunoTableInstanceId();
   const logicalRowCount =
     Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : defaultLoadingRowCount;
   const [viewport] = useState(() => {
@@ -337,16 +340,19 @@ export function BrunoTableLoadingViewportAdapterBoundary({
     [columns, logicalRowCount, viewportBindings],
   );
   useEffect(() => () => viewportBindings.dispose(), [viewportBindings]);
-  const [attachGrid] = useState(
-    () => new BrunoTableGridAttachment(focusFallback, focusHandoff, viewportBindings.attach).attach,
+  const [gridAttachment] = useState(
+    () => new BrunoTableGridAttachment(focusFallback, focusHandoff, viewportBindings.attach),
   );
+  useLayoutEffect(() => {
+    gridAttachment.updateFocusBindings(focusFallback, focusHandoff);
+  }, [focusFallback, focusHandoff, gridAttachment]);
 
   return children({
     columns,
     instanceId,
     logicalRowCount,
     viewportSnapshot,
-    attachGrid,
+    attachGrid: gridAttachment.attach,
     attachBodyLayer: viewportBindings.attachBodyLayer,
     attachRowLayer: viewportBindings.attachRowLayer,
     attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
