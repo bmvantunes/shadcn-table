@@ -66,7 +66,7 @@ export function BrunoTableProductionDefines() {
     enforce: "pre",
     async transform(code, id) {
       if (!id.includes("/src/")) return;
-      const replaceDevelopment = id.endsWith("/src/bruno-table-client.tsx");
+      const replaceDevelopment = code.includes("__BRUNO_TABLE_DEVELOPMENT__");
       if (
         !code.includes("__BRUNO_TABLE_TEST_DIAGNOSTICS__") &&
         !(replaceDevelopment && code.includes("__BRUNO_TABLE_DEVELOPMENT__"))

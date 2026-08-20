@@ -1,4 +1,9 @@
-import { BrunoTableClient, BrunoTableComputedColumn } from "./index";
+import {
+  BrunoTableClient,
+  BrunoTableComputedColumn,
+  BrunoTableQuickFilter,
+  BrunoTableToolbar,
+} from "./index";
 
 import type { BrunoTableColumns } from "./index";
 
@@ -7,6 +12,7 @@ type Row = {
   readonly name: string;
   readonly score: number;
   readonly revision: bigint;
+  readonly hiddenLabel: string;
 };
 
 const columns = [
@@ -86,10 +92,41 @@ const validClient = (
     getRowId={(row) => row.id}
     columns={columns}
     initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    quickFilterFields={["name", "hiddenLabel"]}
+    clientSource={clientSource}
+  >
+    <BrunoTableToolbar>
+      <BrunoTableQuickFilter />
+    </BrunoTableToolbar>
+  </BrunoTableClient>
+);
+void validClient;
+
+const invalidQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_INVALID_QUICK_FIELDS"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error JSX Quick Filter fields reject numeric row fields.
+    quickFilterFields={["score"]}
     clientSource={clientSource}
   />
 );
-void validClient;
+void invalidQuickFilterFields;
+
+const invalidEmptyQuickFilterFields = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_EMPTY_QUICK_FIELDS"
+    getRowId={(row) => row.id}
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    // @ts-expect-error JSX Quick Filter fields require a non-empty tuple.
+    quickFilterFields={[]}
+    clientSource={clientSource}
+  />
+);
+void invalidEmptyQuickFilterFields;
 
 const missingOrder = (
   // @ts-expect-error JSX Client usage requires initialOrderBy.

@@ -244,6 +244,8 @@ describe("BrunoTableClient sorting", () => {
       />,
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SORT_SCROLL" });
+    grid.element().focus();
+    expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull();
     grid.element().scrollLeft = 320;
     grid.element().scrollTop = 720;
     grid.element().dispatchEvent(new Event("scroll"));
@@ -262,6 +264,7 @@ describe("BrunoTableClient sorting", () => {
 
     await vi.waitFor(() => expect(grid.element().scrollTop).toBe(0));
     expect(grid.element().scrollLeft).toBe(horizontalBefore);
+    expect(grid.element().getAttribute("aria-activedescendant")).toBeNull();
     expect(document.activeElement).toBe(toggleElement);
   });
 

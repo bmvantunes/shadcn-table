@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
 
 describe("compileColumns", () => {
@@ -273,6 +274,116 @@ describe("compileColumns", () => {
         },
       ]);
     }).toThrow(ColumnConfigurationError);
+  });
+
+  it("rejects select options outside the compiled value domain", () => {
+    const select = BrunoTableSelectColumn<
+      { status: "open" | "closed" },
+      readonly ["open", "closed"],
+      "status",
+      "COL_ID_STATUS",
+      {
+        readonly columnId: "COL_ID_STATUS";
+        readonly field: "status";
+        readonly headerName: "Status";
+        readonly options: readonly ["open", "closed"];
+      }
+    >({
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      options: ["open", "closed"],
+    }) as unknown as Readonly<Record<string, unknown>>;
+    const widened = { ...select, options: ["pending"] };
+
+    expect(() => compileColumns([widened])).toThrow(ColumnConfigurationError);
+    expect(() => compileColumns([widened])).toThrow(/option at index 0 is invalid/u);
+  });
+
+  it("wraps a throwing Select decoder in a ColumnConfigurationError", () => {
+    const throwingValueType = {
+      codecId: "test/throwing-select-decoder",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: () => {
+        throw new Error("decoder exploded");
+      },
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_THROWING_SELECT",
+          field: "status",
+          headerName: "Status",
+          valueType: throwingValueType,
+          options: ["open"],
+        } as never,
+      ]),
+    ).toThrow(
+      "BrunoTable Select column option at index 0 is invalid for COL_ID_THROWING_SELECT: BrunoTable Value Type decodeRuntime failed.",
+    );
+  });
+
+  it("rejects sparse Select option arrays", () => {
+    const select = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const sparseOptions = Array(2) as unknown[];
+
+    expect(() => compileColumns([{ ...select, options: sparseOptions }])).toThrow(
+      ColumnConfigurationError,
+    );
+    expect(() => compileColumns([{ ...select, options: sparseOptions }])).toThrow(
+      /options must be dense/u,
+    );
+  });
+
+  it("bounds Select option snapshotting before decoding", () => {
+    const select = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["open", "closed"],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const options = Array.from({ length: 16_385 }, (_, index) => String(index));
+
+    expect(() => compileColumns([{ ...select, options }])).toThrow(
+      /options must contain at most 16384 values/u,
+    );
+
+    let lengthReads = 0;
+    const stableOptions = new Proxy(["open", "closed"], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          return lengthReads === 1 ? 2 : 16_385;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const [compiled] = compileColumns([{ ...select, options: stableOptions }]);
+
+    expect(compiled?.selectOptions).toHaveLength(2);
+    expect(lengthReads).toBe(1);
   });
 
   it("rejects malformed widened Field Columns", () => {

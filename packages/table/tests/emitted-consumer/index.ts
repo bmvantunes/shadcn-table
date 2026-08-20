@@ -3,6 +3,7 @@ import {
   BrunoTableBooleanColumn,
   BrunoTableClient,
   BrunoTableComputedColumn,
+  BrunoTableQuickFilter,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
@@ -18,6 +19,8 @@ import {
   type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
+  type BrunoTableQuickFilterField,
+  type BrunoTableQuickFilterFields,
   type BrunoTableGroupKeyCellParams,
   type BrunoTableSaveCellChange,
   type BrunoTableSaveChangeSet,
@@ -52,6 +55,7 @@ type Order = {
   readonly active: boolean;
   readonly status: "open" | "closed";
   readonly multiplier: number;
+  readonly hiddenLabel: string;
 };
 
 const emittedInvalidWhitespaceHelperOptions = {
@@ -106,6 +110,7 @@ const emittedClientProps = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  quickFilterFields: ["symbol", "hiddenLabel"],
   getRowId: (row: Order) => row.id,
   clientSource: {
     rows: [] as readonly Order[],
@@ -118,6 +123,42 @@ const emittedCallableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[
   emittedClientProps;
 const emittedNamedProps: BrunoTableClientProps<Order, Columns> = emittedCallableProps;
 void BrunoTableClient(emittedNamedProps);
+const emittedQuickFields = [
+  "symbol",
+  "hiddenLabel",
+] as const satisfies BrunoTableQuickFilterFields<Order>;
+type EmittedQuickField = Expect<
+  Equal<BrunoTableQuickFilterField<Order>, "id" | "symbol" | "status" | "hiddenLabel">
+>;
+const emittedQuickFieldCheck: EmittedQuickField = true;
+const emittedQuickFilter = BrunoTableQuickFilter;
+void emittedQuickFieldCheck;
+void emittedQuickFields;
+void emittedQuickFilter;
+const emittedInvalidQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject numeric source fields.
+  quickFilterFields: ["price"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedInvalidQuickFields;
+const emittedEmptyQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields require a non-empty tuple.
+  quickFilterFields: [],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedEmptyQuickFields;
+const emittedMisspelledQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject misspelled source fields.
+  quickFilterFields: ["descrption"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedMisspelledQuickFields;
+const emittedColumnIdentityQuickFields = {
+  ...emittedClientProps,
+  // @ts-expect-error Emitted Quick Filter fields reject Column Identity strings.
+  quickFilterFields: ["COL_ID_SYMBOL"],
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedColumnIdentityQuickFields;
 
 const emittedViewServerResult = null as unknown as LiveQueryResult<Order>;
 const emittedViewServerClient = BrunoTableClient({
@@ -295,6 +336,32 @@ type ExactComputedAmount = Expect<
 const exactAmountFilters = [
   { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: { minor: 10n } },
 ] satisfies BrunoTableFilterExpressions<AmountRow, typeof exactAmountColumns>;
+
+const exactBuiltInFilters = [
+  { columnId: "COL_ID_QUANTITY", type: "greaterThanOrEqual", filter: 10n },
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: true },
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "open" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidBigIntFilterOperand = [
+  // @ts-expect-error Emitted BigInt filters preserve bigint operands.
+  { columnId: "COL_ID_QUANTITY", type: "greaterThan", filter: 10 },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidBooleanFilterOperand = [
+  // @ts-expect-error Emitted Boolean filters preserve boolean operands.
+  { columnId: "COL_ID_ACTIVE", type: "equals", filter: "true" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+const invalidSelectFilterOperand = [
+  // @ts-expect-error Emitted Select filters admit only the exact configured value union.
+  { columnId: "COL_ID_STATUS", type: "equals", filter: "pending" },
+] satisfies BrunoTableFilterExpressions<Order, HelperColumns>;
+
+void exactBuiltInFilters;
+void invalidBigIntFilterOperand;
+void invalidBooleanFilterOperand;
+void invalidSelectFilterOperand;
 
 const capabilityColumns = [
   {
@@ -793,6 +860,19 @@ const invalidBooleanSensitivity = [
   },
 ] satisfies BrunoTableFilterExpressions<FeatureFlag, typeof featureFlagColumns>;
 
+const invalidEmptyInFilter = [
+  // @ts-expect-error emitted declarations require non-empty `in` operands.
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: [] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const acceptedTextInFilter = [
+  { columnId: "COL_ID_SYMBOL", type: "in", filter: ["AAPL"] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
+const acceptedNumericInFilter = [
+  { columnId: "COL_ID_PRICE", type: "in", filter: [10] },
+] satisfies BrunoTableFilterExpressions<Order, Columns>;
+
 const invalidMixedColumnCompoundFilter = [
   {
     type: "OR",
@@ -1019,6 +1099,9 @@ void invalidFilter;
 void invalidOptedOutFilter;
 void invalidNumericSensitivity;
 void invalidBooleanSensitivity;
+void invalidEmptyInFilter;
+void acceptedTextInFilter;
+void acceptedNumericInFilter;
 void invalidMixedColumnCompoundFilter;
 void invalidEmptySort;
 void invalidOptedOutSort;

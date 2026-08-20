@@ -15,18 +15,72 @@ import {
   type BrunoTableColumnLayoutState,
   type BrunoTableGridCommand,
 } from "./column-management";
-import type { BrunoTableOrderBy } from "./grid-query";
+import type {
+  BrunoTableClientFilterCollection,
+  BrunoTableFilterComplexity,
+  BrunoTableOrderBy,
+} from "./grid-query";
 import {
-  brunoTableFilterReferencesColumn,
-  collectClientFilterColumnIds,
+  compileClientFilterCollection,
+  normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
-  sanitizeBrunoTableFilters,
+  removeClientFilterColumn,
+  replaceClientFilterColumn,
+  restoreClientFilterColumn,
+  sameBrunoTableFilterColumn,
+  sameBrunoTableFilterCollections,
 } from "./grid-query";
 import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
-import { recordBrunoTableColumnCommandSubscriptionNotification } from "./grid-subscription-instrumentation";
+import {
+  recordBrunoTableColumnCommandSubscriptionNotification,
+  recordBrunoTableColumnFilterSubscriptionEvent,
+} from "./grid-subscription-instrumentation";
+import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
+import { isBrunoTableQuickFilterTextWithinLimit } from "./quick-filter";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
 
 type Listener = () => void;
+/**
+ * Optional editor-owned gate for commands that can change the filtered row projection.
+ * The registered editor owns parsing, validation, and focus restoration; returning false
+ * rejects the filter command before it is instrumented or published. Client editing is
+ * intentionally not installed by the current read-only filter slice, but this seam keeps
+ * future editor capabilities out of the filter controls and command implementations.
+ */
+export type BrunoTableActiveEditorCommitGate = () => boolean;
+
+function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
+  switch (command.type) {
+    case "column.filter.clear":
+    case "column.filters.clear":
+    case "column.filter.reset":
+    case "column.filter.replace":
+    case "quick-filter.replace":
+      return true;
+    case "column.resize.commit":
+    case "column.reorder.commit":
+    case "column.visibility.commit":
+    case "column.pin.commit":
+    case "column.reset.order":
+    case "column.reset.widths":
+    case "column.reset.visibility":
+    case "column.reset.pinning":
+    case "column.reset.layout":
+    case "column.sort.toggle":
+    case "sorting.add":
+    case "sorting.remove":
+    case "sorting.move":
+    case "sorting.reset":
+      return false;
+    default:
+      return assertNeverBrunoTableGridCommand(command);
+  }
+}
+
+function assertNeverBrunoTableGridCommand(value: never): never {
+  throw new TypeError(`Unsupported BrunoTable grid command: ${String(value)}`);
+}
+
 export type BrunoTableInvalidSourceSnapshot =
   | Readonly<{
       readonly kind: "row-count-mismatch";
@@ -96,6 +150,8 @@ export type BrunoTableBodySnapshot =
   | Readonly<{ readonly kind: "invalid" }>
   | Readonly<{ readonly kind: "empty" }>;
 
+export type BrunoTableQueryNavigationMode = "reset" | "reconcile" | "clear";
+
 export type BrunoTableRowSpaceSnapshot<TRow> = Readonly<{
   readonly totalRows: number;
   readonly loadedRows: number;
@@ -114,6 +170,17 @@ export type BrunoTableRuntimeView = {
   readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
   readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
+  readonly getColumnFilterSnapshot: (columnId: string) => unknown;
+  readonly getColumnFilterVersionSnapshot: (columnId: string) => number;
+  /** Invalidates queued editor candidates even when a Clear/Reset command is a semantic no-op. */
+  readonly getColumnFilterCommandEpochSnapshot: (columnId: string) => number;
+  readonly getFilterComplexitySnapshot: () => BrunoTableFilterComplexity;
+  readonly getQuickFilterSnapshot: () => string;
+  /** Resets Client filter position for committed raw text changes that preserve semantics. */
+  readonly getFilterPositionResetEpochSnapshot: () => number;
+  /** Invalidates queued Quick Filter candidates when any Quick Filter command commits. */
+  readonly getQuickFilterCommandEpochSnapshot: () => number;
+  readonly getQuickFilterFieldsSnapshot: () => readonly string[];
   readonly getSortingSnapshot: () => BrunoTableOrderBy;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
   /** Controlled Client column input; width-only commits do not publish it. */
@@ -130,10 +197,18 @@ export type BrunoTableRuntimeView = {
     listener: Listener,
   ) => () => void;
   readonly subscribeColumnCommands: (columnId: string, listener: Listener) => () => void;
+  readonly subscribeColumnFilter: (columnId: string, listener: Listener) => () => void;
+  readonly subscribeColumnFilterCommandEpoch: (columnId: string, listener: Listener) => () => void;
+  readonly subscribeQuickFilter: (listener: Listener) => () => void;
+  readonly subscribeFilterPositionReset: (listener: Listener) => () => void;
+  readonly subscribeQuickFilterCommandEpoch: (listener: Listener) => () => void;
+  /** Imperative invalidation sink for same-value Quick Filter command cancellation. */
+  readonly registerQuickFilterInvalidation: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
-  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => void;
+  readonly registerActiveEditorCommitGate: (gate: BrunoTableActiveEditorCommitGate) => () => void;
+  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly toggleColumnSort: (columnId: string, multi: boolean) => void;
   readonly clearColumnFilters: (columnId: string) => void;
   readonly resetColumnFilters: (columnId: string) => void;
@@ -141,21 +216,103 @@ export type BrunoTableRuntimeView = {
 };
 
 export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
+  readonly getFilterSnapshot: () => BrunoTableFilterSnapshot;
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
+  readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
 
+export type BrunoTableFilterSnapshot = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly filters: readonly unknown[];
+  /** Runtime-owned immutable lookup used by active-filter review without reparsing the root AST. */
+  readonly filtersByColumn: Readonly<{
+    readonly get: (columnId: string) => unknown;
+  }>;
+  /** Bounded label compiled with the admitted column expression for active-filter review. */
+  readonly activeFilterLabelsByColumn: Readonly<{
+    readonly get: (columnId: string) => string | undefined;
+  }>;
+  readonly quickFilter: string;
+}>;
+
 export type BrunoTableQuerySnapshot = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly filters: readonly unknown[];
+  readonly filterCollection: BrunoTableClientFilterCollection;
+  readonly quickFilter: string;
   readonly orderBy: BrunoTableOrderBy;
   readonly generation: number;
+  /** Immutable Active Cell policy for this exact query generation. */
+  readonly navigationMode: BrunoTableQueryNavigationMode;
 }>;
+
+function createFilterSnapshot(
+  query: BrunoTableQuerySnapshot,
+  filtersByColumn: ReadonlyMap<string, unknown>,
+  activeFilterLabelsByColumn: ReadonlyMap<string, string>,
+): BrunoTableFilterSnapshot {
+  return Object.freeze({
+    columns: query.columns,
+    filters: query.filters,
+    filtersByColumn: createFilterColumnIndex(filtersByColumn),
+    activeFilterLabelsByColumn: createFilterLabelIndex(activeFilterLabelsByColumn),
+    quickFilter: query.quickFilter,
+  });
+}
+
+function createFilterColumnIndex(
+  filtersByColumn: ReadonlyMap<string, unknown>,
+): Readonly<{ readonly get: (columnId: string) => unknown }> {
+  const snapshot = new Map(filtersByColumn);
+  return Object.freeze({ get: (columnId: string): unknown => snapshot.get(columnId) });
+}
+
+function createFilterLabelIndex(
+  activeFilterLabelsByColumn: ReadonlyMap<string, string>,
+): Readonly<{ readonly get: (columnId: string) => string | undefined }> {
+  const snapshot = new Map(activeFilterLabelsByColumn);
+  return Object.freeze({
+    get: (columnId: string): string | undefined => snapshot.get(columnId),
+  });
+}
+
+function createQuerySnapshot(
+  columns: readonly CompiledColumn[],
+  filterCollection: BrunoTableClientFilterCollection,
+  quickFilter: string,
+  orderBy: BrunoTableOrderBy,
+  generation: number,
+  navigationMode: BrunoTableQueryNavigationMode = "reset",
+): BrunoTableQuerySnapshot {
+  const snapshot = {
+    columns,
+    filters: filterCollection.filters,
+    quickFilter,
+    orderBy,
+    generation,
+  } as BrunoTableQuerySnapshot & { filterCollection: BrunoTableClientFilterCollection };
+  Object.defineProperty(snapshot, "filterCollection", {
+    configurable: false,
+    enumerable: false,
+    value: filterCollection,
+    writable: false,
+  });
+  Object.defineProperty(snapshot, "navigationMode", {
+    configurable: false,
+    enumerable: false,
+    value: navigationMode,
+    writable: false,
+  });
+  return Object.freeze(snapshot);
+}
 
 export type BrunoTableQueryConfiguration = Readonly<{
   readonly baselineFilters: readonly unknown[];
+  readonly baselineFilterCollection?: BrunoTableClientFilterCollection;
   readonly baselineOrderBy: BrunoTableOrderBy;
+  readonly quickFilterFields?: readonly string[];
 }>;
 
 export type BrunoTableColumnCommandSnapshot = Readonly<{
@@ -212,20 +369,26 @@ export type BrunoTableCellSnapshot = Readonly<{
 }>;
 
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
+const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 
 type QueryTransition = Readonly<{
+  readonly filterChanged: boolean;
   readonly queryChanged: boolean;
+  readonly quickFilterChanged: boolean;
   readonly sortingChanged: boolean;
   readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
+  readonly previousColumnFilters: ReadonlyMap<string, unknown>;
 }>;
 
 type ColumnConfiguration = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly baselineFilters: readonly unknown[];
+  readonly baselineFilterCollection: BrunoTableClientFilterCollection;
   readonly baselineOrderBy: BrunoTableOrderBy;
   readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly columnLayout: BrunoTableColumnLayoutState;
+  readonly invalidatedColumnIds: readonly string[];
   readonly transition: QueryTransition;
 }>;
 
@@ -244,18 +407,34 @@ export class BrunoTableGridRuntime<TRow> {
     Readonly<{ rowId: BrunoTableRowId; columnId: string }>
   >();
   private readonly queryListeners = new Set<Listener>();
+  private readonly filterListeners = new Set<Listener>();
+  private readonly quickFilterListeners = new Set<Listener>();
+  private readonly filterPositionResetListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
+  private readonly columnFilterListeners = new Map<string, Set<Listener>>();
+  private readonly columnFilterCommandEpochListeners = new Map<string, Set<Listener>>();
+  private readonly quickFilterCommandEpochListeners = new Set<Listener>();
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
+  private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
   private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private columns: readonly CompiledColumn[];
   private columnsById: ReadonlyMap<string, CompiledColumn>;
   private baselineFilters: readonly unknown[];
+  private baselineFilterCollection: BrunoTableClientFilterCollection;
   private baselineOrderBy: BrunoTableOrderBy;
+  private readonly quickFilterFields: readonly string[];
   private query: BrunoTableQuerySnapshot;
+  private filterCollection: BrunoTableClientFilterCollection;
+  private filterSnapshot: BrunoTableFilterSnapshot;
+  private columnFilterSnapshots: ReadonlyMap<string, unknown>;
+  private readonly columnFilterVersions = new Map<string, number>();
+  private readonly columnFilterCommandEpochs = new Map<string, number>();
+  private quickFilterCommandEpoch = 0;
+  private filterPositionResetEpoch = 0;
   private columnLayout: BrunoTableColumnLayoutState;
   private columnLayoutSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
@@ -271,7 +450,14 @@ export class BrunoTableGridRuntime<TRow> {
     this.tableId = tableId;
     this.columns = columns;
     this.columnsById = indexColumns(columns);
-    this.baselineFilters = queryConfiguration.baselineFilters;
+    this.baselineFilterCollection =
+      queryConfiguration.baselineFilterCollection ??
+      compileClientFilterCollection(queryConfiguration.baselineFilters, columns, {
+        rejectOverBudget: true,
+      });
+    this.baselineFilters = this.baselineFilterCollection.filters;
+    this.filterCollection = this.baselineFilterCollection;
+    this.quickFilterFields = queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
     const normalizedBaselineOrderBy = reconcileBrunoTableOrderBy(
       queryConfiguration.baselineOrderBy,
       queryConfiguration.baselineOrderBy,
@@ -283,19 +469,24 @@ export class BrunoTableGridRuntime<TRow> {
     )
       ? queryConfiguration.baselineOrderBy
       : normalizedBaselineOrderBy;
-    this.query = Object.freeze({
-      columns,
-      filters: this.baselineFilters,
-      orderBy: this.baselineOrderBy,
-      generation: 0,
-    });
+    this.query = createQuerySnapshot(columns, this.filterCollection, "", this.baselineOrderBy, 0);
+    this.columnFilterSnapshots = createColumnFilterSnapshots(this.filterCollection);
+    this.filterSnapshot = createFilterSnapshot(
+      this.query,
+      this.columnFilterSnapshots,
+      this.filterCollection.activeFilterLabelsByColumn,
+    );
+    for (const columnId of this.columnFilterSnapshots.keys()) {
+      this.columnFilterVersions.set(columnId, 0);
+      this.columnFilterCommandEpochs.set(columnId, 0);
+    }
     this.columnLayout = createBrunoTableColumnLayout(columns);
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
     this.columnStructureSnapshot = this.columnLayoutSnapshot;
     this.columnCommands = createColumnCommandSnapshots(
       columns,
       this.query,
-      this.baselineFilters,
+      this.baselineFilterCollection,
       undefined,
       this.columnLayoutSnapshot,
     );
@@ -315,8 +506,17 @@ export class BrunoTableGridRuntime<TRow> {
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
+        getFilterSnapshot: this.getFilterSnapshot,
+        getQuickFilterSnapshot: this.getQuickFilterSnapshot,
+        getFilterPositionResetEpochSnapshot: this.getFilterPositionResetEpochSnapshot,
+        getQuickFilterFieldsSnapshot: this.getQuickFilterFieldsSnapshot,
         getColumnCommandSnapshot: this.getColumnCommandSnapshot,
+        getColumnFilterSnapshot: this.getColumnFilterSnapshot,
+        getColumnFilterVersionSnapshot: this.getColumnFilterVersionSnapshot,
+        getColumnFilterCommandEpochSnapshot: this.getColumnFilterCommandEpochSnapshot,
+        getFilterComplexitySnapshot: this.getFilterComplexitySnapshot,
         getSortingSnapshot: this.getSortingSnapshot,
+        getQuickFilterCommandEpochSnapshot: this.getQuickFilterCommandEpochSnapshot,
         getColumnLayoutSnapshot: this.getColumnLayoutSnapshot,
         getColumnStructureSnapshot: this.getColumnStructureSnapshot,
         subscribeChrome: this.subscribeChrome,
@@ -327,11 +527,19 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeRow: this.subscribeRow,
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
+        subscribeFilter: this.subscribeFilter,
+        subscribeQuickFilter: this.subscribeQuickFilter,
+        subscribeFilterPositionReset: this.subscribeFilterPositionReset,
+        registerQuickFilterInvalidation: this.registerQuickFilterInvalidation,
         publishRowPipeline: this.publishRowPipeline,
         subscribeColumnCommands: this.subscribeColumnCommands,
+        subscribeColumnFilter: this.subscribeColumnFilter,
+        subscribeColumnFilterCommandEpoch: this.subscribeColumnFilterCommandEpoch,
         subscribeSorting: this.subscribeSorting,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
+        registerActiveEditorCommitGate: this.registerActiveEditorCommitGate,
+        subscribeQuickFilterCommandEpoch: this.subscribeQuickFilterCommandEpoch,
         dispatchGridCommand: this.dispatchGridCommand,
         toggleColumnSort: this.toggleColumnSort,
         clearColumnFilters: this.clearColumnFilters,
@@ -357,14 +565,16 @@ export class BrunoTableGridRuntime<TRow> {
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration = Object.freeze({
       baselineFilters: this.baselineFilters,
+      baselineFilterCollection: this.baselineFilterCollection,
       baselineOrderBy: this.baselineOrderBy,
+      quickFilterFields: this.quickFilterFields,
     }),
   ): void => {
     const previous = this.state;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const configuration =
       this.columns === columns &&
-      this.baselineFilters === queryConfiguration.baselineFilters &&
+      this.baselineFilterCollection === queryConfiguration.baselineFilterCollection &&
       this.baselineOrderBy === queryConfiguration.baselineOrderBy
         ? undefined
         : this.stageColumns(columns, queryConfiguration);
@@ -374,8 +584,16 @@ export class BrunoTableGridRuntime<TRow> {
       this.columns = configuration.columns;
       this.columnsById = indexColumns(configuration.columns);
       this.baselineFilters = configuration.baselineFilters;
+      this.baselineFilterCollection = configuration.baselineFilterCollection;
       this.baselineOrderBy = configuration.baselineOrderBy;
       this.query = configuration.query;
+      this.filterCollection = this.query.filterCollection;
+      this.updateColumnFilterSnapshots();
+      this.filterSnapshot = createFilterSnapshot(
+        this.query,
+        this.columnFilterSnapshots,
+        this.filterCollection.activeFilterLabelsByColumn,
+      );
       this.columnLayout = configuration.columnLayout;
       this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
       this.columnCommands = configuration.columnCommands;
@@ -383,6 +601,15 @@ export class BrunoTableGridRuntime<TRow> {
     this.publication = publication;
     const installed = stabilizeRuntimeState(previous, next);
     this.state = installed;
+    let configurationError: ListenerError | undefined;
+    if (configuration !== undefined) {
+      for (const columnId of configuration.invalidatedColumnIds) {
+        configurationError = firstListenerError(
+          configurationError,
+          this.invalidateColumnFilterCommand(columnId),
+        );
+      }
+    }
     const transitionError =
       configuration === undefined
         ? undefined
@@ -394,7 +621,10 @@ export class BrunoTableGridRuntime<TRow> {
             this.notifyColumnStructureTransition(previousLayoutSnapshot),
           );
     const commitError = this.commitState(previous, installed);
-    const firstError = firstListenerError(transitionError, commitError);
+    const firstError = firstListenerError(
+      firstListenerError(configurationError, transitionError),
+      commitError,
+    );
     if (firstError !== undefined) throw firstError.value;
   };
 
@@ -461,10 +691,32 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 
+  public readonly getFilterSnapshot = (): BrunoTableFilterSnapshot => this.filterSnapshot;
+
+  public readonly getQuickFilterSnapshot = (): string => this.query.quickFilter;
+
+  public readonly getFilterPositionResetEpochSnapshot = (): number => this.filterPositionResetEpoch;
+
+  public readonly getQuickFilterCommandEpochSnapshot = (): number => this.quickFilterCommandEpoch;
+
+  public readonly getQuickFilterFieldsSnapshot = (): readonly string[] => this.quickFilterFields;
+
   public readonly getSortingSnapshot = (): BrunoTableOrderBy => this.query.orderBy;
 
   public readonly getColumnCommandSnapshot = (columnId: string): BrunoTableColumnCommandSnapshot =>
     this.columnCommands.get(columnId) ?? EMPTY_COLUMN_COMMAND;
+
+  public readonly getColumnFilterSnapshot = (columnId: string): unknown =>
+    this.columnFilterSnapshots.get(columnId);
+
+  public readonly getColumnFilterVersionSnapshot = (columnId: string): number =>
+    this.columnFilterVersions.get(columnId) ?? 0;
+
+  public readonly getColumnFilterCommandEpochSnapshot = (columnId: string): number =>
+    this.columnFilterCommandEpochs.get(columnId) ?? 0;
+
+  public readonly getFilterComplexitySnapshot = (): BrunoTableFilterComplexity =>
+    this.filterCollection.complexity;
 
   public readonly getColumnLayoutSnapshot = (): BrunoTableColumnLayoutSnapshot =>
     this.columnLayoutSnapshot;
@@ -541,6 +793,21 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly subscribeQuery = (listener: Listener): (() => void) =>
     subscribe(this.queryListeners, listener);
 
+  public readonly subscribeFilter = (listener: Listener): (() => void) =>
+    subscribe(this.filterListeners, listener);
+
+  public readonly subscribeQuickFilter = (listener: Listener): (() => void) =>
+    subscribe(this.quickFilterListeners, listener);
+
+  public readonly subscribeFilterPositionReset = (listener: Listener): (() => void) =>
+    subscribe(this.filterPositionResetListeners, listener);
+
+  public readonly subscribeQuickFilterCommandEpoch = (listener: Listener): (() => void) =>
+    subscribe(this.quickFilterCommandEpochListeners, listener);
+
+  public readonly registerQuickFilterInvalidation = (listener: Listener): (() => void) =>
+    this.subscribeQuickFilterCommandEpoch(listener);
+
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);
 
@@ -564,13 +831,78 @@ export class BrunoTableGridRuntime<TRow> {
     };
   };
 
+  public readonly subscribeColumnFilter = (columnId: string, listener: Listener): (() => void) => {
+    let listeners = this.columnFilterListeners.get(columnId);
+    if (listeners === undefined) {
+      listeners = new Set<Listener>();
+      this.columnFilterListeners.set(columnId, listeners);
+    }
+    listeners.add(listener);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableColumnFilterSubscriptionEvent(
+        this.tableId,
+        columnId,
+        listeners.size,
+        "subscribe",
+      );
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.columnFilterListeners.get(columnId) !== listeners) return;
+      listeners.delete(listener);
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableColumnFilterSubscriptionEvent(
+          this.tableId,
+          columnId,
+          listeners.size,
+          "unsubscribe",
+        );
+      }
+      if (listeners.size === 0) this.columnFilterListeners.delete(columnId);
+    };
+  };
+
+  public readonly subscribeColumnFilterCommandEpoch = (
+    columnId: string,
+    listener: Listener,
+  ): (() => void) => {
+    let listeners = this.columnFilterCommandEpochListeners.get(columnId);
+    if (listeners === undefined) {
+      listeners = new Set<Listener>();
+      this.columnFilterCommandEpochListeners.set(columnId, listeners);
+    }
+    listeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.columnFilterCommandEpochListeners.get(columnId) !== listeners) return;
+      listeners.delete(listener);
+      if (listeners.size === 0) this.columnFilterCommandEpochListeners.delete(columnId);
+    };
+  };
+
   public readonly subscribeColumnLayout = (listener: Listener): (() => void) =>
     subscribe(this.columnLayoutListeners, listener);
 
   public readonly subscribeColumnStructure = (listener: Listener): (() => void) =>
     subscribe(this.columnStructureListeners, listener);
 
-  public readonly dispatchGridCommand = (command: BrunoTableGridCommand): void => {
+  public readonly dispatchGridCommand = (command: BrunoTableGridCommand): boolean => {
+    if (
+      command.type === "quick-filter.replace" &&
+      !isBrunoTableQuickFilterTextWithinLimit(command.text)
+    ) {
+      return false;
+    }
+    if (
+      (isBrunoTableFilterCommand(command) || isBrunoTableSortingCommand(command)) &&
+      !this.commitActiveEditor()
+    ) {
+      return false;
+    }
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableGridCommand(this.tableId, command);
     }
@@ -581,28 +913,54 @@ export class BrunoTableGridRuntime<TRow> {
         this.columns,
         command,
       );
-      this.publishQuery(this.query.filters, nextOrderBy);
-      return;
+      this.publishQuery(this.filterCollection, nextOrderBy);
+      return true;
     }
     if (command.type === "column.filter.clear") {
+      const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
       this.clearColumnFiltersImpl(command.columnId);
-      return;
+      if (invalidationError !== undefined) throw invalidationError.value;
+      return true;
+    }
+    if (command.type === "column.filters.clear") {
+      let invalidationError: ListenerError | undefined;
+      for (const column of this.columns) {
+        invalidationError = firstListenerError(
+          invalidationError,
+          this.invalidateColumnFilterCommand(column.columnId),
+        );
+      }
+      this.clearAllColumnFiltersImpl();
+      if (invalidationError !== undefined) throw invalidationError.value;
+      return true;
     }
     if (command.type === "column.filter.reset") {
-      this.resetColumnFiltersImpl(command.columnId);
-      return;
+      const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
+      const accepted = this.resetColumnFiltersImpl(command.columnId);
+      if (invalidationError !== undefined) throw invalidationError.value;
+      return accepted;
     }
-    if (!isBrunoTableColumnLayoutCommand(command)) return;
+    if (command.type === "column.filter.replace") {
+      return this.replaceColumnFilterImpl(command.columnId, command.filter);
+    }
+    if (command.type === "quick-filter.replace") {
+      this.quickFilterCommandEpoch += 1;
+      this.publishQuery(this.filterCollection, this.query.orderBy, command.text);
+      const error = notify(this.quickFilterCommandEpochListeners);
+      if (error !== undefined) throw error.value;
+      return true;
+    }
+    if (!isBrunoTableColumnLayoutCommand(command)) return true;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const previousCommands = this.columnCommands;
     const nextLayout = applyBrunoTableGridCommand(this.columnLayout, command);
-    if (nextLayout === this.columnLayout) return;
+    if (nextLayout === this.columnLayout) return true;
     this.columnLayout = nextLayout;
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(nextLayout);
     this.columnCommands = createColumnCommandSnapshots(
       this.columns,
       this.query,
-      this.baselineFilters,
+      this.baselineFilterCollection,
       previousCommands,
       this.columnLayoutSnapshot,
     );
@@ -611,6 +969,26 @@ export class BrunoTableGridRuntime<TRow> {
       this.notifyColumnStructureTransition(previousLayoutSnapshot),
     );
     if (error !== undefined) throw error.value;
+    return true;
+  };
+
+  public readonly registerActiveEditorCommitGate = (
+    gate: BrunoTableActiveEditorCommitGate,
+  ): (() => void) => {
+    this.activeEditorCommitGates.add(gate);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.activeEditorCommitGates.delete(gate);
+    };
+  };
+
+  private readonly commitActiveEditor = (): boolean => {
+    for (const gate of this.activeEditorCommitGates) {
+      if (!gate()) return false;
+    }
+    return true;
   };
 
   public readonly toggleColumnSort = (columnId: string, multi: boolean): void => {
@@ -621,26 +999,50 @@ export class BrunoTableGridRuntime<TRow> {
     this.dispatchGridCommand({ type: "column.filter.clear", columnId });
   };
 
-  private readonly clearColumnFiltersImpl = (columnId: string): void => {
-    const next = this.query.filters.filter(
-      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
+  private readonly clearAllColumnFiltersImpl = (): void => {
+    if (this.query.filters.length === 0) return;
+    this.publishQuery(compileClientFilterCollection([], this.columns), this.query.orderBy);
+  };
+
+  private readonly invalidateColumnFilterCommand = (
+    columnId: string,
+  ): ListenerError | undefined => {
+    this.columnFilterCommandEpochs.set(
+      columnId,
+      (this.columnFilterCommandEpochs.get(columnId) ?? 0) + 1,
     );
-    if (next.length === this.query.filters.length) return;
-    this.publishQuery(Object.freeze(next), this.query.orderBy);
+    const listeners = this.columnFilterCommandEpochListeners.get(columnId);
+    return listeners === undefined ? undefined : notify(listeners);
+  };
+
+  private readonly clearColumnFiltersImpl = (columnId: string): void => {
+    const next = removeClientFilterColumn(this.filterCollection, columnId);
+    if (next === this.filterCollection) return;
+    this.publishQuery(next, this.query.orderBy);
+  };
+
+  private readonly replaceColumnFilterImpl = (columnId: string, candidate: unknown): boolean => {
+    const next = replaceClientFilterColumn(this.filterCollection, columnId, candidate);
+    if (next === undefined) return false;
+    if (next === this.filterCollection) return true;
+    this.publishQuery(next, this.query.orderBy);
+    return true;
   };
 
   public readonly resetColumnFilters = (columnId: string): void => {
     this.dispatchGridCommand({ type: "column.filter.reset", columnId });
   };
 
-  private readonly resetColumnFiltersImpl = (columnId: string): void => {
-    const withoutColumn = this.query.filters.filter(
-      (filter) => !brunoTableFilterReferencesColumn(filter, columnId),
+  private readonly resetColumnFiltersImpl = (columnId: string): boolean => {
+    const next = restoreClientFilterColumn(
+      this.filterCollection,
+      this.baselineFilterCollection,
+      columnId,
     );
-    const baseline = this.baselineFilters.filter((filter) =>
-      brunoTableFilterReferencesColumn(filter, columnId),
-    );
-    this.publishQuery(Object.freeze([...withoutColumn, ...baseline]), this.query.orderBy);
+    if (next === undefined) return false;
+    if (next === this.filterCollection) return true;
+    this.publishQuery(next, this.query.orderBy);
+    return true;
   };
 
   public readonly retry = (): void => {
@@ -674,20 +1076,53 @@ export class BrunoTableGridRuntime<TRow> {
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
   ): ColumnConfiguration {
-    const baselineFilters = queryConfiguration.baselineFilters;
+    const baselineFilterCollection =
+      queryConfiguration.baselineFilterCollection ??
+      compileClientFilterCollection(queryConfiguration.baselineFilters, columns, {
+        rejectOverBudget: true,
+      });
+    const baselineFilters = baselineFilterCollection.filters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
-    const nextFilters = sanitizeBrunoTableFilters(this.query.filters, columns);
+    const nextColumnsById = indexColumns(columns);
+    const invalidatedColumnIds = new Set<string>();
+    for (const column of this.columns) {
+      const next = nextColumnsById.get(column.columnId);
+      if (
+        next === undefined ||
+        !sameFilterCommandSemantics(column, next) ||
+        !sameBrunoTableFilterColumn(
+          this.baselineFilterCollection,
+          baselineFilterCollection,
+          column.columnId,
+        )
+      ) {
+        invalidatedColumnIds.add(column.columnId);
+      }
+    }
+    for (const column of columns) {
+      const previous = this.columnsById.get(column.columnId);
+      if (previous === undefined) invalidatedColumnIds.add(column.columnId);
+    }
+    const nextFilterCollection = compileClientFilterCollection(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
+    const nextQuickFilter = this.query.quickFilter;
     const semanticsChanged =
-      !sameReferences(this.query.filters, nextFilters) ||
+      !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
       !sameOrderBy(this.query.orderBy, nextOrderBy) ||
+      this.query.quickFilter !== nextQuickFilter ||
       activeQuerySemanticsChanged(this.columns, columns, this.query);
-    const query = Object.freeze({
+    const query = createQuerySnapshot(
       columns,
-      filters: nextFilters,
-      orderBy: nextOrderBy,
-      generation: semanticsChanged ? this.query.generation + 1 : this.query.generation,
-    });
+      nextFilterCollection,
+      nextQuickFilter,
+      nextOrderBy,
+      semanticsChanged ? this.query.generation + 1 : this.query.generation,
+      semanticsChanged
+        ? !sameOrderBy(this.query.orderBy, nextOrderBy)
+          ? "clear"
+          : "reconcile"
+        : this.query.navigationMode,
+    );
     const columnLayout = reconcileBrunoTableColumnLayout(
       this.columnLayout,
       columns,
@@ -696,69 +1131,130 @@ export class BrunoTableGridRuntime<TRow> {
     const columnCommands = createColumnCommandSnapshots(
       columns,
       query,
-      baselineFilters,
+      baselineFilterCollection,
       this.columnCommands,
       getBrunoTableColumnLayoutSnapshot(columnLayout),
     );
     return Object.freeze({
       columns,
       baselineFilters,
+      baselineFilterCollection,
       baselineOrderBy,
       query,
       columnCommands,
       columnLayout,
+      invalidatedColumnIds: Object.freeze([...invalidatedColumnIds]),
       transition: Object.freeze({
+        filterChanged:
+          this.columns !== columns ||
+          !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
+          this.query.quickFilter !== nextQuickFilter,
         queryChanged: true,
+        quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         previousCommands: this.columnCommands,
+        previousColumnFilters: this.columnFilterSnapshots,
       }),
     });
   }
 
   private publishQuery(
-    filters: readonly unknown[],
+    filterCollection: BrunoTableClientFilterCollection,
     orderBy: BrunoTableOrderBy,
+    quickFilter = this.query.quickFilter,
     forceColumnRefresh = false,
   ): void {
-    const transition = this.updateQuery(filters, orderBy, forceColumnRefresh);
+    const transition = this.updateQuery(filterCollection, orderBy, quickFilter, forceColumnRefresh);
     if (transition === undefined) return;
     const error = this.notifyQueryTransition(transition);
     if (error !== undefined) throw error.value;
   }
 
   private updateQuery(
-    filters: readonly unknown[],
+    filterCollection: BrunoTableClientFilterCollection,
     orderBy: BrunoTableOrderBy,
+    quickFilter: string,
     forceColumnRefresh = false,
   ): QueryTransition | undefined {
     const sortingChanged = !sameOrderBy(this.query.orderBy, orderBy);
-    const queryChanged = !sameReferences(this.query.filters, filters) || sortingChanged;
-    if (!queryChanged && !forceColumnRefresh) return undefined;
-    const previousCommands = this.columnCommands;
-    if (queryChanged) {
-      this.query = Object.freeze({
-        columns: this.columns,
-        filters,
-        orderBy,
-        generation: this.query.generation + 1,
-      });
-    }
-    this.columnCommands = createColumnCommandSnapshots(
-      this.columns,
-      this.query,
-      this.baselineFilters,
-      previousCommands,
-      this.columnLayoutSnapshot,
+    const quickFilterChanged = this.query.quickFilter !== quickFilter;
+    const quickFilterSemanticsChanged =
+      normalizeBrunoTableFilterText(this.query.quickFilter) !==
+      normalizeBrunoTableFilterText(quickFilter);
+    const filterCollectionChanged = !sameBrunoTableFilterCollections(
+      this.filterCollection,
+      filterCollection,
     );
+    const queryChanged = filterCollectionChanged || sortingChanged || quickFilterSemanticsChanged;
+    const filterChanged = filterCollectionChanged || quickFilterChanged;
+    if (!queryChanged && !quickFilterChanged && !forceColumnRefresh) return undefined;
+    const previousCommands = this.columnCommands;
+    const previousColumnFilters = this.columnFilterSnapshots;
+    const filterColumnIdentitiesChanged =
+      filterCollectionChanged &&
+      !sameStringSet(this.filterCollection.columnIds, filterCollection.columnIds);
+    if (queryChanged) {
+      this.query = createQuerySnapshot(
+        this.columns,
+        filterCollection,
+        quickFilter,
+        orderBy,
+        this.query.generation + 1,
+        sortingChanged ? "clear" : "reset",
+      );
+      this.filterCollection = filterCollection;
+      this.updateColumnFilterSnapshots();
+    } else if (quickFilterChanged) {
+      this.query = createQuerySnapshot(
+        this.columns,
+        this.filterCollection,
+        quickFilter,
+        this.query.orderBy,
+        this.query.generation,
+      );
+    }
+    if (filterChanged) {
+      this.filterSnapshot = createFilterSnapshot(
+        this.query,
+        this.columnFilterSnapshots,
+        this.filterCollection.activeFilterLabelsByColumn,
+      );
+    }
+    this.columnCommands =
+      !sortingChanged && !forceColumnRefresh && !filterColumnIdentitiesChanged
+        ? previousCommands
+        : createColumnCommandSnapshots(
+            this.columns,
+            this.query,
+            this.baselineFilterCollection,
+            previousCommands,
+            this.columnLayoutSnapshot,
+          );
     return Object.freeze({
+      filterChanged,
       queryChanged,
+      quickFilterChanged,
       sortingChanged,
       previousCommands,
+      previousColumnFilters,
     });
   }
 
   private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && transition.queryChanged) {
+      recordBrunoTableClientQueryTransition(this.tableId, this.query.generation);
+    }
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
+    if (transition.filterChanged) {
+      firstError = firstListenerError(firstError, notify(this.filterListeners));
+    }
+    if (transition.filterChanged && !transition.queryChanged) {
+      this.filterPositionResetEpoch += 1;
+      firstError = firstListenerError(firstError, notify(this.filterPositionResetListeners));
+    }
+    if (transition.quickFilterChanged) {
+      firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
+    }
     if (transition.sortingChanged) {
       firstError = firstListenerError(firstError, notify(this.sortingListeners));
     }
@@ -786,7 +1282,59 @@ export class BrunoTableGridRuntime<TRow> {
         }
       }
     }
+    const filterColumnIds = new Set([
+      ...transition.previousColumnFilters.keys(),
+      ...this.columnFilterSnapshots.keys(),
+      ...this.columnFilterListeners.keys(),
+    ]);
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      for (const column of this.columns) filterColumnIds.add(column.columnId);
+    }
+    for (const columnId of filterColumnIds) {
+      const listeners = this.columnFilterListeners.get(columnId);
+      if (
+        Object.is(
+          transition.previousColumnFilters.get(columnId),
+          this.columnFilterSnapshots.get(columnId),
+        )
+      ) {
+        continue;
+      }
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableColumnFilterSubscriptionEvent(
+          this.tableId,
+          columnId,
+          listeners?.size ?? 0,
+          "notify",
+        );
+      }
+      if (listeners !== undefined) {
+        firstError = firstListenerError(firstError, notify(listeners));
+      }
+    }
     return firstError;
+  }
+
+  private updateColumnFilterSnapshots(): void {
+    const next = createColumnFilterSnapshots(this.filterCollection, this.columnFilterSnapshots);
+    const columnIds = new Set([...this.columnFilterSnapshots.keys(), ...next.keys()]);
+    for (const columnId of columnIds) {
+      if (Object.is(this.columnFilterSnapshots.get(columnId), next.get(columnId))) continue;
+      this.columnFilterVersions.set(columnId, (this.columnFilterVersions.get(columnId) ?? 0) + 1);
+    }
+    this.columnFilterSnapshots = next;
+    const currentColumnIds = new Set<string>(this.columns.map((column) => column.columnId));
+    for (const columnId of this.columnFilterVersions.keys()) {
+      if (!currentColumnIds.has(columnId)) {
+        this.columnFilterVersions.delete(columnId);
+        this.columnFilterCommandEpochs.delete(columnId);
+      }
+    }
+    for (const columnId of currentColumnIds) {
+      if (!this.columnFilterCommandEpochs.has(columnId)) {
+        this.columnFilterCommandEpochs.set(columnId, 0);
+      }
+    }
   }
 
   private notifyColumnLayoutTransition(
@@ -943,6 +1491,22 @@ function indexColumns(columns: readonly CompiledColumn[]): ReadonlyMap<string, C
   return new Map(columns.map((column) => [column.columnId, column]));
 }
 
+function createColumnFilterSnapshots(
+  collection: BrunoTableClientFilterCollection,
+  previousSnapshots?: ReadonlyMap<string, unknown>,
+): ReadonlyMap<string, unknown> {
+  const snapshots = new Map<string, unknown>();
+  for (const [columnId, value] of collection.filtersByColumn) {
+    const previous = previousSnapshots?.get(columnId);
+    snapshots.set(columnId, Object.is(previous, value) ? previous : value);
+  }
+  return snapshots;
+}
+
+function sameStringSet(previous: ReadonlySet<string>, next: ReadonlySet<string>): boolean {
+  return previous.size === next.size && [...previous].every((value) => next.has(value));
+}
+
 function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
   if (previous.column !== next.column || previous.rowPresent !== next.rowPresent) return false;
   if (Object.is(previous.value, next.value)) return true;
@@ -1069,11 +1633,13 @@ function bodySnapshot<TRow>(
 function createColumnCommandSnapshots(
   columns: readonly CompiledColumn[],
   query: BrunoTableQuerySnapshot,
-  baselineFilters: readonly unknown[],
+  baselineFilterCollection: BrunoTableClientFilterCollection,
   previous?: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>,
   layout?: BrunoTableColumnLayoutSnapshot,
 ): Map<string, BrunoTableColumnCommandSnapshot> {
   const snapshots = new Map<string, BrunoTableColumnCommandSnapshot>();
+  const activeFilterColumnIds = query.filterCollection.columnIds;
+  const baselineFilterColumnIds = baselineFilterCollection.columnIds;
   const layoutById = new Map(
     (layout?.allColumns ?? columns).map((column) => [column.columnId, column]),
   );
@@ -1093,12 +1659,8 @@ function createColumnCommandSnapshots(
     const next = Object.freeze({
       sortable: column.enableSorting !== false,
       ...(sort === undefined ? {} : { sortDirection: sort.direction, sortPriority: sortIndex + 1 }),
-      filterActive: query.filters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
-      ),
-      filterBaselineAvailable: baselineFilters.some((filter) =>
-        brunoTableFilterReferencesColumn(filter, column.columnId),
-      ),
+      filterActive: activeFilterColumnIds.has(column.columnId),
+      filterBaselineAvailable: baselineFilterColumnIds.has(column.columnId),
       visible: visibleIds.has(column.columnId),
       ...(layoutColumn?.pinned === undefined ? {} : { pinned: layoutColumn.pinned }),
       width: layoutColumn?.semantics.width ?? column.semantics.width,
@@ -1134,10 +1696,6 @@ function sameColumnCommand(
   );
 }
 
-function sameReferences(previous: readonly unknown[], next: readonly unknown[]): boolean {
-  return previous.length === next.length && previous.every((value, index) => value === next[index]);
-}
-
 function sameColumnProjection(
   previous: BrunoTableColumnLayoutSnapshot,
   next: BrunoTableColumnLayoutSnapshot,
@@ -1171,9 +1729,7 @@ function activeQuerySemanticsChanged(
   query: BrunoTableQuerySnapshot,
 ): boolean {
   const activeColumnIds = new Set(query.orderBy.map((sort) => sort.columnId));
-  for (const filter of query.filters) {
-    collectClientFilterColumnIds(filter, activeColumnIds);
-  }
+  for (const columnId of query.filterCollection.columnIds) activeColumnIds.add(columnId);
   for (const columnId of activeColumnIds) {
     const previous = previousColumns.find((column) => column.columnId === columnId);
     const next = nextColumns.find((column) => column.columnId === columnId);
@@ -1181,6 +1737,28 @@ function activeQuerySemanticsChanged(
     if (!sameQuerySemantics(previous, next)) return true;
   }
   return false;
+}
+
+function sameFilterCommandSemantics(previous: CompiledColumn, next: CompiledColumn): boolean {
+  if (
+    previous.columnId !== next.columnId ||
+    previous.enableFilter !== next.enableFilter ||
+    previous.semantics.editorFamily !== next.semantics.editorFamily
+  ) {
+    return false;
+  }
+  if (!sameQuerySemantics(previous, next)) return false;
+  if (previous.selectOptions === undefined || next.selectOptions === undefined) {
+    return previous.selectOptions === next.selectOptions;
+  }
+  if (previous.selectOptions.length !== next.selectOptions.length) return false;
+  try {
+    return previous.selectOptions.every((value, index) =>
+      next.semantics.equivalent(value, next.selectOptions?.[index]),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sameQuerySemantics(previous: CompiledColumn, next: CompiledColumn): boolean {

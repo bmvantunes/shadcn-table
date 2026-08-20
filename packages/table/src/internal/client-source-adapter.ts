@@ -13,12 +13,19 @@ import type {
 import { createBrunoTableInvalidCellValue, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
-import type { ClientOrderBy } from "./grid-query";
+import type { BrunoTableClientFilterCollection, ClientOrderBy } from "./grid-query";
 import {
+  compileClientFilterCollection,
   reconcileClientOrderBy,
-  sanitizeClientInitialFilters,
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
+import {
+  BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS,
+  validateBrunoTableQuickFilterFields,
+} from "./quick-filter";
+
+// Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
+// The public Quick Filter contract documents this limit alongside its tuple type.
 
 export type BrunoTableClientReconciliationEvent = Readonly<{
   readonly residentRows: number;
@@ -58,7 +65,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private coherent: ClientCoherentSnapshot<TRow> | undefined;
   private acceptedCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private readonly initialFilters: readonly unknown[];
+  private readonly initialFilterCollection: BrunoTableClientFilterCollection;
   private readonly initialOrderBy: ClientOrderBy;
+  private readonly quickFilterFields: readonly string[];
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
@@ -78,11 +87,14 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     columns: readonly CompiledColumn[],
     initialFilters: readonly unknown[] | undefined,
     initialOrderBy: ClientOrderBy | undefined,
+    quickFilterFields?: readonly string[],
   ) {
-    this.initialFilters = sanitizeClientInitialFilters(initialFilters, columns, {
+    this.initialFilterCollection = compileClientFilterCollection(initialFilters, columns, {
       rejectOverBudget: true,
     });
+    this.initialFilters = this.initialFilterCollection.filters;
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
+    this.quickFilterFields = snapshotQuickFilterFields(quickFilterFields);
     this.source = snapshotSource(source);
     this.observedRows =
       this.source.inputRows === undefined ? undefined : Array.from(this.source.rows.asArray());
@@ -103,7 +115,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.valueCache.retainColumns(columns, this.coherent?.validatedColumns);
     this.queryConfiguration = Object.freeze({
       baselineFilters: this.initialFilters,
+      baselineFilterCollection: this.initialFilterCollection,
       baselineOrderBy: this.initialOrderBy,
+      quickFilterFields: this.quickFilterFields,
     });
   }
 
@@ -113,7 +127,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     columns: readonly CompiledColumn[],
   ): BrunoTableQueryConfiguration => {
     if (columns === this.queryColumns) return this.queryConfiguration;
-    const baselineFilters = sanitizeClientInitialFilters(this.initialFilters, columns);
+    const baselineFilterCollection = compileClientFilterCollection(
+      this.initialFilterCollection.filters,
+      columns,
+    );
+    const baselineFilters = baselineFilterCollection.filters;
     const baselineOrderBy = reconcileClientOrderBy(
       this.initialOrderBy,
       this.initialOrderBy,
@@ -123,7 +141,12 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       throw new TypeError("BrunoTableClient requires at least one sortable column.");
     }
     this.queryColumns = columns;
-    this.queryConfiguration = Object.freeze({ baselineFilters, baselineOrderBy });
+    this.queryConfiguration = Object.freeze({
+      baselineFilters,
+      baselineFilterCollection,
+      baselineOrderBy,
+      quickFilterFields: this.quickFilterFields,
+    });
     return this.queryConfiguration;
   };
 
@@ -1523,4 +1546,21 @@ function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
     source.totalRows >= 0 &&
     source.rows.length === source.totalRows
   );
+}
+
+function snapshotQuickFilterFields(fields: readonly string[] | undefined): readonly string[] {
+  const result = validateBrunoTableQuickFilterFields(fields);
+  if (result.ok) return result.fields;
+  switch (result.reason) {
+    case "not-array":
+      throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
+    case "length":
+      throw new TypeError(
+        `BrunoTable quickFilterFields must contain between 1 and ${String(BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS)} fields.`,
+      );
+    case "sparse":
+      throw new TypeError("BrunoTable quickFilterFields must be dense.");
+    case "empty-field":
+      throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
+  }
 }

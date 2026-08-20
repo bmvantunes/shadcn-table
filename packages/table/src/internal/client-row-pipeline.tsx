@@ -2,9 +2,15 @@ import { memo, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
+import {
+  compileClientFilterPlan,
+  type BrunoTableClientFilterCollection,
+  type ClientFilterPlan,
+} from "./grid-query";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type {
   BrunoTableInvalidCellValue,
+  BrunoTableQueryNavigationMode,
   BrunoTableRowPipelinePublication,
   BrunoTableRowPipelineRuntimeView,
 } from "./grid-runtime";
@@ -16,7 +22,7 @@ import type {
   BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
-import { createClientFilterPredicate } from "./client-row-model";
+import { createClientQueryPredicate, readClientQuickFilterField } from "./quick-filter";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
@@ -39,7 +45,11 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
 > & {
   readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly filters: readonly unknown[];
+  readonly filterCollection: BrunoTableClientFilterCollection;
+  readonly quickFilter: string;
+  readonly quickFilterFields: readonly string[];
   readonly queryGeneration: number;
+  readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   readonly orderBy: readonly {
     readonly columnId: string;
     readonly direction: "asc" | "desc";
@@ -73,8 +83,12 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
       columnLayout={columnLayout}
       columns={query.columns}
       filters={query.filters}
+      filterCollection={query.filterCollection}
+      quickFilter={query.quickFilter}
+      quickFilterFields={props.runtime.getQuickFilterFieldsSnapshot()}
       orderBy={query.orderBy}
       queryGeneration={query.generation}
+      queryNavigationMode={query.navigationMode}
     />
   );
 });
@@ -86,23 +100,51 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   rowPipelineAdapter,
   children,
   filters,
+  filterCollection,
+  quickFilter,
+  quickFilterFields,
   orderBy,
   queryGeneration,
+  queryNavigationMode,
   columnLayout,
 }: ClientResolvedRowOrderProps) {
-  const rowsStore = useMemo(
-    () =>
-      rowPipelineAdapter.createRowsStore(runtime, () =>
-        createRowOrderChangeDetector(tableId, columns, filters, orderBy),
+  const filterPlan = useMemo(
+    () => compileClientFilterPlan(columns, filters, filterCollection),
+    [columns, filterCollection, filters],
+  );
+  const createDetector = useMemo(
+    () => () =>
+      createRowOrderChangeDetector(
+        tableId,
+        columns,
+        filters,
+        quickFilter,
+        quickFilterFields,
+        orderBy,
+        filterPlan,
       ),
-    [columns, filters, orderBy, rowPipelineAdapter, runtime, tableId],
+    [columns, filterPlan, filters, orderBy, quickFilter, quickFilterFields, tableId],
+  );
+  const rowsStore = useMemo(
+    () => rowPipelineAdapter.createRowsStore(runtime, createDetector),
+    [createDetector, rowPipelineAdapter, runtime],
   );
   const rows = useSyncExternalStore(
     rowsStore.subscribe,
     rowsStore.getSnapshot,
     rowsStore.getSnapshot,
   );
-  const rowModel = useClientRowIds(rows, columns, orderBy, filters, tableId, columnLayout);
+  const rowModel = useClientRowIds(
+    rows,
+    columns,
+    orderBy,
+    filters,
+    tableId,
+    columnLayout,
+    quickFilter,
+    quickFilterFields,
+    filterPlan,
+  );
   const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
   const nextRowIds =
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
@@ -135,6 +177,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
           kind: "rows" as const,
           ...orderSnapshot,
           columns: rowModel.columns,
+          queryNavigationMode,
         }),
   );
 });
@@ -143,21 +186,28 @@ function createRowOrderChangeDetector(
   tableId: string,
   columns: readonly CompiledColumn[],
   filters: readonly unknown[],
+  quickFilter: string,
+  quickFilterFields: readonly string[],
   orderBy: ClientResolvedRowOrderProps["orderBy"],
+  filterPlan: ClientFilterPlan | undefined,
 ): BrunoTableClientRowOrderChangeDetector {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
     recordBrunoTableClientRowOrderPlanning(tableId);
   }
   const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
   const orderedColumns = columns.filter((column) => orderedIds.has(column.columnId));
-  const filterPredicate = createClientFilterPredicate<BrunoTableClientAdmittedRow>(
+  const filterPredicate = createClientQueryPredicate<BrunoTableClientAdmittedRow>(
     columns,
     filters,
+    quickFilter,
+    quickFilterFields,
     (column, row) => {
       const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
       if (isBrunoTableInvalidCellValue(value)) throw FILTER_VALUE_INVALID;
       return value;
     },
+    (row, field) => readClientQuickFilterField(row.raw, field),
+    filterPlan,
   );
   return (previousRows, nextRows, change) =>
     rowOrderChanged(previousRows, nextRows, change, orderedColumns, filterPredicate);
