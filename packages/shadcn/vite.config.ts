@@ -1,23 +1,17 @@
-import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "vite-plus";
 
-const reactCompilerOptions = {
-  compilationMode: "infer",
-  target: "19",
-} as const;
+import { reactCompilerOptions } from "../../config/react-compiler-options.mjs";
 
-const reactCompilerForVite = await babel({
-  presets: [reactCompilerPreset(reactCompilerOptions)],
-});
-
-const reactCompilerForLibrary = await babel({
-  plugins: [["babel-plugin-react-compiler", reactCompilerOptions]],
-});
+const reactWithCompiler = () =>
+  react({
+    compiler: reactCompilerOptions,
+    exclude: [/\/node_modules\//, /\.d\.[cm]?tsx?$/],
+  });
 
 const config: UserConfig = defineConfig({
-  plugins: [react(), reactCompilerForVite, tailwindcss()],
+  plugins: [reactWithCompiler(), tailwindcss()],
   test: {
     projects: [
       {
@@ -72,7 +66,7 @@ const config: UserConfig = defineConfig({
         };
       },
     },
-    plugins: [reactCompilerForLibrary],
+    plugins: [...reactWithCompiler()],
   },
   lint: {
     plugins: ["typescript", "react"],
@@ -81,7 +75,7 @@ const config: UserConfig = defineConfig({
       typeCheck: true,
     },
     rules: {
-      "react/react-compiler": "error",
+      "react/react-compiler": ["error", { reportAllBailouts: true }],
     },
   },
 });

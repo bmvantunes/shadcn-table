@@ -3,6 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { transformSync } from "oxc-transform-react";
+
+import {
+  reactCompilerOptions,
+  reactCompilerStrictnessFixture,
+} from "../../../config/react-compiler-options.mjs";
+
+const strictnessResult = transformSync(
+  "react-compiler-strictness.tsx",
+  reactCompilerStrictnessFixture,
+  {
+    jsx: "preserve",
+    reactCompiler: reactCompilerOptions,
+  },
+);
+
+if (!strictnessResult.fatal) {
+  throw new Error("React Compiler recoverable bailouts are not configured as fatal errors.");
+}
 
 const [buttonOutput, compilerOutput, packageJsonSource, componentFiles] = await Promise.all([
   readFile(new URL("../dist/button.mjs", import.meta.url), "utf8"),

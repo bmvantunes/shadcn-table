@@ -4,7 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { parseAsync } from "@babel/core";
+import { transformSync } from "oxc-transform-react";
+import { parseAstAsync } from "vite";
+
+import {
+  reactCompilerOptions,
+  reactCompilerStrictnessFixture,
+} from "../../../config/react-compiler-options.mjs";
+
+const strictnessResult = transformSync(
+  "react-compiler-strictness.tsx",
+  reactCompilerStrictnessFixture,
+  {
+    jsx: "preserve",
+    reactCompiler: reactCompilerOptions,
+  },
+);
+
+if (!strictnessResult.fatal) {
+  throw new Error("React Compiler recoverable bailouts are not configured as fatal errors.");
+}
 
 class UninspectableWildcardExportError extends Error {}
 
@@ -67,10 +86,7 @@ if (!compilerOutput.includes("react/compiler-runtime")) {
   throw new Error("React Compiler did not transform the @bruno/table smoke fixture.");
 }
 
-const rootRuntimeAst = await parseAsync(rootRuntime, { sourceType: "module" });
-if (rootRuntimeAst === null) {
-  throw new Error("The production package could not be parsed for build-contract assertions.");
-}
+const rootRuntimeAst = await parseAstAsync(rootRuntime);
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
   layoutEffectBinding === undefined
@@ -394,7 +410,7 @@ function hasExactStringRecord(actual, expected) {
 }
 
 function findImportedBinding(ast, source, importedName) {
-  for (const statement of ast.program.body) {
+  for (const statement of ast.body) {
     if (statement.type !== "ImportDeclaration" || statement.source.value !== source) continue;
     for (const specifier of statement.specifiers) {
       if (specifier.type !== "ImportSpecifier") continue;
@@ -410,7 +426,7 @@ function findImportedBinding(ast, source, importedName) {
 
 function collectEffectCallbacks(ast, layoutEffectBinding) {
   const callbacks = [];
-  walkSyntaxTree(ast.program, (node, ancestors) => {
+  walkSyntaxTree(ast, (node, ancestors) => {
     if (
       node.type !== "CallExpression" ||
       node.callee.type !== "Identifier" ||
@@ -424,7 +440,7 @@ function collectEffectCallbacks(ast, layoutEffectBinding) {
       return;
     }
     if (callback?.type !== "Identifier") return;
-    const owner = ancestors.findLast((ancestor) => isFunctionNode(ancestor)) ?? ast.program;
+    const owner = ancestors.findLast((ancestor) => isFunctionNode(ancestor)) ?? ast;
     callbacks.push(...findAssignedFunctions(owner, callback.name));
   });
   return callbacks;
@@ -503,7 +519,9 @@ function isFunctionNode(node) {
 
 function memberPropertyName(member) {
   if (member.property.type === "Identifier" && !member.computed) return member.property.name;
-  if (member.property.type === "StringLiteral") return member.property.value;
+  if (member.property.type === "Literal" && typeof member.property.value === "string") {
+    return member.property.value;
+  }
   return undefined;
 }
 
@@ -536,7 +554,7 @@ function isInertBoundaryRemovalCall(node) {
     node.type === "CallExpression" &&
     node.callee.type === "MemberExpression" &&
     memberPropertyName(node.callee) === "removeAttribute" &&
-    node.arguments[0]?.type === "StringLiteral" &&
+    node.arguments[0]?.type === "Literal" &&
     node.arguments[0].value === "inert"
   );
 }
