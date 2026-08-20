@@ -374,10 +374,9 @@ export function BrunoTableLoadingViewportAdapterBoundary({
     viewportBindings.getSnapshot,
     viewportBindings.getSnapshot,
   );
-  useLayoutEffect(
-    () => viewportBindings.setLayout(logicalRowCount, columns),
-    [columns, logicalRowCount, viewportBindings],
-  );
+  useLayoutEffect(() => {
+    viewportBindings.setLayout(logicalRowCount, columns);
+  }, [columns, logicalRowCount, viewportBindings]);
   useEffect(() => () => viewportBindings.dispose(), [viewportBindings]);
   const [gridAttachment] = useState(
     () => new BrunoTableGridAttachment(focusFallback, focusHandoff, viewportBindings.attach),
