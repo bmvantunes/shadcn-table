@@ -46,6 +46,7 @@ import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableClientQueryValueReadListener } from "./internal/client-adapter";
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
+import { BrunoTableClientFilterProvider } from "./internal/client-filter-controls";
 import {
   BRUNO_TABLE_FILTER_COMPOUND_VISIBLE_CONDITIONS,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
@@ -630,7 +631,8 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
-  test("rejects a queued filter candidate after an external Clear command", async () => {
+  test("invalidates a pending root after an external sibling removal", async () => {
+    vi.useFakeTimers();
     const commands: BrunoTableGridCommand[] = [];
     const removeCommandListener = installBrunoTableGridCommandListener(
       "TABLE_ID_FILTER_PACER_EXTERNAL_CLEAR",
@@ -642,7 +644,10 @@ describe("BrunoTableClient browser surface", () => {
         <BrunoTableClient<FilterRow, typeof filterColumns>
           tableId="TABLE_ID_FILTER_PACER_EXTERNAL_CLEAR"
           columns={filterColumns}
-          initialFilters={[{ columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" }]}
+          initialFilters={[
+            { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+          ]}
           initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
           getRowId={(row) => row.id}
           clientSource={readyFilterSource()}
@@ -652,28 +657,33 @@ describe("BrunoTableClient browser surface", () => {
       await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
       const filterDialog = screen.getByRole("dialog", { name: "Filter Name" });
       await userEvent.fill(
-        filterDialog.getByRole("textbox", { name: "Filter value for Name" }),
+        filterDialog.getByRole("textbox", { name: "Filter value for Name (condition 1)" }),
         "Grace",
       );
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         0,
       );
 
-      await userEvent.click(screen.getByRole("button", { name: "Active filters (1)" }));
+      await userEvent.click(screen.getByRole("button", { name: "Active filters (2)" }));
       const review = screen.getByRole("dialog", { name: "Active filters" });
       await userEvent.click(review.getByRole("button", { name: 'Remove Name: equals "Ada"' }));
+      await vi.advanceTimersByTimeAsync(200);
 
       expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
         0,
       );
+      expect(
+        commands.filter((command) => command.type === "column.filter.replace-root"),
+      ).toHaveLength(0);
       await expect
         .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
         .toBeInTheDocument();
       await expect
         .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
-        .toBeInTheDocument();
+        .not.toBeInTheDocument();
     } finally {
       removeCommandListener();
+      vi.useRealTimers();
     }
   });
 
@@ -1850,6 +1860,123 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("commits an accepted pending root while a sibling remains invalid", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PENDING_INVALID_SIBLING",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PENDING_INVALID_SIBLING"
+          columns={filterColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_FILTER_QUANTITY",
+              type: "equals",
+              filter: 9_007_199_254_740_993n,
+            },
+            {
+              columnId: "COL_ID_FILTER_QUANTITY",
+              type: "notEqual",
+              filter: 9_007_199_254_740_994n,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+      const firstRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Quantity (condition 1)",
+      });
+      const secondRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Quantity (condition 2)",
+      });
+
+      await userEvent.fill(firstRoot, "9007199254740994");
+      await userEvent.clear(secondRoot);
+      await vi.advanceTimersByTimeAsync(150);
+
+      await vi.waitFor(() =>
+        expect(
+          commands.filter((command) => command.type === "column.filter.replace-root"),
+        ).toHaveLength(1),
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
+  test("merges an immediate sibling change with an accepted pending root", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PENDING_IMMEDIATE_SIBLING",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PENDING_IMMEDIATE_SIBLING"
+          columns={filterColumns}
+          initialFilters={[
+            { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      await userEvent.fill(
+        dialog.getByRole("textbox", { name: "Filter value for Name (condition 1)" }),
+        "Grace",
+      );
+      await userEvent.selectOptions(
+        dialog.getByRole("combobox", { name: "Filter operator for Name (condition 2)" }),
+        "equals",
+      );
+
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      expect(commands.at(-1)).toMatchObject({
+        type: "column.filter.replace",
+        filter: [
+          { type: "equals", filter: "Grace" },
+          { type: "equals", filter: "Grace" },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+        1,
+      );
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
   test("retains a pending root while a sibling completes IME composition", async () => {
     vi.useFakeTimers();
     const commands: BrunoTableGridCommand[] = [];
@@ -1887,6 +2014,8 @@ describe("BrunoTableClient browser surface", () => {
         .element()
         .dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
       await userEvent.fill(secondRoot, "Ada");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(commands).toHaveLength(0);
       secondRoot
         .element()
         .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "Ada" }));
@@ -2246,6 +2375,54 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Clear Quick Filter" }).nth(0));
     await expect.element(first).toHaveValue("");
     await expect.element(second).toHaveValue("");
+  });
+
+  test("restores the committed Quick Filter after a rejected Clear", async () => {
+    vi.useFakeTimers();
+    const compiledColumns = compileColumns(filterColumns);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      readyFilterSource(),
+      (row: FilterRow) => row.id,
+      compiledColumns,
+      undefined,
+      [{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }],
+      ["name"],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      compiledColumns,
+      adapter.getQueryConfiguration(compiledColumns),
+      "TABLE_ID_REJECTED_QUICK_FILTER_CLEAR",
+    );
+    expect(runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "Ada" })).toBe(true);
+    const gate = vi.fn(() => false);
+    const unregister = runtime.registerActiveEditorCommitGate(gate);
+
+    try {
+      const screen = await render(
+        <BrunoTableClientFilterProvider runtime={runtime.getView()}>
+          <BrunoTableQuickFilter />
+        </BrunoTableClientFilterProvider>,
+      );
+      const quickFilter = screen.getByRole("searchbox", { name: "Quick Filter" });
+      await expect.element(quickFilter).toHaveValue("Ada");
+
+      await userEvent.fill(quickFilter, "Grace");
+      await userEvent.click(screen.getByRole("button", { name: "Clear Quick Filter" }));
+
+      expect(gate).toHaveBeenCalledOnce();
+      expect(runtime.getQuickFilterSnapshot()).toBe("Ada");
+      await expect.element(quickFilter).toHaveValue("Ada");
+      await expect
+        .element(screen.getByRole("alert"))
+        .toHaveTextContent("Quick Filter could not be committed.");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(runtime.getQuickFilterSnapshot()).toBe("Ada");
+      await expect.element(quickFilter).toHaveValue("Ada");
+    } finally {
+      unregister();
+      vi.useRealTimers();
+    }
   });
 
   test("resets a surviving body active cell to row zero after a Quick Filter query", async () => {

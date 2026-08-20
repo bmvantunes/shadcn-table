@@ -253,7 +253,6 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           type="button"
           variant="ghost"
           onClick={() => {
-            const previousDraft = draftRef.current;
             debouncer.cancel();
             const draftEpoch = draftEpochRef.current + 1;
             draftEpochRef.current = draftEpoch;
@@ -265,8 +264,6 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
               draftEpoch,
             });
             if (!accepted) {
-              draftRef.current = previousDraft;
-              setDraft(previousDraft);
               setError("Quick Filter could not be committed.");
               return;
             }

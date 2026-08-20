@@ -127,7 +127,7 @@ type FilterCandidate = Readonly<{
 
 type CommittedFilterCandidate = FilterCandidate &
   Readonly<{
-    readonly draftRevision: number;
+    readonly commandEpoch: number;
   }>;
 
 type FilterParseResult = ReturnType<CompiledColumn["semantics"]["parseCanonicalText"]>;
@@ -438,16 +438,19 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
-  const draftRevisionRef = useRef(0);
-  const pendingCommitTargetRef = useRef<FilterNode | null | undefined>(undefined);
+  // A pending candidate belongs to its retained root, never to the editor's global draft
+  // revision. The shared trailing timer publishes one root directly or one immutable aggregate
+  // snapshot, so a sibling can only replace its own candidate.
+  const pendingRootCandidatesRef = useRef(new Map<FilterNode, FilterNode>());
   const errorId = useId();
 
   const dispatchCandidate = useCallback(
     (candidate: CommittedFilterCandidate): void => {
       if (candidate.filter === undefined) return;
-      if (candidate.draftRevision !== draftRevisionRef.current) return;
-      if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== commandEpoch) return;
-      pendingCommitTargetRef.current = undefined;
+      if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== candidate.commandEpoch) {
+        return;
+      }
+      pendingRootCandidatesRef.current.clear();
       const accepted =
         candidate.root === undefined
           ? runtime.dispatchGridCommand({
@@ -467,7 +470,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       // The runtime is the sole aggregate admission boundary. A rejected candidate must not
       // remain visually ahead of the committed filter, or a later stale Pacer callback could make
       // the overlay claim a state the row model never accepted.
-      draftRevisionRef.current += 1;
       setLocalState(
         createLocalFilterDraftState(
           column,
@@ -477,13 +479,38 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         ),
       );
     },
-    [column, commandEpoch, editorIdentity, runtime],
+    [column, editorIdentity, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
   const cancelPendingCandidate = useCallback((): void => {
-    pendingCommitTargetRef.current = undefined;
+    pendingRootCandidatesRef.current.clear();
     debouncer.cancel();
   }, [debouncer]);
+
+  const candidateFromPendingRoots = useCallback(
+    (nextDraft: FilterDraft): CommittedFilterCandidate | undefined => {
+      const pendingRoots = pendingRootCandidatesRef.current;
+      if (pendingRoots.size === 0) return undefined;
+      if (pendingRoots.size === 1) {
+        const entry = pendingRoots.entries().next().value;
+        if (entry === undefined) return undefined;
+        const [root, filter] = entry;
+        return Object.freeze({ filter, root, commandEpoch });
+      }
+      if (
+        nextDraft.kind !== "compound" ||
+        nextDraft.rootCollection !== true ||
+        nextDraft.rootEntries === undefined
+      ) {
+        return undefined;
+      }
+      return Object.freeze({
+        filter: Object.freeze(nextDraft.rootEntries.map((root) => pendingRoots.get(root) ?? root)),
+        commandEpoch,
+      });
+    },
+    [commandEpoch],
+  );
 
   useLayoutEffect(() => {
     if (
@@ -491,7 +518,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       !sameFilterEditorIdentity(localState.identity, editorIdentity)
     ) {
       cancelPendingCandidate();
-      draftRevisionRef.current += 1;
     }
   }, [cancelPendingCandidate, column, editorIdentity, localState.column, localState.identity]);
 
@@ -501,30 +527,59 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       // Outside/Escape close must not manufacture a command from a local draft. Releasing the
       // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
       cancelPendingCandidate();
-      draftRevisionRef.current += 1;
     };
   }, [cancelPendingCandidate]);
 
   const commitImmediately = useCallback(
-    (candidate: CommittedFilterCandidate): void => {
-      cancelPendingCandidate();
-      if (candidate.filter !== undefined) dispatchCandidate(candidate);
+    (candidate: FilterCandidate, nextDraft: FilterDraft): void => {
+      debouncer.cancel();
+      if (candidate.filter === undefined && candidate.root !== undefined) {
+        pendingRootCandidatesRef.current.delete(candidate.root);
+        const pendingCandidate = candidateFromPendingRoots(nextDraft);
+        if (pendingCandidate !== undefined) dispatchCandidate(pendingCandidate);
+        return;
+      }
+      if (
+        candidate.root !== undefined &&
+        candidate.filter !== undefined &&
+        !isFilterNodeArray(candidate.filter)
+      ) {
+        pendingRootCandidatesRef.current.set(candidate.root, candidate.filter);
+        const pendingCandidate = candidateFromPendingRoots(nextDraft);
+        if (pendingCandidate !== undefined) dispatchCandidate(pendingCandidate);
+        return;
+      }
+      pendingRootCandidatesRef.current.clear();
+      if (candidate.filter !== undefined) {
+        dispatchCandidate(Object.freeze({ ...candidate, commandEpoch }));
+      }
     },
-    [cancelPendingCandidate, dispatchCandidate],
+    [candidateFromPendingRoots, commandEpoch, debouncer, dispatchCandidate],
   );
 
   const commitContinuous = useCallback(
-    (candidate: CommittedFilterCandidate): void => {
+    (candidate: FilterCandidate, nextDraft: FilterDraft): void => {
       if (candidate.filter === undefined) {
-        if (candidate.root === undefined || pendingCommitTargetRef.current === candidate.root) {
+        if (candidate.root === undefined) {
           cancelPendingCandidate();
+          return;
         }
+        if (!pendingRootCandidatesRef.current.delete(candidate.root)) return;
+        const pendingCandidate = candidateFromPendingRoots(nextDraft);
+        if (pendingCandidate === undefined) cancelPendingCandidate();
+        else debouncer.maybeExecute(pendingCandidate);
         return;
       }
-      pendingCommitTargetRef.current = candidate.root ?? null;
-      debouncer.maybeExecute(candidate);
+      if (candidate.root === undefined || isFilterNodeArray(candidate.filter)) {
+        pendingRootCandidatesRef.current.clear();
+        debouncer.maybeExecute(Object.freeze({ ...candidate, commandEpoch }));
+        return;
+      }
+      pendingRootCandidatesRef.current.set(candidate.root, candidate.filter);
+      const pendingCandidate = candidateFromPendingRoots(nextDraft);
+      if (pendingCandidate !== undefined) debouncer.maybeExecute(pendingCandidate);
     },
-    [cancelPendingCandidate, debouncer],
+    [candidateFromPendingRoots, cancelPendingCandidate, commandEpoch, debouncer],
   );
 
   const commitDraft = useCallback(
@@ -534,8 +589,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       badInput = false,
       changedPath?: readonly FilterDraftPathSegment[],
     ): void => {
-      const draftRevision = draftRevisionRef.current + 1;
-      draftRevisionRef.current = draftRevision;
       const nextDraftComplexity = countFilterDraftComplexity(nextDraft);
       const nextComplexityDelta = Object.freeze({
         nodes:
@@ -562,6 +615,10 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         return;
       }
       if (mode === "local") {
+        // Composition owns the current input until compositionend. Pause publication without
+        // discarding accepted sibling roots; the final composed candidate resumes one aggregate
+        // trailing commit.
+        debouncer.cancel();
         setLocalState({
           column,
           identity: editorIdentity,
@@ -579,20 +636,9 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         parseCache,
         changedPath,
       );
-      let candidate = badInput
+      const candidate = badInput
         ? { ...parsed, filter: undefined, error: "Enter a valid value." }
         : parsed;
-      if (candidate.filter !== undefined) {
-        const candidateTarget = candidate.root ?? null;
-        const pendingTarget = pendingCommitTargetRef.current;
-        if (pendingTarget !== undefined && pendingTarget !== candidateTarget) {
-          // One Pacer owns the column overlay. If a second retained root changes before the first
-          // callback commits, replace the pending root-only candidate with one immutable snapshot
-          // of the complete local draft so neither edit can overwrite the other. The path compiler
-          // has already cached the unchanged roots and the two changed root candidates.
-          candidate = buildFilterCandidate(column, nextDraft, parseCache);
-        }
-      }
       setLocalState({
         column,
         identity: editorIdentity,
@@ -601,9 +647,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         error: candidate.error,
         invalidControl: candidate.invalidControl,
       });
-      const committedCandidate = Object.freeze({ ...candidate, draftRevision });
-      if (mode === "continuous") commitContinuous(committedCandidate);
-      else commitImmediately(committedCandidate);
+      if (mode === "continuous") commitContinuous(candidate, nextDraft);
+      else commitImmediately(candidate, nextDraft);
     },
     [
       column,
@@ -616,6 +661,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       parseCache,
       runtime,
       currentState.complexityDelta,
+      debouncer,
     ],
   );
 
