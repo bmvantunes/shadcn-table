@@ -18,6 +18,7 @@ import {
   compileClientFilterCollection,
   compileClientFilterPlan,
   removeClientFilterColumn,
+  removeClientFilterRoot,
   restoreClientFilterColumn,
   replaceClientFilterColumn,
   replaceClientFilterRoot,
@@ -1411,6 +1412,44 @@ describe("Client row model", () => {
     });
     expect(replacement?.compiledOperands.size).toBe(1);
     expect(removeClientFilterColumn(replacement!, "COL_ID_NAME").compiledOperands.size).toBe(0);
+  });
+
+  it("derives shared-node evaluation evidence from only the retained roots", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const aliasedRoot = Object.freeze({
+      conditions: Object.freeze([sharedLeaf, sharedLeaf]),
+      type: "AND" as const,
+    });
+    const ordinaryRoot = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Grace",
+      type: "notEqual" as const,
+    });
+    const collection = compileClientFilterCollection([aliasedRoot, ordinaryRoot], columns);
+    expect(collection.hasSharedNodes).toBe(true);
+
+    const removed = removeClientFilterRoot(collection, "COL_ID_NAME", collection.roots[0]!.filter);
+    expect(removed?.hasSharedNodes).toBe(false);
+
+    const replaced = replaceClientFilterRoot(
+      collection,
+      "COL_ID_NAME",
+      collection.roots[0]!.filter,
+      { columnId: "COL_ID_NAME", filter: "Lin", type: "equals" },
+    );
+    expect(replaced?.hasSharedNodes).toBe(false);
   });
 
   it("replaces one retained root without re-decoding unchanged roots", () => {

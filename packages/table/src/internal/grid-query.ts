@@ -29,6 +29,7 @@ type BrunoTableClientFilterRoot = Readonly<{
   readonly activeFilterLabel: string;
   readonly signature?: string;
   readonly compiledOperandNodes: readonly object[];
+  readonly hasSharedNodes: boolean;
   readonly complexity: BrunoTableFilterComplexity;
 }>;
 
@@ -298,6 +299,7 @@ function retainClientFilterRoot(
     activeFilterLabel,
     ...(next.signature === undefined ? {} : { signature: next.signature }),
     compiledOperandNodes: Object.freeze([...context.compiledOperands.keys()]),
+    hasSharedNodes: context.hasSharedNodes,
     complexity: {
       rootEntries: 1,
       nodes: context.nodes - previous.nodes,
@@ -408,7 +410,7 @@ function createClientFilterCollection(
     opaqueRootCountByColumn,
     complexity: Object.freeze(complexity),
     compiledOperands,
-    hasSharedNodes: context.hasSharedNodes,
+    hasSharedNodes: frozenRoots.some((root) => root.hasSharedNodes),
   });
 }
 
@@ -549,7 +551,6 @@ function replaceClientFilterRoots(
     columnLabelsById: collection.columnLabelsById,
     descriptionMemo: createClientFilterDescriptionMemo(retainedRoots),
   });
-  context.hasSharedNodes = collection.hasSharedNodes;
   const candidateRoots: BrunoTableClientFilterRoot[] = [];
   for (const filter of candidates) {
     const previous = {
@@ -629,7 +630,6 @@ function createDerivedClientFilterCollection(
     compiledOperands,
     columnLabelsById: collection.columnLabelsById,
   });
-  context.hasSharedNodes = collection.hasSharedNodes || additional?.hasSharedNodes === true;
   return createClientFilterCollection(
     collection.columnsById,
     roots,

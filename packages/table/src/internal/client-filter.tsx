@@ -439,6 +439,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
   const draftRevisionRef = useRef(0);
+  const pendingCommitTargetRef = useRef<FilterNode | null | undefined>(undefined);
   const errorId = useId();
 
   const dispatchCandidate = useCallback(
@@ -446,6 +447,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       if (candidate.filter === undefined) return;
       if (candidate.draftRevision !== draftRevisionRef.current) return;
       if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== commandEpoch) return;
+      pendingCommitTargetRef.current = undefined;
       const accepted =
         candidate.root === undefined
           ? runtime.dispatchGridCommand({
@@ -478,44 +480,51 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     [column, commandEpoch, editorIdentity, runtime],
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
+  const cancelPendingCandidate = useCallback((): void => {
+    pendingCommitTargetRef.current = undefined;
+    debouncer.cancel();
+  }, [debouncer]);
 
   useLayoutEffect(() => {
     if (
       !sameFilterEditorColumn(localState.column, column) ||
       !sameFilterEditorIdentity(localState.identity, editorIdentity)
     ) {
-      debouncer.cancel();
+      cancelPendingCandidate();
       draftRevisionRef.current += 1;
     }
-  }, [column, debouncer, editorIdentity, localState.column, localState.identity]);
+  }, [cancelPendingCandidate, column, editorIdentity, localState.column, localState.identity]);
 
   useLayoutEffect(() => {
     (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
     return () => {
       // Outside/Escape close must not manufacture a command from a local draft. Releasing the
       // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
-      debouncer.cancel();
+      cancelPendingCandidate();
       draftRevisionRef.current += 1;
     };
-  }, [debouncer]);
+  }, [cancelPendingCandidate]);
 
   const commitImmediately = useCallback(
     (candidate: CommittedFilterCandidate): void => {
-      debouncer.cancel();
+      cancelPendingCandidate();
       if (candidate.filter !== undefined) dispatchCandidate(candidate);
     },
-    [debouncer, dispatchCandidate],
+    [cancelPendingCandidate, dispatchCandidate],
   );
 
   const commitContinuous = useCallback(
     (candidate: CommittedFilterCandidate): void => {
       if (candidate.filter === undefined) {
-        debouncer.cancel();
+        if (candidate.root === undefined || pendingCommitTargetRef.current === candidate.root) {
+          cancelPendingCandidate();
+        }
         return;
       }
+      pendingCommitTargetRef.current = candidate.root ?? null;
       debouncer.maybeExecute(candidate);
     },
-    [debouncer],
+    [cancelPendingCandidate, debouncer],
   );
 
   const commitDraft = useCallback(
@@ -537,7 +546,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
           draftComplexity.operands,
       });
       if (mode === "clear") {
-        debouncer.cancel();
+        cancelPendingCandidate();
         const accepted = runtime.dispatchGridCommand({
           type: "column.filter.clear",
           columnId: column.columnId,
@@ -553,7 +562,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         return;
       }
       if (mode === "local") {
-        debouncer.cancel();
         setLocalState({
           column,
           identity: editorIdentity,
@@ -571,9 +579,20 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         parseCache,
         changedPath,
       );
-      const candidate = badInput
+      let candidate = badInput
         ? { ...parsed, filter: undefined, error: "Enter a valid value." }
         : parsed;
+      if (candidate.filter !== undefined) {
+        const candidateTarget = candidate.root ?? null;
+        const pendingTarget = pendingCommitTargetRef.current;
+        if (pendingTarget !== undefined && pendingTarget !== candidateTarget) {
+          // One Pacer owns the column overlay. If a second retained root changes before the first
+          // callback commits, replace the pending root-only candidate with one immutable snapshot
+          // of the complete local draft so neither edit can overwrite the other. The path compiler
+          // has already cached the unchanged roots and the two changed root candidates.
+          candidate = buildFilterCandidate(column, nextDraft, parseCache);
+        }
+      }
       setLocalState({
         column,
         identity: editorIdentity,
@@ -588,9 +607,9 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
     },
     [
       column,
+      cancelPendingCandidate,
       commitContinuous,
       commitImmediately,
-      debouncer,
       draft,
       draftComplexity,
       editorIdentity,
@@ -1836,7 +1855,7 @@ function buildFilterCandidateForDraftChange(
         if (candidate.filter !== undefined && !isFilterNodeArray(candidate.filter)) {
           return { ...candidate, root };
         }
-        return candidate;
+        return { ...candidate, root };
       }
     }
     return buildFilterCandidateAlongPath(column, previous, next, changedPath, parseCache, "root");
@@ -1871,7 +1890,7 @@ function buildFilterCandidateForDraftChange(
       if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
         return { ...candidate, root };
       }
-      return candidate;
+      return { ...candidate, root };
     }
   }
   return buildFilterCandidate(column, next, parseCache);

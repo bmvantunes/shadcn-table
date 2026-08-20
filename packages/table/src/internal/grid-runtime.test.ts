@@ -712,6 +712,69 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(view.getColumnFilterCommandEpochSnapshot("COL_ID_NOTE")).toBe(noteEpoch + 1);
   });
 
+  it("compares cloned custom Select options once during column reconciliation", () => {
+    type SelectOption = Readonly<{ readonly id: number }>;
+    const equivalent = vi.fn(
+      (left: SelectOption, right: SelectOption): boolean => left.id === right.id,
+    );
+    const valueType = Object.freeze({
+      codecId: "test/select-reconciliation",
+      codecVersion: 1,
+      filterFamily: "select" as const,
+      editorFamily: "select" as const,
+      cellAlign: "start" as const,
+      editorLayout: "fullWidth" as const,
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && typeof Reflect.get(input, "id") === "number"
+          ? {
+              _tag: "Success" as const,
+              value: Object.freeze({ id: Reflect.get(input, "id") }),
+            }
+          : { _tag: "Failure" as const, message: "Expected an option." },
+      equivalent,
+      compare: (left: SelectOption, right: SelectOption) => left.id - right.id,
+      formatCanonicalText: (value: SelectOption) => String(value.id),
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ id: Number(text) }),
+      }),
+      formatDisplay: (value: SelectOption) => String(value.id),
+      encodePersisted: (value: SelectOption) => value.id,
+      decodePersisted: (input: unknown) =>
+        typeof input === "number"
+          ? { _tag: "Success" as const, value: Object.freeze({ id: input }) }
+          : { _tag: "Failure" as const, message: "Expected an option id." },
+    });
+    const optionCount = 16_384;
+    const createOptions = (): readonly SelectOption[] =>
+      Array.from({ length: optionCount }, (_, id) => Object.freeze({ id }));
+    const createSelectColumns = (options: readonly SelectOption[]) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_SELECT_RECONCILIATION",
+          field: "status",
+          headerName: "Status",
+          valueType,
+          options,
+        } as never,
+      ]);
+    const previousColumns = createSelectColumns(createOptions());
+    const nextColumns = createSelectColumns(createOptions());
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      previousColumns,
+      undefined,
+      [{ columnId: "COL_ID_SELECT_RECONCILIATION", direction: "asc" }],
+    );
+
+    equivalent.mockClear();
+    runtime.configure((row) => row.id, nextColumns);
+
+    expect(equivalent).toHaveBeenCalledTimes(optionCount);
+  });
+
   it("rejects over-limit Quick Filter text at the command boundary", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Ada" }]),

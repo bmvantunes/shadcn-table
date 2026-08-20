@@ -1728,6 +1728,189 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("commits rapid continuous edits across two retained filter roots", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PENDING_ROOT_EDITS",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PENDING_ROOT_EDITS"
+          columns={filterColumns}
+          initialFilters={[
+            { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      const firstRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Name (condition 1)",
+      });
+      const secondRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Name (condition 2)",
+      });
+
+      await userEvent.fill(firstRoot, "Grace");
+      await userEvent.fill(secondRoot, "Ada");
+      await vi.advanceTimersByTimeAsync(150);
+
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      await expect.element(firstRoot).toHaveValue("Grace");
+      await expect.element(secondRoot).toHaveValue("Ada");
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
+  test("retains a pending root while a sibling passes through an invalid numeric draft", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PENDING_NUMERIC_ROOT_EDITS",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PENDING_NUMERIC_ROOT_EDITS"
+          columns={filterColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_FILTER_QUANTITY",
+              type: "equals",
+              filter: 9_007_199_254_740_993n,
+            },
+            {
+              columnId: "COL_ID_FILTER_QUANTITY",
+              type: "notEqual",
+              filter: 9_007_199_254_740_994n,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Quantity (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Quantity" });
+      const firstRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Quantity (condition 1)",
+      });
+      const secondRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Quantity (condition 2)",
+      });
+
+      await userEvent.fill(firstRoot, "9007199254740994");
+      await userEvent.clear(secondRoot);
+      await expect
+        .element(dialog.getByRole("alert"))
+        .toHaveTextContent("Expected signed base-10 integer digits.");
+      await userEvent.fill(secondRoot, "9007199254740993");
+      await vi.advanceTimersByTimeAsync(150);
+
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      await expect.element(firstRoot).toHaveValue("9007199254740994");
+      await expect.element(secondRoot).toHaveValue("9007199254740993");
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
+  test("retains a pending root while a sibling completes IME composition", async () => {
+    vi.useFakeTimers();
+    const commands: BrunoTableGridCommand[] = [];
+    const removeCommandListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_FILTER_PENDING_IME_ROOT_EDITS",
+      (command) => commands.push(command),
+    );
+    try {
+      const screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_PENDING_IME_ROOT_EDITS"
+          columns={filterColumns}
+          initialFilters={[
+            { columnId: "COL_ID_FILTER_NAME", type: "equals", filter: "Ada" },
+            { columnId: "COL_ID_FILTER_NAME", type: "notEqual", filter: "Grace" },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      commands.length = 0;
+      await userEvent.click(screen.getByRole("button", { name: "Filter Name (active)" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+      const firstRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Name (condition 1)",
+      });
+      const secondRoot = dialog.getByRole("textbox", {
+        name: "Filter value for Name (condition 2)",
+      });
+
+      await userEvent.fill(firstRoot, "Grace");
+      secondRoot
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      await userEvent.fill(secondRoot, "Ada");
+      secondRoot
+        .element()
+        .dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "Ada" }));
+      await vi.advanceTimersByTimeAsync(150);
+
+      await vi.waitFor(() =>
+        expect(commands.filter((command) => command.type === "column.filter.replace")).toHaveLength(
+          1,
+        ),
+      );
+      await expect.element(firstRoot).toHaveValue("Grace");
+      await expect.element(secondRoot).toHaveValue("Ada");
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeCommandListener();
+      vi.useRealTimers();
+    }
+  });
+
   test("bounds multi-value growth by the remaining aggregate operand capacity", async () => {
     const nameRoot = Object.freeze({
       columnId: "COL_ID_FILTER_NAME",

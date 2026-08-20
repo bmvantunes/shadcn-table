@@ -1151,9 +1151,7 @@ export class BrunoTableGridRuntime<TRow> {
     }
     for (const column of columns) {
       const previous = this.columnsById.get(column.columnId);
-      if (previous === undefined || !sameFilterCommandSemantics(previous, column)) {
-        invalidatedColumnIds.add(column.columnId);
-      }
+      if (previous === undefined) invalidatedColumnIds.add(column.columnId);
     }
     const nextFilterCollection = compileClientFilterCollection(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
