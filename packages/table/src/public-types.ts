@@ -544,6 +544,27 @@ export type BrunoTableNonNullish<TValue> = NonNullish<TValue>;
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 export type BrunoTableNonEmptyFields<TRow> = NonEmptyFields<TRow>;
 
+type StringQueryField<TRow> = {
+  [TField in FieldKey<TRow>]: [NonNullish<TRow[TField]>] extends [never]
+    ? never
+    : [NonNullish<TRow[TField]>] extends [string]
+      ? TField
+      : never;
+}[FieldKey<TRow>];
+
+/** A string-valued source field eligible for the Client Quick Filter. */
+export type BrunoTableQuickFilterField<TRow> = StringQueryField<TRow>;
+
+/**
+ * Explicit, non-empty source-field configuration for the Client Quick Filter.
+ * TypeScript enforces the field shape and non-empty tuple; the runtime applies a defensive
+ * maximum of 256 entries when snapshotting untrusted configuration.
+ */
+export type BrunoTableQuickFilterFields<TRow> = readonly [
+  BrunoTableQuickFilterField<TRow>,
+  ...BrunoTableQuickFilterField<TRow>[],
+];
+
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
 type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void]
   ? TColumn
@@ -795,6 +816,10 @@ export type BrunoTableEditableColumnId<
     : never;
 
 type ScalarFilterValue<TValue> = Exclude<TValue, null | undefined>;
+type NonEmptyScalarFilterValues<TValue> = readonly [
+  ScalarFilterValue<TValue>,
+  ...ScalarFilterValue<TValue>[],
+];
 
 type FilterFamilyForValueType<TValueType> = TValueType extends "text"
   ? "text"
@@ -830,11 +855,13 @@ type EqualityFilter<TColumnId extends BrunoTableColumnId, TValue, TFilterFamily>
       readonly type: "equals" | "notEqual";
       readonly filter: ScalarFilterValue<TValue>;
     } & TextSensitivity<TFilterFamily>)
-  | ({
-      readonly columnId: TColumnId;
-      readonly type: "in";
-      readonly filter: readonly ScalarFilterValue<TValue>[];
-    } & TextSensitivity<TFilterFamily>);
+  | (TFilterFamily extends "text" | "numeric"
+      ? {
+          readonly columnId: TColumnId;
+          readonly type: "in";
+          readonly filter: NonEmptyScalarFilterValues<TValue>;
+        } & TextSensitivity<TFilterFamily>
+      : never);
 
 type TextFilter<TColumnId extends BrunoTableColumnId, TFilterFamily> = TFilterFamily extends "text"
   ? {
@@ -1043,6 +1070,7 @@ export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
+    readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly viewportSource?: never;
   };
 

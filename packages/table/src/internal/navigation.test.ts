@@ -53,6 +53,139 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("reconciles a surviving active row across a query projection", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move("down");
+    navigation.move("down");
+
+    navigation.reconcileForQuery(["first", "third"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 1,
+      rowId: "third",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("resets committed-query body position while preserving a header origin", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move("down");
+    navigation.move("down");
+
+    navigation.resetForCommittedQuery(["first", "third"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "first",
+      columnId: "COL_ID_NAME",
+    });
+
+    navigation.activateHeader("COL_ID_NAME");
+    navigation.resetForCommittedQuery(["third"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("resets a body query to row zero and its first visible column", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("right");
+    navigation.move("down");
+
+    navigation.resetForCommittedQuery(["replacement"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "replacement",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("clears a position-based body Active Cell for sorting but preserves a header origin", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("down");
+
+    navigation.clearForCommittedSort(["second", "first"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+
+    navigation.activateHeader("COL_ID_NAME");
+    navigation.clearForCommittedSort(["first", "second"], columns);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "header",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+    });
+  });
+
+  it("falls back to the prior display position when a query projection removes its identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second"], columns);
+    navigation.move("down");
+
+    navigation.reconcileForQuery(["first"], columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "first",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
   it("moves through the coherent header/body space and preserves row identity across reorder", () => {
     const columns = compileColumns([
       {

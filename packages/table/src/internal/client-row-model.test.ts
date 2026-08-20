@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
 import { compileColumns } from "./compile-columns";
 import {
   createBrunoTableClientRowComparator,
@@ -11,6 +12,15 @@ import {
   sanitizeClientInitialOrderBy,
   sanitizeClientOrderBy,
 } from "./client-row-model";
+import {
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
+  compileClientFilterCollection,
+  compileClientFilterPlan,
+  removeClientFilterColumn,
+  restoreClientFilterColumn,
+  replaceClientFilterColumn,
+} from "./grid-query";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,6 +113,73 @@ describe("Client row model", () => {
       ]),
     ).toEqual([{ id: "first", name: "I" }]);
     expect(localeLowerCase).not.toHaveBeenCalled();
+  });
+
+  it("compiles text filter operands once before evaluating rows", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const normalize = vi.spyOn(String.prototype, "normalize");
+    const predicate = createClientFilterPredicate(columns, [
+      { columnId: "COL_ID_NAME", type: "equals", filter: "ada" },
+    ]);
+    const rows = [{ name: "Ada" }, { name: "Grace" }, { name: "ADA" }];
+
+    expect(normalize).toHaveBeenCalledTimes(1);
+    expect(rows.filter(predicate!)).toEqual([{ name: "Ada" }, { name: "ADA" }]);
+    expect(normalize).toHaveBeenCalledTimes(rows.length + 1);
+  });
+
+  it("shares compiled filter operands across Client row adapters", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const filters = [{ columnId: "COL_ID_NAME", type: "equals", filter: "ada" }];
+    const normalize = vi.spyOn(String.prototype, "normalize");
+    const plan = compileClientFilterPlan(columns, filters);
+
+    createClientFilterPredicate(
+      columns,
+      filters,
+      (_column, row: { name: string }) => row.name,
+      plan,
+    );
+    createClientFilterPredicate(
+      columns,
+      filters,
+      (_column, row: { name: string }) => row.name,
+      plan,
+    );
+
+    expect(normalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes direct predicate plans before compiling hostile filters", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+
+    expect(
+      compileClientFilterPlan(columns, [{ columnId: "COL_ID_NAME", type: "in", filter: [] }]),
+    ).toBeUndefined();
+    expect(
+      createClientFilterPredicate(columns, [{ columnId: "COL_ID_NAME", type: "in", filter: [] }]),
+    ).toBeUndefined();
   });
 
   it("normalizes canonically equivalent accent-sensitive text", () => {
@@ -278,7 +355,7 @@ describe("Client row model", () => {
     ).toEqual(["blank", "middle", "upper"]);
   });
 
-  it("retains empty text operands with their exact predicate semantics", () => {
+  it("drops empty text search operands at the admission boundary", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -294,17 +371,23 @@ describe("Client row model", () => {
     ] as const;
 
     for (const type of ["contains", "startsWith", "endsWith"] as const) {
-      expect(
-        filterClientRows(rows, columns, [{ columnId: "COL_ID_NAME", type, filter: "" }]).map(
-          (row) => row.id,
-        ),
-      ).toEqual(["empty", "value"]);
+      const filters = sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", type, filter: "" }],
+        columns,
+      );
+      expect(filters).toEqual([]);
+      expect(filterClientRows(rows, columns, filters).map((row) => row.id)).toEqual([
+        "blank",
+        "empty",
+        "value",
+      ]);
     }
     expect(
-      filterClientRows(rows, columns, [
-        { columnId: "COL_ID_NAME", type: "notContains", filter: "" },
-      ]).map((row) => row.id),
-    ).toEqual(["blank"]);
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", type: "notContains", filter: "" }],
+        columns,
+      ),
+    ).toEqual([]);
   });
 
   it("excludes nullish Number and BigInt values from every ordered filter", () => {
@@ -359,7 +442,103 @@ describe("Client row model", () => {
     ).toEqual(["low", "middle"]);
   });
 
-  it("retains empty ranges and strings while dropping invalid text operands and arrays", () => {
+  it("does not apply built-in numeric membership keys to custom equality semantics", () => {
+    const valueType = {
+      codecId: "test/object-is-number",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "number",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected number." } as const),
+      equivalent: (left: number, right: number) => Object.is(left, right),
+      compare: (left: number, right: number) => (left < right ? -1 : left > right ? 1 : 0),
+      formatCanonicalText: (value: number) => String(value),
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Number(text),
+      }),
+      formatDisplay: (value: number) => String(value),
+      encodePersisted: (value: number) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected number." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", type: "in", filter: [-0] }],
+      columns,
+    );
+
+    expect(
+      filterClientRows(
+        [
+          { id: "negative-zero", value: -0 },
+          { id: "positive-zero", value: 0 },
+        ],
+        columns,
+        filters,
+      ).map((row) => row.id),
+    ).toEqual(["negative-zero"]);
+  });
+
+  it("admits symbol operands for custom value domains", () => {
+    const value = Symbol("value");
+    const valueType = {
+      codecId: "test/symbol",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "symbol"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected symbol." } as const),
+      equivalent: (left: symbol, right: symbol) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (input: symbol) => input.description ?? "",
+      parseCanonicalText: (text: string) => ({
+        _tag: "Failure" as const,
+        message: `Cannot parse symbol: ${text}`,
+      }),
+      formatDisplay: (input: symbol) => input.description ?? "",
+      encodePersisted: (input: symbol) => input.description ?? "",
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Symbols are not persisted." }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", type: "equals", filter: value }],
+      columns,
+    );
+
+    expect(filters).toHaveLength(1);
+    expect(filterClientRows([{ value }, { value: Symbol("other") }], columns, filters)).toEqual([
+      { value },
+    ]);
+  });
+
+  it("drops empty ranges and text searches while retaining invalid-free collections", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -395,12 +574,20 @@ describe("Client row model", () => {
       type: "startsWith",
       filter: "\u0301",
     } as const;
+    const emptyIn = { columnId: "COL_ID_NAME", type: "in", filter: [] } as const;
+    const emptyTextIn = { columnId: "COL_ID_NAME", type: "in", filter: [""] } as const;
+    const normalizedEmptyTextIn = {
+      columnId: "COL_ID_NAME",
+      type: "in",
+      filter: ["\u0301"],
+    } as const;
     expect(
       sanitizeClientInitialFilters(
         [
           ...emptyRanges,
           emptyText,
           normalizedEmptyText,
+          emptyIn,
           {
             columnId: "COL_ID_NAME",
             type: "equals",
@@ -417,12 +604,15 @@ describe("Client row model", () => {
         ],
         columns,
       ),
-    ).toEqual([...emptyRanges, emptyText, normalizedEmptyText]);
+    ).toEqual([]);
     const rows = [{ id: "middle", name: "Ada", score: 5, count: 5n }] as const;
     for (const range of emptyRanges) {
-      expect(filterClientRows(rows, columns, [range])).toEqual([]);
+      expect(filterClientRows(rows, columns, [range])).toEqual(rows);
     }
     expect(filterClientRows(rows, columns, [normalizedEmptyText])).toEqual(rows);
+    expect(filterClientRows(rows, columns, [emptyIn])).toEqual(rows);
+    expect(sanitizeClientInitialFilters([emptyTextIn, normalizedEmptyTextIn], columns)).toEqual([]);
+    expect(filterClientRows(rows, columns, [emptyTextIn, normalizedEmptyTextIn])).toEqual(rows);
 
     expect(
       sanitizeClientInitialFilters(
@@ -550,6 +740,31 @@ describe("Client row model", () => {
     ]);
   });
 
+  it("uses the decomposed accent-sensitive text form shared with the Server", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const rows = [{ name: "é" }, { name: "e" }] as const;
+    const filters = sanitizeClientInitialFilters(
+      [
+        {
+          columnId: "COL_ID_NAME",
+          type: "contains",
+          filter: "e",
+          accentSensitive: true,
+        },
+      ],
+      columns,
+    );
+
+    expect(filterClientRows(rows, columns, filters)).toEqual(rows);
+  });
+
   it("sanitizes compound filters and tracks nested column references", () => {
     const columns = compileColumns([
       {
@@ -643,7 +858,7 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([deep], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
   });
 
@@ -719,6 +934,38 @@ describe("Client row model", () => {
     expect(valueReads).toBe(1);
   });
 
+  it("reapplies the depth bound when an accepted subtree alias moves deeper", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let boundary: Readonly<Record<string, unknown>> = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals",
+    });
+    for (let depth = 0; depth < 64; depth += 1) {
+      boundary = Object.freeze({ condition: boundary, type: "NOT" });
+    }
+
+    const collection = compileClientFilterCollection(
+      [boundary, { condition: boundary, type: "NOT" }],
+      columns,
+    );
+
+    expect(collection.expressions).toHaveLength(1);
+    expect(collection.filters).toEqual([expect.objectContaining({ type: "NOT" })]);
+    expect(() =>
+      compileClientFilterCollection([boundary, { condition: boundary, type: "NOT" }], columns, {
+        rejectOverBudget: true,
+      }),
+    ).toThrow(/nesting depth 64/u);
+  });
+
   it("captures a nested source array once when its owner appears at different depths", () => {
     const columns = compileColumns([
       {
@@ -758,7 +1005,7 @@ describe("Client row model", () => {
     expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([]);
   });
 
-  it("captures repeated top-level filter aliases once across independent root budgets", () => {
+  it("captures repeated top-level filter aliases once across public entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -794,8 +1041,17 @@ describe("Client row model", () => {
 
     const sanitized = sanitizeClientInitialFilters([source, source], columns);
 
-    expect(sanitized).toHaveLength(2);
+    expect(sanitized).toEqual([
+      {
+        type: "AND",
+        conditions: [
+          { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+          { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+        ],
+      },
+    ]);
     expect(reads).toEqual({ columnId: 1, filter: 1, type: 1 });
+    expect(compileClientFilterCollection([source, source], columns).hasSharedNodes).toBe(true);
     expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([
       { name: "Ada" },
     ]);
@@ -840,7 +1096,7 @@ describe("Client row model", () => {
     expect(indexedReads).toBe(1);
   });
 
-  it("propagates internal Value Type decoder failures", () => {
+  it("drops filters when an internal Value Type decoder throws", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -859,12 +1115,12 @@ describe("Client row model", () => {
       }),
     }));
 
-    expect(() =>
+    expect(
       sanitizeClientInitialFilters(
         [{ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" }],
         throwingColumns,
       ),
-    ).toThrow("Decoder implementation failed.");
+    ).toEqual([]);
   });
 
   it("drops a filter whose properties cannot be read", () => {
@@ -1036,7 +1292,7 @@ describe("Client row model", () => {
     ]);
   });
 
-  it("bounds root filter reads and preserves valid siblings around unreadable entries", () => {
+  it("bounds filter-array reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1079,14 +1335,300 @@ describe("Client row model", () => {
     const sanitized = sanitizeClientInitialFilters(hostileRoot, columns);
 
     expect(sanitized).toEqual([
-      { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
-      { columnId: "COL_ID_NAME", type: "notBlank" },
+      {
+        type: "AND",
+        conditions: [
+          { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+          { columnId: "COL_ID_NAME", type: "notBlank" },
+        ],
+      },
     ]);
     expect(indexedProbes).toBeLessThanOrEqual(3);
     expect(ownKeyReads).toBe(1);
   });
 
-  it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
+  it("caps hostile filter-array materialization before canonicalization", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_A",
+        field: "name",
+        headerName: "A",
+        valueType: "text",
+      },
+    ]);
+    const hostileRoot = Array.from({ length: 16_385 }, () => ({
+      columnId: "COL_ID_A",
+      type: "blank",
+    }));
+
+    expect(sanitizeClientInitialFilters(hostileRoot, columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(hostileRoot, columns, { rejectOverBudget: true }),
+    ).toThrow(/contains more than 16384 entries/u);
+    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 16_384), columns)).toEqual([]);
+    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1);
+
+    const metadataRoot: unknown[] = [];
+    for (let index = 0; index < 16_385; index += 1) {
+      Object.defineProperty(metadataRoot, `metadata-${index}`, {
+        configurable: true,
+        value: index,
+      });
+    }
+    expect(sanitizeClientInitialFilters(metadataRoot, columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(metadataRoot, columns, { rejectOverBudget: true }),
+    ).toThrow(/contains more than 16384 entries/u);
+  });
+
+  it("canonicalizes one committed expression per Column Identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const firstName = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const secondName = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Grace",
+      type: "notEqual" as const,
+    });
+
+    const collection = compileClientFilterCollection(
+      [firstName, { columnId: "COL_ID_SCORE", filter: 2, type: "greaterThan" }, secondName],
+      columns,
+    );
+
+    expect(collection.filters).toEqual([
+      { type: "AND", conditions: [firstName, secondName] },
+      { columnId: "COL_ID_SCORE", filter: 2, type: "greaterThan" },
+    ]);
+    expect(collection.columnIds).toEqual(new Set(["COL_ID_NAME", "COL_ID_SCORE"]));
+    expect(collection.filtersByColumn.get("COL_ID_NAME")).toBe(collection.filters[0]);
+    expect(collection.filtersByColumn.get("COL_ID_SCORE")).toBe(collection.filters[1]);
+    expect(collection.complexity.inputEntries).toBe(2);
+    expect(collection.complexity.nodes).toBe(4);
+  });
+
+  it("drops the complete collection when canonicalization exceeds the aggregate bound", () => {
+    const columns = compileColumns([
+      { columnId: "COL_ID_A", field: "name", headerName: "A", valueType: "text" },
+      { columnId: "COL_ID_B", field: "name", headerName: "B", valueType: "text" },
+    ]);
+    const filters = [
+      ...Array.from({ length: 16_383 }, () => ({
+        columnId: "COL_ID_A",
+        type: "blank" as const,
+      })),
+      { columnId: "COL_ID_B", type: "blank" as const },
+    ];
+
+    expect(compileClientFilterCollection(filters, columns).filters).toEqual([]);
+    expect(() =>
+      compileClientFilterCollection(filters, columns, { rejectOverBudget: true }),
+    ).toThrow(/16384 nodes/u);
+  });
+
+  it("admits one aggregate node and operand ledger for the complete filter collection", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
+    const largeRoots = [
+      {
+        conditions: Array.from({ length: 8_190 }, () => leaf),
+        type: "AND" as const,
+      },
+      {
+        conditions: Array.from({ length: 8_190 }, () => leaf),
+        type: "AND" as const,
+      },
+    ];
+    const nodeCollection = compileClientFilterCollection(largeRoots, columns);
+    expect(nodeCollection.expressions).toHaveLength(1);
+    expect(nodeCollection.complexity.nodes).toBe(16_383);
+    expect(nodeCollection.expressionsByColumn.get("COL_ID_NAME")?.filter).toBe(
+      nodeCollection.filters[0],
+    );
+    expect(() =>
+      compileClientFilterCollection([...largeRoots, largeRoots[0]!], columns, {
+        rejectOverBudget: true,
+      }),
+    ).toThrow(/16384 nodes/u);
+
+    const operandRoots = Array.from({ length: 5 }, () => ({
+      columnId: "COL_ID_SCORE",
+      filter: Array.from({ length: 4_096 }, (_, index) => index),
+      type: "in" as const,
+    }));
+    const operandCollection = compileClientFilterCollection(operandRoots, columns);
+    expect(operandCollection.complexity.operands).toBe(16_384);
+    expect(operandCollection.expressions).toHaveLength(1);
+  });
+
+  it("prunes compiled operand metadata when a column root is replaced or cleared", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const collection = compileClientFilterCollection(
+      [
+        { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+        { columnId: "COL_ID_NAME", filter: "Grace", type: "equals" },
+      ],
+      columns,
+    );
+    expect(collection.compiledOperands.size).toBe(2);
+
+    const replacement = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      filter: "Lin",
+      type: "equals",
+    });
+    expect(replacement?.compiledOperands.size).toBe(1);
+    expect(removeClientFilterColumn(replacement!, "COL_ID_NAME").compiledOperands.size).toBe(0);
+  });
+
+  it("derives shared-node evaluation evidence from only the retained column expression", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const aliasedRoot = Object.freeze({
+      conditions: Object.freeze([sharedLeaf, sharedLeaf]),
+      type: "AND" as const,
+    });
+    const ordinaryRoot = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Grace",
+      type: "notEqual" as const,
+    });
+    const collection = compileClientFilterCollection([aliasedRoot, ordinaryRoot], columns);
+    expect(collection.hasSharedNodes).toBe(true);
+
+    const replaced = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      filter: "Lin",
+      type: "equals",
+    });
+    expect(replaced?.hasSharedNodes).toBe(false);
+    expect(removeClientFilterColumn(collection, "COL_ID_NAME").hasSharedNodes).toBe(false);
+  });
+
+  it("evaluates a nested alias shared by distinct public entries once per row", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const filters = [
+      { type: "AND" as const, conditions: [sharedLeaf] },
+      { type: "NOT" as const, condition: sharedLeaf },
+    ];
+    const collection = compileClientFilterCollection(filters, columns);
+    const readValue = vi.fn(() => "Ada");
+    const predicate = createClientFilterPredicate(
+      columns,
+      collection.filters,
+      readValue,
+      collection,
+    );
+
+    expect(collection.hasSharedNodes).toBe(true);
+    expect(predicate?.({})).toBe(false);
+    expect(readValue).toHaveBeenCalledOnce();
+  });
+
+  it("replaces one complete column expression without re-decoding other columns", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const valueType = {
+      codecId: "test/root-replacement",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType,
+      },
+    ] as never);
+    const roots = Array.from({ length: 256 }, (_, index) => ({
+      columnId: "COL_ID_NAME",
+      type: "equals" as const,
+      filter: `Name-${String(index)}`,
+    }));
+    const collection = compileClientFilterCollection(roots, columns);
+    const decodeCallsAfterAdmission = decodeRuntime.mock.calls.length;
+    const replacement = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      type: "equals",
+      filter: "Updated",
+    });
+
+    expect(replacement?.expressions).toHaveLength(1);
+    expect(decodeRuntime).toHaveBeenCalledTimes(decodeCallsAfterAdmission + 1);
+  });
+
+  it("bounds order-array reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1178,7 +1720,7 @@ describe("Client row model", () => {
     expect((inFilter as { readonly filter: readonly unknown[] }).filter).toHaveLength(columnCount);
   });
 
-  it("bounds each in operand before materializing hostile values", () => {
+  it("bounds aggregate in operands before materializing hostile values", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_SCORE",
@@ -1191,7 +1733,7 @@ describe("Client row model", () => {
       [
         {
           columnId: "COL_ID_SCORE",
-          filter: Array.from({ length: 4_096 }, (_, index) => index),
+          filter: Array.from({ length: 16_384 }, (_, index) => index),
           type: "in",
         },
       ],
@@ -1199,11 +1741,11 @@ describe("Client row model", () => {
     );
     expect(
       (atLimit[0] as { readonly filter: readonly unknown[] } | undefined)?.filter,
-    ).toHaveLength(4_096);
+    ).toHaveLength(16_384);
 
     const ownKeys = vi.fn(Reflect.ownKeys);
     const overBudgetOperand = new Proxy(
-      Array.from({ length: 4_097 }, (_, index) => index),
+      Array.from({ length: 16_385 }, (_, index) => index),
       { ownKeys },
     );
     const filter = {
@@ -1217,9 +1759,881 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters([filter], columns, { rejectOverBudget: true }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
     expect(ownKeys).not.toHaveBeenCalled();
+  });
+
+  it("admits text operands beyond the UI draft bound while the aggregate allows them", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const overlong = "x".repeat(1_025);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: overlong, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_NAME", filter: overlong, type: "equals" }]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_NAME", filter: ["ok", overlong], type: "in" }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_NAME", filter: ["ok", overlong], type: "in" }]);
+
+    const numericColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_SCORE", filter: overlong, type: "equals" }],
+        numericColumns,
+        { rejectOverBudget: true },
+      ),
+    ).toEqual([]);
+  });
+
+  it("charges long custom text through the aggregate ledger before retaining it", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const customTextValueType = {
+      codecId: "test/bounded-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_TEXT",
+        field: "value",
+        headerName: "Value",
+        valueType: customTextValueType,
+      },
+    ]);
+
+    const operand = "x".repeat(1_025);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_CUSTOM_TEXT", filter: operand, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_CUSTOM_TEXT", filter: operand, type: "equals" }]);
+    expect(decodeRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("rejects unbounded active-label formatter output before truncation", () => {
+    const valueType = {
+      codecId: "test/unbounded-display",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: () => "d".repeat(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_UNBOUNDED_DISPLAY",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      },
+    ] as never);
+    const filter = [{ columnId: "COL_ID_UNBOUNDED_DISPLAY", filter: "Ada", type: "equals" }];
+
+    expect(sanitizeClientInitialFilters(filter, columns)).toEqual([]);
+    expect(() => sanitizeClientInitialFilters(filter, columns, { rejectOverBudget: true })).toThrow(
+      /1048576 UTF-16 text units/u,
+    );
+  });
+
+  it("does not let a rejected root consume the retained collection ledger", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_REJECTED",
+        field: "rejected",
+        headerName: "Rejected",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ] as never);
+    const collection = compileClientFilterCollection(
+      [
+        {
+          type: "AND",
+          conditions: [
+            { columnId: "COL_ID_REJECTED", type: "blank" },
+            { columnId: "COL_ID_NAME", type: "blank" },
+          ],
+        },
+        { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+      ],
+      columns,
+    );
+
+    expect(collection.filters).toEqual([
+      { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+    ]);
+    expect(collection.complexity).toMatchObject({ nodes: 1, operands: 1 });
+  });
+
+  it("charges structural text for opaque roots through the aggregate ledger", () => {
+    const columnId = `COL_ID_${"A".repeat(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH)}`;
+    const columns = compileColumns([
+      {
+        columnId,
+        field: "value",
+        headerName: "Value",
+        valueType: {
+          codecId: "test/opaque-structure-text",
+          codecVersion: 1,
+          filterFamily: "equality",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 160,
+          decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+          equivalent: Object.is,
+          compare: () => 0,
+          formatCanonicalText: (value: unknown) => String(value),
+          parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+          formatDisplay: (value: unknown) => String(value),
+          encodePersisted: (value: unknown) => String(value),
+          decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+        },
+      },
+    ] as never);
+    const filter = [{ columnId, filter: Object.freeze({ id: 1 }), type: "equals" }];
+
+    expect(sanitizeClientInitialFilters(filter, columns)).toEqual([]);
+    expect(() => sanitizeClientInitialFilters(filter, columns, { rejectOverBudget: true })).toThrow(
+      /1048576 UTF-16 text units/u,
+    );
+  });
+
+  it("shares one aggregate retained-text budget across public entries", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const operand = "x".repeat(150_000);
+    const filters = [
+      { columnId: "COL_ID_NAME", filter: operand, type: "equals" as const },
+      { columnId: "COL_ID_NAME", filter: operand, type: "equals" as const },
+    ];
+
+    expect(compileClientFilterCollection(filters, columns).expressions).toHaveLength(1);
+    expect(() =>
+      compileClientFilterCollection(filters, columns, { rejectOverBudget: true }),
+    ).toThrowError(/1048576 UTF-16 text units/u);
+  });
+
+  it("memoizes shared retained filter descriptions across aliased entries", () => {
+    const formatDisplay = vi.fn((value: unknown) => String(value));
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_TEXT",
+        field: "value",
+        headerName: "Value",
+        valueType: {
+          codecId: "test/shared-description",
+          codecVersion: 1,
+          filterFamily: "text",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 160,
+          decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+          equivalent: Object.is,
+          compare: () => 0,
+          formatCanonicalText: (value: unknown) => String(value),
+          parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+          formatDisplay,
+          encodePersisted: (value: unknown) => String(value),
+          decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+        },
+      },
+    ] as never);
+    const first = compileClientFilterCollection(
+      [{ columnId: "COL_ID_CUSTOM_TEXT", filter: "Ada", type: "equals" }],
+      columns,
+    );
+    formatDisplay.mockClear();
+
+    const shared = first.expressions[0]!.filter;
+    const repeated = compileClientFilterCollection([shared, shared], columns);
+
+    expect(repeated.expressions).toHaveLength(1);
+    expect(formatDisplay).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a reset whose retained baseline would exceed the aggregate budget", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const baseline = compileClientFilterCollection(
+      [{ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" }],
+      columns,
+    );
+    const current = compileClientFilterCollection(
+      [
+        {
+          columnId: "COL_ID_SCORE",
+          filter: Array.from({ length: 16_384 }, (_, index) => index),
+          type: "in",
+        },
+      ],
+      columns,
+    );
+
+    expect(restoreClientFilterColumn(current, baseline, "COL_ID_NAME")).toBeUndefined();
+  });
+
+  it("rejects unreadable custom object operands before invoking the decoder", () => {
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const valueType = {
+      codecId: "test/unreadable-object",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const unreadable = new Proxy(
+      { value: "Ada" },
+      {
+        ownKeys() {
+          throw new Error("unreadable operand");
+        },
+      },
+    );
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_VALUE", filter: unreadable, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
+    expect(decodeRuntime).not.toHaveBeenCalled();
+  });
+
+  it("indexes large built-in text in operands before evaluating rows", () => {
+    const formatCanonicalText = vi.fn((value: string) => value);
+    const valueType = {
+      codecId: "test/indexed-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+      equivalent: (left: string, right: string) => left === right,
+      compare: () => 0,
+      formatCanonicalText,
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: string) => value,
+      encodePersisted: (value: string) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+      } as never,
+    ]);
+    const operands = Array.from({ length: 4_096 }, (_, index) => `value-${index}`);
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_VALUE", filter: operands, type: "in" }],
+      columns,
+    );
+    formatCanonicalText.mockClear();
+
+    expect(filterClientRows([{ value: "value-4095" }], columns, filters)).toEqual([
+      { value: "value-4095" },
+    ]);
+    expect(formatCanonicalText).toHaveBeenCalledTimes(operands.length + 1);
+  });
+
+  it("admits configured Select values beyond the authored text bound", () => {
+    const status = "x".repeat(1_025);
+    const selectColumn = Reflect.apply(BrunoTableSelectColumn, undefined, [
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: [status],
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const columns = compileColumns([selectColumn]);
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }],
+        columns,
+        { rejectOverBudget: true },
+      ),
+    ).toEqual([{ columnId: "COL_ID_STATUS", filter: status, type: "equals" }]);
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_STATUS", filter: `${status}-stale`, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([]);
+
+    const repeated = Array.from({ length: 2_048 }, () => ({
+      columnId: "COL_ID_STATUS",
+      filter: status,
+      type: "equals" as const,
+    }));
+    const repeatedCollection = compileClientFilterCollection(repeated, columns);
+    expect(repeatedCollection.expressions.length).toBeLessThan(repeated.length);
+    expect(repeatedCollection.complexity.textLength).toBeLessThanOrEqual(
+      BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
+    );
+  });
+
+  it("does not re-decode an already compiled long Select option", () => {
+    const status = "x".repeat(1_025);
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const selectValueType = {
+      codecId: "test/select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) => Object.is(left, right),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(value),
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: unknown) => String(value),
+      encodePersisted: (value: unknown) => String(value),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options: [status],
+      } as never,
+    ]);
+    const compileDecodeCalls = decodeRuntime.mock.calls.length;
+
+    expect(
+      sanitizeClientInitialFilters(
+        [{ columnId: "COL_ID_CUSTOM_SELECT", filter: status, type: "equals" }],
+        columns,
+      ),
+    ).toEqual([{ columnId: "COL_ID_CUSTOM_SELECT", filter: status, type: "equals" }]);
+    expect(decodeRuntime).toHaveBeenCalledTimes(compileDecodeCalls);
+  });
+
+  it("canonicalizes semantically equal Select operands without decoding them", () => {
+    const configured = Object.freeze({ code: "open" });
+    const equivalentOperand = Object.freeze({ code: "open" });
+    const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
+    const selectValueType = {
+      codecId: "test/object-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime,
+      equivalent: (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+      compare: () => 0,
+      formatCanonicalText: (value: unknown) => String(Reflect.get(value as object, "code")),
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_OBJECT_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options: [configured],
+      } as never,
+    ]);
+    const compileDecodeCalls = decodeRuntime.mock.calls.length;
+
+    const sanitized = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_OBJECT_SELECT", filter: equivalentOperand, type: "equals" }],
+      columns,
+    );
+
+    expect(sanitized[0]).toMatchObject({ columnId: "COL_ID_OBJECT_SELECT", type: "equals" });
+    expect((sanitized[0] as { readonly filter: unknown }).filter).toBe(configured);
+    expect(decodeRuntime).toHaveBeenCalledTimes(compileDecodeCalls);
+  });
+
+  it("charges configured Select canonical text through the aggregate ledger", () => {
+    const canonical = "c".repeat(2_048);
+    const configured = Object.freeze({ code: "open" });
+    const selectValueType = {
+      codecId: "test/long-canonical-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent: (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+      compare: () => 0,
+      formatCanonicalText: () => canonical,
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LONG_CANONICAL_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options: [configured],
+      } as never,
+    ]);
+    const filters = Array.from({ length: 1_024 }, () => ({
+      columnId: "COL_ID_LONG_CANONICAL_SELECT",
+      filter: Object.freeze({ code: "open" }),
+      type: "equals" as const,
+    }));
+
+    const collection = compileClientFilterCollection(filters, columns);
+
+    expect(collection.expressions.length).toBeLessThan(filters.length);
+    expect(collection.complexity.textLength).toBeLessThanOrEqual(
+      BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
+    );
+
+    const exactFilters = Array.from({ length: 1_024 }, () => ({
+      columnId: "COL_ID_LONG_CANONICAL_SELECT",
+      filter: configured,
+      type: "equals" as const,
+    }));
+    const exactCollection = compileClientFilterCollection(exactFilters, columns);
+    expect(exactCollection.expressions.length).toBeLessThan(exactFilters.length);
+  });
+
+  it("charges custom Select scans to one collection-wide comparison allowance", () => {
+    const options = Array.from({ length: 16_384 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/large-equivalence-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LARGE_EQUIVALENCE_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+
+    const collection = compileClientFilterCollection(
+      [
+        {
+          columnId: "COL_ID_LARGE_EQUIVALENCE_SELECT",
+          filter: Object.freeze({ code: "16383" }),
+          type: "equals",
+        },
+      ],
+      columns,
+    );
+
+    expect(collection.expressions).toHaveLength(1);
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("replays accepted nested Select aliases without repeating semantic comparisons", () => {
+    const options = Array.from({ length: 16_384 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/aliased-equivalence-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_ALIASED_EQUIVALENCE_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_ALIASED_EQUIVALENCE_SELECT",
+      filter: Object.freeze({ code: "16383" }),
+      type: "equals" as const,
+    });
+
+    const collection = compileClientFilterCollection(
+      [
+        { type: "AND", conditions: [sharedLeaf] },
+        { type: "NOT", condition: sharedLeaf },
+      ],
+      columns,
+    );
+
+    expect(collection.expressions).toHaveLength(1);
+    expect(collection.filters[0]).toMatchObject({
+      type: "AND",
+      conditions: [{ type: "AND" }, { type: "NOT" }],
+    });
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("does not reopen the comparison allowance for rejected Select entries", () => {
+    const options = Array.from({ length: 64 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/shared-equivalence-budget",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const filters = Array.from(
+      { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS / options.length + 4 },
+      (_, index) => ({
+        columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: `missing-${String(index)}` }),
+        type: "equals" as const,
+      }),
+    );
+
+    const collection = compileClientFilterCollection(
+      [
+        ...filters,
+        {
+          columnId: "COL_ID_SHARED_EQUIVALENCE_BUDGET",
+          filter: Object.freeze({ code: "0" }),
+          type: "equals" as const,
+        },
+      ],
+      columns,
+    );
+
+    expect(collection.expressions).toEqual([]);
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("starts a fresh comparison allowance for each replacement admission", () => {
+    const options = Array.from(
+      { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS },
+      (_, index) => Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/replacement-equivalence-budget",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const collection = compileClientFilterCollection(
+      [
+        {
+          columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+          filter: options[0],
+          type: "equals" as const,
+        },
+      ],
+      columns,
+    );
+
+    const firstReplacement = replaceClientFilterColumn(
+      collection,
+      "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: String(options.length - 1) }),
+        type: "equals" as const,
+      },
+    );
+    const secondReplacement = replaceClientFilterColumn(
+      firstReplacement!,
+      "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+      {
+        columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
+        filter: Object.freeze({ code: String(options.length - 2) }),
+        type: "equals" as const,
+      },
+    );
+
+    expect(firstReplacement?.expressions).toHaveLength(1);
+    expect(secondReplacement?.expressions).toHaveLength(1);
+    expect(equivalent).toHaveBeenCalledTimes(
+      BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS * 2 - 1,
+    );
+  });
+
+  it("admits exact custom Select equality without a configured option domain", () => {
+    const selectValueType = {
+      codecId: "test/optionless-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+      equivalent: (left: string, right: string) => left === right,
+      compare: (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0),
+      formatCanonicalText: (value: string) => value,
+      parseCanonicalText: (text: string) => ({ _tag: "Success" as const, value: text }),
+      formatDisplay: (value: string) => value,
+      encodePersisted: (value: string) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success" as const, value: input } as const)
+          : ({ _tag: "Failure" as const, message: "Expected text." } as const),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_CUSTOM_SELECT_NO_OPTIONS",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+      } as never,
+    ]);
+
+    const filters = sanitizeClientInitialFilters(
+      [{ columnId: "COL_ID_CUSTOM_SELECT_NO_OPTIONS", filter: "open", type: "equals" }],
+      columns,
+    );
+
+    expect(filters).toEqual([
+      { columnId: "COL_ID_CUSTOM_SELECT_NO_OPTIONS", filter: "open", type: "equals" },
+    ]);
+    expect(filterClientRows([{ status: "open" }, { status: "closed" }], columns, filters)).toEqual([
+      { status: "open" },
+    ]);
   });
 
   it("captures admitted dense operands without enumerating unrelated own properties", () => {
@@ -1259,7 +2673,7 @@ describe("Client row model", () => {
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     const ownKeys = vi.fn(Reflect.ownKeys);
     const overBudgetConditions = new Proxy(
-      Array.from({ length: 1_024 }, () => leaf),
+      Array.from({ length: 16_385 }, () => leaf),
       { ownKeys },
     );
 
@@ -1272,12 +2686,12 @@ describe("Client row model", () => {
         rejectOverBudget: true,
       }),
     ).toThrowError(
-      "BrunoTable initialFilters expressions may contain at most 1024 nodes, nesting depth 64, and 4096 values per in operand.",
+      "BrunoTable initialFilters may contain at most 16384 nodes, 16384 operands, 1048576 UTF-16 text units, 16384 semantic comparisons, and nesting depth 64.",
     );
 
     expect(
       sanitizeClientInitialFilters(
-        [{ conditions: Array.from({ length: 1_023 }, () => leaf), type: "AND" }],
+        [{ conditions: Array.from({ length: 16_383 }, () => leaf), type: "AND" }],
         columns,
       ),
     ).toHaveLength(1);
@@ -1294,14 +2708,14 @@ describe("Client row model", () => {
     ]);
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     const lastOwnKeys = vi.fn(Reflect.ownKeys);
-    const groups = Array.from({ length: 32 }, (_, index) => ({
+    const groups = Array.from({ length: 128 }, (_, index) => ({
       conditions:
-        index === 30
+        index === 126
           ? new Proxy(
-              Array.from({ length: 32 }, () => leaf),
+              Array.from({ length: 128 }, () => leaf),
               { ownKeys: lastOwnKeys },
             )
-          : Array.from({ length: 32 }, () => leaf),
+          : Array.from({ length: 128 }, () => leaf),
       type: "AND",
     }));
 

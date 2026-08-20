@@ -7,6 +7,7 @@ import {
 
 const columnIdPrefix = "COL_ID_";
 const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS";
+const BRUNO_TABLE_MAX_SELECT_OPTIONS = 16_384;
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
 const columnIdWhitespacePattern = /\s/u;
 type RuntimeColumnDefinition = Readonly<Record<PropertyKey, unknown>>;
@@ -18,6 +19,10 @@ type CompiledColumnBase = {
   readonly pinned?: "start" | "end";
   readonly valueType: unknown;
   readonly semantics: ReturnType<typeof compileColumnValueSemantics>;
+  readonly selectOptions?: readonly unknown[];
+  /** Exact and canonical Select lookup indexes compiled once with the column semantics. */
+  readonly selectOptionIndexes?: ReadonlyMap<unknown, number>;
+  readonly selectOptionCanonicalIndexes?: ReadonlyMap<string, number>;
   readonly enableFilter: boolean;
   readonly enableSorting: boolean;
   readonly valueFormatter?: RuntimeCallback;
@@ -124,6 +129,63 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     throw new ColumnConfigurationError(`${error.message} Column: ${columnId}`);
   }
   semantics = nullableSafeSemantics(semantics);
+  let selectOptions: readonly unknown[] | undefined;
+  let selectOptionIndexes: ReadonlyMap<unknown, number> | undefined;
+  let selectOptionCanonicalIndexes: ReadonlyMap<string, number> | undefined;
+  if (semantics.filterFamily === "select" && hasField && Object.hasOwn(candidate, "options")) {
+    const options = candidate["options"];
+    if (!Array.isArray(options)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must be a non-empty array: ${columnId}`,
+      );
+    }
+    const optionCount = options.length;
+    if (optionCount === 0) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must be a non-empty array: ${columnId}`,
+      );
+    }
+    if (optionCount > BRUNO_TABLE_MAX_SELECT_OPTIONS) {
+      throw new ColumnConfigurationError(
+        `BrunoTable Select column options must contain at most ${String(BRUNO_TABLE_MAX_SELECT_OPTIONS)} values: ${columnId}`,
+      );
+    }
+    const decodedOptions: unknown[] = [];
+    const exactIndexes = new Map<unknown, number>();
+    const canonicalIndexes = new Map<string, number>();
+    for (let optionIndex = 0; optionIndex < optionCount; optionIndex += 1) {
+      if (!Object.hasOwn(options, optionIndex)) {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column options must be dense: ${columnId}`,
+        );
+      }
+      const option = options[optionIndex];
+      let decoded: ReturnType<typeof semantics.decodeRuntime>;
+      try {
+        decoded = semantics.decodeRuntime(option);
+      } catch {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: decoding failed.`,
+        );
+      }
+      if (decoded._tag === "Failure") {
+        throw new ColumnConfigurationError(
+          `BrunoTable Select column option at index ${String(optionIndex)} is invalid for ${columnId}: ${decoded.message}`,
+        );
+      }
+      decodedOptions.push(decoded.value);
+      if (!exactIndexes.has(decoded.value)) exactIndexes.set(decoded.value, optionIndex);
+      try {
+        const canonical = semantics.formatCanonicalText(decoded.value);
+        if (!canonicalIndexes.has(canonical)) canonicalIndexes.set(canonical, optionIndex);
+      } catch {
+        // Exact identity remains available when a custom canonical formatter rejects an option.
+      }
+    }
+    selectOptions = Object.freeze(decodedOptions);
+    selectOptionIndexes = exactIndexes;
+    selectOptionCanonicalIndexes = canonicalIndexes;
+  }
 
   const valueFormatter = hasValueFormatter ? candidate["valueFormatter"] : undefined;
   if (hasValueFormatter && typeof valueFormatter !== "function") {
@@ -221,6 +283,9 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       ...(pinned === undefined ? {} : { pinned }),
       valueType,
       semantics,
+      ...(selectOptions === undefined ? {} : { selectOptions }),
+      ...(selectOptionIndexes === undefined ? {} : { selectOptionIndexes }),
+      ...(selectOptionCanonicalIndexes === undefined ? {} : { selectOptionCanonicalIndexes }),
       field,
       groupBy,
       enableFilter,
@@ -305,6 +370,9 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     ...(pinned === undefined ? {} : { pinned }),
     valueType,
     semantics,
+    ...(selectOptions === undefined ? {} : { selectOptions }),
+    ...(selectOptionIndexes === undefined ? {} : { selectOptionIndexes }),
+    ...(selectOptionCanonicalIndexes === undefined ? {} : { selectOptionCanonicalIndexes }),
     enableFilter: false,
     enableSorting: false,
     fields,

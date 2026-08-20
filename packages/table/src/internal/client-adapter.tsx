@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import type { ColumnDef, Row, RowData, Table } from "@tanstack/react-table";
 
 import type { CompiledColumn } from "./compile-columns";
+import type { ClientFilterPlan } from "./grid-query";
 import {
   getBrunoTableLogicalColumnOrder,
   type BrunoTableColumnLayoutSnapshot,
@@ -22,10 +23,8 @@ import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import type { BrunoTableInvalidCellValue } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { ClientOrderBy } from "./client-row-model";
-import {
-  createBrunoTableClientRowComparator,
-  createClientFilterPredicate,
-} from "./client-row-model";
+import { createBrunoTableClientRowComparator } from "./client-row-model";
+import { createClientQueryPredicate, readClientQuickFilterField } from "./quick-filter";
 
 const clientFeatures = tableFeatures({
   columnOrderingFeature,
@@ -60,6 +59,9 @@ export function useClientRowIds(
   filters?: readonly unknown[],
   tableId = "",
   columnLayout?: BrunoTableColumnLayoutSnapshot,
+  quickFilterText = "",
+  quickFilterFields: readonly string[] = EMPTY_QUICK_FILTER_FIELDS,
+  filterPlan?: ClientFilterPlan,
 ): BrunoTableClientRowModelResult {
   // Layout state supplies controlled TanStack inputs. The returned `logicalColumns` below is the
   // only Client logical order consumed by rendering and navigation.
@@ -76,10 +78,16 @@ export function useClientRowIds(
     );
   }, [columnLayout, compiledColumns]);
   const filterPredicate = useMemo(() => {
-    return createClientFilterPredicate<ClientRow>(compiledColumns, filters, (column, row) =>
-      row.getValue(column.columnId),
+    return createClientQueryPredicate<ClientRow>(
+      compiledColumns,
+      filters,
+      quickFilterText,
+      quickFilterFields,
+      (column, row) => row.getValue(column.columnId),
+      (row, field) => readClientQuickFilterField(row.original.raw, field),
+      filterPlan,
     );
-  }, [compiledColumns, filters]);
+  }, [compiledColumns, filterPlan, filters, quickFilterFields, quickFilterText]);
   const rowComparator = useMemo(
     () =>
       createBrunoTableClientRowComparator<ClientRow>(
@@ -282,6 +290,7 @@ function readCanonicalValue(row: AdapterRow, column: CompiledColumn, tableId: st
 }
 
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);
+const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 const ROW_IDS_BY_MODEL = new WeakMap<object, readonly string[]>();
 const LOGICAL_COLUMNS_BY_REQUEST = new WeakMap<
   readonly CompiledColumn[],

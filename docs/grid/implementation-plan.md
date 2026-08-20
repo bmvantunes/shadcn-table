@@ -200,13 +200,13 @@ Build:
 - pinning
 - one compact header/layout menu presentation for typed Sort, Filter, Pin/Unpin, Move, Visibility, and Reset commands, without exposing TanStack objects
 - right-side tool rail
-- `BrunoTableQuickFilter` backed by an explicit non-empty `quickFilterFields` tuple of string-valued Query Fields
+- `BrunoTableQuickFilter` backed by an explicit non-empty `quickFilterFields` tuple of string-valued Query Fields, with a defensive runtime snapshot cap of 256 entries
 - complete View Server operator parity per built-in Value Type
 - default live Set Filters for Boolean and Select Field Columns, with explicit high-cardinality opt-in for Text, Number, BigInt, and BigDecimal fields
 - complete Client faceting and separate live whole-result Server facet subscriptions that exclude their own column filter
 - 150 ms TanStack Pacer filter debounce with no Apply or Reset buttons
 - toolbar filter controls that dispatch the same typed filter commands as header filters
-- active filter count
+- active filter count as filtered-column count plus Quick Filter when active
 - active sort count
 - hidden column count
 - reset actions

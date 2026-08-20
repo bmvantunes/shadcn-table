@@ -40,6 +40,7 @@ export class BrunoTableNavigationRuntime {
   private columns: readonly CompiledColumn[] = [];
   private activeCell: BrunoTableActiveCell | undefined;
   private bodyInitializationBlocked = false;
+  private pendingQueryFallbackRowIndex: number | undefined;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
 
@@ -66,11 +67,128 @@ export class BrunoTableNavigationRuntime {
   };
 
   public readonly reset = (): void => {
+    this.pendingQueryFallbackRowIndex = undefined;
     this.bodyInitializationBlocked = false;
     this.setActive(undefined);
   };
 
   public readonly clearForQuery = (): void => {
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.bodyInitializationBlocked = true;
+    this.setActive(undefined);
+  };
+
+  /**
+   * Reset the position owned by a committed query command without retaining a body row identity.
+   * Header navigation is not a row position, so a header-originated command keeps its logical
+   * header column while a body-originated command starts at row zero (or clears for an empty
+   * result).
+   */
+  public readonly resetForCommittedQuery = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const activeCell = this.activeCell;
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    const column =
+      columns.find((candidate) => candidate.columnId === activeCell?.columnId) ?? columns[0];
+    if (column === undefined) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    if (activeCell?.region === "header") {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    if (rowSpace.totalRows === 0) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    this.bodyInitializationBlocked = false;
+    this.setActive({
+      region: "body",
+      rowIndex: 0,
+      ...rowIdentity(rowSpace, 0),
+      columnId: columns[0]!.columnId,
+    });
+  };
+
+  /** Sorting invalidates a position-based body Active Cell without manufacturing row zero. */
+  public readonly clearForCommittedSort = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const activeCell = this.activeCell;
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
+    if (activeCell?.region === "header" && column !== undefined) {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    this.bodyInitializationBlocked = true;
+    this.setActive(undefined);
+  };
+
+  public readonly reconcileForQuery = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    const activeCell = this.activeCell;
+    this.pendingQueryFallbackRowIndex = undefined;
+    const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    if (column === undefined) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    if (activeCell?.region === "header") {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    const rowId = activeCell?.rowId;
+    const rowIndex = rowId === undefined ? undefined : rowSpace.findRowIndex(rowId);
+    if (activeCell?.region === "body" && rowId !== undefined && rowIndex !== undefined) {
+      this.bodyInitializationBlocked = false;
+      this.setActive({
+        region: "body",
+        rowIndex,
+        rowId,
+        columnId: column.columnId,
+      });
+      return;
+    }
+    if (activeCell?.region === "body") {
+      const fallbackRowIndex = Math.max(
+        0,
+        Math.min(Math.max(0, rowSpace.totalRows - 1), activeCell.rowIndex),
+      );
+      const fallbackRowId = rowSpace.getRowId(fallbackRowIndex);
+      if (fallbackRowId !== undefined) {
+        this.bodyInitializationBlocked = false;
+        this.setActive({
+          region: "body",
+          rowIndex: fallbackRowIndex,
+          rowId: fallbackRowId,
+          columnId: column.columnId,
+        });
+        return;
+      }
+      this.pendingQueryFallbackRowIndex = fallbackRowIndex;
+    }
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
   };
@@ -136,7 +254,22 @@ export class BrunoTableNavigationRuntime {
       this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
       return;
     }
-    if (this.bodyInitializationBlocked) return;
+    if (this.bodyInitializationBlocked) {
+      const pendingRowIndex = this.pendingQueryFallbackRowIndex;
+      if (pendingRowIndex === undefined || rowSpace.totalRows === 0) return;
+      const fallbackRowIndex = Math.max(0, Math.min(rowSpace.totalRows - 1, pendingRowIndex));
+      const fallbackRowId = rowSpace.getRowId(fallbackRowIndex);
+      if (fallbackRowId === undefined) return;
+      this.pendingQueryFallbackRowIndex = undefined;
+      this.bodyInitializationBlocked = false;
+      this.setActive({
+        region: "body",
+        rowIndex: fallbackRowIndex,
+        rowId: fallbackRowId,
+        columnId: column.columnId,
+      });
+      return;
+    }
     if (rowSpace.totalRows === 0) {
       if (this.activeCell?.region === "body") this.bodyInitializationBlocked = true;
       this.setActive(undefined);

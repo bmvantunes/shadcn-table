@@ -12,7 +12,7 @@ import type { ReactElement, RefCallback } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
-import type { BrunoTableRuntimeView } from "./grid-runtime";
+import type { BrunoTableQueryNavigationMode, BrunoTableRuntimeView } from "./grid-runtime";
 import type { BrunoTableNavigationRuntime } from "./navigation";
 import { BrunoTableViewportRuntime, type BrunoTableViewportSnapshot } from "./virtual-viewport";
 
@@ -87,6 +87,7 @@ export function BrunoTableViewportAdapterBoundary({
   columns,
   navigation,
   queryGeneration,
+  queryNavigationMode,
   children,
 }: {
   readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -94,6 +95,7 @@ export function BrunoTableViewportAdapterBoundary({
   readonly columns: readonly CompiledColumn[];
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
+  readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
   const instanceId = useBrunoTableInstanceId();
@@ -168,6 +170,12 @@ export function BrunoTableViewportAdapterBoundary({
     viewportBindings.getSnapshot,
     viewportBindings.getSnapshot,
   );
+  const filterPositionResetEpoch = useSyncExternalStore(
+    runtime.subscribeFilterPositionReset,
+    runtime.getFilterPositionResetEpochSnapshot,
+    runtime.getFilterPositionResetEpochSnapshot,
+  );
+  const filterPositionResetEpochRef = useRef(filterPositionResetEpoch);
   useLayoutEffect(() => {
     if (queryGenerationRef.current === queryGeneration) return;
     queryGenerationRef.current = queryGeneration;
@@ -181,9 +189,46 @@ export function BrunoTableViewportAdapterBoundary({
       start: resetWindow.rowStart,
       end: resetWindow.rowEnd,
     });
-    if (navigation.getSnapshot()?.region !== "header") navigation.clearForQuery();
-    navigation.setShape(rowSpace, logicalColumns);
-  }, [logicalColumns, navigation, queryGeneration, rowSpace, viewportBindings]);
+    if (queryNavigationMode === "reconcile") {
+      navigation.reconcileForQuery(rowSpace, logicalColumns);
+    } else if (queryNavigationMode === "clear") {
+      navigation.clearForCommittedSort(rowSpace, logicalColumns);
+    } else {
+      // Issue #12 resets body position without retaining a hidden/non-zero row. A header
+      // origin remains a header origin, so its DOM focus and logical header navigation survive.
+      navigation.resetForCommittedQuery(rowSpace, logicalColumns);
+    }
+  }, [
+    logicalColumns,
+    navigation,
+    queryNavigationMode,
+    queryGeneration,
+    rowSpace,
+    runtime,
+    viewportBindings,
+  ]);
+  useLayoutEffect(() => {
+    if (filterPositionResetEpochRef.current === filterPositionResetEpoch) return;
+    filterPositionResetEpochRef.current = filterPositionResetEpoch;
+    viewportBindings.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
+    viewportBindings.resetVertical();
+    const resetWindow = viewportBindings.getSnapshot().virtualWindow;
+    rowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
+    publishedRangeRef.current = Object.freeze({
+      rowSpace,
+      generation: queryGeneration,
+      start: resetWindow.rowStart,
+      end: resetWindow.rowEnd,
+    });
+    navigation.resetForCommittedQuery(rowSpace, logicalColumns);
+  }, [
+    filterPositionResetEpoch,
+    logicalColumns,
+    navigation,
+    queryGeneration,
+    rowSpace,
+    viewportBindings,
+  ]);
   useLayoutEffect(() => {
     const columnsChanged = appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;
     viewportBindings.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
