@@ -170,7 +170,7 @@ export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
-  readonly focusFallback: (columnId: string) => void;
+  readonly restoreColumnFocus: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
@@ -179,7 +179,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     column,
     runtime,
     activateHeaderCommand,
-    focusFallback,
+    restoreColumnFocus,
     registerColumnFilterOpener,
   }: BrunoTableColumnFilterProps): ReactElement {
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
@@ -230,9 +230,9 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
         ) {
           return;
         }
-        focusFallback(column.columnId);
+        restoreColumnFocus(column.columnId);
       },
-      [column.columnId, focusFallback],
+      [column.columnId, restoreColumnFocus],
     );
     return (
       <DirectionProvider direction={direction}>

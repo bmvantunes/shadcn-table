@@ -351,7 +351,7 @@ export type BrunoTableColumnFilterRendererProps = {
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly runtime: BrunoTableRuntimeView;
   readonly activateHeaderCommand: (columnId: string) => void;
-  readonly focusFallback: (columnId: string) => void;
+  readonly restoreColumnFocus: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
 };
 
@@ -2496,6 +2496,55 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   );
 });
 
+type BrunoTableMenuFilterTransfer = Readonly<{
+  closeMenu: (preserveFocus?: boolean) => void;
+  onOpenChange: (nextOpen: boolean) => void;
+  openHeaderFilterFromMenu: (columnId: string) => void;
+}>;
+
+function useBrunoTableMenuFilterTransfer({
+  columnId,
+  onOpen,
+  openHeaderFilter,
+  restoreColumnFocus,
+  setOpen,
+}: {
+  readonly columnId: string;
+  readonly onOpen?: () => void;
+  readonly openHeaderFilter: (columnId: string) => void;
+  readonly restoreColumnFocus: (columnId: string) => void;
+  readonly setOpen: (open: boolean) => void;
+}): BrunoTableMenuFilterTransfer {
+  const menuFilterTransfer = useRef(false);
+  const openHeaderFilterFromMenu = useCallback(
+    (nextColumnId: string): void => {
+      menuFilterTransfer.current = true;
+      openHeaderFilter(nextColumnId);
+    },
+    [openHeaderFilter],
+  );
+  const closeMenu = useCallback(
+    (preserveFocus = false): void => {
+      if (preserveFocus) menuFilterTransfer.current = true;
+      setOpen(false);
+    },
+    [setOpen],
+  );
+  const onOpenChange = useCallback(
+    (nextOpen: boolean): void => {
+      if (nextOpen) onOpen?.();
+      setOpen(nextOpen);
+      if (!nextOpen) {
+        const transferred = menuFilterTransfer.current;
+        menuFilterTransfer.current = false;
+        if (!transferred) restoreColumnFocus(columnId);
+      }
+    },
+    [columnId, onOpen, restoreColumnFocus, setOpen],
+  );
+  return { closeMenu, onOpenChange, openHeaderFilterFromMenu };
+}
+
 const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   allColumns,
   activeCell,
@@ -2525,14 +2574,13 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
 }) {
   const [open, setOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
-  const menuFilterTransfer = useRef(false);
-  const openHeaderFilterFromMenu = useCallback(
-    (columnId: string): void => {
-      menuFilterTransfer.current = true;
-      openHeaderFilter(columnId);
-    },
-    [openHeaderFilter],
-  );
+  const { closeMenu, onOpenChange, openHeaderFilterFromMenu } = useBrunoTableMenuFilterTransfer({
+    columnId: column?.columnId ?? "",
+    onOpen: () => setMenuDirection(readBrunoTableMenuDirection()),
+    openHeaderFilter,
+    restoreColumnFocus,
+    setOpen,
+  });
   const columnId = column?.columnId ?? "";
   const subscribe = useMemo(
     () => (listener: () => void) => runtime.subscribeColumnCommands(columnId, listener),
@@ -2556,18 +2604,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
         tableId={tableId}
       />
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu
-          open={open}
-          onOpenChange={(nextOpen) => {
-            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-            setOpen(nextOpen);
-            if (!nextOpen) {
-              const transferred = menuFilterTransfer.current;
-              menuFilterTransfer.current = false;
-              if (!transferred) restoreColumnFocus(column.columnId);
-            }
-          }}
-        >
+        <DropdownMenu open={open} onOpenChange={onOpenChange}>
           <DropdownMenuTrigger
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
@@ -2587,10 +2624,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
-              closeMenu={(preserveFocus) => {
-                if (preserveFocus) menuFilterTransfer.current = true;
-                setOpen(false);
-              }}
+              closeMenu={closeMenu}
               column={column}
               command={command}
               direction={menuDirection}
@@ -2848,14 +2882,13 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       : `Sort by ${column.headerName}, currently ${presentation.direction}${sortPriorityLabel(command.sortPriority)}`;
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuDirection, setMenuDirection] = useState<"ltr" | "rtl">("ltr");
-  const menuFilterTransfer = useRef(false);
-  const openHeaderFilterFromMenu = useCallback(
-    (columnId: string): void => {
-      menuFilterTransfer.current = true;
-      openHeaderFilter(columnId);
-    },
-    [openHeaderFilter],
-  );
+  const { closeMenu, onOpenChange, openHeaderFilterFromMenu } = useBrunoTableMenuFilterTransfer({
+    columnId: column.columnId,
+    onOpen: () => setMenuDirection(readBrunoTableMenuDirection()),
+    openHeaderFilter,
+    restoreColumnFocus,
+    setOpen: setMenuOpen,
+  });
   const pinLabel = command.pinned === undefined ? "unpinned" : `pinned ${command.pinned}`;
   const subscribeActiveResize = useMemo(
     () => (listener: () => void) => navigation.subscribeColumn(column.columnId, listener),
@@ -2903,7 +2936,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               activateHeaderCommand,
               column,
               command,
-              focusFallback: restoreColumnFocus,
+              restoreColumnFocus,
               runtime,
               registerColumnFilterOpener,
             })
@@ -2952,18 +2985,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         <ArrowsHorizontalIcon aria-hidden="true" />
       </button>
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu
-          open={menuOpen}
-          onOpenChange={(nextOpen) => {
-            if (nextOpen) setMenuDirection(readBrunoTableMenuDirection());
-            setMenuOpen(nextOpen);
-            if (!nextOpen) {
-              const transferred = menuFilterTransfer.current;
-              menuFilterTransfer.current = false;
-              if (!transferred) restoreColumnFocus(column.columnId);
-            }
-          }}
-        >
+        <DropdownMenu open={menuOpen} onOpenChange={onOpenChange}>
           <DropdownMenuTrigger
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
@@ -2990,10 +3012,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             <ColumnManagementMenu
               allColumns={allColumns}
               announce={announce}
-              closeMenu={(preserveFocus) => {
-                if (preserveFocus) menuFilterTransfer.current = true;
-                setMenuOpen(false);
-              }}
+              closeMenu={closeMenu}
               column={column}
               command={command}
               direction={menuDirection}
