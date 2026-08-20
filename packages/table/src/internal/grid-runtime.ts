@@ -25,9 +25,7 @@ import {
   normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
   removeClientFilterColumn,
-  removeClientFilterRoot,
   replaceClientFilterColumn,
-  replaceClientFilterRoot,
   restoreClientFilterColumn,
   sameBrunoTableFilterColumn,
   sameBrunoTableFilterCollections,
@@ -57,8 +55,6 @@ function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
     case "column.filters.clear":
     case "column.filter.reset":
     case "column.filter.replace":
-    case "column.filter.remove":
-    case "column.filter.replace-root":
     case "quick-filter.replace":
       return true;
     case "column.resize.commit":
@@ -234,13 +230,9 @@ export type BrunoTableFilterSnapshot = Readonly<{
   readonly filtersByColumn: Readonly<{
     readonly get: (columnId: string) => unknown;
   }>;
-  /** Stable retained-root handles aligned with filtersByColumn for active-filter commands. */
-  readonly filterHandlesByColumn: Readonly<{
-    readonly get: (columnId: string) => readonly object[] | undefined;
-  }>;
-  /** Bounded labels compiled with the admitted roots for active-filter review. */
+  /** Bounded label compiled with the admitted column expression for active-filter review. */
   readonly activeFilterLabelsByColumn: Readonly<{
-    readonly get: (columnId: string) => readonly string[] | undefined;
+    readonly get: (columnId: string) => string | undefined;
   }>;
   readonly quickFilter: string;
 }>;
@@ -259,14 +251,12 @@ export type BrunoTableQuerySnapshot = Readonly<{
 function createFilterSnapshot(
   query: BrunoTableQuerySnapshot,
   filtersByColumn: ReadonlyMap<string, unknown>,
-  filterHandlesByColumn: ReadonlyMap<string, readonly object[]>,
-  activeFilterLabelsByColumn: ReadonlyMap<string, readonly string[]>,
+  activeFilterLabelsByColumn: ReadonlyMap<string, string>,
 ): BrunoTableFilterSnapshot {
   return Object.freeze({
     columns: query.columns,
     filters: query.filters,
     filtersByColumn: createFilterColumnIndex(filtersByColumn),
-    filterHandlesByColumn: createFilterHandleIndex(filterHandlesByColumn),
     activeFilterLabelsByColumn: createFilterLabelIndex(activeFilterLabelsByColumn),
     quickFilter: query.quickFilter,
   });
@@ -279,21 +269,12 @@ function createFilterColumnIndex(
   return Object.freeze({ get: (columnId: string): unknown => snapshot.get(columnId) });
 }
 
-function createFilterHandleIndex(
-  filterHandlesByColumn: ReadonlyMap<string, readonly object[]>,
-): Readonly<{ readonly get: (columnId: string) => readonly object[] | undefined }> {
-  const snapshot = new Map(filterHandlesByColumn);
-  return Object.freeze({
-    get: (columnId: string): readonly object[] | undefined => snapshot.get(columnId),
-  });
-}
-
 function createFilterLabelIndex(
-  activeFilterLabelsByColumn: ReadonlyMap<string, readonly string[]>,
-): Readonly<{ readonly get: (columnId: string) => readonly string[] | undefined }> {
+  activeFilterLabelsByColumn: ReadonlyMap<string, string>,
+): Readonly<{ readonly get: (columnId: string) => string | undefined }> {
   const snapshot = new Map(activeFilterLabelsByColumn);
   return Object.freeze({
-    get: (columnId: string): readonly string[] | undefined => snapshot.get(columnId),
+    get: (columnId: string): string | undefined => snapshot.get(columnId),
   });
 }
 
@@ -493,7 +474,6 @@ export class BrunoTableGridRuntime<TRow> {
     this.filterSnapshot = createFilterSnapshot(
       this.query,
       this.columnFilterSnapshots,
-      this.filterCollection.rootsByColumn,
       this.filterCollection.activeFilterLabelsByColumn,
     );
     for (const columnId of this.columnFilterSnapshots.keys()) {
@@ -612,7 +592,6 @@ export class BrunoTableGridRuntime<TRow> {
       this.filterSnapshot = createFilterSnapshot(
         this.query,
         this.columnFilterSnapshots,
-        this.filterCollection.rootsByColumn,
         this.filterCollection.activeFilterLabelsByColumn,
       );
       this.columnLayout = configuration.columnLayout;
@@ -961,15 +940,6 @@ export class BrunoTableGridRuntime<TRow> {
       if (invalidationError !== undefined) throw invalidationError.value;
       return accepted;
     }
-    if (command.type === "column.filter.remove") {
-      const invalidationError = this.invalidateColumnFilterCommand(command.columnId);
-      const accepted = this.removeColumnFilterRootImpl(command.columnId, command.root);
-      if (invalidationError !== undefined) throw invalidationError.value;
-      return accepted;
-    }
-    if (command.type === "column.filter.replace-root") {
-      return this.replaceColumnFilterRootImpl(command.columnId, command.root, command.filter);
-    }
     if (command.type === "column.filter.replace") {
       return this.replaceColumnFilterImpl(command.columnId, command.filter);
     }
@@ -1053,26 +1023,6 @@ export class BrunoTableGridRuntime<TRow> {
 
   private readonly replaceColumnFilterImpl = (columnId: string, candidate: unknown): boolean => {
     const next = replaceClientFilterColumn(this.filterCollection, columnId, candidate);
-    if (next === undefined) return false;
-    if (next === this.filterCollection) return true;
-    this.publishQuery(next, this.query.orderBy);
-    return true;
-  };
-
-  private readonly replaceColumnFilterRootImpl = (
-    columnId: string,
-    root: unknown,
-    candidate: unknown,
-  ): boolean => {
-    const next = replaceClientFilterRoot(this.filterCollection, columnId, root, candidate);
-    if (next === undefined) return false;
-    if (next === this.filterCollection) return true;
-    this.publishQuery(next, this.query.orderBy);
-    return true;
-  };
-
-  private readonly removeColumnFilterRootImpl = (columnId: string, root: unknown): boolean => {
-    const next = removeClientFilterRoot(this.filterCollection, columnId, root);
     if (next === undefined) return false;
     if (next === this.filterCollection) return true;
     this.publishQuery(next, this.query.orderBy);
@@ -1267,7 +1217,6 @@ export class BrunoTableGridRuntime<TRow> {
       this.filterSnapshot = createFilterSnapshot(
         this.query,
         this.columnFilterSnapshots,
-        this.filterCollection.rootsByColumn,
         this.filterCollection.activeFilterLabelsByColumn,
       );
     }
@@ -1547,7 +1496,7 @@ function createColumnFilterSnapshots(
   previousSnapshots?: ReadonlyMap<string, unknown>,
 ): ReadonlyMap<string, unknown> {
   const snapshots = new Map<string, unknown>();
-  for (const [columnId, value] of collection.snapshotsByColumn) {
+  for (const [columnId, value] of collection.filtersByColumn) {
     const previous = previousSnapshots?.get(columnId);
     snapshots.set(columnId, Object.is(previous, value) ? previous : value);
   }

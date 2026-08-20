@@ -69,8 +69,8 @@ One numeric domain whose values and operands remain `number`, `bigint`, or BigDe
 _Avoid_: Numeric-like value, number coercion, mixed numeric domain
 
 **Grid Filter Expression**:
-A filter expression whose leaves refer to Column Identity. It is persisted as user intent and translated through current column definitions before reaching a server.
-_Avoid_: View Server filter, field-keyed persisted filter
+The one committed filter expression owned by one Column Identity. Its leaves all refer to that identity; conditions may compose through `AND`, `OR`, and `NOT`. Public and persisted arrays remain accepted, but duplicate entries for one Column Identity canonicalize in input order to one same-column `AND` expression before runtime ownership, persistence, or Server translation.
+_Avoid_: Filter root, root handle, partial root command, sibling-root state, View Server filter, field-keyed persisted filter
 
 **Quick Filter**:
 A grid-owned free-text filter applied with `contains` across an explicit non-empty tuple of string-valued Query Fields supplied through `quickFilterFields`. Those fields combine with `OR`; the resulting expression combines with External Filters and Grid Filters through `AND`. Both its field configuration and committed text are session-only and never persisted.

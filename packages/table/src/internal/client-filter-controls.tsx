@@ -130,9 +130,11 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
   const lastCommittedRef = useRef(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const draftEpochRef = useRef(0);
-  const composingRef = useRef(false);
-  const compositionSessionRef = useRef(0);
-  const invalidatedCompositionSessionRef = useRef<number | null>(null);
+  const compositionRef = useRef<{
+    nextToken: number;
+    activeToken: number | undefined;
+    invalidatedToken: number | undefined;
+  }>({ nextToken: 0, activeToken: undefined, invalidatedToken: undefined });
   const publish = useCallback(
     (
       candidate: Readonly<{
@@ -182,8 +184,9 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
     return runtime.registerQuickFilterInvalidation(() => {
       debouncer.cancel();
       draftEpochRef.current += 1;
-      if (composingRef.current) {
-        invalidatedCompositionSessionRef.current = compositionSessionRef.current;
+      const composition = compositionRef.current;
+      if (composition.activeToken !== undefined) {
+        composition.invalidatedToken = composition.activeToken;
       }
       const committed = runtime.getQuickFilterSnapshot();
       lastCommittedRef.current = committed;
@@ -205,14 +208,14 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
         type="search"
         value={draft}
         onCompositionEnd={(event) => {
-          const compositionSession = compositionSessionRef.current;
-          if (invalidatedCompositionSessionRef.current === compositionSession) {
-            invalidatedCompositionSessionRef.current = null;
-            composingRef.current = false;
+          const composition = compositionRef.current;
+          const token = composition.activeToken;
+          composition.activeToken = undefined;
+          if (token !== undefined && composition.invalidatedToken === token) {
+            composition.invalidatedToken = undefined;
             event.currentTarget.value = draftRef.current;
             return;
           }
-          composingRef.current = false;
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           const draftEpoch = draftEpochRef.current + 1;
           draftEpochRef.current = draftEpoch;
@@ -225,20 +228,28 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           });
         }}
         onCompositionStart={() => {
-          compositionSessionRef.current += 1;
-          invalidatedCompositionSessionRef.current = null;
-          composingRef.current = true;
+          const composition = compositionRef.current;
+          composition.nextToken += 1;
+          composition.activeToken = composition.nextToken;
+          composition.invalidatedToken = undefined;
           draftEpochRef.current += 1;
           debouncer.cancel();
         }}
         onChange={(event) => {
-          if (invalidatedCompositionSessionRef.current === compositionSessionRef.current) return;
+          const composition = compositionRef.current;
+          if (
+            composition.activeToken !== undefined &&
+            composition.invalidatedToken === composition.activeToken
+          ) {
+            event.currentTarget.value = draftRef.current;
+            return;
+          }
           const text = boundBrunoTableQuickFilterText(event.currentTarget.value);
           const draftEpoch = draftEpochRef.current + 1;
           draftEpochRef.current = draftEpoch;
           draftRef.current = text;
           setDraft(text);
-          if (composingRef.current) return;
+          if (composition.activeToken !== undefined) return;
           debouncer.maybeExecute({
             text,
             commandEpoch: runtime.getQuickFilterCommandEpochSnapshot(),
@@ -254,6 +265,10 @@ const BrunoTableQuickFilterInput = memo(function BrunoTableQuickFilterInput({
           variant="ghost"
           onClick={() => {
             debouncer.cancel();
+            const composition = compositionRef.current;
+            if (composition.activeToken !== undefined) {
+              composition.invalidatedToken = composition.activeToken;
+            }
             const draftEpoch = draftEpochRef.current + 1;
             draftEpochRef.current = draftEpoch;
             draftRef.current = "";
@@ -385,9 +400,8 @@ const BrunoTableActiveFiltersReview = memo(function BrunoTableActiveFiltersRevie
         entry.kind === "quick"
           ? runtime.dispatchGridCommand({ type: "quick-filter.replace", text: "" })
           : runtime.dispatchGridCommand({
-              type: "column.filter.remove",
+              type: "column.filter.clear",
               columnId: entry.columnId,
-              root: entry.root,
             });
       if (!accepted) return;
       if (nextIndex >= 0) {
@@ -525,24 +539,11 @@ type BrunoTableActiveFilterEntry =
       readonly kind: "column";
       readonly columnId: string;
       readonly key: string;
-      readonly root: object;
       readonly label: string;
     }>
   | Readonly<{ readonly kind: "quick"; readonly key: string; readonly label: string }>;
 
 const ACTIVE_FILTER_VISIBLE_ENTRIES = 64;
-const ACTIVE_FILTER_ROOT_KEYS = new WeakMap<object, string>();
-let nextActiveFilterRootKey = 0;
-
-function activeFilterRootKey(root: object): string {
-  const existing = ACTIVE_FILTER_ROOT_KEYS.get(root);
-  if (existing !== undefined) return existing;
-  const key = String(nextActiveFilterRootKey);
-  nextActiveFilterRootKey += 1;
-  ACTIVE_FILTER_ROOT_KEYS.set(root, key);
-  return key;
-}
-
 type ActiveFilterProjection = Readonly<{
   readonly entries: readonly BrunoTableActiveFilterEntry[];
   readonly entryCount: number;
@@ -559,23 +560,16 @@ function activeFilterProjection(
   const quickFilterActive = normalizeBrunoTableFilterText(query.quickFilter).length > 0;
   const activeColumns: Array<{
     readonly column: (typeof query.columns)[number];
-    readonly filters: readonly unknown[];
-    readonly handles: readonly object[];
-    readonly labels: readonly string[];
+    readonly filter: unknown;
+    readonly label: string;
   }> = [];
   for (const column of query.columns) {
-    const snapshot = query.filtersByColumn.get(column.columnId);
-    const filters =
-      snapshot === undefined ? [] : Array.isArray(snapshot) ? snapshot : Object.freeze([snapshot]);
-    if (filters.length === 0) continue;
-    const handles = query.filterHandlesByColumn.get(column.columnId) ?? [];
-    const labels = query.activeFilterLabelsByColumn.get(column.columnId) ?? [];
-    activeColumns.push({ column, filters, handles, labels });
+    const filter = query.filtersByColumn.get(column.columnId);
+    if (filter === undefined) continue;
+    const label = query.activeFilterLabelsByColumn.get(column.columnId) ?? column.headerName;
+    activeColumns.push({ column, filter, label });
   }
-  const gridFilterEntryCount = activeColumns.reduce(
-    (count, activeColumn) => count + activeColumn.filters.length,
-    0,
-  );
+  const gridFilterEntryCount = activeColumns.length;
   const entryCount = gridFilterEntryCount + (quickFilterActive ? 1 : 0);
   const maxEntryWindowStart = Math.max(0, entryCount - ACTIVE_FILTER_VISIBLE_ENTRIES);
   const visibleEntryWindowStart = Math.min(requestedWindowStart, maxEntryWindowStart);
@@ -598,22 +592,15 @@ function activeFilterProjection(
     entryIndex += 1;
   }
   for (const activeColumn of activeColumns) {
-    for (const [filterIndex, filter] of activeColumn.filters.entries()) {
-      if (typeof filter !== "object" || filter === null) continue;
-      const root = activeColumn.handles[filterIndex] ?? filter;
-      const shouldDescribe =
-        entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
-      entries.push({
-        kind: "column",
-        columnId: activeColumn.column.columnId,
-        key: `column-filter-${activeColumn.column.columnId}-${activeFilterRootKey(root)}`,
-        root,
-        label: shouldDescribe
-          ? (activeColumn.labels[filterIndex] ?? activeColumn.column.headerName)
-          : activeColumn.column.headerName,
-      });
-      entryIndex += 1;
-    }
+    const shouldDescribe =
+      entryIndex >= visibleEntryWindowStart && entryIndex < visibleEntryWindowEnd;
+    entries.push({
+      kind: "column",
+      columnId: activeColumn.column.columnId,
+      key: `column-filter-${activeColumn.column.columnId}`,
+      label: shouldDescribe ? activeColumn.label : activeColumn.column.headerName,
+    });
+    entryIndex += 1;
   }
   return {
     entries,

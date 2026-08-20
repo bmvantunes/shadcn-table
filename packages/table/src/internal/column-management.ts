@@ -79,17 +79,6 @@ export type BrunoTableGridCommand =
       readonly filter?: unknown;
     }>
   | Readonly<{
-      readonly type: "column.filter.remove";
-      readonly columnId: string;
-      readonly root: unknown;
-    }>
-  | Readonly<{
-      readonly type: "column.filter.replace-root";
-      readonly columnId: string;
-      readonly root: unknown;
-      readonly filter: unknown;
-    }>
-  | Readonly<{
       readonly type: "quick-filter.replace";
       readonly text: string;
     }>;
@@ -121,8 +110,6 @@ export function isBrunoTableColumnLayoutCommand(
     case "column.filters.clear":
     case "column.filter.reset":
     case "column.filter.replace":
-    case "column.filter.remove":
-    case "column.filter.replace-root":
     case "quick-filter.replace":
       return false;
     default:

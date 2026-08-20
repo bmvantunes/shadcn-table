@@ -16,41 +16,42 @@ type CompiledFilterOperandPlan = Readonly<{
 }>;
 
 export type BrunoTableFilterComplexity = Readonly<{
-  readonly rootEntries: number;
+  readonly inputEntries: number;
   readonly nodes: number;
   readonly operands: number;
   readonly textLength: number;
 }>;
 
-type BrunoTableClientFilterRoot = Readonly<{
+type BrunoTableClientFilterExpression = Readonly<{
   readonly filter: Readonly<Record<string, unknown>>;
   readonly columnId: string;
-  /** Bounded active-filter label compiled from the admitted root, never rediscovered in the UI. */
+  /** Bounded active-filter label compiled during admission, never rediscovered in the UI. */
   readonly activeFilterLabel: string;
   readonly signature?: string;
   readonly compiledOperandNodes: readonly object[];
+  readonly filterNodes: readonly object[];
   readonly hasSharedNodes: boolean;
   readonly complexity: BrunoTableFilterComplexity;
 }>;
 
+type AdmittedFilterFragment = BrunoTableClientFilterExpression;
+
 /**
  * The sole admitted Grid Filter representation used by the Client runtime. Raw filter snapshots
  * remain available at the Adapter seam, while commands and render projections use the retained
- * roots, per-column index, and semantic evidence compiled during one bounded admission pass.
+ * one expression per Column Identity and semantic evidence compiled during one bounded admission
+ * pass.
  */
 export type BrunoTableClientFilterCollection = Readonly<{
   readonly filters: readonly unknown[];
   readonly columnsById: ReadonlyMap<string, CompiledColumn>;
   readonly columnLabelsById: ReadonlyMap<string, string>;
-  readonly roots: readonly BrunoTableClientFilterRoot[];
-  readonly byColumn: ReadonlyMap<string, readonly unknown[]>;
-  readonly rootsByColumn: ReadonlyMap<string, readonly BrunoTableClientFilterRoot[]>;
-  readonly activeFilterLabelsByColumn: ReadonlyMap<string, readonly string[]>;
-  readonly snapshotsByColumn: ReadonlyMap<string, unknown>;
+  readonly expressions: readonly BrunoTableClientFilterExpression[];
+  readonly expressionsByColumn: ReadonlyMap<string, BrunoTableClientFilterExpression>;
+  readonly filtersByColumn: ReadonlyMap<string, unknown>;
+  readonly activeFilterLabelsByColumn: ReadonlyMap<string, string>;
   readonly complexityByColumn: ReadonlyMap<string, BrunoTableFilterComplexity>;
   readonly columnIds: ReadonlySet<string>;
-  readonly signatureCountsByColumn: ReadonlyMap<string, ReadonlyMap<string, number>>;
-  readonly opaqueRootCountByColumn: ReadonlyMap<string, number>;
   readonly complexity: BrunoTableFilterComplexity;
   readonly compiledOperands: ReadonlyMap<object, CompiledFilterOperandPlan>;
   readonly hasSharedNodes: boolean;
@@ -80,7 +81,7 @@ export function sanitizeBrunoTableFilters(
 
 /**
  * Legacy raw-input inspection kept for compatibility with low-level tests. Runtime commands use
- * BrunoTableClientFilterCollection.columnIds/rootsByColumn and never rediscover these identities.
+ * BrunoTableClientFilterCollection.columnIds and never rediscover these identities.
  */
 export function brunoTableFilterReferencesColumn(candidate: unknown, columnId: string): boolean {
   return filterReferencesColumn(candidate, columnId);
@@ -124,8 +125,8 @@ export function sanitizeClientOrderBy(
   orderBy: ClientOrderBy | undefined,
   columns: readonly CompiledColumn[],
 ): ClientOrderBy {
-  const candidates = snapshotRootEntries(orderBy);
-  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) {
+  const candidates = snapshotInputEntries(orderBy);
+  if (candidates === undefined || candidates === FILTER_ENTRIES_OVER_BUDGET) {
     return EMPTY_ORDER_BY;
   }
   const sortable = new Set<string>(
@@ -159,21 +160,21 @@ export function sanitizeClientInitialFilters(
 
 /**
  * Admits the complete filter collection through one bounded pass. The returned collection is the
- * only representation the Client query/runtime path should use after this boundary: roots retain
- * their sanitized snapshots, while indexes and value-semantic evidence are compiled alongside
- * them. Invalid restoration/command candidates are dropped by default; initial configuration can
- * request a hard failure for an over-budget candidate.
+ * only representation the Client query/runtime path should use after this boundary. Duplicate
+ * same-column public entries are canonicalized, in input order, to one AND expression. Invalid
+ * restoration/command candidates are dropped by default; initial configuration can request a hard
+ * failure for an over-budget candidate.
  */
 export function compileClientFilterCollection(
   filters: readonly unknown[] | undefined,
   columns: readonly CompiledColumn[],
   options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
 ): BrunoTableClientFilterCollection {
-  const candidates = snapshotRootEntries(filters);
-  if (candidates === ROOT_ENTRIES_OVER_BUDGET) {
+  const candidates = snapshotInputEntries(filters);
+  if (candidates === FILTER_ENTRIES_OVER_BUDGET) {
     if (options?.rejectOverBudget === true) {
       throw new TypeError(
-        `BrunoTable initialFilters root contains more than ${BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES} entries.`,
+        `BrunoTable initialFilters contains more than ${BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES} entries.`,
       );
     }
     return createEmptyClientFilterCollection(columns);
@@ -189,58 +190,68 @@ export function compileClientFilterCollection(
     columnLabelsById,
     descriptionMemo: new Map(),
   });
-  const roots: BrunoTableClientFilterRoot[] = [];
+  const fragments: AdmittedFilterFragment[] = [];
+  const acceptedSanitizedEvidence = new WeakMap<object, AcceptedSanitizedFilterEvidence>();
   for (const filter of candidates) {
-    // Each root is a transaction over the one collection-wide ledger. Its weak traversal caches
-    // and operand map are discarded with an invalid candidate, so hostile rejected roots cannot
-    // retain compiled evidence or poison a later valid root through a cached failure.
+    // Each public entry is a transaction over the one collection-wide ledger. Its weak traversal
+    // caches and operand map are discarded with an invalid candidate, so a hostile rejected entry
+    // cannot retain compiled evidence or poison a later valid entry through a cached failure.
     const previous = {
       nodes: context.nodes,
       operands: context.operands,
       textLength: context.textLength,
     };
-    const rootContext = createFilterSanitizationContext({
+    const candidateContext = createFilterSanitizationContext({
       initial: { ...previous, comparisons: context.comparisons },
       captured,
       capturedArrays,
+      acceptedSanitizedEvidence,
+      compiledOperandLookup: context.compiledOperands,
       columnLabelsById,
       descriptionMemo: context.descriptionMemo,
       pendingDescriptionMemo: new Map(),
       comparisonBudgetExhausted: context.comparisonBudgetExhausted,
     });
-    const next = sanitizeFilter(filter, columnsById, rootContext, 0);
-    // Retained node, operand, and text cost commits only with an accepted root. Custom semantic
+    const next = sanitizeFilter(filter, columnsById, candidateContext, 0);
+    // Retained node, operand, and text cost commits only with an accepted entry. Custom semantic
     // comparisons are admission work and remain monotonic across the complete transaction.
-    context.comparisons = rootContext.comparisons;
-    context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
-    if (rootContext.overBudget && options?.rejectOverBudget === true) {
-      throw new TypeError(
-        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS} semantic comparisons, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
-      );
+    context.comparisons = candidateContext.comparisons;
+    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
+    if (candidateContext.overBudget && options?.rejectOverBudget === true) {
+      throwClientFilterAdmissionBudgetError();
     }
-    if (next === undefined || rootContext.overBudget) {
+    if (next === undefined || candidateContext.overBudget) {
       continue;
     }
-    const root = retainClientFilterRoot(next, columnsById, rootContext, previous);
-    context.comparisons = rootContext.comparisons;
-    context.comparisonBudgetExhausted ||= rootContext.comparisonBudgetExhausted;
-    if (rootContext.overBudget && options?.rejectOverBudget === true) {
-      throw new TypeError(
-        `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS} semantic comparisons, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
-      );
+    const fragment = retainClientFilterFragment(next, columnsById, candidateContext, previous);
+    context.comparisons = candidateContext.comparisons;
+    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
+    if (candidateContext.overBudget && options?.rejectOverBudget === true) {
+      throwClientFilterAdmissionBudgetError();
     }
-    if (root === undefined || rootContext.overBudget) continue;
-    context.nodes = rootContext.nodes;
-    context.operands = rootContext.operands;
-    context.textLength = rootContext.textLength;
-    mergeClientFilterDescriptionMemo(context.descriptionMemo, rootContext.pendingDescriptionMemo);
-    context.hasSharedNodes ||= rootContext.hasSharedNodes;
-    for (const [node, plan] of rootContext.compiledOperands) {
+    if (fragment === undefined || candidateContext.overBudget) continue;
+    context.nodes = candidateContext.nodes;
+    context.operands = candidateContext.operands;
+    context.textLength = candidateContext.textLength;
+    mergeClientFilterDescriptionMemo(
+      context.descriptionMemo,
+      candidateContext.pendingDescriptionMemo,
+    );
+    context.hasSharedNodes ||= candidateContext.hasSharedNodes;
+    for (const [node, plan] of candidateContext.compiledOperands) {
       context.compiledOperands.set(node, plan);
     }
-    roots.push(root);
+    for (const [rawNode, evidence] of candidateContext.pendingSanitizedEvidence) {
+      acceptedSanitizedEvidence.set(rawNode, evidence);
+    }
+    fragments.push(fragment);
   }
-  return createClientFilterCollection(columnsById, roots, context, filters);
+  const expressions = canonicalizeClientFilterFragments(fragments, context);
+  if (context.overBudget) {
+    if (options?.rejectOverBudget === true) throwClientFilterAdmissionBudgetError();
+    return createEmptyClientFilterCollection(columns);
+  }
+  return createClientFilterCollection(columnsById, expressions, context, filters);
 }
 
 function createEmptyClientFilterCollection(
@@ -275,12 +286,12 @@ function createClientFilterColumnLabels(
   return labels;
 }
 
-function retainClientFilterRoot(
+function retainClientFilterFragment(
   next: SanitizedFilterNode,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   context: FilterSanitizationContext,
   previous: Readonly<Pick<BrunoTableFilterComplexity, "nodes" | "operands" | "textLength">>,
-): BrunoTableClientFilterRoot | undefined {
+): AdmittedFilterFragment | undefined {
   const columnId = next.columnIds.values().next().value;
   if (typeof columnId !== "string") return undefined;
   const column = columnsById.get(columnId);
@@ -299,9 +310,10 @@ function retainClientFilterRoot(
     activeFilterLabel,
     ...(next.signature === undefined ? {} : { signature: next.signature }),
     compiledOperandNodes: Object.freeze([...context.compiledOperands.keys()]),
+    filterNodes: Object.freeze(context.filterNodes),
     hasSharedNodes: context.hasSharedNodes,
     complexity: {
-      rootEntries: 1,
+      inputEntries: 1,
       nodes: context.nodes - previous.nodes,
       operands: context.operands - previous.operands,
       textLength: context.textLength - previous.textLength,
@@ -309,145 +321,140 @@ function retainClientFilterRoot(
   };
 }
 
+function canonicalizeClientFilterFragments(
+  fragments: readonly AdmittedFilterFragment[],
+  context: FilterSanitizationContext,
+): readonly BrunoTableClientFilterExpression[] {
+  const grouped = new Map<string, AdmittedFilterFragment[]>();
+  for (const fragment of fragments) {
+    const group = grouped.get(fragment.columnId);
+    if (group === undefined) grouped.set(fragment.columnId, [fragment]);
+    else group.push(fragment);
+  }
+  const expressions: BrunoTableClientFilterExpression[] = [];
+  for (const [columnId, group] of grouped) {
+    if (group.length === 1) {
+      expressions.push(group[0]!);
+      continue;
+    }
+    const textLengthBeforeWrapper = context.textLength;
+    if (!reserveFilterNodes(1, context)) continue;
+    const conditions = Object.freeze(group.map((fragment) => fragment.filter));
+    const filter = Object.freeze({ type: "AND", conditions });
+    SANITIZED_FILTER_SNAPSHOTS.add(filter);
+    const signatureParts = group.map((fragment) => fragment.signature);
+    const signature = signatureParts.every((part): part is string => part !== undefined)
+      ? createFilterSignature(["AND", ...signatureParts], context)
+      : undefined;
+    const activeFilterLabel = truncateClientFilterDescription(
+      group.map((fragment) => fragment.activeFilterLabel).join(" AND "),
+    );
+    if (!reserveFilterText(activeFilterLabel.length, context)) continue;
+    const retainedFilterNodes = new Set<object>();
+    let hasSharedNodes = group.some((fragment) => fragment.hasSharedNodes);
+    for (const fragment of group) {
+      for (const node of fragment.filterNodes) {
+        if (retainedFilterNodes.has(node)) hasSharedNodes = true;
+        else retainedFilterNodes.add(node);
+      }
+    }
+    expressions.push({
+      filter,
+      columnId,
+      activeFilterLabel,
+      ...(signature === undefined ? {} : { signature }),
+      compiledOperandNodes: Object.freeze(
+        group.flatMap((fragment) => fragment.compiledOperandNodes),
+      ),
+      filterNodes: Object.freeze([...retainedFilterNodes]),
+      hasSharedNodes,
+      complexity: Object.freeze({
+        inputEntries: 1,
+        nodes: group.reduce((total, fragment) => total + fragment.complexity.nodes, 1),
+        operands: group.reduce((total, fragment) => total + fragment.complexity.operands, 0),
+        textLength:
+          group.reduce((total, fragment) => total + fragment.complexity.textLength, 0) +
+          context.textLength -
+          textLengthBeforeWrapper,
+      }),
+    });
+  }
+  return expressions;
+}
+
 function createClientFilterCollection(
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  roots: readonly BrunoTableClientFilterRoot[],
+  expressions: readonly BrunoTableClientFilterExpression[],
   context: FilterSanitizationContext,
   sourceFilters?: readonly unknown[],
-  previousCollection?: BrunoTableClientFilterCollection,
 ): BrunoTableClientFilterCollection {
-  const frozenRoots = Object.freeze(
-    roots.map((root) =>
-      Object.isFrozen(root)
-        ? root
+  const frozenExpressions = Object.freeze(
+    expressions.map((expression) =>
+      Object.isFrozen(expression)
+        ? expression
         : Object.freeze({
-            ...root,
-            complexity: Object.freeze({ ...root.complexity }),
+            ...expression,
+            complexity: Object.freeze({ ...expression.complexity }),
           }),
     ),
   );
-  const rootFilters = frozenRoots.map((root) => root.filter);
+  const expressionFilters = frozenExpressions.map((expression) => expression.filter);
   const compiledOperands = new Map<object, CompiledFilterOperandPlan>();
-  for (const root of frozenRoots) {
-    for (const node of root.compiledOperandNodes) {
+  for (const expression of frozenExpressions) {
+    for (const node of expression.compiledOperandNodes) {
       const plan = context.compiledOperands.get(node) ?? context.compiledOperandLookup.get(node);
       if (plan !== undefined) compiledOperands.set(node, plan);
     }
   }
-  const filters = snapshotSanitizedFilterArray(sourceFilters, rootFilters);
-  const byColumn = new Map<string, unknown[]>();
-  const rootsByColumn = new Map<string, BrunoTableClientFilterRoot[]>();
-  const activeFilterLabelsByColumn = new Map<string, string[]>();
-  const snapshotsByColumn = new Map<string, unknown>();
+  const filters = snapshotSanitizedFilterArray(sourceFilters, expressionFilters);
+  const expressionsByColumn = new Map<string, BrunoTableClientFilterExpression>();
+  const filtersByColumn = new Map<string, unknown>();
+  const activeFilterLabelsByColumn = new Map<string, string>();
   const complexityByColumn = new Map<string, BrunoTableFilterComplexity>();
-  const signatureCountsByColumn = new Map<string, Map<string, number>>();
-  const opaqueRootCountByColumn = new Map<string, number>();
   const columnIds = new Set<string>();
-  for (const root of frozenRoots) {
-    columnIds.add(root.columnId);
-    const columnFilters = byColumn.get(root.columnId);
-    if (columnFilters === undefined) byColumn.set(root.columnId, [root.filter]);
-    else columnFilters.push(root.filter);
-    const columnRoots = rootsByColumn.get(root.columnId);
-    if (columnRoots === undefined) rootsByColumn.set(root.columnId, [root]);
-    else columnRoots.push(root);
-    const activeFilterLabels = activeFilterLabelsByColumn.get(root.columnId);
-    if (activeFilterLabels === undefined) {
-      activeFilterLabelsByColumn.set(root.columnId, [root.activeFilterLabel]);
-    } else {
-      activeFilterLabels.push(root.activeFilterLabel);
-    }
-    complexityByColumn.set(
-      root.columnId,
-      addFilterComplexity(complexityByColumn.get(root.columnId), root.complexity),
-    );
-    if (root.signature === undefined) {
-      opaqueRootCountByColumn.set(
-        root.columnId,
-        (opaqueRootCountByColumn.get(root.columnId) ?? 0) + 1,
-      );
-    } else {
-      const counts = signatureCountsByColumn.get(root.columnId) ?? new Map<string, number>();
-      counts.set(root.signature, (counts.get(root.signature) ?? 0) + 1);
-      signatureCountsByColumn.set(root.columnId, counts);
-    }
+  for (const expression of frozenExpressions) {
+    columnIds.add(expression.columnId);
+    expressionsByColumn.set(expression.columnId, expression);
+    filtersByColumn.set(expression.columnId, expression.filter);
+    activeFilterLabelsByColumn.set(expression.columnId, expression.activeFilterLabel);
+    complexityByColumn.set(expression.columnId, expression.complexity);
   }
-  for (const [columnId, columnFilters] of byColumn) {
-    const previousFilters = previousCollection?.byColumn.get(columnId);
-    if (
-      previousCollection !== undefined &&
-      previousFilters !== undefined &&
-      sameReferences(previousFilters, columnFilters)
-    ) {
-      snapshotsByColumn.set(columnId, previousCollection.snapshotsByColumn.get(columnId));
-    } else {
-      snapshotsByColumn.set(
-        columnId,
-        columnFilters.length === 1 ? columnFilters[0] : Object.freeze(Array.from(columnFilters)),
-      );
-    }
-  }
-  for (const values of byColumn.values()) Object.freeze(values);
-  for (const values of rootsByColumn.values()) Object.freeze(values);
-  for (const values of activeFilterLabelsByColumn.values()) Object.freeze(values);
-  for (const counts of signatureCountsByColumn.values()) Object.freeze(counts);
-  const complexity = frozenRoots.reduce(
-    (total, root) => addFilterComplexity(total, root.complexity),
+  const complexity = frozenExpressions.reduce(
+    (total, expression) => addFilterComplexity(total, expression.complexity),
     createEmptyFilterComplexity(),
   );
   return Object.freeze({
     filters,
     columnsById,
     columnLabelsById: context.columnLabelsById,
-    roots: frozenRoots,
-    byColumn,
-    rootsByColumn,
+    expressions: frozenExpressions,
+    expressionsByColumn,
+    filtersByColumn,
     activeFilterLabelsByColumn,
-    snapshotsByColumn,
     complexityByColumn,
     columnIds,
-    signatureCountsByColumn,
-    opaqueRootCountByColumn,
     complexity: Object.freeze(complexity),
     compiledOperands,
-    hasSharedNodes: frozenRoots.some((root) => root.hasSharedNodes),
+    hasSharedNodes: frozenExpressions.some((expression) => expression.hasSharedNodes),
   });
 }
 
-/** Removes one column's admitted roots without reopening or rescanning any expression. */
+/** Removes one column's admitted expression without reopening or rescanning another column. */
 export function removeClientFilterColumn(
   collection: BrunoTableClientFilterCollection,
   columnId: string,
 ): BrunoTableClientFilterCollection {
-  const roots = collection.roots.filter((root) => root.columnId !== columnId);
-  if (roots.length === collection.roots.length) return collection;
+  const expressions = collection.expressions.filter(
+    (expression) => expression.columnId !== columnId,
+  );
+  if (expressions.length === collection.expressions.length) return collection;
   return (
     createDerivedClientFilterCollection(
       collection,
-      roots,
+      expressions,
       undefined,
       subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId)),
     ) ?? collection
-  );
-}
-
-/** Removes one retained root without reopening the other roots in that column. */
-export function removeClientFilterRoot(
-  collection: BrunoTableClientFilterCollection,
-  columnId: string,
-  rootFilter: unknown,
-): BrunoTableClientFilterCollection | undefined {
-  const root = collection.roots.find(
-    (candidate) =>
-      candidate.columnId === columnId &&
-      (candidate === rootFilter || candidate.filter === rootFilter),
-  );
-  if (root === undefined) return undefined;
-  return createDerivedClientFilterCollection(
-    collection,
-    collection.roots.filter((candidate) => candidate !== root),
-    undefined,
-    subtractFilterComplexity(collection.complexity, root.complexity),
   );
 }
 
@@ -458,13 +465,13 @@ export function restoreClientFilterColumn(
   columnId: string,
 ): BrunoTableClientFilterCollection | undefined {
   if (sameBrunoTableFilterColumn(collection, baseline, columnId)) return collection;
-  const roots = [
-    ...collection.roots.filter((root) => root.columnId !== columnId),
-    ...baseline.roots.filter((root) => root.columnId === columnId),
+  const expressions = [
+    ...collection.expressions.filter((expression) => expression.columnId !== columnId),
+    ...baseline.expressions.filter((expression) => expression.columnId === columnId),
   ];
   return createDerivedClientFilterCollection(
     collection,
-    roots,
+    expressions,
     baseline,
     addFilterComplexity(
       subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId)),
@@ -474,9 +481,8 @@ export function restoreClientFilterColumn(
 }
 
 /**
- * Admits a replacement for one column against the remaining compiled collection. Existing roots
- * contribute their retained ledger cost and operand plans directly; only the replacement roots
- * cross the sanitizer/compiler boundary.
+ * Admits one complete replacement expression for a column. Existing expressions retain their
+ * compiled evidence; only the replacement crosses the sanitizer/compiler boundary.
  */
 export function replaceClientFilterColumn(
   collection: BrunoTableClientFilterCollection,
@@ -485,142 +491,51 @@ export function replaceClientFilterColumn(
 ): BrunoTableClientFilterCollection | undefined {
   const candidateEntries =
     candidate === undefined ? [] : Array.isArray(candidate) ? candidate : [candidate];
-  const candidates = snapshotRootEntries(candidateEntries);
-  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) return undefined;
-  return replaceClientFilterRoots(collection, columnId, candidates);
-}
-
-/**
- * Replaces one retained root while keeping every other root and its compiled evidence intact.
- * Overlay editors use this seam for continuous edits so Pacer work never rebuilds a whole
- * same-column root collection for one changed leaf.
- */
-export function replaceClientFilterRoot(
-  collection: BrunoTableClientFilterCollection,
-  columnId: string,
-  rootFilter: unknown,
-  candidate: unknown,
-): BrunoTableClientFilterCollection | undefined {
-  const root = collection.roots.find(
-    (candidateRoot) =>
-      candidateRoot.columnId === columnId &&
-      (candidateRoot === rootFilter || candidateRoot.filter === rootFilter),
+  const candidates = snapshotInputEntries(candidateEntries);
+  if (candidates === undefined || candidates === FILTER_ENTRIES_OVER_BUDGET) return undefined;
+  const retainedExpressions = collection.expressions.filter(
+    (expression) => expression.columnId !== columnId,
   );
-  if (root === undefined) return undefined;
-  const candidates = snapshotRootEntries([candidate]);
-  if (candidates === undefined || candidates === ROOT_ENTRIES_OVER_BUDGET) return undefined;
-  if (candidates.length !== 1) return undefined;
-  return replaceClientFilterRoots(collection, columnId, candidates, root);
-}
-
-function replaceClientFilterRoots(
-  collection: BrunoTableClientFilterCollection,
-  columnId: string,
-  candidates: readonly unknown[],
-  rootToReplace?: BrunoTableClientFilterRoot,
-): BrunoTableClientFilterCollection | undefined {
-  const retainedRoots = collection.roots.filter((root) =>
-    rootToReplace === undefined ? root.columnId !== columnId : root !== rootToReplace,
+  const retainedComplexity = subtractFilterComplexity(
+    collection.complexity,
+    collection.complexityByColumn.get(columnId),
   );
-  if (retainedRoots.length + candidates.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) {
-    return undefined;
-  }
-  const retainedComplexity =
-    rootToReplace === undefined
-      ? subtractFilterComplexity(collection.complexity, collection.complexityByColumn.get(columnId))
-      : subtractFilterComplexity(collection.complexity, rootToReplace.complexity);
-  if (candidates.length === 0)
+  if (candidates.length === 0) {
     return createDerivedClientFilterCollection(
       collection,
-      retainedRoots,
+      retainedExpressions,
       undefined,
       retainedComplexity,
     );
-
-  const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
-  const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
-  const retainedCompiledOperands = collectCompiledOperandPlans(retainedRoots, [
-    collection.compiledOperands,
-  ]);
-  const context = createFilterSanitizationContext({
-    initial: retainedComplexity,
-    compiledOperands: new Map(),
-    captured,
-    capturedArrays,
-    compiledOperandLookup: retainedCompiledOperands,
-    columnLabelsById: collection.columnLabelsById,
-    descriptionMemo: createClientFilterDescriptionMemo(retainedRoots),
-  });
-  const candidateRoots: BrunoTableClientFilterRoot[] = [];
-  for (const filter of candidates) {
-    const previous = {
-      nodes: context.nodes,
-      operands: context.operands,
-      textLength: context.textLength,
-    };
-    const candidateContext = createFilterSanitizationContext({
-      initial: { ...previous, comparisons: context.comparisons },
-      captured,
-      capturedArrays,
-      compiledOperandLookup: new Map(),
-      columnLabelsById: collection.columnLabelsById,
-      descriptionMemo: context.descriptionMemo,
-      pendingDescriptionMemo: new Map(),
-      comparisonBudgetExhausted: context.comparisonBudgetExhausted,
-    });
-    const next = sanitizeFilter(filter, collection.columnsById, candidateContext, 0);
-    context.nodes = candidateContext.nodes;
-    context.operands = candidateContext.operands;
-    context.textLength = candidateContext.textLength;
-    context.comparisons = candidateContext.comparisons;
-    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
-    const candidateColumnId = next?.columnIds.values().next().value;
-    if (next === undefined || candidateContext.overBudget || candidateColumnId !== columnId) {
-      return undefined;
-    }
-    const root = retainClientFilterRoot(next, collection.columnsById, candidateContext, previous);
-    context.nodes = candidateContext.nodes;
-    context.operands = candidateContext.operands;
-    context.textLength = candidateContext.textLength;
-    context.comparisons = candidateContext.comparisons;
-    context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
-    if (root === undefined || candidateContext.overBudget) return undefined;
-    mergeClientFilterDescriptionMemo(
-      context.descriptionMemo,
-      candidateContext.pendingDescriptionMemo,
-    );
-    context.hasSharedNodes ||= candidateContext.hasSharedNodes;
-    for (const [node, plan] of candidateContext.compiledOperands) {
-      context.compiledOperands.set(node, plan);
-    }
-    candidateRoots.push(root);
   }
-  const roots =
-    rootToReplace === undefined
-      ? [...retainedRoots, ...candidateRoots]
-      : [
-          ...retainedRoots.slice(0, collection.roots.indexOf(rootToReplace)),
-          ...candidateRoots,
-          ...retainedRoots.slice(collection.roots.indexOf(rootToReplace)),
-        ];
-  return createClientFilterCollection(
-    collection.columnsById,
-    roots,
-    context,
-    undefined,
+  const candidateCollection = compileClientFilterCollection(candidates, [
+    ...collection.columnsById.values(),
+  ]);
+  const candidateExpression = candidateCollection.expressions[0];
+  if (
+    candidateCollection.expressions.length !== 1 ||
+    candidateExpression === undefined ||
+    candidateExpression.columnId !== columnId
+  ) {
+    return undefined;
+  }
+  return createDerivedClientFilterCollection(
     collection,
+    [...retainedExpressions, candidateExpression],
+    candidateCollection,
+    addFilterComplexity(retainedComplexity, candidateExpression.complexity),
   );
 }
 
 function createDerivedClientFilterCollection(
   collection: BrunoTableClientFilterCollection,
-  roots: readonly BrunoTableClientFilterRoot[],
+  expressions: readonly BrunoTableClientFilterExpression[],
   additional: BrunoTableClientFilterCollection | undefined,
   complexity: BrunoTableFilterComplexity,
 ): BrunoTableClientFilterCollection | undefined {
   if (!isClientFilterComplexityWithinBudget(complexity)) return undefined;
   const compiledOperands = collectCompiledOperandPlans(
-    roots,
+    expressions,
     additional === undefined || additional === collection
       ? [collection.compiledOperands]
       : [collection.compiledOperands, additional.compiledOperands],
@@ -630,22 +545,16 @@ function createDerivedClientFilterCollection(
     compiledOperands,
     columnLabelsById: collection.columnLabelsById,
   });
-  return createClientFilterCollection(
-    collection.columnsById,
-    roots,
-    context,
-    undefined,
-    collection,
-  );
+  return createClientFilterCollection(collection.columnsById, expressions, context, undefined);
 }
 
 function collectCompiledOperandPlans(
-  roots: readonly BrunoTableClientFilterRoot[],
+  expressions: readonly BrunoTableClientFilterExpression[],
   sources: readonly ReadonlyMap<object, CompiledFilterOperandPlan>[],
 ): Map<object, CompiledFilterOperandPlan> {
   const compiledOperands = new Map<object, CompiledFilterOperandPlan>();
-  for (const root of roots) {
-    for (const node of root.compiledOperandNodes) {
+  for (const expression of expressions) {
+    for (const node of expression.compiledOperandNodes) {
       for (const source of sources) {
         const plan = source.get(node);
         if (plan !== undefined) {
@@ -663,7 +572,7 @@ function addFilterComplexity(
   right: BrunoTableFilterComplexity | undefined,
 ): BrunoTableFilterComplexity {
   return {
-    rootEntries: (left?.rootEntries ?? 0) + (right?.rootEntries ?? 0),
+    inputEntries: (left?.inputEntries ?? 0) + (right?.inputEntries ?? 0),
     nodes: (left?.nodes ?? 0) + (right?.nodes ?? 0),
     operands: (left?.operands ?? 0) + (right?.operands ?? 0),
     textLength: (left?.textLength ?? 0) + (right?.textLength ?? 0),
@@ -671,7 +580,7 @@ function addFilterComplexity(
 }
 
 function createEmptyFilterComplexity(): BrunoTableFilterComplexity {
-  return { rootEntries: 0, nodes: 0, operands: 0, textLength: 0 };
+  return { inputEntries: 0, nodes: 0, operands: 0, textLength: 0 };
 }
 
 function subtractFilterComplexity(
@@ -679,7 +588,7 @@ function subtractFilterComplexity(
   removed: BrunoTableFilterComplexity | undefined,
 ): BrunoTableFilterComplexity {
   return {
-    rootEntries: Math.max(0, total.rootEntries - (removed?.rootEntries ?? 0)),
+    inputEntries: Math.max(0, total.inputEntries - (removed?.inputEntries ?? 0)),
     nodes: Math.max(0, total.nodes - (removed?.nodes ?? 0)),
     operands: Math.max(0, total.operands - (removed?.operands ?? 0)),
     textLength: Math.max(0, total.textLength - (removed?.textLength ?? 0)),
@@ -688,10 +597,16 @@ function subtractFilterComplexity(
 
 function isClientFilterComplexityWithinBudget(complexity: BrunoTableFilterComplexity): boolean {
   return (
-    complexity.rootEntries <= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES &&
+    complexity.inputEntries <= BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES &&
     complexity.nodes <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES &&
     complexity.operands <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS &&
     complexity.textLength <= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH
+  );
+}
+
+function throwClientFilterAdmissionBudgetError(): never {
+  throw new TypeError(
+    `BrunoTable initialFilters may contain at most ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES} nodes, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS} operands, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH} UTF-16 text units, ${BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS} semantic comparisons, and nesting depth ${BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH}.`,
   );
 }
 
@@ -717,7 +632,7 @@ export function compileClientFilterPlan(
   collection?: BrunoTableClientFilterCollection,
 ): ClientFilterPlan | undefined {
   const plan = collection ?? compileClientFilterCollection(filters, columns);
-  return plan.roots.length === 0 ? undefined : plan;
+  return plan.expressions.length === 0 ? undefined : plan;
 }
 
 export function createClientFilterPredicate<TRow>(
@@ -732,8 +647,15 @@ export function createClientFilterPredicate<TRow>(
   const readUnknown = (column: CompiledColumn, row: unknown) => readValue(column, row as TRow);
   return (row) => {
     const completed = plan.hasSharedNodes ? new WeakMap<object, boolean>() : undefined;
-    return plan.roots.every((root) =>
-      evaluateFilter(root.filter, row, columnsById, readUnknown, plan.compiledOperands, completed),
+    return plan.expressions.every((expression) =>
+      evaluateFilter(
+        expression.filter,
+        row,
+        columnsById,
+        readUnknown,
+        plan.compiledOperands,
+        completed,
+      ),
     );
   };
 }
@@ -810,8 +732,22 @@ function sanitizeFilter(
       return undefined;
     }
   }
+  const accepted = context.acceptedSanitizedEvidence.get(candidate);
+  if (accepted !== undefined) {
+    if (depth + accepted.height > BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH) {
+      context.overBudget = true;
+      return undefined;
+    }
+    return replayAcceptedSanitizedFilter(candidate, depth, accepted, context);
+  }
   const completedAtDepth = context.completed.get(candidate);
   if (completedAtDepth?.has(depth) === true) return completedAtDepth.get(depth);
+  const subtreeStart = {
+    filterNodeIndex: context.filterNodes.length,
+    nodes: context.nodes,
+    operands: context.operands,
+    textLength: context.textLength,
+  };
   context.visited.add(candidate);
   let captured: Readonly<Record<string, unknown>> | undefined;
   try {
@@ -834,7 +770,56 @@ function sanitizeFilter(
   } finally {
     context.visited.delete(candidate);
   }
-  return memoizeSanitizedFilter(candidate, depth, sanitized, context, completedAtDepth);
+  const retained = memoizeSanitizedFilter(candidate, depth, sanitized, context, completedAtDepth);
+  if (retained !== undefined) {
+    const filterNodes = context.filterNodes.slice(subtreeStart.filterNodeIndex);
+    context.pendingSanitizedEvidence.push([
+      candidate,
+      {
+        node: retained,
+        height: retained.height,
+        descendantNodes: context.nodes - subtreeStart.nodes,
+        operands: context.operands - subtreeStart.operands,
+        textLength: context.textLength - subtreeStart.textLength,
+        filterNodes,
+        compiledOperands: filterNodes.flatMap((filterNode) => {
+          const plan = context.compiledOperands.get(filterNode);
+          return plan === undefined ? [] : ([[filterNode, plan]] as const);
+        }),
+      },
+    ]);
+  }
+  return retained;
+}
+
+function replayAcceptedSanitizedFilter(
+  candidate: object,
+  depth: number,
+  evidence: AcceptedSanitizedFilterEvidence,
+  context: FilterSanitizationContext,
+): SanitizedFilterNode | undefined {
+  if (
+    !reserveFilterNodes(evidence.descendantNodes, context) ||
+    !reserveFilterOperands(evidence.operands, context) ||
+    !reserveFilterText(evidence.textLength, context)
+  ) {
+    return undefined;
+  }
+  context.hasSharedNodes = true;
+  for (const filterNode of evidence.filterNodes) {
+    if (!context.retainedFilterNodes.has(filterNode)) {
+      context.retainedFilterNodes.add(filterNode);
+      context.filterNodes.push(filterNode);
+    }
+  }
+  for (const [filterNode, plan] of evidence.compiledOperands) {
+    context.compiledOperands.set(filterNode, plan);
+  }
+  const completedAtDepth = context.completed.get(candidate);
+  const memo = completedAtDepth ?? new Map<number, SanitizedFilterNode | undefined>();
+  memo.set(depth, evidence.node);
+  if (completedAtDepth === undefined) context.completed.set(candidate, memo);
+  return evidence.node;
 }
 
 function captureFilterRecord(
@@ -976,6 +961,10 @@ function memoizeSanitizedFilter(
   const memo = completedAtDepth ?? new Map<number, SanitizedFilterNode | undefined>();
   memo.set(depth, sanitized);
   if (completedAtDepth === undefined) context.completed.set(candidate, memo);
+  if (sanitized !== undefined && !context.retainedFilterNodes.has(sanitized.filter)) {
+    context.retainedFilterNodes.add(sanitized.filter);
+    context.filterNodes.push(sanitized.filter);
+  }
   return sanitized;
 }
 
@@ -1039,6 +1028,7 @@ function sanitizeFilterRecord(
       filter: snapshotFilter(filter, ["type", "conditions"], {
         conditions: sanitizedConditions,
       }),
+      height: 1 + Math.max(...conditionNodes.map((condition) => condition.height)),
       ...(signature === undefined ? {} : { signature }),
     };
   }
@@ -1057,6 +1047,7 @@ function sanitizeFilterRecord(
     return {
       columnIds: condition.columnIds,
       filter: sanitized,
+      height: condition.height + 1,
       ...(signature === undefined ? {} : { signature }),
     };
   }
@@ -1089,6 +1080,7 @@ function sanitizeFilterRecord(
     return {
       columnIds: new Set([columnId]),
       filter: sanitizedFilter,
+      height: 0,
       ...(signature === undefined ? {} : { signature }),
     };
   };
@@ -1240,7 +1232,7 @@ function sanitizeFilterRecord(
 }
 
 /**
- * Builds the active-filter label while a sanitized root is admitted. The input graph has already
+ * Builds the active-filter label while a sanitized entry is admitted. The input graph has already
  * crossed the collection-wide node/operand/text boundary, and the bounded summary only retains
  * the first few visible children. Ordinary active-filter renders consume the retained string and
  * never walk this graph again.
@@ -2072,26 +2064,23 @@ function sameCompiledFilterCollections(
   unordered: boolean,
 ): boolean {
   if (previous === next) return true;
-  if (previous.roots.length !== next.roots.length) return false;
-  if (previous.opaqueRootCountByColumn.size > 0 || next.opaqueRootCountByColumn.size > 0) {
-    return false;
-  }
+  if (previous.expressions.length !== next.expressions.length) return false;
   if (!unordered) {
-    return previous.roots.every(
-      (root, index) =>
-        root.signature !== undefined && root.signature === next.roots[index]?.signature,
+    return previous.expressions.every(
+      (expression, index) =>
+        expression.signature !== undefined &&
+        expression.signature === next.expressions[index]?.signature,
     );
   }
   const columnIds = new Set<string>([
-    ...previous.signatureCountsByColumn.keys(),
-    ...next.signatureCountsByColumn.keys(),
+    ...previous.expressionsByColumn.keys(),
+    ...next.expressionsByColumn.keys(),
   ]);
-  return [...columnIds].every((columnId) =>
-    sameSignatureCounts(
-      previous.signatureCountsByColumn.get(columnId),
-      next.signatureCountsByColumn.get(columnId),
-    ),
-  );
+  return [...columnIds].every((columnId) => {
+    const left = previous.expressionsByColumn.get(columnId)?.signature;
+    const right = next.expressionsByColumn.get(columnId)?.signature;
+    return left !== undefined && left === right;
+  });
 }
 
 export function sameBrunoTableFilterCollections(
@@ -2107,21 +2096,10 @@ export function sameBrunoTableFilterColumn(
   next: BrunoTableClientFilterCollection,
   columnId: string,
 ): boolean {
-  if ((previous.opaqueRootCountByColumn.get(columnId) ?? 0) > 0) return false;
-  if ((next.opaqueRootCountByColumn.get(columnId) ?? 0) > 0) return false;
-  return sameSignatureCounts(
-    previous.signatureCountsByColumn.get(columnId),
-    next.signatureCountsByColumn.get(columnId),
-  );
-}
-
-function sameSignatureCounts(
-  previous: ReadonlyMap<string, number> | undefined,
-  next: ReadonlyMap<string, number> | undefined,
-): boolean {
-  if (previous === next) return true;
-  if (previous === undefined || next === undefined || previous.size !== next.size) return false;
-  return [...previous].every(([signature, count]) => next.get(signature) === count);
+  const left = previous.expressionsByColumn.get(columnId);
+  const right = next.expressionsByColumn.get(columnId);
+  if (left === right) return true;
+  return left?.signature !== undefined && left.signature === right?.signature;
 }
 
 function hasValidTextSensitivity(
@@ -2147,15 +2125,15 @@ function snapshotDenseArray(values: unknown, length: number): readonly unknown[]
   }
 }
 
-function snapshotRootEntries(
+function snapshotInputEntries(
   values: unknown,
-): readonly unknown[] | undefined | typeof ROOT_ENTRIES_OVER_BUDGET {
+): readonly unknown[] | undefined | typeof FILTER_ENTRIES_OVER_BUDGET {
   try {
     if (!Array.isArray(values)) return undefined;
     const length = values.length;
     if (!Number.isSafeInteger(length) || length < 0) return undefined;
     const indexes = readOwnArrayIndexes(values, length);
-    if (indexes === undefined || indexes === ROOT_ENTRIES_OVER_BUDGET) return indexes;
+    if (indexes === undefined || indexes === FILTER_ENTRIES_OVER_BUDGET) return indexes;
     const snapshot: unknown[] = [];
     for (const index of indexes) {
       try {
@@ -2173,23 +2151,23 @@ function snapshotRootEntries(
 function readOwnArrayIndexes(
   values: readonly unknown[],
   length: number,
-): readonly number[] | undefined | typeof ROOT_ENTRIES_OVER_BUDGET {
+): readonly number[] | undefined | typeof FILTER_ENTRIES_OVER_BUDGET {
   try {
     const indexes: number[] = [];
     const ownKeys = Reflect.ownKeys(values);
     // An Array always owns its non-data `length` key. Count every other own
     // key, including symbols and non-index properties, before inspecting any
-    // indexed values so hostile metadata cannot bypass the root budget.
-    if (ownKeys.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES + 1) {
-      return ROOT_ENTRIES_OVER_BUDGET;
+    // indexed values so hostile metadata cannot bypass the public-entry bound.
+    if (ownKeys.length > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES + 1) {
+      return FILTER_ENTRIES_OVER_BUDGET;
     }
     for (const key of ownKeys) {
       if (typeof key !== "string" || key === "length") continue;
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
         indexes.push(index);
-        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES) {
-          return ROOT_ENTRIES_OVER_BUDGET;
+        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
+          return FILTER_ENTRIES_OVER_BUDGET;
         }
       }
     }
@@ -2230,8 +2208,8 @@ export const BRUNO_TABLE_CLIENT_FILTER_MAX_NODES: number =
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES;
 export const BRUNO_TABLE_CLIENT_FILTER_MAX_OPERANDS: number =
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS;
-export const BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES = 16_384;
-const ROOT_ENTRIES_OVER_BUDGET = Symbol("BrunoTable root filter entries over budget");
+export const BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES = 16_384;
+const FILTER_ENTRIES_OVER_BUDGET = Symbol("BrunoTable filter entries over budget");
 const SANITIZED_FILTER_SNAPSHOTS = new WeakSet<object>();
 
 type FilterSanitizationContext = {
@@ -2240,20 +2218,24 @@ type FilterSanitizationContext = {
   readonly completed: WeakMap<object, Map<number, SanitizedFilterNode | undefined>>;
   readonly visited: WeakSet<object>;
   readonly admittedNodes: WeakSet<object>;
-  /** Raw operand objects already traversed during this root admission transaction. */
+  readonly acceptedSanitizedEvidence: WeakMap<object, AcceptedSanitizedFilterEvidence>;
+  readonly pendingSanitizedEvidence: Array<readonly [object, AcceptedSanitizedFilterEvidence]>;
+  readonly retainedFilterNodes: WeakSet<object>;
+  readonly filterNodes: object[];
+  /** Raw operand objects already traversed during this entry admission transaction. */
   readonly meteredOperandObjects: WeakSet<object>;
   readonly compiledOperands: Map<object, CompiledFilterOperandPlan>;
   readonly compiledOperandLookup: ReadonlyMap<object, CompiledFilterOperandPlan>;
   readonly columnLabelsById: ReadonlyMap<string, string>;
-  /** Descriptions committed by earlier accepted roots in this collection admission. */
+  /** Descriptions committed by earlier accepted entries in this collection admission. */
   readonly descriptionMemo: Map<object, string | undefined>;
-  /** Candidate-local descriptions; merged only after the candidate root is accepted. */
+  /** Candidate-local descriptions; merged only after the candidate entry is accepted. */
   readonly pendingDescriptionMemo: Map<object, string | undefined>;
   hasSharedNodes: boolean;
   nodes: number;
   operands: number;
   textLength: number;
-  /** Monotonic admission work counter; rejected roots cannot reopen consumed comparisons. */
+  /** Monotonic admission work counter; rejected entries cannot reopen consumed comparisons. */
   comparisons: number;
   comparisonBudgetExhausted: boolean;
   overBudget: boolean;
@@ -2266,11 +2248,22 @@ type FilterSanitizationContextInitial = Readonly<{
   readonly comparisons?: number;
 }>;
 
+type AcceptedSanitizedFilterEvidence = Readonly<{
+  readonly node: SanitizedFilterNode;
+  readonly height: number;
+  readonly descendantNodes: number;
+  readonly operands: number;
+  readonly textLength: number;
+  readonly filterNodes: readonly object[];
+  readonly compiledOperands: readonly (readonly [object, CompiledFilterOperandPlan])[];
+}>;
+
 type FilterSanitizationContextOptions = Readonly<{
   readonly initial?: FilterSanitizationContextInitial;
   readonly compiledOperands?: Map<object, CompiledFilterOperandPlan>;
   readonly captured?: WeakMap<object, Readonly<Record<string, unknown>> | undefined>;
   readonly capturedArrays?: WeakMap<object, CapturedFilterArray | undefined>;
+  readonly acceptedSanitizedEvidence?: WeakMap<object, AcceptedSanitizedFilterEvidence>;
   readonly compiledOperandLookup?: ReadonlyMap<object, CompiledFilterOperandPlan>;
   readonly columnLabelsById?: ReadonlyMap<string, string>;
   readonly descriptionMemo?: Map<object, string | undefined>;
@@ -2288,6 +2281,10 @@ function createFilterSanitizationContext(
     completed: new WeakMap(),
     visited: new WeakSet(),
     admittedNodes: new WeakSet(),
+    acceptedSanitizedEvidence: options.acceptedSanitizedEvidence ?? new WeakMap(),
+    pendingSanitizedEvidence: [],
+    retainedFilterNodes: new WeakSet(),
+    filterNodes: [],
     meteredOperandObjects: new WeakSet(),
     compiledOperands,
     compiledOperandLookup: options.compiledOperandLookup ?? compiledOperands,
@@ -2302,14 +2299,6 @@ function createFilterSanitizationContext(
     comparisonBudgetExhausted: options.comparisonBudgetExhausted === true,
     overBudget: false,
   };
-}
-
-function createClientFilterDescriptionMemo(
-  roots: readonly BrunoTableClientFilterRoot[],
-): Map<object, string | undefined> {
-  const memo = new Map<object, string | undefined>();
-  for (const root of roots) memo.set(root.filter, root.activeFilterLabel);
-  return memo;
 }
 
 function mergeClientFilterDescriptionMemo(
@@ -2399,5 +2388,6 @@ type CapturedFilterArray = {
 type SanitizedFilterNode = {
   readonly columnIds: ReadonlySet<string>;
   readonly filter: Readonly<Record<string, unknown>>;
+  readonly height: number;
   readonly signature?: string;
 };

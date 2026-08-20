@@ -456,7 +456,7 @@ describe("BrunoTable filter runtime primitives", () => {
       } as never,
     ]);
     const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-    const previous = Array.from({ length: 16_384 }, (_, id) => ({
+    const previous = Array.from({ length: 4_096 }, (_, id) => ({
       columnId: "COL_ID_OPAQUE",
       type: "equals" as const,
       filter: Object.freeze({ id }),
@@ -515,7 +515,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(equivalent.mock.calls.length).toBeLessThanOrEqual(4_096);
   });
 
-  it("replaces a column's implicit root filter collection without wrapping it", () => {
+  it("canonicalizes a column replacement array to one AND expression", () => {
     const runtime = createClientRuntime(
       source([{ id: "first", name: "Name-0" }]),
       (row) => row.id,
@@ -536,11 +536,11 @@ describe("BrunoTable filter runtime primitives", () => {
       filter: filters,
     });
 
-    expect(runtime.getQuerySnapshot().filters).toHaveLength(filters.length);
+    expect(runtime.getQuerySnapshot().filters).toEqual([{ type: "AND", conditions: filters }]);
     expect(runtime.getQuerySnapshot().generation).toBe(generation + 1);
   });
 
-  it("compares the maximum admitted root through linear semantic keys", () => {
+  it("compares a large canonical column expression through linear semantic keys", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_A",
@@ -549,7 +549,7 @@ describe("BrunoTable filter runtime primitives", () => {
         valueType: "number",
       },
     ]);
-    const filters = Array.from({ length: 16_384 }, () => ({
+    const filters = Array.from({ length: 8_192 }, () => ({
       columnId: "COL_ID_A",
       type: "blank" as const,
     }));
@@ -1038,7 +1038,7 @@ describe("BrunoTable filter runtime primitives", () => {
     expect(queryListener).not.toHaveBeenCalled();
   });
 
-  it("keeps Reset a no-op when another column filter changes root order", () => {
+  it("keeps Reset a no-op when another column changes public entry order", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",

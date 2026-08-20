@@ -30,7 +30,6 @@ import type { CompositionEvent, NamedExoticComponent, ReactElement } from "react
 import type { CompiledColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
-  BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
   BRUNO_TABLE_MAX_FILTER_OPERAND_LENGTH,
@@ -100,8 +99,6 @@ type FilterDraft =
       readonly kind: "compound";
       readonly operator: "AND" | "OR";
       readonly conditions: readonly [FilterDraft, ...FilterDraft[]];
-      readonly rootCollection?: boolean;
-      readonly rootEntries?: readonly FilterNode[];
     }>
   | Readonly<{
       readonly kind: "not";
@@ -114,13 +111,8 @@ type FilterDraft =
 
 type FilterNode = Readonly<Record<string, unknown>>;
 
-function isFilterNodeArray(value: unknown): value is readonly FilterNode[] {
-  return Array.isArray(value);
-}
-
 type FilterCandidate = Readonly<{
-  readonly filter: FilterNode | readonly FilterNode[] | undefined;
-  readonly root?: FilterNode;
+  readonly filter: FilterNode | undefined;
   readonly error?: string;
   readonly invalidControl?: string;
 }>;
@@ -363,7 +355,7 @@ type FilterDraftComplexity = Readonly<{
 }>;
 
 const FILTER_DRAFT_COMPLEXITY = new WeakMap<FilterDraft, FilterDraftComplexity>();
-const FILTER_DRAFT_CANDIDATE = new WeakMap<FilterDraft, FilterNode | readonly FilterNode[]>();
+const FILTER_DRAFT_CANDIDATE = new WeakMap<FilterDraft, FilterNode>();
 
 function createLocalFilterDraftState(
   column: CompiledColumn,
@@ -438,10 +430,6 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
-  // A pending candidate belongs to its retained root, never to the editor's global draft
-  // revision. The shared trailing timer publishes one root directly or one immutable aggregate
-  // snapshot, so a sibling can only replace its own candidate.
-  const pendingRootCandidatesRef = useRef(new Map<FilterNode, FilterNode>());
   const errorId = useId();
 
   const dispatchCandidate = useCallback(
@@ -450,22 +438,11 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       if (runtime.getColumnFilterCommandEpochSnapshot(column.columnId) !== candidate.commandEpoch) {
         return;
       }
-      pendingRootCandidatesRef.current.clear();
-      const accepted =
-        candidate.root === undefined
-          ? runtime.dispatchGridCommand({
-              type: "column.filter.replace",
-              columnId: column.columnId,
-              filter: candidate.filter,
-            })
-          : candidate.filter === undefined || Array.isArray(candidate.filter)
-            ? false
-            : runtime.dispatchGridCommand({
-                type: "column.filter.replace-root",
-                columnId: column.columnId,
-                root: candidate.root,
-                filter: candidate.filter,
-              });
+      const accepted = runtime.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: column.columnId,
+        filter: candidate.filter,
+      });
       if (accepted) return;
       // The runtime is the sole aggregate admission boundary. A rejected candidate must not
       // remain visually ahead of the committed filter, or a later stale Pacer callback could make
@@ -483,34 +460,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
   const debouncer = useDebouncer(dispatchCandidate, { wait: 150 });
   const cancelPendingCandidate = useCallback((): void => {
-    pendingRootCandidatesRef.current.clear();
     debouncer.cancel();
   }, [debouncer]);
-
-  const candidateFromPendingRoots = useCallback(
-    (nextDraft: FilterDraft): CommittedFilterCandidate | undefined => {
-      const pendingRoots = pendingRootCandidatesRef.current;
-      if (pendingRoots.size === 0) return undefined;
-      if (pendingRoots.size === 1) {
-        const entry = pendingRoots.entries().next().value;
-        if (entry === undefined) return undefined;
-        const [root, filter] = entry;
-        return Object.freeze({ filter, root, commandEpoch });
-      }
-      if (
-        nextDraft.kind !== "compound" ||
-        nextDraft.rootCollection !== true ||
-        nextDraft.rootEntries === undefined
-      ) {
-        return undefined;
-      }
-      return Object.freeze({
-        filter: Object.freeze(nextDraft.rootEntries.map((root) => pendingRoots.get(root) ?? root)),
-        commandEpoch,
-      });
-    },
-    [commandEpoch],
-  );
 
   useLayoutEffect(() => {
     if (
@@ -531,55 +482,24 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   }, [cancelPendingCandidate]);
 
   const commitImmediately = useCallback(
-    (candidate: FilterCandidate, nextDraft: FilterDraft): void => {
+    (candidate: FilterCandidate): void => {
       debouncer.cancel();
-      if (candidate.filter === undefined && candidate.root !== undefined) {
-        pendingRootCandidatesRef.current.delete(candidate.root);
-        const pendingCandidate = candidateFromPendingRoots(nextDraft);
-        if (pendingCandidate !== undefined) dispatchCandidate(pendingCandidate);
-        return;
-      }
-      if (
-        candidate.root !== undefined &&
-        candidate.filter !== undefined &&
-        !isFilterNodeArray(candidate.filter)
-      ) {
-        pendingRootCandidatesRef.current.set(candidate.root, candidate.filter);
-        const pendingCandidate = candidateFromPendingRoots(nextDraft);
-        if (pendingCandidate !== undefined) dispatchCandidate(pendingCandidate);
-        return;
-      }
-      pendingRootCandidatesRef.current.clear();
       if (candidate.filter !== undefined) {
         dispatchCandidate(Object.freeze({ ...candidate, commandEpoch }));
       }
     },
-    [candidateFromPendingRoots, commandEpoch, debouncer, dispatchCandidate],
+    [commandEpoch, debouncer, dispatchCandidate],
   );
 
   const commitContinuous = useCallback(
-    (candidate: FilterCandidate, nextDraft: FilterDraft): void => {
+    (candidate: FilterCandidate): void => {
       if (candidate.filter === undefined) {
-        if (candidate.root === undefined) {
-          cancelPendingCandidate();
-          return;
-        }
-        if (!pendingRootCandidatesRef.current.delete(candidate.root)) return;
-        const pendingCandidate = candidateFromPendingRoots(nextDraft);
-        if (pendingCandidate === undefined) cancelPendingCandidate();
-        else debouncer.maybeExecute(pendingCandidate);
+        cancelPendingCandidate();
         return;
       }
-      if (candidate.root === undefined || isFilterNodeArray(candidate.filter)) {
-        pendingRootCandidatesRef.current.clear();
-        debouncer.maybeExecute(Object.freeze({ ...candidate, commandEpoch }));
-        return;
-      }
-      pendingRootCandidatesRef.current.set(candidate.root, candidate.filter);
-      const pendingCandidate = candidateFromPendingRoots(nextDraft);
-      if (pendingCandidate !== undefined) debouncer.maybeExecute(pendingCandidate);
+      debouncer.maybeExecute(Object.freeze({ ...candidate, commandEpoch }));
     },
-    [candidateFromPendingRoots, cancelPendingCandidate, commandEpoch, debouncer],
+    [cancelPendingCandidate, commandEpoch, debouncer],
   );
 
   const commitDraft = useCallback(
@@ -615,9 +535,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         return;
       }
       if (mode === "local") {
-        // Composition owns the current input until compositionend. Pause publication without
-        // discarding accepted sibling roots; the final composed candidate resumes one aggregate
-        // trailing commit.
+        // Composition owns the complete local draft until compositionend. Cancel the obsolete
+        // whole-expression timer; the final composed draft schedules a new atomic publication.
         debouncer.cancel();
         setLocalState({
           column,
@@ -647,8 +566,8 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         error: candidate.error,
         invalidControl: candidate.invalidControl,
       });
-      if (mode === "continuous") commitContinuous(candidate, nextDraft);
-      else commitImmediately(candidate, nextDraft);
+      if (mode === "continuous") commitContinuous(candidate);
+      else commitImmediately(candidate);
     },
     [
       column,
@@ -1096,23 +1015,13 @@ function FilterExpressionEditor({
           ) : null}
           <Button
             aria-label={`Add condition for ${column.headerName}${labelSuffix}`}
-            disabled={
-              !canAddCondition ||
-              omittedCompoundConditionCount > 0 ||
-              (draft.rootCollection === true &&
-                draft.conditions.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
-            }
+            disabled={!canAddCondition || omittedCompoundConditionCount > 0}
             size="xs"
             type="button"
             variant="outline"
             onClick={() => {
               const nextIndex = draft.conditions.length;
-              if (
-                !canAddCondition ||
-                omittedCompoundConditionCount > 0 ||
-                (draft.rootCollection === true &&
-                  nextIndex >= BRUNO_TABLE_CLIENT_FILTER_MAX_ROOT_ENTRIES)
-              ) {
+              if (!canAddCondition || omittedCompoundConditionCount > 0) {
                 return;
               }
               setConditionWindowStart(
@@ -1679,30 +1588,7 @@ type FilterDraftMaterializationState = {
 
 function draftFromCommitted(column: CompiledColumn, committed: unknown): FilterDraft {
   if (Array.isArray(committed)) {
-    const state = createFilterDraftMaterializationState();
-    const rootEntries = committed.map((condition) => asRecord(condition));
-    const conditions = rootEntries.map((record, index) => {
-      return index < FILTER_COMPOUND_VISIBLE_CONDITIONS
-        ? draftFromNode(column, record, state, 0)
-        : createOpaqueFilterDraft(record, state);
-    });
-    if (conditions.length >= 2) {
-      const draft = Object.freeze({
-        kind: "compound",
-        operator: "AND",
-        conditions: Object.freeze(conditions) as readonly [
-          FilterDraft,
-          FilterDraft,
-          ...FilterDraft[],
-        ],
-        rootCollection: true,
-        rootEntries: Object.freeze(rootEntries),
-      });
-      countFilterDraftComplexity(draft);
-      FILTER_DRAFT_CANDIDATE.set(draft, draft.rootEntries);
-      return draft;
-    }
-    return conditions[0] ?? createDefaultLeaf(column);
+    committed = Object.freeze({ type: "AND", conditions: Object.freeze([...committed]) });
   }
   return draftFromNode(column, asRecord(committed), createFilterDraftMaterializationState(), 0);
 }
@@ -1828,10 +1714,7 @@ function buildFilterCandidate(
   if (draft.kind === "not") {
     const condition = buildFilterCandidate(column, draft.condition, parseCache, `${path}-not`);
     if (condition.filter === undefined) return condition;
-    const conditionFilter = Array.isArray(condition.filter)
-      ? Object.freeze({ type: "AND", conditions: condition.filter })
-      : condition.filter;
-    const filter = Object.freeze({ type: "NOT", condition: conditionFilter });
+    const filter = Object.freeze({ type: "NOT", condition: condition.filter });
     FILTER_DRAFT_CANDIDATE.set(draft, filter);
     return { filter };
   }
@@ -1845,14 +1728,7 @@ function buildFilterCandidate(
         `${path}-${String(index)}`,
       );
       if (condition.filter === undefined) return condition;
-      const conditionFilter = condition.filter;
-      if (Array.isArray(conditionFilter)) return { filter: undefined };
-      conditions.push(conditionFilter as FilterNode);
-    }
-    if (draft.rootCollection) {
-      const filter = Object.freeze(conditions);
-      FILTER_DRAFT_CANDIDATE.set(draft, filter);
-      return { filter };
+      conditions.push(condition.filter);
     }
     const filter = Object.freeze({
       type: draft.operator,
@@ -1862,7 +1738,7 @@ function buildFilterCandidate(
     return { filter };
   }
   const candidate = buildLeafFilterCandidate(column, draft, parseCache, path);
-  if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
+  if (candidate.filter !== undefined) {
     FILTER_DRAFT_CANDIDATE.set(draft, candidate.filter);
   }
   return candidate;
@@ -1876,68 +1752,7 @@ function buildFilterCandidateForDraftChange(
   changedPath?: readonly FilterDraftPathSegment[],
 ): FilterCandidate {
   if (changedPath !== undefined) {
-    const [rootIndex, ...rootPath] = changedPath;
-    if (
-      typeof rootIndex === "number" &&
-      previous.kind === "compound" &&
-      next.kind === "compound" &&
-      previous.rootCollection === true &&
-      next.rootCollection === true &&
-      previous.rootEntries !== undefined &&
-      previous.conditions.length === next.conditions.length
-    ) {
-      const root = previous.rootEntries[rootIndex];
-      const previousRoot = previous.conditions[rootIndex];
-      const nextRoot = next.conditions[rootIndex];
-      if (root !== undefined && previousRoot !== undefined && nextRoot !== undefined) {
-        const candidate = buildFilterCandidateAlongPath(
-          column,
-          previousRoot,
-          nextRoot,
-          rootPath,
-          parseCache,
-          `root-${String(rootIndex)}`,
-        );
-        if (candidate.filter !== undefined && !isFilterNodeArray(candidate.filter)) {
-          return { ...candidate, root };
-        }
-        return { ...candidate, root };
-      }
-    }
     return buildFilterCandidateAlongPath(column, previous, next, changedPath, parseCache, "root");
-  }
-  if (
-    previous.kind === "compound" &&
-    next.kind === "compound" &&
-    previous.rootCollection === true &&
-    next.rootCollection === true &&
-    previous.rootEntries !== undefined &&
-    next.rootEntries !== undefined &&
-    previous.rootEntries.length === next.rootEntries.length &&
-    previous.conditions.length === next.conditions.length
-  ) {
-    let changedIndex = -1;
-    for (let index = 0; index < previous.conditions.length; index += 1) {
-      if (previous.conditions[index] === next.conditions[index]) continue;
-      if (changedIndex !== -1) {
-        changedIndex = -2;
-        break;
-      }
-      changedIndex = index;
-    }
-    const root = changedIndex >= 0 ? previous.rootEntries[changedIndex] : undefined;
-    if (root !== undefined && changedIndex >= 0) {
-      const candidate = buildFilterCandidate(
-        column,
-        next.conditions[changedIndex]!,
-        parseCache,
-        `root-${String(changedIndex)}`,
-      );
-      if (candidate.filter !== undefined && !Array.isArray(candidate.filter)) {
-        return { ...candidate, root };
-      }
-      return { ...candidate, root };
-    }
   }
   return buildFilterCandidate(column, next, parseCache);
 }
@@ -1959,16 +1774,14 @@ function buildFilterCandidateAlongPath(
     ) {
       const conditions = getFilterDraftCandidateConditions(previous);
       if (conditions !== undefined) {
-        const filter = next.rootCollection
-          ? conditions
-          : Object.freeze({ type: next.operator, conditions });
+        const filter = Object.freeze({ type: next.operator, conditions });
         FILTER_DRAFT_CANDIDATE.set(next, filter);
         return { filter };
       }
     }
     if (next.kind === "not" && next.condition === previous) {
       const condition = FILTER_DRAFT_CANDIDATE.get(previous);
-      if (condition !== undefined && !Array.isArray(condition)) {
+      if (condition !== undefined) {
         const filter = Object.freeze({ type: "NOT", condition });
         FILTER_DRAFT_CANDIDATE.set(next, filter);
         return { filter };
@@ -1995,13 +1808,11 @@ function buildFilterCandidateAlongPath(
       parseCache,
       `${controlPath}-${String(segment)}`,
     );
-    if (candidate.filter === undefined || isFilterNodeArray(candidate.filter)) return candidate;
+    if (candidate.filter === undefined) return candidate;
     const nextConditions = conditions.slice();
     nextConditions[segment] = candidate.filter;
     const frozenConditions = Object.freeze(nextConditions);
-    const filter = next.rootCollection
-      ? frozenConditions
-      : Object.freeze({ type: next.operator, conditions: frozenConditions });
+    const filter = Object.freeze({ type: next.operator, conditions: frozenConditions });
     FILTER_DRAFT_CANDIDATE.set(next, filter);
     return { filter };
   }
@@ -2015,10 +1826,7 @@ function buildFilterCandidateAlongPath(
       `${controlPath}-not`,
     );
     if (candidate.filter === undefined) return candidate;
-    const condition = Array.isArray(candidate.filter)
-      ? Object.freeze({ type: "AND", conditions: candidate.filter })
-      : candidate.filter;
-    const filter = Object.freeze({ type: "NOT", condition });
+    const filter = Object.freeze({ type: "NOT", condition: candidate.filter });
     FILTER_DRAFT_CANDIDATE.set(next, filter);
     return { filter };
   }
@@ -2029,7 +1837,6 @@ function getFilterDraftCandidateConditions(draft: FilterDraft): readonly FilterN
   if (draft.kind !== "compound") return undefined;
   const candidate = FILTER_DRAFT_CANDIDATE.get(draft);
   if (candidate === undefined) return undefined;
-  if (isFilterNodeArray(candidate)) return candidate;
   const conditions = candidate["conditions"];
   return Array.isArray(conditions) ? (conditions as readonly FilterNode[]) : undefined;
 }
@@ -2219,26 +2026,11 @@ function changeExpressionMode(
     if (draft.kind === "not") return draft;
     const next = Object.freeze({ kind: "not", condition: draft });
     const current = countFilterDraftComplexity(draft);
-    cacheKnownFilterDraftComplexity(
-      next,
-      current.nodes + (draft.kind === "compound" && draft.rootCollection === true ? 2 : 1),
-      current.operands,
-    );
+    cacheKnownFilterDraftComplexity(next, current.nodes + 1, current.operands);
     return next;
   }
   if (mode !== "AND" && mode !== "OR") return draft;
   if (draft.kind === "compound") {
-    if (draft.rootCollection === true && mode === "AND") return draft;
-    if (draft.rootCollection === true) {
-      const next = Object.freeze({
-        kind: "compound",
-        operator: mode,
-        conditions: draft.conditions,
-      });
-      const current = countFilterDraftComplexity(draft);
-      cacheKnownFilterDraftComplexity(next, current.nodes + 1, current.operands);
-      return next;
-    }
     const next = Object.freeze({
       ...draft,
       operator: mode,
@@ -2369,7 +2161,7 @@ function countFilterDraftComplexity(draft: FilterDraft): FilterDraftComplexity {
         const next = countFilterDraftComplexity(condition);
         return { nodes: total.nodes + next.nodes, operands: total.operands + next.operands };
       },
-      { nodes: draft.rootCollection === true ? 0 : 1, operands: 0 },
+      { nodes: 1, operands: 0 },
     );
   } else if (draft.operator === "blank" || draft.operator === "notBlank") {
     complexity = { nodes: 1, operands: 0 };

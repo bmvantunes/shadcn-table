@@ -18,10 +18,8 @@ import {
   compileClientFilterCollection,
   compileClientFilterPlan,
   removeClientFilterColumn,
-  removeClientFilterRoot,
   restoreClientFilterColumn,
   replaceClientFilterColumn,
-  replaceClientFilterRoot,
 } from "./grid-query";
 
 afterEach(() => {
@@ -936,6 +934,38 @@ describe("Client row model", () => {
     expect(valueReads).toBe(1);
   });
 
+  it("reapplies the depth bound when an accepted subtree alias moves deeper", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let boundary: Readonly<Record<string, unknown>> = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals",
+    });
+    for (let depth = 0; depth < 64; depth += 1) {
+      boundary = Object.freeze({ condition: boundary, type: "NOT" });
+    }
+
+    const collection = compileClientFilterCollection(
+      [boundary, { condition: boundary, type: "NOT" }],
+      columns,
+    );
+
+    expect(collection.expressions).toHaveLength(1);
+    expect(collection.filters).toEqual([expect.objectContaining({ type: "NOT" })]);
+    expect(() =>
+      compileClientFilterCollection([boundary, { condition: boundary, type: "NOT" }], columns, {
+        rejectOverBudget: true,
+      }),
+    ).toThrow(/nesting depth 64/u);
+  });
+
   it("captures a nested source array once when its owner appears at different depths", () => {
     const columns = compileColumns([
       {
@@ -975,7 +1005,7 @@ describe("Client row model", () => {
     expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([]);
   });
 
-  it("captures repeated top-level filter aliases once across independent root budgets", () => {
+  it("captures repeated top-level filter aliases once across public entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1011,8 +1041,17 @@ describe("Client row model", () => {
 
     const sanitized = sanitizeClientInitialFilters([source, source], columns);
 
-    expect(sanitized).toHaveLength(2);
+    expect(sanitized).toEqual([
+      {
+        type: "AND",
+        conditions: [
+          { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+          { columnId: "COL_ID_NAME", filter: "Ada", type: "equals" },
+        ],
+      },
+    ]);
     expect(reads).toEqual({ columnId: 1, filter: 1, type: 1 });
+    expect(compileClientFilterCollection([source, source], columns).hasSharedNodes).toBe(true);
     expect(filterClientRows([{ name: "Ada" }, { name: "Grace" }], columns, sanitized)).toEqual([
       { name: "Ada" },
     ]);
@@ -1253,7 +1292,7 @@ describe("Client row model", () => {
     ]);
   });
 
-  it("bounds root filter reads and preserves valid siblings around unreadable entries", () => {
+  it("bounds filter-array reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1296,14 +1335,19 @@ describe("Client row model", () => {
     const sanitized = sanitizeClientInitialFilters(hostileRoot, columns);
 
     expect(sanitized).toEqual([
-      { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
-      { columnId: "COL_ID_NAME", type: "notBlank" },
+      {
+        type: "AND",
+        conditions: [
+          { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+          { columnId: "COL_ID_NAME", type: "notBlank" },
+        ],
+      },
     ]);
     expect(indexedProbes).toBeLessThanOrEqual(3);
     expect(ownKeyReads).toBe(1);
   });
 
-  it("caps hostile root filter materialization without limiting ordinary root collections", () => {
+  it("caps hostile filter-array materialization before canonicalization", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_A",
@@ -1320,11 +1364,9 @@ describe("Client row model", () => {
     expect(sanitizeClientInitialFilters(hostileRoot, columns)).toEqual([]);
     expect(() =>
       sanitizeClientInitialFilters(hostileRoot, columns, { rejectOverBudget: true }),
-    ).toThrow(/root contains more than 16384 entries/u);
-    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 16_384), columns)).toHaveLength(
-      16_384,
-    );
-    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1_025);
+    ).toThrow(/contains more than 16384 entries/u);
+    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 16_384), columns)).toEqual([]);
+    expect(sanitizeClientInitialFilters(hostileRoot.slice(0, 1_025), columns)).toHaveLength(1);
 
     const metadataRoot: unknown[] = [];
     for (let index = 0; index < 16_385; index += 1) {
@@ -1336,7 +1378,68 @@ describe("Client row model", () => {
     expect(sanitizeClientInitialFilters(metadataRoot, columns)).toEqual([]);
     expect(() =>
       sanitizeClientInitialFilters(metadataRoot, columns, { rejectOverBudget: true }),
-    ).toThrow(/root contains more than 16384 entries/u);
+    ).toThrow(/contains more than 16384 entries/u);
+  });
+
+  it("canonicalizes one committed expression per Column Identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+    ]);
+    const firstName = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const secondName = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Grace",
+      type: "notEqual" as const,
+    });
+
+    const collection = compileClientFilterCollection(
+      [firstName, { columnId: "COL_ID_SCORE", filter: 2, type: "greaterThan" }, secondName],
+      columns,
+    );
+
+    expect(collection.filters).toEqual([
+      { type: "AND", conditions: [firstName, secondName] },
+      { columnId: "COL_ID_SCORE", filter: 2, type: "greaterThan" },
+    ]);
+    expect(collection.columnIds).toEqual(new Set(["COL_ID_NAME", "COL_ID_SCORE"]));
+    expect(collection.filtersByColumn.get("COL_ID_NAME")).toBe(collection.filters[0]);
+    expect(collection.filtersByColumn.get("COL_ID_SCORE")).toBe(collection.filters[1]);
+    expect(collection.complexity.inputEntries).toBe(2);
+    expect(collection.complexity.nodes).toBe(4);
+  });
+
+  it("drops the complete collection when canonicalization exceeds the aggregate bound", () => {
+    const columns = compileColumns([
+      { columnId: "COL_ID_A", field: "name", headerName: "A", valueType: "text" },
+      { columnId: "COL_ID_B", field: "name", headerName: "B", valueType: "text" },
+    ]);
+    const filters = [
+      ...Array.from({ length: 16_383 }, () => ({
+        columnId: "COL_ID_A",
+        type: "blank" as const,
+      })),
+      { columnId: "COL_ID_B", type: "blank" as const },
+    ];
+
+    expect(compileClientFilterCollection(filters, columns).filters).toEqual([]);
+    expect(() =>
+      compileClientFilterCollection(filters, columns, { rejectOverBudget: true }),
+    ).toThrow(/16384 nodes/u);
   });
 
   it("admits one aggregate node and operand ledger for the complete filter collection", () => {
@@ -1357,19 +1460,20 @@ describe("Client row model", () => {
     const leaf = Object.freeze({ columnId: "COL_ID_NAME", filter: "Ada", type: "equals" });
     const largeRoots = [
       {
-        conditions: Array.from({ length: 8_191 }, () => leaf),
+        conditions: Array.from({ length: 8_190 }, () => leaf),
         type: "AND" as const,
       },
       {
-        conditions: Array.from({ length: 8_191 }, () => leaf),
+        conditions: Array.from({ length: 8_190 }, () => leaf),
         type: "AND" as const,
       },
     ];
     const nodeCollection = compileClientFilterCollection(largeRoots, columns);
-    expect(nodeCollection.roots).toHaveLength(2);
-    expect(nodeCollection.complexity.nodes).toBe(16_384);
-    expect(nodeCollection.rootsByColumn.get("COL_ID_NAME")).toHaveLength(2);
-    expect(nodeCollection.byColumn.get("COL_ID_NAME")).toHaveLength(2);
+    expect(nodeCollection.expressions).toHaveLength(1);
+    expect(nodeCollection.complexity.nodes).toBe(16_383);
+    expect(nodeCollection.expressionsByColumn.get("COL_ID_NAME")?.filter).toBe(
+      nodeCollection.filters[0],
+    );
     expect(() =>
       compileClientFilterCollection([...largeRoots, largeRoots[0]!], columns, {
         rejectOverBudget: true,
@@ -1383,8 +1487,7 @@ describe("Client row model", () => {
     }));
     const operandCollection = compileClientFilterCollection(operandRoots, columns);
     expect(operandCollection.complexity.operands).toBe(16_384);
-    expect(operandCollection.roots).toHaveLength(4);
-    expect(operandCollection.rootsByColumn.get("COL_ID_SCORE")).toHaveLength(4);
+    expect(operandCollection.expressions).toHaveLength(1);
   });
 
   it("prunes compiled operand metadata when a column root is replaced or cleared", () => {
@@ -1414,7 +1517,7 @@ describe("Client row model", () => {
     expect(removeClientFilterColumn(replacement!, "COL_ID_NAME").compiledOperands.size).toBe(0);
   });
 
-  it("derives shared-node evaluation evidence from only the retained roots", () => {
+  it("derives shared-node evaluation evidence from only the retained column expression", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1440,19 +1543,48 @@ describe("Client row model", () => {
     const collection = compileClientFilterCollection([aliasedRoot, ordinaryRoot], columns);
     expect(collection.hasSharedNodes).toBe(true);
 
-    const removed = removeClientFilterRoot(collection, "COL_ID_NAME", collection.roots[0]!.filter);
-    expect(removed?.hasSharedNodes).toBe(false);
-
-    const replaced = replaceClientFilterRoot(
-      collection,
-      "COL_ID_NAME",
-      collection.roots[0]!.filter,
-      { columnId: "COL_ID_NAME", filter: "Lin", type: "equals" },
-    );
+    const replaced = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      filter: "Lin",
+      type: "equals",
+    });
     expect(replaced?.hasSharedNodes).toBe(false);
+    expect(removeClientFilterColumn(collection, "COL_ID_NAME").hasSharedNodes).toBe(false);
   });
 
-  it("replaces one retained root without re-decoding unchanged roots", () => {
+  it("evaluates a nested alias shared by distinct public entries once per row", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_NAME",
+      filter: "Ada",
+      type: "equals" as const,
+    });
+    const filters = [
+      { type: "AND" as const, conditions: [sharedLeaf] },
+      { type: "NOT" as const, condition: sharedLeaf },
+    ];
+    const collection = compileClientFilterCollection(filters, columns);
+    const readValue = vi.fn(() => "Ada");
+    const predicate = createClientFilterPredicate(
+      columns,
+      collection.filters,
+      readValue,
+      collection,
+    );
+
+    expect(collection.hasSharedNodes).toBe(true);
+    expect(predicate?.({})).toBe(false);
+    expect(readValue).toHaveBeenCalledOnce();
+  });
+
+  it("replaces one complete column expression without re-decoding other columns", () => {
     const decodeRuntime = vi.fn((input: unknown) => ({ _tag: "Success" as const, value: input }));
     const valueType = {
       codecId: "test/root-replacement",
@@ -1486,18 +1618,17 @@ describe("Client row model", () => {
     }));
     const collection = compileClientFilterCollection(roots, columns);
     const decodeCallsAfterAdmission = decodeRuntime.mock.calls.length;
-    const replacement = replaceClientFilterRoot(
-      collection,
-      "COL_ID_NAME",
-      collection.roots[100]!.filter,
-      { columnId: "COL_ID_NAME", type: "equals", filter: "Updated" },
-    );
+    const replacement = replaceClientFilterColumn(collection, "COL_ID_NAME", {
+      columnId: "COL_ID_NAME",
+      type: "equals",
+      filter: "Updated",
+    });
 
-    expect(replacement?.roots).toHaveLength(256);
+    expect(replacement?.expressions).toHaveLength(1);
     expect(decodeRuntime).toHaveBeenCalledTimes(decodeCallsAfterAdmission + 1);
   });
 
-  it("bounds root order reads and preserves valid siblings around unreadable entries", () => {
+  it("bounds order-array reads and preserves valid siblings around unreadable entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1815,7 +1946,7 @@ describe("Client row model", () => {
     );
   });
 
-  it("shares one aggregate retained-text budget across roots", () => {
+  it("shares one aggregate retained-text budget across public entries", () => {
     const columns = compileColumns([
       {
         columnId: "COL_ID_NAME",
@@ -1830,13 +1961,13 @@ describe("Client row model", () => {
       { columnId: "COL_ID_NAME", filter: operand, type: "equals" as const },
     ];
 
-    expect(compileClientFilterCollection(filters, columns).roots).toHaveLength(1);
+    expect(compileClientFilterCollection(filters, columns).expressions).toHaveLength(1);
     expect(() =>
       compileClientFilterCollection(filters, columns, { rejectOverBudget: true }),
     ).toThrowError(/1048576 UTF-16 text units/u);
   });
 
-  it("memoizes shared retained filter descriptions across collection roots", () => {
+  it("memoizes shared retained filter descriptions across aliased entries", () => {
     const formatDisplay = vi.fn((value: unknown) => String(value));
     const columns = compileColumns([
       {
@@ -1868,10 +1999,10 @@ describe("Client row model", () => {
     );
     formatDisplay.mockClear();
 
-    const shared = first.roots[0]!.filter;
+    const shared = first.expressions[0]!.filter;
     const repeated = compileClientFilterCollection([shared, shared], columns);
 
-    expect(repeated.roots).toHaveLength(2);
+    expect(repeated.expressions).toHaveLength(1);
     expect(formatDisplay).toHaveBeenCalledOnce();
   });
 
@@ -2031,7 +2162,7 @@ describe("Client row model", () => {
       type: "equals" as const,
     }));
     const repeatedCollection = compileClientFilterCollection(repeated, columns);
-    expect(repeatedCollection.roots.length).toBeLessThan(repeated.length);
+    expect(repeatedCollection.expressions.length).toBeLessThan(repeated.length);
     expect(repeatedCollection.complexity.textLength).toBeLessThanOrEqual(
       BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
     );
@@ -2172,7 +2303,7 @@ describe("Client row model", () => {
 
     const collection = compileClientFilterCollection(filters, columns);
 
-    expect(collection.roots.length).toBeLessThan(filters.length);
+    expect(collection.expressions.length).toBeLessThan(filters.length);
     expect(collection.complexity.textLength).toBeLessThanOrEqual(
       BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
     );
@@ -2183,7 +2314,7 @@ describe("Client row model", () => {
       type: "equals" as const,
     }));
     const exactCollection = compileClientFilterCollection(exactFilters, columns);
-    expect(exactCollection.roots.length).toBeLessThan(exactFilters.length);
+    expect(exactCollection.expressions.length).toBeLessThan(exactFilters.length);
   });
 
   it("charges custom Select scans to one collection-wide comparison allowance", () => {
@@ -2241,11 +2372,76 @@ describe("Client row model", () => {
       columns,
     );
 
-    expect(collection.roots).toHaveLength(1);
+    expect(collection.expressions).toHaveLength(1);
     expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
   });
 
-  it("does not reopen the comparison allowance for rejected Select roots", () => {
+  it("replays accepted nested Select aliases without repeating semantic comparisons", () => {
+    const options = Array.from({ length: 16_384 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/aliased-equivalence-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => String(Reflect.get(value as object, "code")),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_ALIASED_EQUIVALENCE_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const sharedLeaf = Object.freeze({
+      columnId: "COL_ID_ALIASED_EQUIVALENCE_SELECT",
+      filter: Object.freeze({ code: "16383" }),
+      type: "equals" as const,
+    });
+
+    const collection = compileClientFilterCollection(
+      [
+        { type: "AND", conditions: [sharedLeaf] },
+        { type: "NOT", condition: sharedLeaf },
+      ],
+      columns,
+    );
+
+    expect(collection.expressions).toHaveLength(1);
+    expect(collection.filters[0]).toMatchObject({
+      type: "AND",
+      conditions: [{ type: "AND" }, { type: "NOT" }],
+    });
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
+  });
+
+  it("does not reopen the comparison allowance for rejected Select entries", () => {
     const options = Array.from({ length: 64 }, (_, index) =>
       Object.freeze({ code: String(index) }),
     );
@@ -2309,7 +2505,7 @@ describe("Client row model", () => {
       columns,
     );
 
-    expect(collection.roots).toEqual([]);
+    expect(collection.expressions).toEqual([]);
     expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
   });
 
@@ -2368,20 +2564,18 @@ describe("Client row model", () => {
       columns,
     );
 
-    const firstReplacement = replaceClientFilterRoot(
+    const firstReplacement = replaceClientFilterColumn(
       collection,
       "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
-      collection.roots[0]!.filter,
       {
         columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
         filter: Object.freeze({ code: String(options.length - 1) }),
         type: "equals" as const,
       },
     );
-    const secondReplacement = replaceClientFilterRoot(
+    const secondReplacement = replaceClientFilterColumn(
       firstReplacement!,
       "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
-      firstReplacement!.roots[0]!.filter,
       {
         columnId: "COL_ID_REPLACEMENT_EQUIVALENCE_BUDGET",
         filter: Object.freeze({ code: String(options.length - 2) }),
@@ -2389,8 +2583,8 @@ describe("Client row model", () => {
       },
     );
 
-    expect(firstReplacement?.roots).toHaveLength(1);
-    expect(secondReplacement?.roots).toHaveLength(1);
+    expect(firstReplacement?.expressions).toHaveLength(1);
+    expect(secondReplacement?.expressions).toHaveLength(1);
     expect(equivalent).toHaveBeenCalledTimes(
       BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS * 2 - 1,
     );

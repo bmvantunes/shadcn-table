@@ -206,7 +206,7 @@ Build:
 - complete Client faceting and separate live whole-result Server facet subscriptions that exclude their own column filter
 - 150 ms TanStack Pacer filter debounce with no Apply or Reset buttons
 - toolbar filter controls that dispatch the same typed filter commands as header filters
-- active filter count
+- active filter count as filtered-column count plus Quick Filter when active
 - active sort count
 - hidden column count
 - reset actions
