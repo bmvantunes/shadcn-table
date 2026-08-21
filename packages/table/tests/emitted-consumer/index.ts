@@ -162,7 +162,7 @@ const emittedInvalidPersistedTextSearch = {
       filter: ["AAPL"],
     },
   ],
-} satisfies BrunoTablePersistedState<Order, Columns>;
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
 void emittedInvalidPersistedTextSearch;
 const emittedInvalidPersistedState = {
   ...emittedPersistedState,

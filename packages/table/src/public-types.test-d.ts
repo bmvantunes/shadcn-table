@@ -128,7 +128,7 @@ const invalidPersistedTextSearch = {
       filter: { value: "AAPL" },
     },
   ],
-} satisfies BrunoTablePersistedState<Order, Columns>;
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
 void invalidPersistedTextSearch;
 
 const invalidPersistedNumericOperator = {

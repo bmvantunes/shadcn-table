@@ -352,7 +352,9 @@ describe("Grid Preferences", () => {
     });
 
     expect(restored.filters).toEqual([]);
+  });
 
+  it("rejects unsupported sensitivity evidence on numeric filters", () => {
     const numericSnapshot = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
         tableId: "TABLE_ID_UNSUPPORTED_SENSITIVITY",
@@ -809,6 +811,95 @@ describe("Grid Preferences", () => {
 
       expect(restored.filters).toEqual([{ columnId: "COL_ID_NAME", type: "blank" }]);
     }
+  });
+
+  it("prunes codec-decodable leaves that fail current value semantics", () => {
+    const rangeSnapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_STALE_RANGE_LEAF",
+        columns,
+        initialFilters: [
+          {
+            type: "AND",
+            conditions: [
+              { columnId: "COL_ID_SCORE", type: "blank" },
+              { columnId: "COL_ID_SCORE", type: "inRange", filter: 1, filterTo: 2 },
+            ],
+          },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const rangeFilters = rangeSnapshot["filters"];
+    const rangeCompound = Array.isArray(rangeFilters) ? rangeFilters[0] : undefined;
+    if (
+      typeof rangeCompound !== "object" ||
+      rangeCompound === null ||
+      !("conditions" in rangeCompound) ||
+      !Array.isArray(rangeCompound.conditions) ||
+      typeof rangeCompound.conditions[1] !== "object" ||
+      rangeCompound.conditions[1] === null ||
+      !("filterTo" in rangeCompound.conditions[1]) ||
+      typeof rangeCompound.conditions[1].filterTo !== "object" ||
+      rangeCompound.conditions[1].filterTo === null
+    ) {
+      throw new TypeError("Expected one persisted range compound.");
+    }
+    const restoredRange = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_STALE_RANGE_LEAF",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...rangeSnapshot,
+        filters: [
+          {
+            ...rangeCompound,
+            conditions: [
+              rangeCompound.conditions[0],
+              {
+                ...rangeCompound.conditions[1],
+                filterTo: { ...rangeCompound.conditions[1].filterTo, value: "1" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(restoredRange.filters).toEqual([{ columnId: "COL_ID_SCORE", type: "blank" }]);
+
+    const selectSnapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_STALE_SELECT_LEAF",
+        columns,
+        initialFilters: [
+          {
+            type: "AND",
+            conditions: [
+              { columnId: "COL_ID_STATUS", type: "blank" },
+              { columnId: "COL_ID_STATUS", type: "equals", filter: "open" },
+            ],
+          },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const currentSelectColumns = compileColumns([
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options: ["closed"] as const,
+      }),
+    ] satisfies BrunoTableColumns<Readonly<{ status: "closed" }>>);
+    const restoredSelect = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_STALE_SELECT_LEAF",
+      columns: currentSelectColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_STATUS", direction: "asc" }],
+      initialPersistedState: selectSnapshot,
+    });
+    expect(restoredSelect.filters).toEqual([{ columnId: "COL_ID_STATUS", type: "blank" }]);
   });
 
   it("rejects accessor-backed persisted codec operands without invoking them", () => {

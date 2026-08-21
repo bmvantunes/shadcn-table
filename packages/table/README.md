@@ -144,7 +144,9 @@ that compiled Value Type's JSON-safe `encodePersisted` output. Text-search opera
 bounded search operand directly as a string because it is search intent rather than a column value;
 codec identity and version are still checked for compatibility. Restoration calls the matching
 `decodePersisted` implementation for value operands and drops stale, malformed, unknown, or
-incompatible evidence.
+incompatible evidence. A restored search operand that normalizes to empty text under its own case
+and accent sensitivity is also dropped because compiled admission rejects search intent that would
+degenerate to Match All or Match None depending on the operator.
 Native `bigint` and Effect BigDecimal objects therefore never appear directly in the snapshot.
 If a custom `encodePersisted` implementation returns a value that is not JSON-safe, the committing
 preference command throws a `TypeError`; column compilation does not pre-execute value codecs.

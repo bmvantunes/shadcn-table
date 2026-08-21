@@ -14,7 +14,6 @@ import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
   compileClientFilterCollection,
-  normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
   type BrunoTableClientFilterCollection,
   type BrunoTableOrderBy,
@@ -340,7 +339,7 @@ function decodePersistedFilter(
     const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
     if (column === undefined || !supportsPersistedFilterType(column, type)) return undefined;
     if (type === "blank" || type === "notBlank" || type === "matchNone") {
-      return Object.freeze({ type, columnId });
+      return admitDecodedPersistedLeaf(Object.freeze({ type, columnId }), column);
     }
     if (
       record["codecId"] !== column.semantics.codecId ||
@@ -359,22 +358,16 @@ function decodePersistedFilter(
         return undefined;
       }
       if (!hasValidPersistedTextSensitivity(record, true)) return undefined;
-      if (
-        normalizeBrunoTableFilterText(
+      return admitDecodedPersistedLeaf(
+        Object.freeze({
+          type,
+          columnId,
           filter,
-          record["caseSensitive"] === true,
-          record["accentSensitive"] === true,
-        ).length === 0
-      ) {
-        return undefined;
-      }
-      return Object.freeze({
-        type,
-        columnId,
-        filter,
-        ...(record["caseSensitive"] === true ? { caseSensitive: true } : {}),
-        ...(record["accentSensitive"] === true ? { accentSensitive: true } : {}),
-      });
+          ...(record["caseSensitive"] === true ? { caseSensitive: true } : {}),
+          ...(record["accentSensitive"] === true ? { accentSensitive: true } : {}),
+        }),
+        column,
+      );
     }
     const decode = (value: unknown) => {
       const snapshot = snapshotUnknownJsonValue(value, new WeakSet(), budget.json, 0);
@@ -437,10 +430,21 @@ function decodePersistedFilter(
     }
     if (record["caseSensitive"] === true) result["caseSensitive"] = true;
     if (record["accentSensitive"] === true) result["accentSensitive"] = true;
-    return Object.freeze(result);
+    return admitDecodedPersistedLeaf(Object.freeze(result), column);
   } catch {
     return undefined;
   }
+}
+
+function admitDecodedPersistedLeaf(
+  filter: Readonly<Record<string, unknown>>,
+  column: CompiledColumn,
+): Readonly<Record<string, unknown>> | undefined {
+  const admitted = compileClientFilterCollection([filter], [column]).filters;
+  const leaf = admitted.length === 1 ? admitted[0] : undefined;
+  return typeof leaf === "object" && leaf !== null && !Array.isArray(leaf)
+    ? (leaf as Readonly<Record<string, unknown>>)
+    : undefined;
 }
 
 function supportsPersistedFilterType(column: CompiledColumn, type: string): boolean {
