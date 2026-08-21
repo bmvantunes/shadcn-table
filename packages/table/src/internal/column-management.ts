@@ -200,7 +200,7 @@ export function restoreBrunoTableColumnLayout(
     orderedIds.flatMap((columnId) => {
       const column = columnsById.get(columnId);
       if (column === undefined) return [];
-      const pinned = pinning.get(columnId);
+      const pinned = pinning.values.get(columnId);
       const width = widths.get(columnId);
       const withPin = pinned === column.pinned ? column : withColumnPin(column, pinned);
       return [
@@ -221,11 +221,11 @@ export function restoreBrunoTableColumnLayout(
     const baselineColumn = columnsById.get(column.columnId);
     if (baselineColumn === undefined) continue;
     const restoredWidth = widths.get(column.columnId);
-    const pinChanged = column.pinned !== baselineColumn.pinned;
-    if (restoredWidth !== undefined || pinChanged) {
+    const pinningCommitted = pinning.committedColumnIds.has(column.columnId);
+    if (restoredWidth !== undefined || pinningCommitted) {
       committedOverrides.set(column.columnId, {
         ...(restoredWidth === undefined ? {} : { width: restoredWidth }),
-        ...(pinChanged ? { pinned: column.pinned, pinningCommitted: true } : {}),
+        ...(pinningCommitted ? { pinned: column.pinned, pinningCommitted: true } : {}),
       });
     }
   }
@@ -287,7 +287,10 @@ function sanitizeColumnPinning(
   input: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
   snapshotColumnIds: ReadonlySet<string> | undefined,
-): ReadonlyMap<string, BrunoTableColumnPin> {
+): Readonly<{
+  readonly values: ReadonlyMap<string, BrunoTableColumnPin>;
+  readonly committedColumnIds: ReadonlySet<string>;
+}> {
   const result = new Map<string, BrunoTableColumnPin>();
   const record = captureBrunoTablePlainRecord(input);
   const start = captureSanitizedColumnIdArray(record?.["start"], columnsById);
@@ -299,14 +302,16 @@ function sanitizeColumnPinning(
     snapshotColumnIds === undefined
   ) {
     for (const column of columnsById.values()) result.set(column.columnId, column.pinned);
-    return result;
+    return Object.freeze({ values: result, committedColumnIds: new Set<string>() });
   }
   for (const [side, candidates] of [
     ["start", start],
     ["end", end],
   ] as const) {
     for (const columnId of candidates) {
-      if (!result.has(columnId)) result.set(columnId, side);
+      if (snapshotColumnIds.has(columnId) && !result.has(columnId)) {
+        result.set(columnId, side);
+      }
     }
   }
   for (const [columnId, column] of columnsById) {
@@ -314,7 +319,7 @@ function sanitizeColumnPinning(
       result.set(columnId, snapshotColumnIds.has(columnId) ? undefined : column.pinned);
     }
   }
-  return result;
+  return Object.freeze({ values: result, committedColumnIds: snapshotColumnIds });
 }
 
 function sanitizeColumnWidths(

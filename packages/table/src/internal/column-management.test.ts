@@ -10,6 +10,7 @@ import {
   getBrunoTableColumnLayoutSnapshot,
   getBrunoTableLogicalColumnOrder,
   reconcileBrunoTableColumnLayout,
+  restoreBrunoTableColumnLayout,
 } from "./column-management";
 import type { BrunoTableColumnLayoutState, BrunoTableColumnPin } from "./column-management";
 
@@ -507,6 +508,77 @@ describe("BrunoTable column management", () => {
     expect(name?.headerName).toBe("Renamed Name");
     expect(name?.semantics.width).toBe(220);
     expect(score?.pinned).toBe("start");
+  });
+
+  it("preserves baseline-equal restored pinning across definition replacement", () => {
+    const currentColumns = compileColumns([
+      { columnId: "COL_ID_NAME", headerName: "Name", field: "name", valueType: "text" },
+      { columnId: "COL_ID_SCORE", headerName: "Score", field: "score", valueType: "number" },
+      {
+        columnId: "COL_ID_STATUS",
+        headerName: "Status",
+        field: "status",
+        valueType: "text",
+        pinned: "end",
+      },
+      {
+        columnId: "COL_ID_NEW",
+        headerName: "New",
+        field: "name",
+        valueType: "text",
+        pinned: "start",
+      },
+    ]);
+    const restored = restoreBrunoTableColumnLayout(currentColumns, {
+      columnOrder: ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"],
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: ["COL_ID_STATUS", "COL_ID_NEW"] },
+    });
+    expect(restored.allColumns.find((column) => column.columnId === "COL_ID_NEW")?.pinned).toBe(
+      "start",
+    );
+    const replacement = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        pinned: "start",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        valueType: "text",
+        pinned: "start",
+      },
+      {
+        columnId: "COL_ID_NEW",
+        field: "name",
+        headerName: "New",
+        valueType: "text",
+        pinned: "start",
+      },
+    ]);
+
+    const next = reconcileBrunoTableColumnLayout(restored, replacement);
+
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_NAME")?.pinned).toBe(
+      undefined,
+    );
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_STATUS")?.pinned).toBe(
+      "end",
+    );
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_NEW")?.pinned).toBe(
+      "start",
+    );
   });
 
   it("reconciles visible order when definitions are reordered", () => {
