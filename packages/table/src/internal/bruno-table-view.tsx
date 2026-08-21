@@ -68,6 +68,8 @@ import type {
 
 import type { CompiledColumn } from "./compile-columns";
 import {
+  type BrunoTableHotkeyGesture,
+  isBrunoTableHotkeyWorkflowOwner,
   requestBrunoTableHotkeyWorkflowAction,
   useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
@@ -1943,14 +1945,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     return true;
   };
 
-  const ownsGridSurface = (event: KeyboardEvent): boolean => event.target === gridElement.current;
-  const resolveEventColumn = (event: KeyboardEvent): CompiledColumn | undefined => {
+  const ownsGridSurface = (event: BrunoTableHotkeyGesture): boolean =>
+    event.target === gridElement.current;
+  const resolveEventColumn = (event: BrunoTableHotkeyGesture): CompiledColumn | undefined => {
     const target = event.target instanceof Element ? event.target : null;
     const header = target?.closest<HTMLElement>("th[data-bruno-column-id]");
     const columnId = header?.dataset["brunoColumnId"];
     return logicalColumns.find((candidate) => candidate.columnId === columnId);
   };
-  const runNavigation = (event: KeyboardEvent, command: BrunoTableNavigationCommand): void => {
+  const runNavigation = (
+    event: BrunoTableHotkeyGesture,
+    command: BrunoTableNavigationCommand,
+  ): void => {
     if (!ownsGridSurface(event)) return;
     event.preventDefault();
     navigation.activateForFocus();
@@ -1958,13 +1964,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const next = navigation.getSnapshot();
     if (next !== undefined) revealCell(next.rowIndex, next.columnId, next.region, next.rowId);
   };
-  const runPageNavigation = (event: KeyboardEvent, direction: -1 | 1): void => {
+  const runPageNavigation = (event: BrunoTableHotkeyGesture, direction: -1 | 1): void => {
     const grid = gridElement.current;
     if (grid === null || event.target !== grid) return;
     runNavigation(event, { type: "page", rowDelta: direction * viewportPageSize(grid) });
   };
   const runColumnResize = (
-    event: KeyboardEvent,
+    event: BrunoTableHotkeyGesture,
     adjustment: "minimum" | "maximum" | number,
     step: number,
     allowActiveHeader = false,
@@ -1993,12 +1999,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const nextWidth = commitBrunoTableColumnResize(runtime, column.columnId, width);
     setAnnouncement(`${column.headerName} width ${String(nextWidth)} pixels`);
   };
-  const runHeaderMenu = (event: KeyboardEvent): void => {
+  const runHeaderMenu = (event: BrunoTableHotkeyGesture): void => {
     if (event.defaultPrevented) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const directTrigger =
       target?.closest<HTMLButtonElement>('button[aria-label^="Column menu for "]') ?? null;
-    if (directTrigger !== null && gridElement.current?.contains(directTrigger)) {
+    if (
+      directTrigger !== null &&
+      gridElement.current?.contains(directTrigger) &&
+      isBrunoTableHotkeyWorkflowOwner(directTrigger)
+    ) {
       event.preventDefault();
       const column = resolveEventColumn(event);
       if (column !== undefined) navigation.activateHeader(column.columnId);
@@ -2009,19 +2019,25 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     navigation.activateForFocus();
     const active = navigation.getSnapshot();
     if (active?.region !== "header") return;
-    event.preventDefault();
     const header = [
       ...(gridElement.current?.querySelectorAll<HTMLElement>("th[data-bruno-column-id]") ?? []),
     ].find((candidate) => candidate.dataset["brunoColumnId"] === active.columnId);
     const trigger =
-      header?.querySelector<HTMLButtonElement>('button[aria-label^="Column menu for "]') ??
-      gridElement.current?.querySelector<HTMLButtonElement>(
-        '[data-bruno-active-header-menu-trigger=""]',
-      );
-    if (trigger != null) requestBrunoTableHotkeyWorkflowAction(trigger);
+      [
+        ...(header?.querySelectorAll<HTMLButtonElement>('button[aria-label^="Column menu for "]') ??
+          []),
+      ].find(isBrunoTableHotkeyWorkflowOwner) ??
+      [
+        ...(gridElement.current?.querySelectorAll<HTMLButtonElement>(
+          '[data-bruno-active-header-menu-trigger=""]',
+        ) ?? []),
+      ].find(isBrunoTableHotkeyWorkflowOwner);
+    if (trigger === undefined) return;
+    event.preventDefault();
+    requestBrunoTableHotkeyWorkflowAction(trigger);
   };
   const runActivation = (
-    event: KeyboardEvent,
+    event: BrunoTableHotkeyGesture,
     intent: "enter" | "f2" | "space",
     alt: boolean,
     shift: boolean,

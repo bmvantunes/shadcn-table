@@ -1256,6 +1256,42 @@ describe("BrunoTable column management browser surface", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
   });
 
+  test("leaves lookalike custom controls outside the column-menu workflow", async () => {
+    const customColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <button aria-label={`Column menu for custom ${row.name}`} type="button">
+            Custom action
+          </button>
+        ),
+      },
+      columns[1],
+      columns[2],
+    ] as const;
+    const screen = await render(
+      <BrunoTableClient<Row, typeof customColumns>
+        {...tableProps}
+        columns={customColumns}
+        tableId="TABLE_ID_COLUMN_MENU_LOOKALIKE"
+      />,
+    );
+    const customAction = screen.getByRole("button", { name: "Column menu for custom Ada" });
+    customAction.element().focus();
+    const shortcut = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    customAction.element().dispatchEvent(shortcut);
+
+    await new Promise(requestAnimationFrame);
+    expect(shortcut.defaultPrevented).toBe(false);
+    await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+    await expect.element(customAction).toHaveFocus();
+  });
+
   test("opens the typed filter editor from a column menu without an initial baseline", async () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
@@ -2797,7 +2833,7 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
-  test("cancels an active column gesture when Escape comes from a newly focused text control", async () => {
+  test("cancels an active column gesture for every modified Escape from a newly focused text control", async () => {
     const screen = await render(
       <>
         <BrunoTableClient<Row, typeof columns> {...tableProps} />
@@ -2810,39 +2846,46 @@ describe("BrunoTable column management browser surface", () => {
       .element();
     const statusHeader = screen.getByRole("columnheader", { name: /Status/u }).element();
 
-    statusHandle.dispatchEvent(
-      new PointerEvent("pointerdown", {
+    for (let modifiers = 0; modifiers < 16; modifiers += 1) {
+      const pointerId = 20 + modifiers;
+      statusHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 0,
+          pointerId,
+        }),
+      );
+      destination.focus();
+      const escape = new KeyboardEvent("keydown", {
+        altKey: (modifiers & 1) !== 0,
         bubbles: true,
-        button: 0,
-        clientX: 100,
-        pointerId: 11,
-      }),
-    );
-    window.dispatchEvent(
-      new PointerEvent("pointermove", {
-        bubbles: true,
-        clientX: 0,
-        pointerId: 11,
-      }),
-    );
-    destination.focus();
-    const escape = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "Escape",
-    });
-    destination.dispatchEvent(escape);
-    window.dispatchEvent(
-      new PointerEvent("pointerup", {
-        bubbles: true,
-        clientX: 0,
-        pointerId: 11,
-      }),
-    );
+        cancelable: true,
+        ctrlKey: (modifiers & 2) !== 0,
+        key: "Escape",
+        metaKey: (modifiers & 4) !== 0,
+        shiftKey: (modifiers & 8) !== 0,
+      });
+      destination.dispatchEvent(escape);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: 0,
+          pointerId,
+        }),
+      );
 
-    await new Promise(requestAnimationFrame);
-    expect(escape.defaultPrevented).toBe(true);
-    expect(statusHeader).toHaveAttribute("aria-colindex", "3");
+      await new Promise(requestAnimationFrame);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(statusHeader).toHaveAttribute("aria-colindex", "3");
+    }
   });
 
   test("detaches global gesture listeners after repeated committed gestures", async () => {

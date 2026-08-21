@@ -1,8 +1,14 @@
 import { afterAll, beforeAll, bench, describe } from "vite-plus/test";
 import { cleanup, render } from "vitest-browser-react";
+import { getHotkeyManager } from "@tanstack/react-hotkeys";
 import { useRef, useState } from "react";
 
-import { useBrunoTableGridHotkeys, type BrunoTableGridHotkeyCommands } from "./hotkey-adapter";
+import {
+  BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+  useBrunoTableColumnGestureEscape,
+  useBrunoTableGridHotkeys,
+  type BrunoTableGridHotkeyCommands,
+} from "./hotkey-adapter";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableNavigationRuntime } from "./navigation";
 
@@ -43,14 +49,22 @@ function AdapterBenchmarkProbe() {
     page: () => undefined,
   };
   useBrunoTableGridHotkeys(ownerRef, commands);
+  useBrunoTableColumnGestureEscape(() => undefined);
   return <section ref={ownerRef} role="region" aria-label="Adapter Browser benchmark" />;
 }
 
 beforeAll(async () => {
+  const baselineRegistrations = getHotkeyManager().registrations.state.size;
   const screen = await render(<AdapterBenchmarkProbe />);
   const candidate = screen.getByRole("region", { name: "Adapter Browser benchmark" }).element();
   if (!(candidate instanceof HTMLElement)) throw new Error("Expected an HTML benchmark owner.");
   owner = candidate;
+  if (
+    getHotkeyManager().registrations.state.size !==
+    baselineRegistrations + BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT
+  ) {
+    throw new Error("The Browser benchmark did not mount the complete table registration set.");
+  }
 });
 
 afterAll(async () => {

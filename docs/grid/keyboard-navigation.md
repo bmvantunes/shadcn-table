@@ -12,6 +12,11 @@ delivery, conflict policy, and platform normalization. Cross-platform chords use
 syntax; feature code receives an already-matched gesture and retains ownership of typed navigation,
 column, filter, sort, and workflow commands. Hotkey registration and DOM-listener cost is bounded
 per Table Instance or active workflow and never varies with mounted rows, cells, or headers.
+The Adapter is the only current production module allowed to receive a raw `KeyboardEvent` and
+passes feature owners a key- and modifier-free gesture capability containing only command effects
+and ownership evidence. The build guard maintains an explicit finite allowlist of raw keyboard
+evidence modules. A future native editor/input/IME owner may add a separate narrow boundary to that
+allowlist; it must not weaken the rule or reintroduce handler binding inference.
 
 The Adapter scopes ordinary commands to the owning grid surface and explicitly bridges the few
 portalled table workflows that remain owned by that Table Instance. Mounted menu triggers publish

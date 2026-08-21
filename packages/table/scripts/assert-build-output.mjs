@@ -12,8 +12,9 @@ import { assertReactCompilerStrictness } from "../../../config/react-compiler-op
 assertReactCompilerStrictness(transformSync);
 
 class UninspectableWildcardExportError extends Error {}
-const keyboardEvidenceBindingCache = new WeakMap();
-const keyboardHandlerFunctionOwners = new WeakSet();
+// Native editor/input/IME handling may add another narrow module here when that
+// capability ships. Never weaken the global rule or infer keyboard ownership.
+const rawKeyboardEvidenceModuleSuffixes = new Set(["/internal/hotkey-adapter.ts"]);
 
 async function readProductionModules(directoryUrl) {
   const directoryPath = fileURLToPath(directoryUrl);
@@ -104,27 +105,48 @@ const productionModuleAsts = await Promise.all(
     ast: await parseAstAsync(source, { lang: sourcePath.endsWith("x") ? "tsx" : "ts" }),
   })),
 );
-const legacyKeyboardGuardSmokeAsts = await Promise.all(
+const keyboardBoundaryRejectedSmokes = await Promise.all(
   [
-    `function direct(event: KeyboardEvent) { return event.key; }`,
-    `function alias(event: globalThis.KeyboardEvent) { const gesture = event; return gesture.shiftKey; }`,
-    `function assigned(event: KeyboardEvent) { let gesture; gesture = event; return gesture.key; }`,
-    `function destructured(event: KeyboardEvent) { const { key } = event; return key; }`,
-    `function nested(event: KeyboardEvent) { return [1].map(() => event.metaKey); }`,
-    `const inferred = <input onKeyDown={(gesture) => gesture.key} />;`,
-  ].map((source) => parseAstAsync(source, { lang: source.includes("<input") ? "tsx" : "ts" })),
+    { source: `function raw(event: KeyboardEvent) { return event.target; }` },
+    { source: `const handler: React.KeyboardEventHandler<HTMLInputElement> = () => undefined;` },
+    { source: `const reactHandler = <input onKeyDown={() => undefined} />;`, lang: "tsx" },
+    { source: `const handlers = { onKeyUp: () => undefined };` },
+    { source: `window.addEventListener("keydown", () => undefined);` },
+    { source: `window.onkeyup = () => undefined;` },
+    ...["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].flatMap((property) => [
+      {
+        source: `function adapter(event: KeyboardEvent) { return event.${property}; }`,
+        rawKeyboardBoundary: true,
+      },
+      {
+        source: `function adapter({ ${property} }: KeyboardEvent) { return ${property}; }`,
+        rawKeyboardBoundary: true,
+      },
+    ]),
+  ].map(async ({ source, lang = "ts", rawKeyboardBoundary = false }) => ({
+    ast: await parseAstAsync(source, { lang }),
+    rawKeyboardBoundary,
+  })),
 );
-const nativePointerGuardSmokeAst = await parseAstAsync(
-  `function nativePointer(event: MouseEvent) { return event.shiftKey; }`,
-  { lang: "ts" },
-);
-const nativeKeyboardEvidenceGuardSmokeAst = await parseAstAsync(
-  `const nativeInput = <input onKeyDown={(event) => recordComposition(event.isComposing)} />;`,
-  { lang: "tsx" },
-);
-const nativeNonKeyboardHandlerGuardSmokeAst = await parseAstAsync(
-  `const nativeHandlers = <div onWheel={(event) => event.ctrlKey} onPointerDown={(event) => event.shiftKey} />;`,
-  { lang: "tsx" },
+const keyboardBoundaryAllowedSmokes = await Promise.all(
+  [
+    {
+      source: `function domain(entry: { key: string }) { const { key } = entry; return entry.key === key; }`,
+    },
+    {
+      source: `function pointer(event: MouseEvent | PointerEvent | WheelEvent) { return event.shiftKey || event.ctrlKey; }`,
+    },
+    {
+      source: `function adapter(event: KeyboardEvent) { return event.isComposing; }`,
+      mode: "raw-evidence",
+    },
+    {
+      source: `function command(event: BrunoTableHotkeyGesture) { if (event.target) event.preventDefault(); }`,
+    },
+  ].map(async ({ source, mode = "production" }) => ({
+    ast: await parseAstAsync(source, { lang: "ts" }),
+    mode,
+  })),
 );
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
@@ -174,20 +196,22 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
   throw new Error("The emitted package lost the shared React Hotkeys boundary.");
 }
 
-assertNoLegacyKeyboardSyntax(rootRuntimeAst, "emitted @bruno/table root");
+assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
 for (const { sourcePath, ast } of productionModuleAsts) {
-  assertNoLegacyKeyboardSyntax(ast, sourcePath);
+  assertKeyboardBoundary(
+    ast,
+    sourcePath,
+    [...rawKeyboardEvidenceModuleSuffixes].some((suffix) => sourcePath.endsWith(suffix))
+      ? "raw-evidence"
+      : "production",
+  );
 }
-for (const smokeAst of legacyKeyboardGuardSmokeAsts) assertLegacyKeyboardSyntaxDetected(smokeAst);
-assertNoLegacyKeyboardSyntax(nativePointerGuardSmokeAst, "native pointer guard smoke fixture");
-assertNoLegacyKeyboardSyntax(
-  nativeKeyboardEvidenceGuardSmokeAst,
-  "native keyboard evidence guard smoke fixture",
-);
-assertNoLegacyKeyboardSyntax(
-  nativeNonKeyboardHandlerGuardSmokeAst,
-  "native non-keyboard handler guard smoke fixture",
-);
+for (const { ast, rawKeyboardBoundary } of keyboardBoundaryRejectedSmokes) {
+  assertKeyboardBoundaryViolationDetected(ast, rawKeyboardBoundary ? "raw-evidence" : "production");
+}
+for (const { ast, mode } of keyboardBoundaryAllowedSmokes) {
+  assertKeyboardBoundary(ast, "keyboard boundary allowed smoke fixture", mode);
+}
 
 if (
   /BrunoTable(?:ToolbarController|ToolbarState|ToolbarRowStore|ToolbarCellStore)/u.test(
@@ -503,12 +527,16 @@ function findImportedBinding(ast, source, importedName) {
   return undefined;
 }
 
-function assertNoLegacyKeyboardSyntax(ast, label) {
+function assertKeyboardBoundary(ast, label, mode) {
   let violation;
-  collectKeyboardHandlerFunctions(ast, (owner) => keyboardHandlerFunctionOwners.add(owner));
   walkSyntaxTree(ast, (node, ancestors) => {
     if (violation !== undefined) return;
     const parent = ancestors.at(-1);
+    const handlerProperty = keyboardHandlerPropertyName(node);
+    if (handlerProperty !== undefined) {
+      violation = `${handlerProperty} keyboard handler`;
+      return;
+    }
     if (
       node.type === "CallExpression" &&
       node.callee.type === "MemberExpression" &&
@@ -520,140 +548,65 @@ function assertNoLegacyKeyboardSyntax(ast, label) {
       return;
     }
     if (
-      node.type === "MemberExpression" &&
-      ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(
-        memberPropertyName(node) ?? "",
-      ) &&
-      isKeyboardEvidenceExpression(node.object, ancestors)
+      mode === "production" &&
+      ((node.type === "Identifier" &&
+        ["KeyboardEvent", "ReactKeyboardEvent", "KeyboardEventHandler"].includes(node.name)) ||
+        (node.type === "Literal" &&
+          ["KeyboardEvent", "ReactKeyboardEvent", "KeyboardEventHandler"].includes(node.value)))
     ) {
-      violation = `manual KeyboardEvent.${memberPropertyName(node)} interpretation`;
+      violation = "raw keyboard event type outside an approved evidence boundary";
       return;
     }
     if (
-      node.type === "Property" &&
-      parent?.type === "ObjectPattern" &&
-      ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(
-        propertyName(node) ?? "",
-      ) &&
-      isKeyboardEvidenceDestructuring(ancestors)
+      mode === "raw-evidence" &&
+      ((node.type === "MemberExpression" &&
+        isKeyboardInterpretationProperty(memberPropertyName(node))) ||
+        (node.type === "Property" &&
+          parent?.type === "ObjectPattern" &&
+          isKeyboardInterpretationProperty(propertyName(node))))
     ) {
-      violation = `destructured KeyboardEvent.${propertyName(node)} evidence`;
+      violation = `manual keyboard ${String(
+        node.type === "MemberExpression" ? memberPropertyName(node) : propertyName(node),
+      )} interpretation inside an approved evidence boundary`;
       return;
     }
   });
   if (violation !== undefined) {
-    throw new Error(
-      `${label} contains a legacy BrunoTable shortcut interpreter: ${String(violation)}.`,
-    );
+    throw new Error(`${label} violates the BrunoTable keyboard boundary: ${String(violation)}.`);
   }
 }
 
-function assertLegacyKeyboardSyntaxDetected(ast) {
+function assertKeyboardBoundaryViolationDetected(ast, mode) {
   try {
-    assertNoLegacyKeyboardSyntax(ast, "legacy keyboard guard smoke fixture");
+    assertKeyboardBoundary(ast, "keyboard boundary rejection smoke fixture", mode);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("legacy BrunoTable shortcut interpreter")
-    ) {
+    if (error instanceof Error && error.message.includes("BrunoTable keyboard boundary")) {
       return;
     }
     throw error;
   }
-  throw new Error("The legacy keyboard guard accepted KeyboardEvent key/modifier interpretation.");
+  throw new Error("The BrunoTable keyboard boundary accepted a forbidden production shape.");
 }
 
-function isKeyboardEvidenceExpression(expression, ancestors) {
-  if (expression.type !== "Identifier") return false;
-  return ancestors
-    .filter((ancestor) => isFunctionNode(ancestor))
-    .some((owner) => keyboardEvidenceBindings(owner).has(expression.name));
-}
-
-function isKeyboardEvidenceDestructuring(ancestors) {
-  const declarator = ancestors.findLast((ancestor) => ancestor.type === "VariableDeclarator");
-  if (declarator?.init?.type !== "Identifier") return false;
-  return isKeyboardEvidenceExpression(declarator.init, ancestors);
-}
-
-function keyboardEvidenceBindings(owner) {
-  const cached = keyboardEvidenceBindingCache.get(owner);
-  if (cached !== undefined) return cached;
-  const bindings = new Set();
-  for (const [index, parameter] of (owner.params ?? []).entries()) {
-    if (parameter.type !== "Identifier") continue;
-    if (
-      isKeyboardEventTypeAnnotation(parameter.typeAnnotation) ||
-      (index === 0 && keyboardHandlerFunctionOwners.has(owner))
-    ) {
-      bindings.add(parameter.name);
-    }
+function keyboardHandlerPropertyName(node) {
+  if (
+    node.type === "JSXAttribute" &&
+    node.name?.type === "JSXIdentifier" &&
+    (node.name.name === "onKeyDown" || node.name.name === "onKeyUp")
+  ) {
+    return node.name.name;
   }
-  let changed = true;
-  while (changed) {
-    changed = false;
-    walkOwnerScope(owner.body, (node) => {
-      if (
-        node.type === "VariableDeclarator" &&
-        node.id.type === "Identifier" &&
-        node.init?.type === "Identifier" &&
-        bindings.has(node.init.name) &&
-        !bindings.has(node.id.name)
-      ) {
-        bindings.add(node.id.name);
-        changed = true;
-      }
-      if (
-        node.type === "AssignmentExpression" &&
-        node.operator === "=" &&
-        node.left.type === "Identifier" &&
-        node.right.type === "Identifier" &&
-        bindings.has(node.right.name) &&
-        !bindings.has(node.left.name)
-      ) {
-        bindings.add(node.left.name);
-        changed = true;
-      }
-    });
-  }
-  keyboardEvidenceBindingCache.set(owner, bindings);
-  return bindings;
+  const name =
+    node.type === "Property"
+      ? propertyName(node)
+      : node.type === "MemberExpression"
+        ? memberPropertyName(node)
+        : undefined;
+  return ["onKeyDown", "onKeyUp", "onkeydown", "onkeyup"].includes(name ?? "") ? name : undefined;
 }
 
-function collectKeyboardHandlerFunctions(ast, register) {
-  walkSyntaxTree(ast, (node) => {
-    let handler;
-    if (
-      node.type === "JSXAttribute" &&
-      node.name?.type === "JSXIdentifier" &&
-      (node.name.name === "onKeyDown" || node.name.name === "onKeyUp") &&
-      node.value?.type === "JSXExpressionContainer"
-    ) {
-      handler = node.value.expression;
-    } else if (
-      node.type === "Property" &&
-      (propertyName(node) === "onKeyDown" || propertyName(node) === "onKeyUp")
-    ) {
-      handler = node.value;
-    }
-    if (isFunctionNode(handler)) register(handler);
-    if (handler?.type === "Identifier") {
-      for (const resolved of findAssignedFunctions(ast, handler.name)) register(resolved);
-    }
-  });
-}
-
-function isKeyboardEventTypeAnnotation(annotation) {
-  return typeAnnotationContainsName(annotation, new Set(["KeyboardEvent", "ReactKeyboardEvent"]));
-}
-
-function typeAnnotationContainsName(annotation, names) {
-  if (annotation === null || annotation === undefined) return false;
-  let matched = false;
-  walkSyntaxTree(annotation, (node) => {
-    if (node.type === "Identifier" && names.has(node.name)) matched = true;
-  });
-  return matched;
+function isKeyboardInterpretationProperty(name) {
+  return ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(name ?? "");
 }
 
 function isKeyboardEventTypeLiteral(node) {

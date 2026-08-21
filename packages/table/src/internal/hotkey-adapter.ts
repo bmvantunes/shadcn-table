@@ -19,24 +19,27 @@ type BrunoTableHotkeyBinding = Readonly<{
   onTrigger: HotkeyCallback;
 }>;
 
+export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
+  Pick<KeyboardEvent, "preventDefault">;
+
 export type BrunoTableGridHotkeyCommands = Readonly<{
-  escape: (event: KeyboardEvent) => void;
-  shiftTab: (event: KeyboardEvent) => void;
-  headerMenu: (event: KeyboardEvent) => void;
+  escape: (event: BrunoTableHotkeyGesture) => void;
+  shiftTab: (event: BrunoTableHotkeyGesture) => void;
+  headerMenu: (event: BrunoTableHotkeyGesture) => void;
   resize: (
-    event: KeyboardEvent,
+    event: BrunoTableHotkeyGesture,
     adjustment: "minimum" | "maximum" | -1 | 1,
     step: number,
     allowActiveHeader?: boolean,
   ) => void;
   activate: (
-    event: KeyboardEvent,
+    event: BrunoTableHotkeyGesture,
     intent: "enter" | "f2" | "space",
     alt: boolean,
     shift: boolean,
   ) => void;
-  navigate: (event: KeyboardEvent, command: BrunoTableNavigationCommand) => void;
-  page: (event: KeyboardEvent, direction: -1 | 1) => void;
+  navigate: (event: BrunoTableHotkeyGesture, command: BrunoTableNavigationCommand) => void;
+  page: (event: BrunoTableHotkeyGesture, direction: -1 | 1) => void;
 }>;
 
 function createBrunoTableGridHotkeyBindings(
@@ -252,10 +255,29 @@ const NOOP_GRID_COMMANDS: BrunoTableGridHotkeyCommands = Object.freeze({
 export const BRUNO_TABLE_GRID_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze(
   createBrunoTableGridHotkeyBindings(NOOP_GRID_COMMANDS).map((binding) => binding.hotkey),
 );
-// One table registers every grid binding plus the single window-scoped
-// column-gesture Escape from useBrunoTableColumnGestureEscape.
+export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] =
+  Object.freeze([
+    "Escape",
+    "Control+Escape",
+    "Alt+Escape",
+    "Shift+Escape",
+    "Meta+Escape",
+    "Control+Alt+Escape",
+    "Control+Shift+Escape",
+    "Control+Meta+Escape",
+    "Alt+Shift+Escape",
+    "Alt+Meta+Escape",
+    "Shift+Meta+Escape",
+    "Control+Alt+Shift+Escape",
+    "Control+Alt+Meta+Escape",
+    "Control+Shift+Meta+Escape",
+    "Alt+Shift+Meta+Escape",
+    "Control+Alt+Shift+Meta+Escape",
+  ] satisfies readonly RegisterableHotkey[]);
+// One table registers every grid binding plus the complete modifier-insensitive
+// window-scoped column-gesture Escape set.
 export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
-  BRUNO_TABLE_GRID_HOTKEYS.length + 1;
+  BRUNO_TABLE_GRID_HOTKEYS.length + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
@@ -277,6 +299,10 @@ export function requestBrunoTableHotkeyWorkflowAction(owner: HTMLElement): boole
   if (action === undefined) return false;
   action();
   return true;
+}
+
+export function isBrunoTableHotkeyWorkflowOwner(owner: HTMLElement): boolean {
+  return BRUNO_TABLE_WORKFLOW_ACTIONS.has(owner);
 }
 
 export function useBrunoTableHotkeyWorkflowAction(action: () => void): RefCallback<HTMLElement> {
@@ -346,17 +372,23 @@ export function useBrunoTableGridHotkeys(
   useBrunoTableHotkeys(target, createBrunoTableGridHotkeyBindings(commands), "error");
 }
 
-export function useBrunoTableColumnGestureEscape(onTrigger: (event: KeyboardEvent) => void): void {
+export function useBrunoTableColumnGestureEscape(
+  onTrigger: (event: BrunoTableHotkeyGesture) => void,
+): void {
   useBrunoTableHotkeys(
     typeof window === "undefined" ? null : window,
-    [{ hotkey: "Escape", allowInTextInput: true, onTrigger }],
+    BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.map((hotkey) => ({
+      hotkey,
+      allowInTextInput: true,
+      onTrigger,
+    })),
     "allow",
   );
 }
 
 export function useBrunoTableFilterWorkflowEscape(
   target: HTMLElement | null,
-  onTrigger: (event: KeyboardEvent) => void,
+  onTrigger: (event: BrunoTableHotkeyGesture) => void,
 ): void {
   const targetRef = useMemo(() => ({ current: target }), [target]);
   useBrunoTableHotkeys(

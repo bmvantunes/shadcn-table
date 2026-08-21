@@ -35,6 +35,7 @@ import {
 } from "./internal/virtual-viewport";
 import {
   BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
   BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_GRID_HOTKEYS,
 } from "./internal/hotkey-adapter";
@@ -8439,6 +8440,8 @@ describe("BrunoTableClient browser surface", () => {
     const manager = getHotkeyManager();
     const addElementListener = vi.spyOn(HTMLElement.prototype, "addEventListener");
     const removeElementListener = vi.spyOn(HTMLElement.prototype, "removeEventListener");
+    const addWindowListener = vi.spyOn(window, "addEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
     const baselineRegistrations = manager.registrations.state.size;
     const baselineWindowRegistrations = [...manager.registrations.state.values()].filter(
       (registration) => registration.target === window,
@@ -8471,7 +8474,12 @@ describe("BrunoTableClient browser surface", () => {
       [...manager.registrations.state.values()].filter(
         (registration) => registration.target === window,
       ),
-    ).toHaveLength(baselineWindowRegistrations + 1);
+    ).toHaveLength(baselineWindowRegistrations + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length);
+    expect(
+      addWindowListener.mock.calls
+        .map((call) => call[0])
+        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
+    ).toEqual(["keydown", "keyup"]);
     expect(
       addElementListener.mock.calls
         .map((call, index) => ({
@@ -8557,6 +8565,11 @@ describe("BrunoTableClient browser surface", () => {
             (entry.eventType === "keydown" || entry.eventType === "keyup"),
         )
         .map((entry) => entry.eventType),
+    ).toEqual(["keydown", "keyup"]);
+    expect(
+      removeWindowListener.mock.calls
+        .map((call) => call[0])
+        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
     ).toEqual(["keydown", "keyup"]);
   });
 
