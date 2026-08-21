@@ -107,6 +107,7 @@ import type {
   BrunoTableChromeSnapshot,
   BrunoTableColumnCommandSnapshot,
   BrunoTableQueryNavigationMode,
+  BrunoTableRowCellSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -3471,7 +3472,7 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
       rowId === undefined
         ? () => undefined
         : rowAware
-          ? runtime.subscribeRow(rowId, listener)
+          ? runtime.subscribeRowCell(rowId, column.columnId, listener)
           : runtime.subscribeCell(rowId, column.columnId, listener),
     [column.columnId, rowAware, rowId, runtime],
   );
@@ -3480,24 +3481,29 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
       rowId === undefined
         ? undefined
         : rowAware
-          ? runtime.getRowSnapshot(rowId)
+          ? runtime.getRowCellSnapshot(rowId, column.columnId)
           : runtime.getCellSnapshot(rowId, column.columnId),
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot | undefined);
-  const row = rowAware ? snapshot : undefined;
-  const rowPresent = rowAware ? row !== undefined : (cellSnapshot?.rowPresent ?? false);
-  const value =
-    rowAware && rowId !== undefined
-      ? runtime.getCellValueSnapshot(rowId, column.columnId)
-      : cellSnapshot?.value;
+  const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot | undefined) : undefined;
+  const row = rowSnapshot?.row;
+  const unavailable = rowAware
+    ? rowSnapshot?.kind === "unavailable"
+    : cellSnapshot?.kind === "unavailable";
+  const rowPresent = rowAware
+    ? row !== undefined
+    : cellSnapshot?.kind === "available" && cellSnapshot.rowPresent;
+  const value = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const content = !rowPresent
-    ? "Loading row"
-    : invalid
-      ? invalidSourceDetails(invalid.invalid)
-      : resolveProxyCellContent(column, row, value);
+  const content = unavailable
+    ? null
+    : !rowPresent
+      ? "Loading row"
+      : invalid
+        ? invalidSourceDetails(invalid.invalid)
+        : resolveProxyCellContent(column, row, value);
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
@@ -3856,29 +3862,37 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const subscribe = useMemo(
     () => (listener: () => void) =>
       rowAware
-        ? runtime.subscribeRow(rowId, listener)
+        ? runtime.subscribeRowCell(rowId, column.columnId, listener)
         : runtime.subscribeCell(rowId, column.columnId, listener),
     [column.columnId, rowAware, rowId, runtime],
   );
   const getSnapshot = useMemo(
     () => () =>
-      rowAware ? runtime.getRowSnapshot(rowId) : runtime.getCellSnapshot(rowId, column.columnId),
+      rowAware
+        ? runtime.getRowCellSnapshot(rowId, column.columnId)
+        : runtime.getCellSnapshot(rowId, column.columnId),
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
-  const row = rowAware ? snapshot : undefined;
-  const rowMissing = rowAware && row === undefined;
-  const value = rowAware
-    ? runtime.getCellValueSnapshot(rowId, column.columnId)
-    : cellSnapshot?.value;
+  const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot) : undefined;
+  const row = rowSnapshot?.row;
+  const unavailable = rowAware
+    ? rowSnapshot?.kind === "unavailable"
+    : cellSnapshot?.kind === "unavailable";
+  const rowMissing = rowAware
+    ? row === undefined
+    : cellSnapshot?.kind === "available" && !cellSnapshot.rowPresent;
+  const value = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const className = invalid || rowMissing ? undefined : resolveCellClassName(column, row, value);
-  const content = rowMissing ? null : invalid ? (
-    <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
-  ) : (
-    resolveCellContent(column, row, value)
-  );
+  const className =
+    invalid || unavailable || rowMissing ? undefined : resolveCellClassName(column, row, value);
+  const content =
+    unavailable || rowMissing ? null : invalid ? (
+      <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
+    ) : (
+      resolveCellContent(column, row, value)
+    );
   const id =
     instanceId === undefined || tableId === undefined || columnIndex === undefined
       ? undefined

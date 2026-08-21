@@ -206,6 +206,11 @@ export type BrunoTableRuntimeView = {
   readonly getBodySnapshot: () => BrunoTableBodySnapshot;
   readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
+  readonly getRowPresentationSnapshot: (rowId: BrunoTableRowId) => BrunoTableRowSnapshot;
+  readonly getRowCellSnapshot: (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableRowCellSnapshot;
   readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
   readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
@@ -233,6 +238,11 @@ export type BrunoTableRuntimeView = {
   readonly subscribeBody: (listener: Listener) => () => void;
   readonly subscribeRowSpace: (listener: Listener) => () => void;
   readonly subscribeRow: (rowId: BrunoTableRowId, listener: Listener) => () => void;
+  readonly subscribeRowCell: (
+    rowId: BrunoTableRowId,
+    columnId: string,
+    listener: Listener,
+  ) => () => void;
   readonly subscribeCell: (
     rowId: BrunoTableRowId,
     columnId: string,
@@ -268,7 +278,7 @@ export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   /**
    * Accepts authoritative Adapter input during runtime notifications. When a publication pass is
    * already active, that pass completes first; re-entrant publications then apply in call order
-   * before the outer publication returns or rethrows its first listener failure.
+   * before the outer publication returns or rethrows its first read/listener failure.
    */
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
@@ -411,12 +421,48 @@ type RuntimeState<TRow> = Readonly<{
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined;
 }>;
 
-export type BrunoTableCellSnapshot = Readonly<{
-  readonly column: CompiledColumn | undefined;
-  readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
-  readonly rowPresent: boolean;
-  readonly value: unknown;
-}>;
+export type BrunoTableCellSnapshot =
+  | Readonly<{
+      readonly kind: "available";
+      readonly column: CompiledColumn | undefined;
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly rowPresent: boolean;
+      readonly value: unknown;
+    }>
+  | Readonly<{
+      readonly kind: "unavailable";
+      readonly column: CompiledColumn | undefined;
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly value: undefined;
+    }>;
+
+export type BrunoTableRowSnapshot =
+  | Readonly<{
+      readonly kind: "available";
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: unknown;
+    }>
+  | Readonly<{
+      readonly kind: "unavailable";
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: undefined;
+    }>;
+
+export type BrunoTableRowCellSnapshot =
+  | Readonly<{
+      readonly kind: "available";
+      readonly column: CompiledColumn | undefined;
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: unknown;
+      readonly value: unknown;
+    }>
+  | Readonly<{
+      readonly kind: "unavailable";
+      readonly column: CompiledColumn | undefined;
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: undefined;
+      readonly value: undefined;
+    }>;
 
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
@@ -471,8 +517,20 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly bodyListeners = new Set<Listener>();
   private readonly rowSpaceListeners = new Set<Listener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
+  private readonly rowSnapshots = new Map<BrunoTableRowId, BrunoTableRowSnapshot>();
+  private readonly rowCellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
+  private readonly rowCellSnapshots = new Map<
+    BrunoTableRowId,
+    Map<string, BrunoTableRowCellSnapshot>
+  >();
+  private readonly pendingRowCellTokensByRow = new Map<BrunoTableRowId, Map<string, object>>();
+  private readonly pendingRowCellLru = new Map<
+    object,
+    Readonly<{ readonly rowId: BrunoTableRowId; readonly columnId: string }>
+  >();
   private readonly cellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
   private readonly cellSnapshots = new Map<BrunoTableRowId, Map<string, BrunoTableCellSnapshot>>();
+  private readonly unavailableRows = new Set<BrunoTableRowId>();
   private readonly pendingCellTokensByRow = new Map<BrunoTableRowId, Map<string, object>>();
   private readonly pendingCellLru = new Map<
     object,
@@ -612,6 +670,8 @@ export class BrunoTableGridRuntime<TRow> {
         getBodySnapshot: this.getBodySnapshot,
         getRowSpaceSnapshot: this.getRowSpaceSnapshot,
         getRowSnapshot: this.getRowSnapshot,
+        getRowPresentationSnapshot: this.getRowPresentationSnapshot,
+        getRowCellSnapshot: this.getRowCellSnapshot,
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
@@ -637,6 +697,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeBody: this.subscribeBody,
         subscribeRowSpace: this.subscribeRowSpace,
         subscribeRow: this.subscribeRow,
+        subscribeRowCell: this.subscribeRowCell,
         subscribeCell: this.subscribeCell,
         subscribeQuery: this.subscribeQuery,
         subscribeFilter: this.subscribeFilter,
@@ -696,14 +757,14 @@ export class BrunoTableGridRuntime<TRow> {
     }
 
     this.publishing = true;
-    let firstError: ListenerError | undefined;
+    let firstError: NotificationFailure | undefined;
     try {
       firstError = this.reconcilePublication(publication, configuration);
       for (let index = 0; index < this.queuedPublications.length; index += 1) {
         const queued = this.queuedPublications[index];
         this.queuedPublications[index] = undefined;
         if (queued === undefined) continue;
-        firstError = firstListenerError(
+        firstError = firstNotificationFailure(
           firstError,
           this.reconcilePublication(queued.publication, queued.configuration),
         );
@@ -728,7 +789,7 @@ export class BrunoTableGridRuntime<TRow> {
   private reconcilePublication(
     publication: BrunoTableRowPipelinePublication<TRow>,
     publicationConfiguration: PublicationConfiguration,
-  ): ListenerError | undefined {
+  ): NotificationFailure | undefined {
     const { columns, queryConfiguration } = publicationConfiguration;
     const previous = this.state;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
@@ -762,10 +823,10 @@ export class BrunoTableGridRuntime<TRow> {
     const installed = stabilizeRuntimeState(previous, next);
     this.state = installed;
     this.installedPublicationConfiguration = publicationConfiguration;
-    let configurationError: ListenerError | undefined;
+    let configurationError: NotificationFailure | undefined;
     if (configuration !== undefined) {
       for (const columnId of configuration.invalidatedColumnIds) {
-        configurationError = firstListenerError(
+        configurationError = firstNotificationFailure(
           configurationError,
           this.invalidateColumnFilterCommand(columnId),
         );
@@ -774,16 +835,16 @@ export class BrunoTableGridRuntime<TRow> {
     const transitionError =
       configuration === undefined
         ? undefined
-        : firstListenerError(
-            firstListenerError(
+        : firstNotificationFailure(
+            firstNotificationFailure(
               this.notifyQueryTransition(configuration.transition),
               this.notifyColumnLayoutTransition(previousLayoutSnapshot),
             ),
             this.notifyColumnStructureTransition(previousLayoutSnapshot),
           );
     const commitError = this.commitState(previous, installed);
-    const firstError = firstListenerError(
-      firstListenerError(configurationError, transitionError),
+    const firstError = firstNotificationFailure(
+      firstNotificationFailure(configurationError, transitionError),
       commitError,
     );
     return firstError;
@@ -792,7 +853,7 @@ export class BrunoTableGridRuntime<TRow> {
   private commitState(
     previous: RuntimeState<TRow>,
     next: RuntimeState<TRow>,
-  ): ListenerError | undefined {
+  ): NotificationFailure | undefined {
     const chromeChanged = previous.chrome !== next.chrome;
     const sourceChanged = previous.source !== next.source;
     const sourceVersionChanged = previous.sourceVersion !== next.sourceVersion;
@@ -800,20 +861,25 @@ export class BrunoTableGridRuntime<TRow> {
     const rowSpaceChanged = previous.rowSpace !== next.rowSpace;
     this.state = next;
 
-    let firstError: ListenerError | undefined;
+    let firstError: NotificationFailure | undefined;
     if (chromeChanged) firstError = notify(this.chromeListeners);
-    if (sourceChanged) firstError = firstListenerError(firstError, notify(this.sourceListeners));
+    if (sourceChanged) {
+      firstError = firstNotificationFailure(firstError, notify(this.sourceListeners));
+    }
     if (previous.source.loadedRows !== next.source.loadedRows) {
-      firstError = firstListenerError(firstError, notify(this.loadedRowCountListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.loadedRowCountListeners));
     }
     if (sourceVersionChanged) {
-      firstError = firstListenerError(firstError, notify(this.sourceVersionListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.sourceVersionListeners));
     }
-    if (bodyChanged) firstError = firstListenerError(firstError, notify(this.bodyListeners));
+    if (bodyChanged) firstError = firstNotificationFailure(firstError, notify(this.bodyListeners));
     if (rowSpaceChanged) {
-      firstError = firstListenerError(firstError, notify(this.rowSpaceListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.rowSpaceListeners));
     }
-    return firstListenerError(firstError, this.notifyChangedRows(previous.rowSpace, next.rowSpace));
+    return firstNotificationFailure(
+      firstError,
+      this.notifyChangedRows(previous.rowSpace, next.rowSpace),
+    );
   }
 
   public readonly configure = (
@@ -842,7 +908,21 @@ export class BrunoTableGridRuntime<TRow> {
     this.state.rowSpace;
 
   public readonly getRowSnapshot = (rowId: BrunoTableRowId): TRow | undefined =>
-    this.state.rowSpace?.getRow(rowId);
+    this.currentRowSnapshot(rowId).row as TRow | undefined;
+
+  public readonly getRowPresentationSnapshot = (rowId: BrunoTableRowId): BrunoTableRowSnapshot =>
+    this.currentRowSnapshot(rowId);
+
+  public readonly getRowCellSnapshot = (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ): BrunoTableRowCellSnapshot => {
+    const snapshot = this.currentRowCellSnapshot(rowId, columnId);
+    if (!this.rowCellListeners.get(rowId)?.has(columnId)) {
+      this.trackPendingRowCellSnapshot(rowId, columnId);
+    }
+    return snapshot;
+  };
 
   public readonly getCellSnapshot = (
     rowId: BrunoTableRowId,
@@ -929,7 +1009,45 @@ export class BrunoTableGridRuntime<TRow> {
       active = false;
       if (this.rowListeners.get(rowId) !== listeners) return;
       listeners.delete(listener);
-      if (listeners.size === 0) this.rowListeners.delete(rowId);
+      if (listeners.size === 0) {
+        this.rowListeners.delete(rowId);
+        this.rowSnapshots.delete(rowId);
+        this.unavailableRows.delete(rowId);
+      }
+    };
+  };
+
+  public readonly subscribeRowCell = (
+    rowId: BrunoTableRowId,
+    columnId: string,
+    listener: Listener,
+  ): (() => void) => {
+    const snapshot = this.currentRowCellSnapshot(rowId, columnId);
+    let rowListeners = this.rowCellListeners.get(rowId);
+    if (rowListeners === undefined) {
+      rowListeners = new Map();
+      this.rowCellListeners.set(rowId, rowListeners);
+    }
+    let listeners = rowListeners.get(columnId);
+    if (listeners === undefined) {
+      listeners = new Set();
+      rowListeners.set(columnId, listeners);
+    }
+    listeners.add(listener);
+    this.clearPendingRowCellSnapshot(rowId, columnId);
+    this.installRowCellSnapshot(rowId, columnId, snapshot);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.rowCellListeners.get(rowId)?.get(columnId) !== listeners) return;
+      listeners.delete(listener);
+      if (listeners.size > 0) return;
+      rowListeners?.delete(columnId);
+      this.rowCellSnapshots.get(rowId)?.delete(columnId);
+      this.clearPendingRowCellSnapshot(rowId, columnId);
+      if (rowListeners?.size === 0) this.rowCellListeners.delete(rowId);
+      if (this.rowCellSnapshots.get(rowId)?.size === 0) this.rowCellSnapshots.delete(rowId);
     };
   };
 
@@ -938,6 +1056,7 @@ export class BrunoTableGridRuntime<TRow> {
     columnId: string,
     listener: Listener,
   ): (() => void) => {
+    const snapshot = this.currentCellSnapshot(rowId, columnId);
     let rowListeners = this.cellListeners.get(rowId);
     if (rowListeners === undefined) {
       rowListeners = new Map();
@@ -948,7 +1067,6 @@ export class BrunoTableGridRuntime<TRow> {
       listeners = new Set();
       rowListeners.set(columnId, listeners);
     }
-    const snapshot = this.currentCellSnapshot(rowId, columnId);
     listeners.add(listener);
     this.clearPendingCellSnapshot(rowId, columnId);
     this.installCellSnapshot(rowId, columnId, snapshot);
@@ -1158,9 +1276,9 @@ export class BrunoTableGridRuntime<TRow> {
       return true;
     }
     if (command.type === "column.filters.clear") {
-      let invalidationError: ListenerError | undefined;
+      let invalidationError: NotificationFailure | undefined;
       for (const column of this.columns) {
-        invalidationError = firstListenerError(
+        invalidationError = firstNotificationFailure(
           invalidationError,
           this.invalidateColumnFilterCommand(column.columnId),
         );
@@ -1199,7 +1317,7 @@ export class BrunoTableGridRuntime<TRow> {
       previousCommands,
       this.columnLayoutSnapshot,
     );
-    const error = firstListenerError(
+    const error = firstNotificationFailure(
       this.notifyColumnLayoutTransition(previousLayoutSnapshot, previousCommands),
       this.notifyColumnStructureTransition(previousLayoutSnapshot),
     );
@@ -1241,7 +1359,7 @@ export class BrunoTableGridRuntime<TRow> {
 
   private readonly invalidateColumnFilterCommand = (
     columnId: string,
-  ): ListenerError | undefined => {
+  ): NotificationFailure | undefined => {
     this.columnFilterCommandEpochs.set(
       columnId,
       (this.columnFilterCommandEpochs.get(columnId) ?? 0) + 1,
@@ -1483,29 +1601,29 @@ export class BrunoTableGridRuntime<TRow> {
     });
   }
 
-  private notifyQueryTransition(transition: QueryTransition): ListenerError | undefined {
+  private notifyQueryTransition(transition: QueryTransition): NotificationFailure | undefined {
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && transition.queryChanged) {
       recordBrunoTableClientQueryTransition(this.tableId, this.query.generation);
     }
     let firstError = transition.queryChanged ? notify(this.queryListeners) : undefined;
     if (transition.filterChanged) {
-      firstError = firstListenerError(firstError, notify(this.filterListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.filterListeners));
     }
     if (transition.filterChanged && !transition.queryChanged) {
       this.filterPositionResetEpoch += 1;
-      firstError = firstListenerError(firstError, notify(this.filterPositionResetListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.filterPositionResetListeners));
     }
     if (transition.quickFilterChanged) {
-      firstError = firstListenerError(firstError, notify(this.quickFilterListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.quickFilterListeners));
     }
     if (transition.sortingChanged) {
-      firstError = firstListenerError(firstError, notify(this.sortingListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.sortingListeners));
     }
     if (transition.activeFilterCountChanged) {
-      firstError = firstListenerError(firstError, notify(this.activeFilterCountListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.activeFilterCountListeners));
     }
     if (transition.activeSortCountChanged) {
-      firstError = firstListenerError(firstError, notify(this.activeSortCountListeners));
+      firstError = firstNotificationFailure(firstError, notify(this.activeSortCountListeners));
     }
     const columnIds = new Set([
       ...transition.previousCommands.keys(),
@@ -1527,7 +1645,7 @@ export class BrunoTableGridRuntime<TRow> {
               listeners.size,
             );
           }
-          firstError = firstListenerError(firstError, notify(listeners));
+          firstError = firstNotificationFailure(firstError, notify(listeners));
         }
       }
     }
@@ -1558,7 +1676,7 @@ export class BrunoTableGridRuntime<TRow> {
         );
       }
       if (listeners !== undefined) {
-        firstError = firstListenerError(firstError, notify(listeners));
+        firstError = firstNotificationFailure(firstError, notify(listeners));
       }
     }
     return firstError;
@@ -1589,7 +1707,7 @@ export class BrunoTableGridRuntime<TRow> {
   private notifyColumnLayoutTransition(
     previous: BrunoTableColumnLayoutSnapshot,
     previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot> = this.columnCommands,
-  ): ListenerError | undefined {
+  ): NotificationFailure | undefined {
     let firstError =
       previous.version === this.columnLayoutSnapshot.version
         ? undefined
@@ -1606,7 +1724,7 @@ export class BrunoTableGridRuntime<TRow> {
               listeners.size,
             );
           }
-          firstError = firstListenerError(firstError, notify(listeners));
+          firstError = firstNotificationFailure(firstError, notify(listeners));
         }
       }
     }
@@ -1615,7 +1733,7 @@ export class BrunoTableGridRuntime<TRow> {
 
   private notifyColumnStructureTransition(
     previous: BrunoTableColumnLayoutSnapshot,
-  ): ListenerError | undefined {
+  ): NotificationFailure | undefined {
     if (sameColumnProjection(previous, this.columnLayoutSnapshot)) return undefined;
     this.columnStructureSnapshot = this.columnLayoutSnapshot;
     return notify(this.columnStructureListeners);
@@ -1624,30 +1742,248 @@ export class BrunoTableGridRuntime<TRow> {
   private notifyChangedRows(
     previous: BrunoTableRowSpaceSnapshot<TRow> | undefined,
     next: BrunoTableRowSpaceSnapshot<TRow> | undefined,
-  ): ListenerError | undefined {
-    if (previous === next) return undefined;
-    let firstError: ListenerError | undefined;
+  ): NotificationFailure | undefined {
+    if (
+      previous === next &&
+      this.unavailableRows.size === 0 &&
+      !this.hasUnavailableRowCellSnapshot() &&
+      !this.hasUnavailableCellSnapshot() &&
+      !this.hasStaleSubscribedColumnSnapshot()
+    ) {
+      return undefined;
+    }
+    let firstError: NotificationFailure | undefined;
     for (const [rowId, listeners] of this.rowListeners) {
-      if (previous?.getRow(rowId) !== next?.getRow(rowId)) {
-        firstError = firstListenerError(firstError, notify(listeners));
+      if (previous === next && !this.unavailableRows.has(rowId)) continue;
+      const recovering = this.unavailableRows.delete(rowId);
+      let previousSnapshot = this.rowSnapshots.get(rowId);
+      let nextSnapshot: BrunoTableRowSnapshot;
+      let previousReadFailed = false;
+      let nextReadFailed = false;
+      if (!recovering && previousSnapshot === undefined) {
+        try {
+          previousSnapshot = readRowSnapshot(previous, rowId);
+          this.installRowSnapshot(rowId, previousSnapshot);
+        } catch (error) {
+          previousReadFailed = true;
+          firstError = firstNotificationFailure(firstError, notificationFailure(error));
+        }
+      }
+      try {
+        nextSnapshot = readRowSnapshot(next, rowId);
+      } catch (error) {
+        nextReadFailed = true;
+        firstError = firstNotificationFailure(firstError, notificationFailure(error));
+        nextSnapshot = unavailableRowSnapshot(next);
+      }
+      if (nextReadFailed) this.unavailableRows.add(rowId);
+      this.installRowSnapshot(rowId, nextSnapshot);
+      if (
+        previousReadFailed ||
+        nextReadFailed ||
+        recovering ||
+        previousSnapshot === undefined ||
+        previousSnapshot.kind !== nextSnapshot.kind ||
+        previousSnapshot.row !== nextSnapshot.row
+      ) {
+        firstError = firstNotificationFailure(firstError, notify(listeners));
+      }
+    }
+    for (const [rowId, columns] of this.rowCellListeners) {
+      for (const [columnId, listeners] of columns) {
+        const previousSnapshot = this.rowCellSnapshots.get(rowId)?.get(columnId);
+        if (
+          previous === next &&
+          previousSnapshot?.kind !== "unavailable" &&
+          previousSnapshot?.column === this.columnsById.get(columnId)
+        ) {
+          continue;
+        }
+        let nextSnapshot: BrunoTableRowCellSnapshot;
+        try {
+          nextSnapshot = readRowCellSnapshot(next, this.columnsById, rowId, columnId);
+        } catch (error) {
+          firstError = firstNotificationFailure(firstError, notificationFailure(error));
+          const unavailableSnapshot = unavailableRowCellSnapshot(
+            next,
+            this.columnsById.get(columnId),
+          );
+          if (
+            previousSnapshot === undefined ||
+            !sameRowCellSnapshot(previousSnapshot, unavailableSnapshot)
+          ) {
+            this.installRowCellSnapshot(rowId, columnId, unavailableSnapshot);
+            firstError = firstNotificationFailure(firstError, notify(listeners));
+          }
+          continue;
+        }
+        if (
+          previousSnapshot === undefined ||
+          !sameRowCellSnapshot(previousSnapshot, nextSnapshot)
+        ) {
+          this.installRowCellSnapshot(rowId, columnId, nextSnapshot);
+          firstError = firstNotificationFailure(firstError, notify(listeners));
+        }
       }
     }
     for (const [rowId, columns] of this.cellListeners) {
       for (const [columnId, listeners] of columns) {
-        const previousSnapshot =
-          this.cellSnapshots.get(rowId)?.get(columnId) ??
-          readCellSnapshot(previous, this.columnsById, rowId, columnId);
-        const nextSnapshot = readCellSnapshot(next, this.columnsById, rowId, columnId);
+        const previousSnapshot = this.cellSnapshots.get(rowId)?.get(columnId);
+        if (
+          previous === next &&
+          previousSnapshot?.kind !== "unavailable" &&
+          previousSnapshot?.column === this.columnsById.get(columnId)
+        ) {
+          continue;
+        }
+        let nextSnapshot: BrunoTableCellSnapshot;
+        try {
+          nextSnapshot = readCellSnapshot(next, this.columnsById, rowId, columnId);
+        } catch (error) {
+          firstError = firstNotificationFailure(firstError, notificationFailure(error));
+          const unavailableSnapshot = unavailableCellSnapshot(next, this.columnsById.get(columnId));
+          if (
+            previousSnapshot === undefined ||
+            !sameCellSnapshot(previousSnapshot, unavailableSnapshot)
+          ) {
+            this.installCellSnapshot(rowId, columnId, unavailableSnapshot);
+            firstError = firstNotificationFailure(firstError, notify(listeners));
+          }
+          continue;
+        }
+        if (previousSnapshot === undefined) {
+          this.installCellSnapshot(rowId, columnId, nextSnapshot);
+          firstError = firstNotificationFailure(firstError, notify(listeners));
+          continue;
+        }
         if (previousSnapshot.column !== nextSnapshot.column) {
           this.installCellSnapshot(rowId, columnId, nextSnapshot);
           continue;
         }
         if (sameCellSnapshot(previousSnapshot, nextSnapshot)) continue;
         this.installCellSnapshot(rowId, columnId, nextSnapshot);
-        firstError = firstListenerError(firstError, notify(listeners));
+        firstError = firstNotificationFailure(firstError, notify(listeners));
       }
     }
     return firstError;
+  }
+
+  private currentRowSnapshot(rowId: BrunoTableRowId): BrunoTableRowSnapshot {
+    const current = this.rowSnapshots.get(rowId);
+    if (current !== undefined && current.rowSpace === this.state.rowSpace) return current;
+    const next = readRowSnapshot(this.state.rowSpace, rowId);
+    if (this.rowListeners.has(rowId)) this.installRowSnapshot(rowId, next);
+    return next;
+  }
+
+  private installRowSnapshot(rowId: BrunoTableRowId, snapshot: BrunoTableRowSnapshot): void {
+    this.rowSnapshots.set(rowId, snapshot);
+  }
+
+  private currentRowCellSnapshot(
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ): BrunoTableRowCellSnapshot {
+    const column = this.columnsById.get(columnId);
+    const current = this.rowCellSnapshots.get(rowId)?.get(columnId);
+    const subscribed = this.rowCellListeners.get(rowId)?.has(columnId) ?? false;
+    if (
+      current !== undefined &&
+      current.column === column &&
+      (subscribed || current.rowSpace === this.state.rowSpace)
+    ) {
+      return current;
+    }
+    const next = readRowCellSnapshot(this.state.rowSpace, this.columnsById, rowId, columnId);
+    this.installRowCellSnapshot(rowId, columnId, next);
+    return next;
+  }
+
+  private installRowCellSnapshot(
+    rowId: BrunoTableRowId,
+    columnId: string,
+    snapshot: BrunoTableRowCellSnapshot,
+  ): void {
+    let rowSnapshots = this.rowCellSnapshots.get(rowId);
+    if (rowSnapshots === undefined) {
+      rowSnapshots = new Map();
+      this.rowCellSnapshots.set(rowId, rowSnapshots);
+    }
+    rowSnapshots.set(columnId, snapshot);
+  }
+
+  private trackPendingRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    let rowTokens = this.pendingRowCellTokensByRow.get(rowId);
+    if (rowTokens === undefined) {
+      rowTokens = new Map();
+      this.pendingRowCellTokensByRow.set(rowId, rowTokens);
+    }
+    const currentToken = rowTokens.get(columnId);
+    if (currentToken !== undefined) this.pendingRowCellLru.delete(currentToken);
+    const token = currentToken ?? Object.freeze({});
+    rowTokens.set(columnId, token);
+    this.pendingRowCellLru.set(token, { rowId, columnId });
+    if (this.pendingRowCellLru.size <= PENDING_CELL_SNAPSHOT_LIMIT) return;
+    const oldestToken = this.pendingRowCellLru.keys().next().value;
+    if (oldestToken === undefined) return;
+    const oldest = this.pendingRowCellLru.get(oldestToken);
+    if (oldest === undefined) return;
+    this.clearPendingRowCellSnapshot(oldest.rowId, oldest.columnId);
+    if (!this.rowCellListeners.get(oldest.rowId)?.has(oldest.columnId)) {
+      this.rowCellSnapshots.get(oldest.rowId)?.delete(oldest.columnId);
+      if (this.rowCellSnapshots.get(oldest.rowId)?.size === 0) {
+        this.rowCellSnapshots.delete(oldest.rowId);
+      }
+    }
+  }
+
+  private clearPendingRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    const rowTokens = this.pendingRowCellTokensByRow.get(rowId);
+    const token = rowTokens?.get(columnId);
+    if (token === undefined) return;
+    rowTokens?.delete(columnId);
+    this.pendingRowCellLru.delete(token);
+    if (rowTokens?.size === 0) this.pendingRowCellTokensByRow.delete(rowId);
+  }
+
+  private hasUnavailableRowCellSnapshot(): boolean {
+    for (const rowSnapshots of this.rowCellSnapshots.values()) {
+      for (const snapshot of rowSnapshots.values()) {
+        if (snapshot.kind === "unavailable") return true;
+      }
+    }
+    return false;
+  }
+
+  private hasUnavailableCellSnapshot(): boolean {
+    for (const rowSnapshots of this.cellSnapshots.values()) {
+      for (const snapshot of rowSnapshots.values()) {
+        if (snapshot.kind === "unavailable") return true;
+      }
+    }
+    return false;
+  }
+
+  private hasStaleSubscribedColumnSnapshot(): boolean {
+    for (const [rowId, columns] of this.rowCellListeners) {
+      for (const columnId of columns.keys()) {
+        if (
+          this.rowCellSnapshots.get(rowId)?.get(columnId)?.column !== this.columnsById.get(columnId)
+        ) {
+          return true;
+        }
+      }
+    }
+    for (const [rowId, columns] of this.cellListeners) {
+      for (const columnId of columns.keys()) {
+        if (
+          this.cellSnapshots.get(rowId)?.get(columnId)?.column !== this.columnsById.get(columnId)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private currentCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
@@ -1729,10 +2065,64 @@ function readCellSnapshot<TRow>(
   const column = columnsById.get(columnId);
   const rowPresent = rowSpace?.getRow(rowId) !== undefined;
   return Object.freeze({
+    kind: "available",
     column,
     rowSpace,
     rowPresent,
     value: rowPresent ? rowSpace?.getCellValue(rowId, columnId) : undefined,
+  });
+}
+
+function readRowSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+  rowId: BrunoTableRowId,
+): BrunoTableRowSnapshot {
+  return Object.freeze({
+    kind: "available",
+    rowSpace,
+    row: rowSpace?.getRow(rowId),
+  });
+}
+
+function unavailableRowSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+): BrunoTableRowSnapshot {
+  return Object.freeze({ kind: "unavailable", rowSpace, row: undefined });
+}
+
+function readRowCellSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  rowId: BrunoTableRowId,
+  columnId: string,
+): BrunoTableRowCellSnapshot {
+  const column = columnsById.get(columnId);
+  const row = rowSpace?.getRow(rowId);
+  return Object.freeze({
+    kind: "available",
+    column,
+    rowSpace,
+    row,
+    value: row === undefined ? undefined : rowSpace?.getCellValue(rowId, columnId),
+  });
+}
+
+function unavailableRowCellSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+  column: CompiledColumn | undefined,
+): BrunoTableRowCellSnapshot {
+  return Object.freeze({ kind: "unavailable", column, rowSpace, row: undefined, value: undefined });
+}
+
+function unavailableCellSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+  column: CompiledColumn | undefined,
+): BrunoTableCellSnapshot {
+  return Object.freeze({
+    kind: "unavailable",
+    column,
+    rowSpace,
+    value: undefined,
   });
 }
 
@@ -1757,28 +2147,44 @@ function sameStringSet(previous: ReadonlySet<string>, next: ReadonlySet<string>)
 }
 
 function sameCellSnapshot(previous: BrunoTableCellSnapshot, next: BrunoTableCellSnapshot): boolean {
-  if (previous.column !== next.column || previous.rowPresent !== next.rowPresent) return false;
-  if (Object.is(previous.value, next.value)) return true;
-  if (isBrunoTableInvalidCellValue(previous.value) || isBrunoTableInvalidCellValue(next.value)) {
+  if (previous.kind !== next.kind) return false;
+  if (previous.column !== next.column) return false;
+  if (previous.kind === "unavailable" || next.kind === "unavailable") return true;
+  if (previous.rowPresent !== next.rowPresent) return false;
+  return sameAvailableCellValue(previous.value, next.value, next.column);
+}
+
+function sameRowCellSnapshot(
+  previous: BrunoTableRowCellSnapshot,
+  next: BrunoTableRowCellSnapshot,
+): boolean {
+  if (previous.kind !== next.kind || previous.column !== next.column) return false;
+  if (previous.kind === "unavailable" || next.kind === "unavailable") return true;
+  return (
+    previous.row === next.row && sameAvailableCellValue(previous.value, next.value, next.column)
+  );
+}
+
+function sameAvailableCellValue(
+  previous: unknown,
+  next: unknown,
+  column: CompiledColumn | undefined,
+): boolean {
+  if (Object.is(previous, next)) return true;
+  if (isBrunoTableInvalidCellValue(previous) || isBrunoTableInvalidCellValue(next)) {
     return (
-      isBrunoTableInvalidCellValue(previous.value) &&
-      isBrunoTableInvalidCellValue(next.value) &&
-      sameInvalidSource(previous.value.invalid, next.value.invalid)
+      isBrunoTableInvalidCellValue(previous) &&
+      isBrunoTableInvalidCellValue(next) &&
+      sameInvalidSource(previous.invalid, next.invalid)
     );
   }
-  if (
-    previous.value === null ||
-    previous.value === undefined ||
-    next.value === null ||
-    next.value === undefined
-  ) {
+  if (previous === null || previous === undefined || next === null || next === undefined) {
     return false;
   }
-  const column = next.column;
   return (
     column !== undefined &&
-    column.semantics.equivalent(previous.value, next.value) &&
-    column.semantics.formatDisplay(previous.value) === column.semantics.formatDisplay(next.value)
+    column.semantics.equivalent(previous, next) &&
+    column.semantics.formatDisplay(previous) === column.semantics.formatDisplay(next)
   );
 }
 
@@ -2046,22 +2452,26 @@ function subscribe(listeners: Set<Listener>, listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-type ListenerError = Readonly<{ readonly value: unknown }>;
+type NotificationFailure = Readonly<{ readonly value: unknown }>;
 
-function firstListenerError(
-  current: ListenerError | undefined,
-  next: ListenerError | undefined,
-): ListenerError | undefined {
+function notificationFailure(value: unknown): NotificationFailure {
+  return Object.freeze({ value });
+}
+
+function firstNotificationFailure(
+  current: NotificationFailure | undefined,
+  next: NotificationFailure | undefined,
+): NotificationFailure | undefined {
   return current ?? next;
 }
 
-function notify(listeners: Set<Listener>): ListenerError | undefined {
-  let firstError: ListenerError | undefined;
+function notify(listeners: Set<Listener>): NotificationFailure | undefined {
+  let firstError: NotificationFailure | undefined;
   for (const listener of listeners) {
     try {
       listener();
     } catch (error) {
-      firstError ??= Object.freeze({ value: error });
+      firstError ??= notificationFailure(error);
     }
   }
   return firstError;

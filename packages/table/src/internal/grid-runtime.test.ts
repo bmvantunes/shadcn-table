@@ -2026,6 +2026,66 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(refreshed.value).toBe("Changed");
   });
 
+  it("refreshes abandoned row-aware cell reads and bounds pending snapshots", () => {
+    const manyRows = Array.from({ length: 4_100 }, (_, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    const runtime = createRuntime(source(manyRows));
+    const firstSnapshot = runtime.getRowCellSnapshot("row-0", "COL_ID_NAME");
+    for (let index = 1; index <= 4_096; index += 1) {
+      runtime.getRowCellSnapshot(`row-${String(index)}`, "COL_ID_NAME");
+    }
+
+    const rereadAfterEviction = runtime.getRowCellSnapshot("row-0", "COL_ID_NAME");
+    expect(rereadAfterEviction).not.toBe(firstSnapshot);
+    expect(rereadAfterEviction.value).toBe("Name 0");
+
+    const changedRows = manyRows.with(0, { id: "row-0", name: "Changed" });
+    runtime.publish(source(changedRows));
+
+    const refreshed = runtime.getRowCellSnapshot("row-0", "COL_ID_NAME");
+    expect(refreshed).not.toBe(rereadAfterEviction);
+    expect(refreshed.value).toBe("Changed");
+  });
+
+  it("retains generic row snapshots only while a row subscription owns them", () => {
+    const row = { id: "first", name: "Ada" } satisfies Row;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([row]),
+      (candidate: Row) => candidate.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_ROW_SNAPSHOT_OWNERSHIP",
+    );
+    const view = runtime.getView();
+    const publication = adapter.publish(source([row]));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    const getRow = vi.fn((rowId: string) => rowSpace.getRow(rowId));
+    runtime.publish({ ...publication, rowSpace: { ...rowSpace, getRow } });
+
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(getRow).toHaveBeenCalledTimes(2);
+
+    const unsubscribe = view.subscribeRow("first", () => undefined);
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(getRow).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(view.getRowSnapshot("first")).toBe(row);
+    expect(getRow).toHaveBeenCalledTimes(5);
+  });
+
   it("advances a derived row-order snapshot only with its notification", () => {
     const first = { id: "first", name: "Ada" } satisfies Row;
     const second = { id: "second", name: "Grace" } satisfies Row;
@@ -4329,7 +4389,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Newest");
   });
 
-  it("retains configuration installed before a post-install internal failure", () => {
+  it("retains installed configuration after a contained row-read failure", () => {
     const replacementColumns = compileColumns([
       {
         columnId: "COL_ID_ALIAS",
@@ -4342,7 +4402,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const failed = { id: "first", name: "Failed" } satisfies Row;
     const newest = { id: "first", name: "Newest" } satisfies Row;
     const { adapter, runtime, view } = createSubject([initial]);
-    const internalFailure = new Error("installed row space failed");
+    const sourceReadFailure = new Error("installed row space failed");
     view.subscribeRow("first", () => undefined);
     const rejected = adapter.reconcile(source([failed]), (row) => row.id, replacementColumns);
     const rejectedRowSpace = rejected.rowSpace;
@@ -4355,7 +4415,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
         getRow(rowId: string): Row | undefined {
           if (!rowReadFailed) {
             rowReadFailed = true;
-            throw internalFailure;
+            throw sourceReadFailure;
           }
           return rejectedRowSpace.getRow(rowId);
         },
@@ -4368,14 +4428,14 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
         replacementColumns,
         adapter.getQueryConfiguration(replacementColumns),
       ),
-    ).toThrow(internalFailure);
+    ).toThrow(sourceReadFailure);
 
     runtime.publish(adapter.publish(source([newest])));
     expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
     expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
   });
 
-  it("retains an accepted adapter configuration when the outer pass aborts", () => {
+  it("drains accepted adapter configuration after a contained outer row-read failure", () => {
     const replacementColumns = compileColumns([
       {
         columnId: "COL_ID_ALIAS",
@@ -4389,7 +4449,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const queued = { id: "first", name: "Queued" } satisfies Row;
     const newest = { id: "first", name: "Newest" } satisfies Row;
     const { adapter, runtime, view } = createSubject([initial]);
-    const internalFailure = new Error("outer row space failed");
+    const sourceReadFailure = new Error("outer row space failed");
     let accepted = false;
     view.subscribeRowSpace(() => {
       if (accepted) return;
@@ -4414,13 +4474,13 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
           getRow(rowId: string): Row | undefined {
             if (!rowReadFailed) {
               rowReadFailed = true;
-              throw internalFailure;
+              throw sourceReadFailure;
             }
             return rejectedRowSpace.getRow(rowId);
           },
         },
       }),
-    ).toThrow(internalFailure);
+    ).toThrow(sourceReadFailure);
 
     runtime.publish(adapter.publish(source([newest])));
     expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
@@ -4772,5 +4832,554 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
 
     expect(() => runtime.publish(adapter.publish(source([], "closed")))).not.toThrow();
     expect(view.getChromeSnapshot().status).toBe("closed");
+  });
+
+  it("contains a middle cell value read failure and notifies successful siblings in order", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const nextRows = [
+      { id: "first", name: "Next first" },
+      { id: "second", name: "Next second" },
+      { id: "third", name: "Next third" },
+    ] satisfies readonly Row[];
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("second cell read failed");
+    const events: string[] = [];
+    for (const row of initialRows) {
+      view.subscribeCell(row.id, "COL_ID_NAME", () => events.push(`notify:${row.id}`));
+    }
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            events.push(`read:${rowId}`);
+            if (rowId === "second") throw readFailure;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow(readFailure);
+
+    expect(events).toEqual([
+      "read:first",
+      "notify:first",
+      "read:second",
+      "notify:second",
+      "read:third",
+      "notify:third",
+    ]);
+  });
+
+  it("contains a middle row read failure and continues later subscribed cells", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("second row read failed");
+    const events: string[] = [];
+    for (const row of initialRows) {
+      view.subscribeCell(row.id, "COL_ID_NAME", () => events.push(`notify:${row.id}`));
+    }
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getRow(rowId) {
+            events.push(`row:${rowId}`);
+            if (rowId === "second") throw readFailure;
+            return rowSpace.getRow(rowId);
+          },
+        },
+      }),
+    ).toThrow(readFailure);
+
+    expect(events).toEqual([
+      "row:first",
+      "notify:first",
+      "row:second",
+      "notify:second",
+      "row:third",
+      "notify:third",
+    ]);
+  });
+
+  it("invalidates a row-aware subscriber after getRow fails and recovers it later", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const failed = { id: "first", name: "Failed publication" } satisfies Row;
+    const recovered = { id: "first", name: "Recovered" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const observedRows: (Row | undefined)[] = [];
+    view.subscribeRow("first", () =>
+      observedRows.push(view.getRowSnapshot("first") as Row | undefined),
+    );
+    const publication = adapter.publish(source([failed]));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getRow() {
+            throw new Error("unreadable current row");
+          },
+        },
+      }),
+    ).toThrow("unreadable current row");
+    expect(observedRows).toEqual([undefined]);
+    expect(view.getRowSnapshot("first")).toBeUndefined();
+
+    runtime.publish(adapter.publish(source([recovered])));
+    expect(observedRows).toEqual([undefined, recovered]);
+    expect(view.getRowSnapshot("first")).toBe(recovered);
+  });
+
+  it("contains a row-aware cell-value read and continues later subscribed work", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("row-aware cell read failed");
+    const events: string[] = [];
+    view.subscribeRowCell("first", "COL_ID_NAME", () => {
+      events.push(`notify:first:${view.getRowCellSnapshot("first", "COL_ID_NAME").kind}`);
+    });
+    view.subscribeCell("second", "COL_ID_NAME", () => events.push("notify:second"));
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            events.push(`read:${rowId}`);
+            if (rowId === "first") throw readFailure;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow(readFailure);
+
+    expect(events).toEqual([
+      "read:first",
+      "notify:first:unavailable",
+      "read:second",
+      "notify:second",
+    ]);
+  });
+
+  it("does not renotify cells that remain unavailable across failed retries", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const rowCellListener = vi.fn();
+    const cellListener = vi.fn();
+    view.subscribeRowCell("first", "COL_ID_NAME", rowCellListener);
+    view.subscribeCell("second", "COL_ID_NAME", cellListener);
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    const readFailure = new Error("reads remain unavailable");
+    let readCount = 0;
+    const failingPublication = {
+      ...publication,
+      rowSpace: {
+        ...rowSpace,
+        getCellValue() {
+          readCount += 1;
+          throw readFailure;
+        },
+      },
+    };
+
+    expect(() => runtime.publish(failingPublication)).toThrow(readFailure);
+    expect(readCount).toBe(2);
+    expect(rowCellListener).toHaveBeenCalledOnce();
+    expect(cellListener).toHaveBeenCalledOnce();
+    const unavailableRowCellSnapshot = view.getRowCellSnapshot("first", "COL_ID_NAME");
+    const unavailableCellSnapshot = view.getCellSnapshot("second", "COL_ID_NAME");
+
+    expect(() => runtime.publish(failingPublication)).toThrow(readFailure);
+    expect(readCount).toBe(4);
+    expect(rowCellListener).toHaveBeenCalledOnce();
+    expect(cellListener).toHaveBeenCalledOnce();
+    expect(view.getRowCellSnapshot("first", "COL_ID_NAME")).toBe(unavailableRowCellSnapshot);
+    expect(view.getCellSnapshot("second", "COL_ID_NAME")).toBe(unavailableCellSnapshot);
+
+    expect(() =>
+      runtime.publish({
+        ...failingPublication,
+        rowSpace: { ...failingPublication.rowSpace },
+      }),
+    ).toThrow(readFailure);
+    expect(readCount).toBe(6);
+    expect(rowCellListener).toHaveBeenCalledOnce();
+    expect(cellListener).toHaveBeenCalledOnce();
+    expect(view.getRowCellSnapshot("first", "COL_ID_NAME")).toBe(unavailableRowCellSnapshot);
+    expect(view.getCellSnapshot("second", "COL_ID_NAME")).toBe(unavailableCellSnapshot);
+
+    runtime.publish(adapter.publish(source(nextRows)));
+    expect(rowCellListener).toHaveBeenCalledTimes(2);
+    expect(cellListener).toHaveBeenCalledTimes(2);
+    expect(view.getRowCellSnapshot("first", "COL_ID_NAME")).not.toBe(unavailableRowCellSnapshot);
+    expect(view.getCellSnapshot("second", "COL_ID_NAME")).not.toBe(unavailableCellSnapshot);
+  });
+
+  it("retains a row-aware snapshot when a successful publication is presentation-equivalent", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const next = { id: "first", name: "Next" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const listener = vi.fn();
+    view.subscribeRowCell("first", "COL_ID_NAME", listener);
+    const publication = adapter.publish(source([next]));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    runtime.publish(publication);
+    expect(listener).toHaveBeenCalledOnce();
+    const snapshot = view.getRowCellSnapshot("first", "COL_ID_NAME");
+
+    runtime.publish({
+      ...publication,
+      rowSpace: { ...rowSpace },
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(view.getRowCellSnapshot("first", "COL_ID_NAME")).toBe(snapshot);
+  });
+
+  it.each(["row-aware", "ordinary"] as const)(
+    "does not retain a phantom %s cell subscription when its initial read fails",
+    (kind) => {
+      const initial = { id: "first", name: "Initial" } satisfies Row;
+      const next = { id: "first", name: "Next" } satisfies Row;
+      const { adapter, runtime, view } = createSubject([initial]);
+      if (kind === "row-aware") view.getRowCellSnapshot("first", "COL_ID_NAME");
+      else view.getCellSnapshot("first", "COL_ID_NAME");
+      const publication = adapter.publish(source([next]));
+      const rowSpace = publication.rowSpace;
+      if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+      const readFailure = new Error(`${kind} subscription read failed`);
+      let readCount = 0;
+      const failingRowSpace = {
+        ...rowSpace,
+        getCellValue() {
+          readCount += 1;
+          throw readFailure;
+        },
+      };
+      runtime.publish({ ...publication, rowSpace: failingRowSpace });
+
+      expect(() =>
+        kind === "row-aware"
+          ? view.subscribeRowCell("first", "COL_ID_NAME", () => undefined)
+          : view.subscribeCell("first", "COL_ID_NAME", () => undefined),
+      ).toThrow(readFailure);
+      expect(readCount).toBe(1);
+
+      expect(() =>
+        runtime.publish({ ...publication, rowSpace: { ...failingRowSpace } }),
+      ).not.toThrow();
+      expect(readCount).toBe(1);
+    },
+  );
+
+  it("contains subscribed reads for replacement columns on the same row space", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("replacement column read failed");
+    const events: string[] = [];
+    view.subscribeRowCell("first", "COL_ID_NAME", () => events.push("notify:first"));
+    view.subscribeCell("second", "COL_ID_NAME", () => events.push("notify:second"));
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    let failFirstRead = false;
+    const sharedPublication = {
+      ...publication,
+      rowSpace: {
+        ...rowSpace,
+        getCellValue(rowId: string, columnId: string) {
+          events.push(`read:${rowId}`);
+          if (failFirstRead && rowId === "first") throw readFailure;
+          return rowSpace.getCellValue(rowId, columnId);
+        },
+      },
+    };
+    runtime.publish(sharedPublication);
+    events.length = 0;
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Replacement Name",
+        valueType: "text",
+      },
+    ]);
+    failFirstRead = true;
+
+    expect(() =>
+      runtime.reconcile(
+        sharedPublication,
+        replacementColumns,
+        adapter.getQueryConfiguration(replacementColumns),
+      ),
+    ).toThrow(readFailure);
+    expect(events).toEqual(["read:first", "notify:first", "read:second"]);
+    expect(view.getRowCellSnapshot("first", "COL_ID_NAME").kind).toBe("unavailable");
+    expect(view.getCellSnapshot("second", "COL_ID_NAME")).toMatchObject({
+      kind: "available",
+      column: replacementColumns[0],
+      value: "Next second",
+    });
+    events.length = 0;
+
+    view.getRowCellSnapshot("first", "COL_ID_NAME");
+    view.getCellSnapshot("second", "COL_ID_NAME");
+    expect(events).toEqual([]);
+  });
+
+  it("preserves an undefined read failure ahead of later listener failures", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const laterFailure = new Error("later listener failed");
+    view.subscribeCell("first", "COL_ID_NAME", () => undefined);
+    view.subscribeCell("second", "COL_ID_NAME", () => {
+      throw laterFailure;
+    });
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    let caught = false;
+
+    try {
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "first") throw undefined;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      });
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
+  });
+
+  it("keeps an earlier listener failure ahead of later read and listener failures", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const nextRows = initialRows.map((row) => ({ ...row, name: `Next ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const firstFailure = new Error("first listener failed");
+    const laterListener = vi.fn(() => {
+      throw new Error("later listener failed");
+    });
+    view.subscribeCell("first", "COL_ID_NAME", () => {
+      throw firstFailure;
+    });
+    view.subscribeCell("second", "COL_ID_NAME", () => undefined);
+    view.subscribeCell("third", "COL_ID_NAME", laterListener);
+    const publication = adapter.publish(source(nextRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "second") throw undefined;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow(firstFailure);
+    expect(laterListener).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose a stale successful value after a failed read and recovers later", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const failed = { id: "first", name: "Failed publication" } satisfies Row;
+    const recovered = { id: "first", name: "Recovered" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const observedSnapshots: unknown[] = [];
+    const listener = vi.fn(() => {
+      observedSnapshots.push(view.getCellSnapshot("first", "COL_ID_NAME"));
+    });
+    view.subscribeCell("first", "COL_ID_NAME", listener);
+    const publication = adapter.publish(source([failed]));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    let currentRow = failed;
+    let cellReadFails = true;
+    const sharedRowSpace = {
+      ...rowSpace,
+      getRow(rowId: string) {
+        return rowId === currentRow.id ? currentRow : undefined;
+      },
+      getCellValue() {
+        if (cellReadFails) throw new Error("unreadable current value");
+        return currentRow.name;
+      },
+    };
+    const sharedPublication = { ...publication, rowSpace: sharedRowSpace };
+
+    expect(() => runtime.publish(sharedPublication)).toThrow("unreadable current value");
+    expect(listener).toHaveBeenCalledOnce();
+    const unavailableSnapshot = view.getCellSnapshot("first", "COL_ID_NAME");
+    expect(unavailableSnapshot).toMatchObject({
+      kind: "unavailable",
+      value: undefined,
+    });
+    expect(unavailableSnapshot).not.toHaveProperty("rowPresent");
+    expect(observedSnapshots).toEqual([
+      expect.objectContaining({ kind: "unavailable", value: undefined }),
+    ]);
+    expect(observedSnapshots[0]).not.toHaveProperty("rowPresent");
+
+    currentRow = recovered;
+    cellReadFails = false;
+    runtime.publish(sharedPublication);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(view.getCellSnapshot("first", "COL_ID_NAME").value).toBe("Recovered");
+    expect(observedSnapshots.at(-1)).toMatchObject({ kind: "available", value: "Recovered" });
+  });
+
+  it("retains FIFO newest authority when a later cell queues recovery after a read failure", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const outerRows = initialRows.map((row) => ({ ...row, name: `Outer ${row.id}` }));
+    const newestRows = initialRows.map((row) => ({ ...row, name: `Newest ${row.id}` }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("outer second read failed");
+    const events: string[] = [];
+    for (const row of initialRows) {
+      view.subscribeCell(row.id, "COL_ID_NAME", () => {
+        const value = String(view.getCellValueSnapshot(row.id, "COL_ID_NAME"));
+        events.push(`${row.id}:${value}`);
+        if (row.id === "third" && value === "Outer third") {
+          runtime.publish(adapter.publish(source(newestRows)));
+        }
+      });
+    }
+    const publication = adapter.publish(source(outerRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "second") throw readFailure;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow(readFailure);
+
+    expect(events).toEqual([
+      "first:Outer first",
+      "second:undefined",
+      "third:Outer third",
+      "first:Newest first",
+      "second:Newest second",
+      "third:Newest third",
+    ]);
+    expect(view.getRowSnapshot("first")).toBe(newestRows[0]);
+    expect(view.getCellSnapshot("second", "COL_ID_NAME").value).toBe("Newest second");
+  });
+
+  it("prioritizes a nested internal invariant failure over collected read and listener errors", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+    ] satisfies readonly Row[];
+    const outerRows = initialRows.map((row) => ({ ...row, name: `Outer ${row.id}` }));
+    const newest = { id: "first", name: "Reusable" } satisfies Row;
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const readFailure = new Error("read failed");
+    const listenerFailure = new Error("listener failed");
+    const invariantFailure = new Error("publication invariant failed");
+    const unreadable = {
+      ...adapter.getPublication(),
+      get status(): "ready" {
+        throw invariantFailure;
+      },
+    };
+    let queuedInvariantFailure = false;
+    view.subscribeCell("first", "COL_ID_NAME", () => undefined);
+    view.subscribeCell("second", "COL_ID_NAME", () => {
+      if (queuedInvariantFailure) return;
+      queuedInvariantFailure = true;
+      view.publishRowPipeline(unreadable);
+      throw listenerFailure;
+    });
+    const publication = adapter.publish(source(outerRows));
+    const rowSpace = publication.rowSpace;
+    if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...publication,
+        rowSpace: {
+          ...rowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "first") throw readFailure;
+            return rowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow(invariantFailure);
+
+    expect(() => runtime.publish(adapter.publish(source([newest])))).not.toThrow();
+    expect(view.getRowSnapshot("first")).toBe(newest);
   });
 });
