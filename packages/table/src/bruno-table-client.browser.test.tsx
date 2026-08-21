@@ -7708,15 +7708,22 @@ describe("BrunoTableClient browser surface", () => {
         expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
         expect(document.activeElement).toBe(control.element());
       }
-      const escape = new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Escape",
-      });
-      control.element().dispatchEvent(escape);
-      await vi.waitFor(() => expect(document.activeElement).toBe(grid.element()));
-      expect(escape.defaultPrevented).toBe(true);
-      expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+      for (let modifiers = 0; modifiers < 16; modifiers += 1) {
+        control.element().focus();
+        const escape = new KeyboardEvent("keydown", {
+          altKey: (modifiers & 1) !== 0,
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: (modifiers & 2) !== 0,
+          key: "Escape",
+          metaKey: (modifiers & 4) !== 0,
+          shiftKey: (modifiers & 8) !== 0,
+        });
+        control.element().dispatchEvent(escape);
+        await vi.waitFor(() => expect(document.activeElement).toBe(grid.element()));
+        expect(escape.defaultPrevented).toBe(true);
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+      }
     }
 
     grid.element().focus();
@@ -7727,6 +7734,7 @@ describe("BrunoTableClient browser surface", () => {
       key: "ArrowDown",
     });
     grid.element().dispatchEvent(composingArrow);
+    await new Promise(requestAnimationFrame);
     expect(composingArrow.defaultPrevented).toBe(false);
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
 
@@ -8479,7 +8487,7 @@ describe("BrunoTableClient browser surface", () => {
       addWindowListener.mock.calls
         .map((call) => call[0])
         .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
-    ).toEqual(["keydown", "keyup"]);
+    ).toEqual(baselineWindowRegistrations === 0 ? ["keydown", "keyup"] : []);
     expect(
       addElementListener.mock.calls
         .map((call, index) => ({
@@ -8570,7 +8578,7 @@ describe("BrunoTableClient browser surface", () => {
       removeWindowListener.mock.calls
         .map((call) => call[0])
         .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
-    ).toEqual(["keydown", "keyup"]);
+    ).toEqual(baselineWindowRegistrations === 0 ? ["keydown", "keyup"] : []);
   });
 
   test("hydrates the restored preference projection without an echo and uses the latest callback", async () => {

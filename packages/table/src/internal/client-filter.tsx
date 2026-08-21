@@ -229,7 +229,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     useLayoutEffect(() => {
       wasOpenRef.current = open;
     }, [open]);
-    useEffect(
+    useLayoutEffect(
       () => () => {
         if (escapeFocusFrameRef.current !== null) {
           cancelAnimationFrame(escapeFocusFrameRef.current);

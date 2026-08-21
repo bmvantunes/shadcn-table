@@ -1225,28 +1225,25 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               []),
           ].find((candidate) => candidate.dataset["brunoColumnId"] === columnId);
           const trigger = [...(header?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-            (candidate) =>
-              candidate.getAttribute("aria-label") ===
-              `Column menu for ${columnHeaderName(logicalColumns, columnId)}`,
+            (candidate) => candidate.dataset["brunoColumnMenuTrigger"] === columnId,
           );
           if (trigger !== undefined) {
             trigger.focus({ preventScroll: true });
             return;
           }
-          const proxy = gridElement.current?.querySelector<HTMLButtonElement>(
-            '[data-bruno-active-header-menu-trigger=""]',
-          );
-          if (
-            proxy?.getAttribute("aria-label") ===
-            `Column menu for ${columnHeaderName(logicalColumns, columnId)}`
-          ) {
+          const proxy = [
+            ...(gridElement.current?.querySelectorAll<HTMLButtonElement>(
+              '[data-bruno-active-header-menu-trigger=""]',
+            ) ?? []),
+          ].find((candidate) => candidate.dataset["brunoColumnMenuTrigger"] === columnId);
+          if (proxy !== undefined) {
             proxy.focus({ preventScroll: true });
             return;
           }
           gridElement.current?.focus({ preventScroll: true });
         });
       },
-    [logicalColumns],
+    [],
   );
 
   const clearReorderTarget = (): void => {
@@ -2003,7 +2000,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (event.defaultPrevented) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const directTrigger =
-      target?.closest<HTMLButtonElement>('button[aria-label^="Column menu for "]') ?? null;
+      target?.closest<HTMLButtonElement>("button[data-bruno-column-menu-trigger]") ?? null;
     if (
       directTrigger !== null &&
       gridElement.current?.contains(directTrigger) &&
@@ -2024,7 +2021,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     ].find((candidate) => candidate.dataset["brunoColumnId"] === active.columnId);
     const trigger =
       [
-        ...(header?.querySelectorAll<HTMLButtonElement>('button[aria-label^="Column menu for "]') ??
+        ...(header?.querySelectorAll<HTMLButtonElement>("button[data-bruno-column-menu-trigger]") ??
           []),
       ].find(isBrunoTableHotkeyWorkflowOwner) ??
       [
@@ -2591,6 +2588,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
             data-bruno-active-header-menu-trigger=""
+            data-bruno-column-menu-trigger={column.columnId}
             id={menuTriggerId}
             style={VISUALLY_HIDDEN}
             tabIndex={-1}
@@ -2963,6 +2961,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
             className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+            data-bruno-column-menu-trigger={column.columnId}
             id={menuTriggerId}
             tabIndex={-1}
             onPointerDown={(event) => {

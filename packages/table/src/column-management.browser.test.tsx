@@ -4,7 +4,7 @@ import { cleanup, render } from "vitest-browser-react";
 import { detectPlatform } from "@tanstack/react-hotkeys";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
-import type { BrunoTableColumnId } from "./index";
+import type { BrunoTableColumnId, BrunoTableColumns } from "./index";
 import { BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE } from "./internal/column-management";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
@@ -1239,6 +1239,7 @@ describe("BrunoTable column management browser surface", () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const trigger = screen.getByRole("button", { name: "Column menu for Name" });
     await expect.element(trigger).toHaveAttribute("aria-keyshortcuts", "Shift+F10 ContextMenu");
+    await expect.element(trigger).toHaveAttribute("data-bruno-column-menu-trigger", "COL_ID_NAME");
     trigger.element().focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     await expect.element(screen.getByRole("menu")).toBeInTheDocument();
@@ -1268,7 +1269,7 @@ describe("BrunoTable column management browser surface", () => {
       },
       columns[1],
       columns[2],
-    ] as const;
+    ] as const satisfies BrunoTableColumns<Row>;
     const screen = await render(
       <BrunoTableClient<Row, typeof customColumns>
         {...tableProps}

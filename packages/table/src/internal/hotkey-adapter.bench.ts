@@ -1,4 +1,4 @@
-import { bench, describe } from "vite-plus/test";
+import { afterAll, bench, describe } from "vite-plus/test";
 
 import { compileColumns } from "./compile-columns";
 import {
@@ -61,7 +61,33 @@ describe("BrunoTable navigation command seam benchmark (8.33 ms/120 Hz reference
   const diagnosticNavigation = createNavigation();
   const diagnosticSamples: number[] = [];
   let diagnosticDirection: "up" | "down" = "down";
-  let diagnosticPrinted = false;
+
+  afterAll(() => {
+    const heldNavigationP99Ms = percentile99(diagnosticSamples);
+    if (diagnosticSamples.length !== 100 || heldNavigationP99Ms > referenceFrameBudgetMs) {
+      throw new Error("The held-navigation diagnostic missed its sample count or frame budget.");
+    }
+    console.log(
+      JSON.stringify({
+        benchmark: "BrunoTable already-matched held-navigation command seam",
+        referenceFrameBudgetMs,
+        heldGestureCount,
+        heldNavigationP99Ms,
+        heldNavigationP99WithinReference: heldNavigationP99Ms <= referenceFrameBudgetMs,
+        registrationsPerTable: brunoTableHotkeyRegistrationBound(mountedRows, mountedColumns),
+        registrationsWithFilterWorkflow: brunoTableHotkeyRegistrationBound(
+          mountedRows,
+          mountedColumns,
+          1,
+        ),
+        expectedBaseRegistrations: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+        expectedFilterWorkflowRegistrations: BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+        declaredGridHotkeys: BRUNO_TABLE_GRID_HOTKEYS.length,
+        mountedRows,
+        mountedColumns,
+      }),
+    );
+  });
 
   bench(
     "diagnostic p99 for the navigation seam and table/workflow registration bounds",
@@ -72,32 +98,6 @@ describe("BrunoTable navigation command seam benchmark (8.33 ms/120 Hz reference
       }
       diagnosticSamples.push(performance.now() - startedAt);
       diagnosticDirection = diagnosticDirection === "down" ? "up" : "down";
-
-      if (!diagnosticPrinted && diagnosticSamples.length >= 100) {
-        diagnosticPrinted = true;
-        const heldNavigationP99Ms = percentile99(diagnosticSamples);
-        process.stdout.write(
-          `${JSON.stringify({
-            benchmark: "BrunoTable already-matched held-navigation command seam",
-            referenceFrameBudgetMs,
-            heldGestureCount,
-            heldNavigationP99Ms,
-            heldNavigationP99WithinReference: heldNavigationP99Ms <= referenceFrameBudgetMs,
-            registrationsPerTable: brunoTableHotkeyRegistrationBound(mountedRows, mountedColumns),
-            registrationsWithFilterWorkflow: brunoTableHotkeyRegistrationBound(
-              mountedRows,
-              mountedColumns,
-              1,
-            ),
-            expectedBaseRegistrations: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
-            expectedFilterWorkflowRegistrations:
-              BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
-            declaredGridHotkeys: BRUNO_TABLE_GRID_HOTKEYS.length,
-            mountedRows,
-            mountedColumns,
-          })}\n`,
-        );
-      }
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );

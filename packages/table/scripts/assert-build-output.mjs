@@ -14,25 +14,54 @@ assertReactCompilerStrictness(transformSync);
 class UninspectableWildcardExportError extends Error {}
 // Native editor/input/IME handling may add another narrow module here when that
 // capability ships. Never weaken the global rule or infer keyboard ownership.
-const rawKeyboardEvidenceModuleSuffixes = new Set(["/internal/hotkey-adapter.ts"]);
+const keyboardEvidenceModuleCapabilities = new Map([["internal/hotkey-adapter.ts", "adapter"]]);
+const hasNativeKeyboardEvidenceBoundary = [...keyboardEvidenceModuleCapabilities.values()].includes(
+  "native-evidence",
+);
+
+function normalizeProductionModulePath(sourcePath) {
+  return sourcePath.replaceAll("\\", "/").replace(/^\.\/+|\/+$/gu, "");
+}
+
+function keyboardBoundaryModeForPath(sourcePath) {
+  return (
+    keyboardEvidenceModuleCapabilities.get(normalizeProductionModulePath(sourcePath)) ??
+    "production"
+  );
+}
+
+for (const [sourcePath, expectedMode] of [
+  ["internal/hotkey-adapter.ts", "adapter"],
+  ["internal\\hotkey-adapter.ts", "adapter"],
+  ["./internal/hotkey-adapter.ts", "adapter"],
+  ["nested/internal/hotkey-adapter.ts", "production"],
+  ["internal/hotkey-adapter.ts.backup", "production"],
+]) {
+  if (keyboardBoundaryModeForPath(sourcePath) !== expectedMode) {
+    throw new Error(`The keyboard boundary misclassified normalized path ${sourcePath}.`);
+  }
+}
 
 async function readProductionModules(directoryUrl) {
   const directoryPath = fileURLToPath(directoryUrl);
   const entries = await readdir(directoryPath, { recursive: true });
   const sourcePaths = entries
+    .map((entry) => ({
+      absolutePath: join(directoryPath, entry),
+      sourcePath: normalizeProductionModulePath(entry),
+    }))
     .filter(
-      (entry) =>
-        /\.[cm]?tsx?$/u.test(entry) &&
-        !/(?:^|\/)[^/]+\.(?:bench|setup|test|test-d)\.[cm]?tsx?$/u.test(entry) &&
+      ({ sourcePath }) =>
+        /\.[cm]?tsx?$/u.test(sourcePath) &&
+        !/(?:^|\/)[^/]+\.(?:bench|setup|test|test-d)\.[cm]?tsx?$/u.test(sourcePath) &&
         !/(?:^|\/)(?:commit-diagnostic-probes|compiler-smoke|test-diagnostic-build-contract)\.[cm]?tsx?$/u.test(
-          entry,
+          sourcePath,
         ),
-    )
-    .map((entry) => join(directoryPath, entry));
+    );
   return Promise.all(
-    sourcePaths.map(async (sourcePath) => ({
+    sourcePaths.map(async ({ absolutePath, sourcePath }) => ({
       sourcePath,
-      source: await readFile(sourcePath, "utf8"),
+      source: await readFile(absolutePath, "utf8"),
     })),
   );
 }
@@ -109,23 +138,63 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
   [
     { source: `function raw(event: KeyboardEvent) { return event.target; }` },
     { source: `const handler: React.KeyboardEventHandler<HTMLInputElement> = () => undefined;` },
-    { source: `const reactHandler = <input onKeyDown={() => undefined} />;`, lang: "tsx" },
-    { source: `const handlers = { onKeyUp: () => undefined };` },
-    { source: `window.addEventListener("keydown", () => undefined);` },
-    { source: `window.onkeyup = () => undefined;` },
+    ...[
+      "onKeyDown",
+      "onKeyUp",
+      "onKeyPress",
+      "onKeyDownCapture",
+      "onKeyUpCapture",
+      "onKeyPressCapture",
+    ].map((handlerName) => ({
+      source: `const reactHandler = <input ${handlerName}={(event) => event.key} />;`,
+      lang: "tsx",
+    })),
+    ...["keydown", "keyup", "keypress"].flatMap((eventType) => [
+      { source: `window.addEventListener("${eventType}", () => undefined);` },
+      { source: `window.removeEventListener("${eventType}", () => undefined);` },
+      { source: `window.on${eventType} = () => undefined;` },
+    ]),
+    { source: `const emittedHandler = { onKeyDown: () => undefined };`, mode: "emitted" },
+    {
+      source: `window.addEventListener("keydown", () => undefined);`,
+      mode: "emitted",
+    },
+    {
+      source: `window.removeEventListener("keyup", () => undefined);`,
+      mode: "emitted",
+    },
+    { source: `window.onkeypress = () => undefined;`, mode: "emitted" },
+    {
+      source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", (event) => event.key);`,
+    },
+    {
+      source: `import { useHotkeys as useFeatureHotkeys } from "@tanstack/react-hotkeys"; useFeatureHotkeys("Enter", (event) => event.key);`,
+    },
+    {
+      source: `import * as ReactHotkeys from "@tanstack/react-hotkeys"; ReactHotkeys.useHotkeys("Enter", (event) => event.key);`,
+    },
+    {
+      source: `const adapterHandler = <input onKeyDown={(event) => event.isComposing} />;`,
+      lang: "tsx",
+      mode: "adapter",
+    },
+    {
+      source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
+      mode: "native-evidence",
+    },
     ...["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].flatMap((property) => [
       {
         source: `function adapter(event: KeyboardEvent) { return event.${property}; }`,
-        rawKeyboardBoundary: true,
+        mode: "adapter",
       },
       {
         source: `function adapter({ ${property} }: KeyboardEvent) { return ${property}; }`,
-        rawKeyboardBoundary: true,
+        mode: "adapter",
       },
     ]),
-  ].map(async ({ source, lang = "ts", rawKeyboardBoundary = false }) => ({
+  ].map(async ({ source, lang = "ts", mode = "production" }) => ({
     ast: await parseAstAsync(source, { lang }),
-    rawKeyboardBoundary,
+    mode,
   })),
 );
 const keyboardBoundaryAllowedSmokes = await Promise.all(
@@ -138,15 +207,48 @@ const keyboardBoundaryAllowedSmokes = await Promise.all(
     },
     {
       source: `function adapter(event: KeyboardEvent) { return event.isComposing; }`,
-      mode: "raw-evidence",
+      mode: "adapter",
+    },
+    {
+      source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
+      mode: "adapter",
+    },
+    ...[
+      "onKeyDown",
+      "onKeyUp",
+      "onKeyPress",
+      "onKeyDownCapture",
+      "onKeyUpCapture",
+      "onKeyPressCapture",
+    ].map((handlerName) => ({
+      source: `const nativeEditor = <input ${handlerName}={(event) => record(event.isComposing)} />;`,
+      lang: "tsx",
+      mode: "native-evidence",
+    })),
+    {
+      source: `element.addEventListener("keydown", (event) => record(event.isComposing));`,
+      mode: "native-evidence",
+    },
+    {
+      source: `const emittedNativeEditor = { onKeyDown: () => undefined };`,
+      mode: "emitted",
+      hasNativeEvidenceBoundary: true,
+    },
+    {
+      source: `element.addEventListener("keydown", () => undefined);`,
+      mode: "emitted",
+      hasNativeEvidenceBoundary: true,
     },
     {
       source: `function command(event: BrunoTableHotkeyGesture) { if (event.target) event.preventDefault(); }`,
     },
-  ].map(async ({ source, mode = "production" }) => ({
-    ast: await parseAstAsync(source, { lang: "ts" }),
-    mode,
-  })),
+  ].map(
+    async ({ source, lang = "ts", mode = "production", hasNativeEvidenceBoundary = false }) => ({
+      ast: await parseAstAsync(source, { lang }),
+      mode,
+      hasNativeEvidenceBoundary,
+    }),
+  ),
 );
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
@@ -196,21 +298,25 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
   throw new Error("The emitted package lost the shared React Hotkeys boundary.");
 }
 
-assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
+assertKeyboardBoundary(
+  rootRuntimeAst,
+  "emitted @bruno/table root",
+  "emitted",
+  hasNativeKeyboardEvidenceBoundary,
+);
 for (const { sourcePath, ast } of productionModuleAsts) {
+  assertKeyboardBoundary(ast, sourcePath, keyboardBoundaryModeForPath(sourcePath));
+}
+for (const { ast, mode } of keyboardBoundaryRejectedSmokes) {
+  assertKeyboardBoundaryViolationDetected(ast, mode);
+}
+for (const { ast, mode, hasNativeEvidenceBoundary } of keyboardBoundaryAllowedSmokes) {
   assertKeyboardBoundary(
     ast,
-    sourcePath,
-    [...rawKeyboardEvidenceModuleSuffixes].some((suffix) => sourcePath.endsWith(suffix))
-      ? "raw-evidence"
-      : "production",
+    "keyboard boundary allowed smoke fixture",
+    mode,
+    hasNativeEvidenceBoundary,
   );
-}
-for (const { ast, rawKeyboardBoundary } of keyboardBoundaryRejectedSmokes) {
-  assertKeyboardBoundaryViolationDetected(ast, rawKeyboardBoundary ? "raw-evidence" : "production");
-}
-for (const { ast, mode } of keyboardBoundaryAllowedSmokes) {
-  assertKeyboardBoundary(ast, "keyboard boundary allowed smoke fixture", mode);
 }
 
 if (
@@ -527,17 +633,20 @@ function findImportedBinding(ast, source, importedName) {
   return undefined;
 }
 
-function assertKeyboardBoundary(ast, label, mode) {
+function assertKeyboardBoundary(ast, label, mode, hasNativeEvidenceBoundary = false) {
   let violation;
   walkSyntaxTree(ast, (node, ancestors) => {
     if (violation !== undefined) return;
     const parent = ancestors.at(-1);
     const handlerProperty = keyboardHandlerPropertyName(node);
-    if (handlerProperty !== undefined) {
+    const allowsHandlerEvidence =
+      mode === "native-evidence" || (mode === "emitted" && hasNativeEvidenceBoundary);
+    if (!allowsHandlerEvidence && handlerProperty !== undefined) {
       violation = `${handlerProperty} keyboard handler`;
       return;
     }
     if (
+      !allowsHandlerEvidence &&
       node.type === "CallExpression" &&
       node.callee.type === "MemberExpression" &&
       (memberPropertyName(node.callee) === "addEventListener" ||
@@ -545,6 +654,15 @@ function assertKeyboardBoundary(ast, label, mode) {
       isKeyboardEventTypeLiteral(node.arguments[0])
     ) {
       violation = `${memberPropertyName(node.callee)} keyboard listener`;
+      return;
+    }
+    if (
+      mode !== "adapter" &&
+      mode !== "emitted" &&
+      node.type === "ImportDeclaration" &&
+      node.source.value === "@tanstack/react-hotkeys"
+    ) {
+      violation = "React Hotkeys import outside the approved Adapter boundary";
       return;
     }
     if (
@@ -558,7 +676,7 @@ function assertKeyboardBoundary(ast, label, mode) {
       return;
     }
     if (
-      mode === "raw-evidence" &&
+      (mode === "adapter" || mode === "native-evidence") &&
       ((node.type === "MemberExpression" &&
         isKeyboardInterpretationProperty(memberPropertyName(node))) ||
         (node.type === "Property" &&
@@ -592,7 +710,14 @@ function keyboardHandlerPropertyName(node) {
   if (
     node.type === "JSXAttribute" &&
     node.name?.type === "JSXIdentifier" &&
-    (node.name.name === "onKeyDown" || node.name.name === "onKeyUp")
+    [
+      "onKeyDown",
+      "onKeyUp",
+      "onKeyPress",
+      "onKeyDownCapture",
+      "onKeyUpCapture",
+      "onKeyPressCapture",
+    ].includes(node.name.name)
   ) {
     return node.name.name;
   }
@@ -602,7 +727,19 @@ function keyboardHandlerPropertyName(node) {
       : node.type === "MemberExpression"
         ? memberPropertyName(node)
         : undefined;
-  return ["onKeyDown", "onKeyUp", "onkeydown", "onkeyup"].includes(name ?? "") ? name : undefined;
+  return [
+    "onKeyDown",
+    "onKeyUp",
+    "onKeyPress",
+    "onKeyDownCapture",
+    "onKeyUpCapture",
+    "onKeyPressCapture",
+    "onkeydown",
+    "onkeyup",
+    "onkeypress",
+  ].includes(name ?? "")
+    ? name
+    : undefined;
 }
 
 function isKeyboardInterpretationProperty(name) {
@@ -610,7 +747,10 @@ function isKeyboardInterpretationProperty(name) {
 }
 
 function isKeyboardEventTypeLiteral(node) {
-  return node?.type === "Literal" && (node.value === "keydown" || node.value === "keyup");
+  return (
+    node?.type === "Literal" &&
+    (node.value === "keydown" || node.value === "keyup" || node.value === "keypress")
+  );
 }
 
 function propertyName(property) {

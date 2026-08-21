@@ -14,9 +14,13 @@ column, filter, sort, and workflow commands. Hotkey registration and DOM-listene
 per Table Instance or active workflow and never varies with mounted rows, cells, or headers.
 The Adapter is the only current production module allowed to receive a raw `KeyboardEvent` and
 passes feature owners a key- and modifier-free gesture capability containing only command effects
-and ownership evidence. The build guard maintains an explicit finite allowlist of raw keyboard
-evidence modules. A future native editor/input/IME owner may add a separate narrow boundary to that
-allowlist; it must not weaken the rule or reintroduce handler binding inference.
+and ownership evidence. The build guard maintains an explicit finite map from exact normalized
+root-relative module paths to evidence capabilities. The Adapter capability alone may import React
+Hotkeys; it admits no React or DOM keyboard handler. A future native editor/input/IME owner may add
+a separate `native-evidence` entry whose component-owned handler can inspect composition evidence
+but cannot interpret keys or modifiers. The emitted guard permits handler/listener evidence only
+when that exact source capability exists, with the source scan providing attribution after bundling.
+It must not weaken the rule or reintroduce binding inference.
 
 The Adapter scopes ordinary commands to the owning grid surface and explicitly bridges the few
 portalled table workflows that remain owned by that Table Instance. Mounted menu triggers publish

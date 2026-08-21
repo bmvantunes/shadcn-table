@@ -22,6 +22,25 @@ type BrunoTableHotkeyBinding = Readonly<{
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
   Pick<KeyboardEvent, "preventDefault">;
 
+export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze([
+  "Escape",
+  "Control+Escape",
+  "Alt+Escape",
+  "Shift+Escape",
+  "Meta+Escape",
+  "Control+Alt+Escape",
+  "Control+Shift+Escape",
+  "Control+Meta+Escape",
+  "Alt+Shift+Escape",
+  "Alt+Meta+Escape",
+  "Shift+Meta+Escape",
+  "Control+Alt+Shift+Escape",
+  "Control+Alt+Meta+Escape",
+  "Control+Shift+Meta+Escape",
+  "Alt+Shift+Meta+Escape",
+  "Control+Alt+Shift+Meta+Escape",
+] satisfies readonly RegisterableHotkey[]);
+
 export type BrunoTableGridHotkeyCommands = Readonly<{
   escape: (event: BrunoTableHotkeyGesture) => void;
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
@@ -46,7 +65,11 @@ function createBrunoTableGridHotkeyBindings(
   commands: BrunoTableGridHotkeyCommands,
 ): readonly BrunoTableHotkeyBinding[] {
   return [
-    { hotkey: "Escape", allowInTextInput: true, onTrigger: commands.escape },
+    ...BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
+      hotkey,
+      allowInTextInput: true,
+      onTrigger: commands.escape,
+    })),
     { hotkey: "Shift+Tab", allowInTextInput: true, onTrigger: commands.shiftTab },
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
@@ -256,24 +279,7 @@ export const BRUNO_TABLE_GRID_HOTKEYS: readonly RegisterableHotkey[] = Object.fr
   createBrunoTableGridHotkeyBindings(NOOP_GRID_COMMANDS).map((binding) => binding.hotkey),
 );
 export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] =
-  Object.freeze([
-    "Escape",
-    "Control+Escape",
-    "Alt+Escape",
-    "Shift+Escape",
-    "Meta+Escape",
-    "Control+Alt+Escape",
-    "Control+Shift+Escape",
-    "Control+Meta+Escape",
-    "Alt+Shift+Escape",
-    "Alt+Meta+Escape",
-    "Shift+Meta+Escape",
-    "Control+Alt+Shift+Escape",
-    "Control+Alt+Meta+Escape",
-    "Control+Shift+Meta+Escape",
-    "Alt+Shift+Meta+Escape",
-    "Control+Alt+Shift+Meta+Escape",
-  ] satisfies readonly RegisterableHotkey[]);
+  BRUNO_TABLE_ESCAPE_HOTKEYS;
 // One table registers every grid binding plus the complete modifier-insensitive
 // window-scoped column-gesture Escape set.
 export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =

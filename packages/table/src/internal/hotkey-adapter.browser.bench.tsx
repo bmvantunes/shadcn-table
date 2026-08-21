@@ -72,15 +72,17 @@ afterAll(async () => {
 });
 
 describe("BrunoTable real-listener Adapter dispatch benchmark (8.33 ms/120 Hz reference)", () => {
+  let direction: "ArrowDown" | "ArrowUp" = "ArrowDown";
   bench(
     "matches and dispatches 100 held-arrow events through TanStack and the Adapter",
     () => {
       const before = dispatchedCommands;
       for (let gesture = 0; gesture < 100; gesture += 1) {
         owner.dispatchEvent(
-          new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", repeat: true }),
+          new KeyboardEvent("keydown", { bubbles: true, key: direction, repeat: true }),
         );
       }
+      direction = direction === "ArrowDown" ? "ArrowUp" : "ArrowDown";
       if (dispatchedCommands - before !== 100) {
         throw new Error("The Adapter did not dispatch exactly once per held-key repeat unit.");
       }

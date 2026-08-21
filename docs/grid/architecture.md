@@ -92,10 +92,14 @@ controlled actions with that seam, while Base UI retains overlay focus and Escap
 editor/input/textarea/contenteditable and IME evidence remains at the component that owns the text,
 and Base UI-owned menu, popover, and dialog behavior is not reinterpreted. No public hotkey map,
 TanStack type, or controller crosses the package boundary.
-Raw keyboard evidence is admitted only through an explicit build-guard allowlist;
-`hotkey-adapter.ts` is its sole current member. The Adapter exposes a private key- and modifier-free
-gesture capability to command owners. Future native editor or IME handling must add its own narrow
-evidence boundary instead of weakening this rule or teaching the guard JavaScript binding inference.
+Raw keyboard evidence is admitted only through an explicit build-guard map keyed by exact,
+normalized root-relative module paths; `internal/hotkey-adapter.ts` is its sole current member and
+the only capability allowed to import React Hotkeys. The Adapter exposes a private key- and
+modifier-free gesture capability to command owners. Future native editor or IME handling must add
+its own `native-evidence` capability, limited to component-owned composition evidence, instead of
+weakening this rule or teaching the guard JavaScript binding inference. The emitted guard admits
+handler or listener evidence only when that finite source map contains such a boundary; exact source
+scanning remains the attribution proof after modules are bundled together.
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, optional message, and an optional Source Retry Capability. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store. The capability is a source-owned `run` command plus its `pending` state; the shared view may present it for closed or errored sources but never owns reconnect policy or changes lifecycle state in anticipation of the source.
 
