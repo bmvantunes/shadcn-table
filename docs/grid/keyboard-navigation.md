@@ -6,6 +6,46 @@ Navigation operates on the logical grid, never on "the next mounted DOM element"
 
 The renderer may have separate pinned and virtualized regions, but navigation sees one coherent coordinate system.
 
+Every BrunoTable-owned shortcut enters through one private, table-scoped Hotkey Adapter. Its React
+boundary uses `@tanstack/react-hotkeys` for registration, matching, listener lifecycle, repeated-key
+delivery, conflict policy, and platform normalization. Cross-platform chords use TanStack's `Mod`
+syntax; feature code receives an already-matched gesture and retains ownership of typed navigation,
+column, filter, sort, and workflow commands. Hotkey registration and DOM-listener cost is bounded
+per Table Instance or active workflow and never varies with mounted rows, cells, or headers.
+Grid-local commands attach to the grid surface. Descendant-exit Escape attaches through TanStack at
+the owning document and validates grid containment, allowing a custom renderer's React handler to
+retain Escape by stopping propagation before it reaches that target. Active resize/reorder Escape
+remains an immediate window-capture workflow command. That narrow framework-agnostic capture seam
+uses `@tanstack/hotkeys` for matching because the React Adapter has no capture option. The same
+core boundary provides a bubble listener only for a foreign owning document, where the React
+manager cannot safely classify events across DOM realms; it preserves the same definitions and
+post-React propagation order.
+The React Adapter and capture Adapter are the only current production modules allowed to receive a raw `KeyboardEvent`. Together they
+pass feature owners a key- and modifier-free gesture capability containing only command effects
+and ownership evidence. The build guard maintains an explicit finite map from exact normalized
+root-relative module paths to evidence capabilities. The React Adapter alone may import React
+Hotkeys; the core listener Adapter alone may import Hotkeys core and install its exact capture and
+foreign-document bubble listeners. Neither
+may interpret event keys or modifiers. A future native editor/input/IME owner may add
+a separate `native-evidence` entry whose component-owned handler can inspect composition evidence
+but cannot interpret keys or modifiers. The emitted guard permits only the exact listener lifecycle
+structurally attributed to a sanctioned boundary; adding a future native boundary also requires a
+correspondingly narrow emitted attribution rule, with the source scan remaining authoritative.
+It must not weaken the rule or reintroduce binding inference.
+
+The Adapter scopes ordinary commands to the owning grid surface and explicitly bridges the few
+portalled table workflows that remain owned by that Table Instance. Mounted menu triggers publish
+only their controlled open action into a weak ownership registry; they add no hotkey or DOM
+listener. A workflow opens through this supported action seam, and the Adapter does not synthesize
+pointer, mouse, or keyboard DOM events. Native inputs, textareas, contenteditable regions, editors, IME composition, dead keys,
+AltGr/Option-produced text, and Base UI-owned menu/dialog behavior keep their native or component
+ownership. These are evidence and interaction semantics, not a second BrunoTable shortcut matcher.
+An ancestor application `HotkeysProvider` cannot override BrunoTable's private binding options or
+`Mod` platform detection. When Tables are nested, descendant-exit commands belong to the nearest
+`data-bruno-table` boundary, independent of registration order.
+Later keyboard work—including sparse Server held-arrow behavior—extends this Adapter and the
+existing command/navigation domain rather than adding another event-key interpreter.
+
 ## Coordinate model
 
 ```ts
@@ -47,7 +87,7 @@ Arrow Right from the final pinned-start column enters the first centre column. A
 ## Navigation pipeline
 
 ```text
-keyboard command
+matched table-scoped Hotkey Adapter command
     ↓
 resolve logical destination
     ↓

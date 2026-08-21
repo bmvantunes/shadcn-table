@@ -31,6 +31,7 @@ import {
 import type { CompositionEvent, NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
+import { useBrunoTableFilterWorkflowEscape } from "./hotkey-adapter";
 import {
   applyBrunoTableSetFilterCommand,
   createBrunoTableClientFacetStore,
@@ -228,7 +229,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     useLayoutEffect(() => {
       wasOpenRef.current = open;
     }, [open]);
-    useEffect(
+    useLayoutEffect(
       () => () => {
         if (escapeFocusFrameRef.current !== null) {
           cancelAnimationFrame(escapeFocusFrameRef.current);
@@ -452,9 +453,11 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const selectRef = useRef<HTMLSelectElement | null>(null);
+  const [overlayElement, setOverlayElement] = useState<HTMLDivElement | null>(null);
   const errorId = useId();
   const setExpressionActive =
     column.enableSetFilter && isBrunoTableSetFilterExpression(column, committed);
+  useBrunoTableFilterWorkflowEscape(overlayElement, onEscape);
 
   const dispatchCandidate = useCallback(
     (candidate: CommittedFilterCandidate): void => {
@@ -612,13 +615,11 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
 
   return (
     <PopoverContent
+      ref={setOverlayElement}
       align="start"
       aria-label={labelForContent(column)}
       className="max-h-[min(32rem,calc(100vh-1rem))] max-w-[calc(100vw-1rem)] overflow-y-auto w-80"
       dir={direction}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onEscape();
-      }}
       role="dialog"
       data-bruno-filter-overlay={column.columnId}
     >

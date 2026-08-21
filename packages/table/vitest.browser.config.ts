@@ -22,6 +22,7 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       "@bruno/shadcn/direction",
+      "@tanstack/react-hotkeys",
       "react",
       "react-dom/client",
       "react-dom/server",
@@ -32,6 +33,7 @@ export default defineConfig({
   test: {
     name: "table-browser",
     include: ["src/**/*.browser.test.tsx"],
+    benchmark: { include: ["src/**/*.browser.bench.tsx"] },
     setupFiles: ["./src/vitest.browser.setup.ts"],
     browser: {
       enabled: true,

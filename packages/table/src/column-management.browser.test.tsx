@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import { detectPlatform } from "@tanstack/react-hotkeys";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
-import type { BrunoTableColumnId } from "./index";
+import type { BrunoTableColumnId, BrunoTableColumns } from "./index";
 import { BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE } from "./internal/column-management";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
@@ -296,7 +297,7 @@ type ColumnGestureFrameEvent =
 type ColumnGestureListenerEvent = Readonly<{
   readonly tableId: string;
   readonly phase: "attach" | "detach";
-  readonly event: "pointermove" | "pointerup" | "pointercancel" | "keydown";
+  readonly event: "pointermove" | "pointerup" | "pointercancel";
 }>;
 type ColumnCommandSubscriptionEvent = Readonly<{
   readonly tableId: string;
@@ -314,7 +315,9 @@ async function openColumnMenu(screen: BrowserScreen, columnName = "Name") {
   const trigger = screen.getByRole("button", { name: `Column menu for ${columnName}` });
   const targetColumnId = columnName === "Name" ? "COL_ID_NAME" : "COL_ID_SCORE";
   grid.focus();
-  await userEvent.keyboard("{Control>}{Home}{/Control}");
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}{Home}{/Meta}" : "{Control>}{Home}{/Control}",
+  );
   const targetIndex = columnOrder(grid).indexOf(targetColumnId);
   if (targetIndex < 0) throw new Error(`Column ${targetColumnId} is not mounted`);
   for (let index = 0; index < targetIndex; index += 1) {
@@ -1236,6 +1239,7 @@ describe("BrunoTable column management browser surface", () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const trigger = screen.getByRole("button", { name: "Column menu for Name" });
     await expect.element(trigger).toHaveAttribute("aria-keyshortcuts", "Shift+F10 ContextMenu");
+    await expect.element(trigger).toHaveAttribute("data-bruno-column-menu-trigger", "COL_ID_NAME");
     trigger.element().focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     await expect.element(screen.getByRole("menu")).toBeInTheDocument();
@@ -1251,6 +1255,42 @@ describe("BrunoTable column management browser surface", () => {
     await expect.element(screen.getByRole("menu")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
+  });
+
+  test("leaves lookalike custom controls outside the column-menu workflow", async () => {
+    const customColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <button aria-label={`Column menu for custom ${row.name}`} type="button">
+            Custom action
+          </button>
+        ),
+      },
+      columns[1],
+      columns[2],
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient<Row, typeof customColumns>
+        {...tableProps}
+        columns={customColumns}
+        tableId="TABLE_ID_COLUMN_MENU_LOOKALIKE"
+      />,
+    );
+    const customAction = screen.getByRole("button", { name: "Column menu for custom Ada" });
+    customAction.element().focus();
+    const shortcut = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    customAction.element().dispatchEvent(shortcut);
+
+    await new Promise(requestAnimationFrame);
+    expect(shortcut.defaultPrevented).toBe(false);
+    await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+    await expect.element(customAction).toHaveFocus();
   });
 
   test("opens the typed filter editor from a column menu without an initial baseline", async () => {
@@ -2794,6 +2834,155 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
+  test("cancels an active column gesture for every modified Escape from a newly focused text control", async () => {
+    const screen = await render(
+      <>
+        <BrunoTableClient<Row, typeof columns> {...tableProps} />
+        <input
+          aria-label="Column gesture focus destination"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") event.stopPropagation();
+          }}
+        />
+      </>,
+    );
+    const statusHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+    const destination = screen
+      .getByRole("textbox", { name: "Column gesture focus destination" })
+      .element();
+    const statusHeader = screen.getByRole("columnheader", { name: /Status/u }).element();
+
+    for (let modifiers = 0; modifiers < 16; modifiers += 1) {
+      const pointerId = 20 + modifiers;
+      statusHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 0,
+          pointerId,
+        }),
+      );
+      destination.focus();
+      const escape = new KeyboardEvent("keydown", {
+        altKey: (modifiers & 1) !== 0,
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: (modifiers & 2) !== 0,
+        key: "Escape",
+        metaKey: (modifiers & 4) !== 0,
+        shiftKey: (modifiers & 8) !== 0,
+      });
+      destination.dispatchEvent(escape);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: 0,
+          pointerId,
+        }),
+      );
+
+      await new Promise(requestAnimationFrame);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(statusHeader).toHaveAttribute("aria-colindex", "3");
+    }
+  });
+
+  test("cancels only the active table gesture when two tables share the capture target", async () => {
+    const ownerTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_OWNER";
+    const inactiveTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_INACTIVE";
+    const ownerEvents: ColumnGestureListenerEvent[] = [];
+    const inactiveEvents: ColumnGestureListenerEvent[] = [];
+    const removeOwnerListener = installBrunoTableClientColumnGestureListener(
+      ownerTableId,
+      (event) => ownerEvents.push(event),
+    );
+    const removeInactiveListener = installBrunoTableClientColumnGestureListener(
+      inactiveTableId,
+      (event) => inactiveEvents.push(event),
+    );
+    try {
+      const ownerColumns = [
+        columns[0],
+        columns[1],
+        {
+          ...columns[2],
+          cellRenderer: () => <input aria-label="Owner gesture focus destination" />,
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
+      const screen = await render(
+        <>
+          <BrunoTableClient<Row, typeof ownerColumns>
+            {...tableProps}
+            columns={ownerColumns}
+            tableId={ownerTableId}
+          />
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
+        </>,
+      );
+      const ownerRegion = screen.getByRole("region", { name: ownerTableId, exact: true });
+      const inactiveRegion = screen.getByRole("region", { name: inactiveTableId, exact: true });
+      const ownerHandle = ownerRegion.getByRole("button", { name: "Reorder Status" }).element();
+      const ownerHeader = ownerRegion.getByRole("columnheader", { name: /Status/u }).element();
+      const ownerGrid = ownerRegion.getByRole("grid").element();
+      const focusGrid = vi.spyOn(ownerGrid, "focus");
+      const inactiveHeader = inactiveRegion
+        .getByRole("columnheader", { name: /Status/u })
+        .element();
+      const destination = ownerRegion
+        .getByRole("textbox", { name: "Owner gesture focus destination" })
+        .first()
+        .element();
+
+      ownerHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 79,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 0,
+          pointerId: 79,
+        }),
+      );
+      destination.focus();
+      focusGrid.mockClear();
+      const escape = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        key: "Escape",
+        shiftKey: true,
+      });
+      destination.dispatchEvent(escape);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 0, pointerId: 79 }),
+      );
+
+      await new Promise(requestAnimationFrame);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(focusGrid).not.toHaveBeenCalled();
+      expect(ownerHeader).toHaveAttribute("aria-colindex", "3");
+      expect(inactiveHeader).toHaveAttribute("aria-colindex", "3");
+      expect(ownerEvents.filter((event) => event.phase === "attach")).toHaveLength(3);
+      expect(ownerEvents.filter((event) => event.phase === "detach")).toHaveLength(3);
+      expect(inactiveEvents).toEqual([]);
+    } finally {
+      removeOwnerListener();
+      removeInactiveListener();
+    }
+  });
+
   test("detaches global gesture listeners after repeated committed gestures", async () => {
     const tableId = "TABLE_ID_COLUMN_MANAGEMENT_GESTURE_CYCLES";
     const commands: BrunoTableGridCommand[] = [];
@@ -2845,7 +3034,7 @@ describe("BrunoTable column management browser surface", () => {
       );
       await vi.waitFor(() => expect(commands).toHaveLength(2));
 
-      for (const event of ["pointermove", "pointerup", "pointercancel", "keydown"] as const) {
+      for (const event of ["pointermove", "pointerup", "pointercancel"] as const) {
         expect(
           gestureListeners.filter((entry) => entry.phase === "attach" && entry.event === event),
         ).toHaveLength(2);
@@ -3106,7 +3295,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
       expect(cancelFrame).toHaveBeenCalled();
 
-      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const events = ["pointermove", "pointerup", "pointercancel"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
           events.includes(event as (typeof events)[number]) && options === true,
@@ -3212,7 +3401,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
       expect(cancelFrame).toHaveBeenCalled();
 
-      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const events = ["pointermove", "pointerup", "pointercancel"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
           events.includes(event as (typeof events)[number]) && options === true,

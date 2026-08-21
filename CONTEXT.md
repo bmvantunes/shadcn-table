@@ -152,6 +152,10 @@ _Avoid_: Sending column IDs as fields, adopting the View Server query language a
 
 ## Interaction
 
+**Hotkey Adapter**:
+The private table-scoped boundary through which every BrunoTable-owned keyboard command is registered and matched. Its React implementation uses TanStack Hotkeys, including `Mod` for platform chords, and dispatches into existing command and workflow owners without exposing a consumer hotkey map. Native text/IME evidence and Base UI-owned overlay behavior are not parallel BrunoTable shortcut interpreters.
+_Avoid_: Feature-local key parser, per-cell hotkey, public hotkey controller
+
 **Logical Column Order**:
 The single navigable order formed by pinned-start columns, centre columns, and pinned-end columns. Pinning changes presentation regions, not keyboard adjacency.
 _Avoid_: DOM order, separate pinned navigation loops

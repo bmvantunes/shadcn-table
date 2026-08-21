@@ -61,13 +61,20 @@ import type {
   CSSProperties,
   NamedExoticComponent,
   PointerEvent as ReactPointerEvent,
-  KeyboardEvent as ReactKeyboardEvent,
   ReactElement,
   ReactNode,
   RefCallback,
 } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
+import {
+  type BrunoTableHotkeyGesture,
+  isBrunoTableHotkeyWorkflowOwner,
+  requestBrunoTableHotkeyWorkflowAction,
+  useBrunoTableColumnGestureEscape,
+  useBrunoTableGridHotkeys,
+  useBrunoTableHotkeyWorkflowAction,
+} from "./hotkey-adapter";
 import {
   BrunoTableCellCommitDiagnosticProbe,
   BrunoTableGridSurfaceCommitDiagnosticProbe,
@@ -100,7 +107,6 @@ import {
   BrunoTableNavigationRuntime,
   type BrunoTableActiveCell,
   type BrunoTableNavigationCommand,
-  type BrunoTableNavigationDirection,
 } from "./navigation";
 import type {
   BrunoTableCellSnapshot,
@@ -164,7 +170,6 @@ type BrunoTableColumnGesture = {
   readonly onPointerMove: (event: globalThis.PointerEvent) => void;
   readonly onPointerUp: (event: globalThis.PointerEvent) => void;
   readonly onPointerCancel: (event: globalThis.PointerEvent) => void;
-  readonly onKeyDown: (event: globalThis.KeyboardEvent) => void;
   reorderGeometry: readonly BrunoTableReorderGeometry[];
   reorderGeometryVersion: number;
   reorderGeometryVersionBeforeScroll: number;
@@ -182,10 +187,6 @@ type BrunoTableColumnPointerDownHandler = (
   event: ReactPointerEvent<HTMLElement>,
   column: CompiledColumn,
   kind: "resize" | "reorder",
-) => void;
-type BrunoTableColumnResizeKeyDownHandler = (
-  event: ReactKeyboardEvent<HTMLElement>,
-  column: CompiledColumn,
 ) => void;
 const INTERACTIVE_DESCENDANT_SELECTOR =
   'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
@@ -241,45 +242,9 @@ function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
   }, 0);
 }
 
-function navigationDelta(key: string): BrunoTableNavigationDirection | undefined {
-  if (key === "ArrowUp") return "up";
-  if (key === "ArrowDown") return "down";
-  if (key === "ArrowLeft") return "left";
-  if (key === "ArrowRight") return "right";
-  return undefined;
-}
-
-function keyboardNavigationCommand(
-  event: Readonly<
-    Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey"> & {
-      readonly currentTarget: HTMLElement;
-    }
-  >,
-): BrunoTableNavigationCommand | undefined {
-  if (event.altKey) return undefined;
-  const boundaryModifier = event.ctrlKey || event.metaKey;
-  if (event.key === "Home" || event.key === "End") {
-    const edge = event.key === "Home" ? "start" : "end";
-    return boundaryModifier ? { type: "grid-edge", edge } : { type: "row-edge", edge };
-  }
-  if (boundaryModifier && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-    return {
-      type: "column-edge",
-      edge: event.key === "ArrowUp" ? "start" : "end",
-    };
-  }
-  if (boundaryModifier && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-    return {
-      type: "row-edge",
-      edge: event.key === "ArrowLeft" ? "start" : "end",
-    };
-  }
-  if (event.key === "PageUp" || event.key === "PageDown") {
-    const pageSize = viewportPageSize(event.currentTarget);
-    return { type: "page", rowDelta: event.key === "PageUp" ? -pageSize : pageSize };
-  }
-  const delta = navigationDelta(event.key);
-  return delta === undefined ? undefined : { type: "step", direction: delta };
+function isNodeInBrunoTableRealm(owner: HTMLElement, target: EventTarget | null): target is Node {
+  const OwnerNode = owner.ownerDocument.defaultView?.Node;
+  return OwnerNode !== undefined && target instanceof OwnerNode;
 }
 
 function cellDomId(instanceId: string, tableId: string, rowId: string, columnId: string): string {
@@ -1222,7 +1187,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
   const gestureCancel = useRef<() => void>(() => undefined);
   const columnPointerDownHandler = useRef<BrunoTableColumnPointerDownHandler>(() => undefined);
-  const columnResizeKeyDownHandler = useRef<BrunoTableColumnResizeKeyDownHandler>(() => undefined);
   const [columnGestureActor] = useState<BrunoTableColumnGestureActor>(() =>
     createBrunoTableColumnGestureActor(),
   );
@@ -1266,28 +1230,25 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               []),
           ].find((candidate) => candidate.dataset["brunoColumnId"] === columnId);
           const trigger = [...(header?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-            (candidate) =>
-              candidate.getAttribute("aria-label") ===
-              `Column menu for ${columnHeaderName(logicalColumns, columnId)}`,
+            (candidate) => candidate.dataset["brunoColumnMenuTrigger"] === columnId,
           );
           if (trigger !== undefined) {
             trigger.focus({ preventScroll: true });
             return;
           }
-          const proxy = gridElement.current?.querySelector<HTMLButtonElement>(
-            '[data-bruno-active-header-menu-trigger=""]',
-          );
-          if (
-            proxy?.getAttribute("aria-label") ===
-            `Column menu for ${columnHeaderName(logicalColumns, columnId)}`
-          ) {
+          const proxy = [
+            ...(gridElement.current?.querySelectorAll<HTMLButtonElement>(
+              '[data-bruno-active-header-menu-trigger=""]',
+            ) ?? []),
+          ].find((candidate) => candidate.dataset["brunoColumnMenuTrigger"] === columnId);
+          if (proxy !== undefined) {
             proxy.focus({ preventScroll: true });
             return;
           }
           gridElement.current?.focus({ preventScroll: true });
         });
       },
-    [logicalColumns],
+    [],
   );
 
   const clearReorderTarget = (): void => {
@@ -1582,13 +1543,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         event: "pointercancel",
       });
     }
-    window.removeEventListener("keydown", gesture.onKeyDown, true);
-    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
-      recordBrunoTableClientColumnGestureListener(tableId, {
-        phase: "detach",
-        event: "keydown",
-      });
-    }
     try {
       if (gesture.target.hasPointerCapture?.(gesture.pointerId)) {
         gesture.target.releasePointerCapture?.(gesture.pointerId);
@@ -1659,12 +1613,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (gesture === undefined || event.pointerId !== gesture.pointerId) return;
     finishColumnGesture(false);
   };
-  const onColumnKeyDown = (event: globalThis.KeyboardEvent): void => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    finishColumnGesture(false);
-  };
-
   const startColumnGesture = (
     event: ReactPointerEvent<HTMLElement>,
     column: CompiledColumn,
@@ -1735,7 +1683,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       onPointerMove: onColumnPointerMove,
       onPointerUp: onColumnPointerUp,
       onPointerCancel: onColumnPointerCancel,
-      onKeyDown: onColumnKeyDown,
       reorderGeometry,
       reorderGeometryVersion: reorderGeometryVersion.current,
       reorderGeometryVersionBeforeScroll: reorderGeometryVersion.current,
@@ -1769,13 +1716,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         event: "pointercancel",
       });
     }
-    window.addEventListener("keydown", columnGesture.current.onKeyDown, true);
-    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
-      recordBrunoTableClientColumnGestureListener(tableId, {
-        phase: "attach",
-        event: "keydown",
-      });
-    }
     if (kind === "resize") {
       writePreviewProperty(
         brunoTableColumnCssVariable("width", column.columnId),
@@ -1787,32 +1727,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
   };
 
-  const resizeColumnWithKeyboard = (
-    event: ReactKeyboardEvent<HTMLElement>,
-    column: CompiledColumn,
-  ): void => {
-    const command = runtime.getColumnCommandSnapshot(column.columnId);
-    const step = event.shiftKey ? 50 : 10;
-    const direction =
-      getComputedStyle(gridElement.current ?? event.currentTarget).direction === "rtl"
-        ? "rtl"
-        : "ltr";
-    let width: number | undefined;
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      const physicalDelta = event.key === "ArrowRight" ? step : -step;
-      width = command.width + (direction === "rtl" ? -physicalDelta : physicalDelta);
-    }
-    if (event.key === "Home") width = command.minWidth;
-    if (event.key === "End") width = command.maxWidth;
-    if (width === undefined) return;
-    event.preventDefault();
-    const nextWidth = commitBrunoTableColumnResize(runtime, column.columnId, width);
-    setAnnouncement(`${column.headerName} width ${String(nextWidth)} pixels`);
-  };
   useEffect(() => {
     gestureCancel.current = () => finishColumnGesture(false);
     columnPointerDownHandler.current = startColumnGesture;
-    columnResizeKeyDownHandler.current = resizeColumnWithKeyboard;
   });
   useEffect(() => {
     columnGestureActor.start();
@@ -1868,10 +1785,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   }, [columnLayout.version, logicalColumns, queryGeneration, rowSpace.totalRows]);
   const onColumnPointerDown = useMemo<BrunoTableColumnPointerDownHandler>(
     () => (event, column, kind) => columnPointerDownHandler.current(event, column, kind),
-    [],
-  );
-  const onColumnResizeKeyDown = useMemo<BrunoTableColumnResizeKeyDownHandler>(
-    () => (event, column) => columnResizeKeyDownHandler.current(event, column),
     [],
   );
   const attachGrid = useMemo(
@@ -2034,6 +1947,179 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     return true;
   };
 
+  const ownsGridSurface = (event: BrunoTableHotkeyGesture): boolean =>
+    event.target === gridElement.current;
+  const resolveEventColumn = (event: BrunoTableHotkeyGesture): CompiledColumn | undefined => {
+    const target = event.target instanceof Element ? event.target : null;
+    const header = target?.closest<HTMLElement>("th[data-bruno-column-id]");
+    const columnId = header?.dataset["brunoColumnId"];
+    return logicalColumns.find((candidate) => candidate.columnId === columnId);
+  };
+  const runNavigation = (
+    event: BrunoTableHotkeyGesture,
+    command: BrunoTableNavigationCommand,
+  ): void => {
+    if (!ownsGridSurface(event)) return;
+    event.preventDefault();
+    navigation.activateForFocus();
+    navigation.navigate(command);
+    const next = navigation.getSnapshot();
+    if (next !== undefined) revealCell(next.rowIndex, next.columnId, next.region, next.rowId);
+  };
+  const runPageNavigation = (event: BrunoTableHotkeyGesture, direction: -1 | 1): void => {
+    const grid = gridElement.current;
+    if (grid === null || event.target !== grid) return;
+    runNavigation(event, { type: "page", rowDelta: direction * viewportPageSize(grid) });
+  };
+  const runColumnResize = (
+    event: BrunoTableHotkeyGesture,
+    adjustment: "minimum" | "maximum" | number,
+    step: number,
+    allowActiveHeader = false,
+  ): void => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const separator = target?.closest<HTMLElement>('[role="separator"]') ?? null;
+    const active = navigation.getSnapshot();
+    const column =
+      separator !== null
+        ? resolveEventColumn(event)
+        : allowActiveHeader && ownsGridSurface(event) && active?.region === "header"
+          ? logicalColumns.find((candidate) => candidate.columnId === active.columnId)
+          : undefined;
+    if (column === undefined) return;
+    const command = runtime.getColumnCommandSnapshot(column.columnId);
+    const directionSource = gridElement.current ?? target;
+    if (directionSource === null) return;
+    const direction = getComputedStyle(directionSource).direction === "rtl" ? "rtl" : "ltr";
+    const width =
+      adjustment === "minimum"
+        ? command.minWidth
+        : adjustment === "maximum"
+          ? command.maxWidth
+          : command.width + (direction === "rtl" ? -adjustment : adjustment) * step;
+    event.preventDefault();
+    const nextWidth = commitBrunoTableColumnResize(runtime, column.columnId, width);
+    setAnnouncement(`${column.headerName} width ${String(nextWidth)} pixels`);
+  };
+  const runHeaderMenu = (event: BrunoTableHotkeyGesture): void => {
+    if (event.defaultPrevented) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const directTrigger =
+      target?.closest<HTMLButtonElement>("button[data-bruno-column-menu-trigger]") ?? null;
+    if (
+      directTrigger !== null &&
+      gridElement.current?.contains(directTrigger) &&
+      isBrunoTableHotkeyWorkflowOwner(directTrigger)
+    ) {
+      event.preventDefault();
+      const column = resolveEventColumn(event);
+      if (column !== undefined) navigation.activateHeader(column.columnId);
+      requestBrunoTableHotkeyWorkflowAction(directTrigger);
+      return;
+    }
+    if (!ownsGridSurface(event)) return;
+    navigation.activateForFocus();
+    const active = navigation.getSnapshot();
+    if (active?.region !== "header") return;
+    const header = [
+      ...(gridElement.current?.querySelectorAll<HTMLElement>("th[data-bruno-column-id]") ?? []),
+    ].find((candidate) => candidate.dataset["brunoColumnId"] === active.columnId);
+    const trigger =
+      [
+        ...(header?.querySelectorAll<HTMLButtonElement>("button[data-bruno-column-menu-trigger]") ??
+          []),
+      ].find(isBrunoTableHotkeyWorkflowOwner) ??
+      [
+        ...(gridElement.current?.querySelectorAll<HTMLButtonElement>(
+          '[data-bruno-active-header-menu-trigger=""]',
+        ) ?? []),
+      ].find(isBrunoTableHotkeyWorkflowOwner);
+    if (trigger === undefined) return;
+    event.preventDefault();
+    requestBrunoTableHotkeyWorkflowAction(trigger);
+  };
+  const runActivation = (
+    event: BrunoTableHotkeyGesture,
+    intent: "enter" | "f2" | "space",
+    alt: boolean,
+    shift: boolean,
+  ): void => {
+    if (!ownsGridSurface(event)) return;
+    navigation.activateForFocus();
+    const active = navigation.getSnapshot();
+    const column = logicalColumns.find((candidate) => candidate.columnId === active?.columnId);
+    if (active?.region === "body" && (intent === "enter" || intent === "f2")) {
+      if (column !== undefined && enterInteractiveCell(active, column)) event.preventDefault();
+      return;
+    }
+    if (active?.region !== "header" || column === undefined || intent === "f2") return;
+    const command = runtime.getColumnCommandSnapshot(column.columnId);
+    const filterable = supportsBrunoTableCustomColumnFilter(column, renderColumnFilter);
+    const legacyFilterable = column.kind === "field" && column.enableFilter !== false;
+    if (alt && filterable) {
+      event.preventDefault();
+      if (shift && (command.filterActive || command.filterBaselineAvailable)) {
+        toggleHeaderFilter(column.columnId);
+      } else {
+        openHeaderFilter(column.columnId);
+      }
+    } else if (alt && legacyFilterable && command.filterBaselineAvailable) {
+      event.preventDefault();
+      toggleHeaderFilter(column.columnId);
+    } else if (command.sortable) {
+      event.preventDefault();
+      toggleHeaderSort(column.columnId, shift);
+    } else if (command.filterActive || command.filterBaselineAvailable) {
+      event.preventDefault();
+      toggleHeaderFilter(column.columnId);
+    } else if (filterable) {
+      event.preventDefault();
+      openHeaderFilter(column.columnId);
+    }
+  };
+  useBrunoTableGridHotkeys(gridElement, {
+    escape: (event) => {
+      if (columnGesture.current !== undefined) {
+        event.preventDefault();
+        gestureCancel.current();
+        return;
+      }
+      if (event.defaultPrevented) return;
+      const grid = gridElement.current;
+      if (
+        grid !== null &&
+        event.target !== grid &&
+        isNodeInBrunoTableRealm(grid, event.target) &&
+        grid.contains(event.target)
+      ) {
+        event.preventDefault();
+        gestureCancel.current();
+        grid.focus({ preventScroll: true });
+      }
+    },
+    shiftTab: (event) => {
+      const grid = gridElement.current;
+      if (
+        grid !== null &&
+        event.target !== grid &&
+        isNodeInBrunoTableRealm(grid, event.target) &&
+        grid.contains(event.target)
+      ) {
+        yieldGridTabStopForNativeTraversal(grid);
+      }
+    },
+    headerMenu: runHeaderMenu,
+    resize: runColumnResize,
+    activate: runActivation,
+    navigate: runNavigation,
+    page: runPageNavigation,
+  });
+  useBrunoTableColumnGestureEscape(gridElement, (event) => {
+    if (columnGesture.current === undefined) return;
+    event.preventDefault();
+    gestureCancel.current();
+  });
+
   return (
     <div style={{ position: "relative" }}>
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
@@ -2056,119 +2142,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
         onFocus={(event) => {
           if (event.target === event.currentTarget) navigation.activateForFocus();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && columnGesture.current !== undefined) {
-            event.preventDefault();
-            gestureCancel.current();
-            return;
-          }
-          if (event.target !== event.currentTarget) {
-            if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) {
-              event.preventDefault();
-              gestureCancel.current();
-              event.currentTarget.focus({ preventScroll: true });
-            } else if (
-              event.key === "Tab" &&
-              event.shiftKey &&
-              event.currentTarget.contains(event.target as Node)
-            ) {
-              yieldGridTabStopForNativeTraversal(event.currentTarget);
-            }
-            return;
-          }
-          navigation.activateForFocus();
-          const activeForLayout = navigation.getSnapshot();
-          if (
-            activeForLayout?.region === "header" &&
-            ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")
-          ) {
-            event.preventDefault();
-            const header = [
-              ...(gridElement.current?.querySelectorAll<HTMLElement>(`th[data-bruno-column-id]`) ??
-                []),
-            ].find((candidate) => candidate.dataset["brunoColumnId"] === activeForLayout.columnId);
-            const trigger =
-              header?.querySelector<HTMLButtonElement>('button[aria-label^="Column menu for "]') ??
-              gridElement.current?.querySelector<HTMLButtonElement>(
-                '[data-bruno-active-header-menu-trigger=""]',
-              );
-            trigger?.click();
-            return;
-          }
-          if (
-            activeForLayout?.region === "header" &&
-            event.altKey &&
-            (event.key === "ArrowLeft" || event.key === "ArrowRight")
-          ) {
-            const activeColumn = logicalColumns.find(
-              (candidate) => candidate.columnId === activeForLayout.columnId,
-            );
-            if (activeColumn !== undefined) {
-              event.preventDefault();
-              const command = runtime.getColumnCommandSnapshot(activeColumn.columnId);
-              const delta = event.shiftKey ? 50 : 10;
-              const direction =
-                getComputedStyle(event.currentTarget).direction === "rtl" ? "rtl" : "ltr";
-              const physicalDelta = event.key === "ArrowRight" ? delta : -delta;
-              const nextWidth = commitBrunoTableColumnResize(
-                runtime,
-                activeColumn.columnId,
-                command.width + (direction === "rtl" ? -physicalDelta : physicalDelta),
-              );
-              setAnnouncement(`${activeColumn.headerName} width ${String(nextWidth)} pixels`);
-              return;
-            }
-          }
-          if (event.key === "Enter" || event.key === " " || event.key === "F2") {
-            const active = navigation.getSnapshot();
-            const column = logicalColumns.find(
-              (candidate) => candidate.columnId === active?.columnId,
-            );
-            if (active?.region === "body" && (event.key === "Enter" || event.key === "F2")) {
-              if (column !== undefined && enterInteractiveCell(active, column))
-                event.preventDefault();
-              return;
-            }
-            if (active?.region !== "header" || column === undefined || event.key === "F2") return;
-            const command = runtime.getColumnCommandSnapshot(column.columnId);
-            const filterable = supportsBrunoTableCustomColumnFilter(column, renderColumnFilter);
-            const legacyFilterable = column.kind === "field" && column.enableFilter !== false;
-            if (event.altKey && event.key === "Enter" && filterable) {
-              event.preventDefault();
-              if (event.shiftKey && (command.filterActive || command.filterBaselineAvailable)) {
-                toggleHeaderFilter(column.columnId);
-              } else {
-                openHeaderFilter(column.columnId);
-              }
-            } else if (
-              event.altKey &&
-              event.key === "Enter" &&
-              legacyFilterable &&
-              command.filterBaselineAvailable
-            ) {
-              event.preventDefault();
-              toggleHeaderFilter(column.columnId);
-            } else if (command.sortable) {
-              event.preventDefault();
-              toggleHeaderSort(column.columnId, event.shiftKey);
-            } else if (command.filterActive || command.filterBaselineAvailable) {
-              event.preventDefault();
-              toggleHeaderFilter(column.columnId);
-            } else if (filterable) {
-              event.preventDefault();
-              openHeaderFilter(column.columnId);
-            }
-            return;
-          }
-          const command = keyboardNavigationCommand(event);
-          if (command === undefined) return;
-          event.preventDefault();
-          navigation.navigate(command);
-          const next = navigation.getSnapshot();
-          if (next !== undefined) {
-            revealCell(next.rowIndex, next.columnId, next.region, next.rowId);
-          }
         }}
         style={{
           maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
@@ -2208,7 +2181,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               visibleColumnIds={visibleColumnIds}
               navigation={navigation}
               onColumnPointerDown={onColumnPointerDown}
-              onColumnResizeKeyDown={onColumnResizeKeyDown}
               restoreColumnFocus={restoreColumnFocus}
               columnWindow={columnWindow}
               instanceId={instanceId}
@@ -2592,6 +2564,13 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
     [columnId, runtime],
   );
   const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const menuTriggerId = headerDomId(instanceId, tableId, `${columnId}-menu-proxy`);
+  const attachMenuHotkeyWorkflow = useBrunoTableHotkeyWorkflowAction(() => {
+    if (column !== undefined) {
+      setMenuDirection(readBrunoTableMenuDirection());
+      setOpen(true);
+    }
+  });
   if (column === undefined) return null;
   return (
     <>
@@ -2605,21 +2584,20 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
         tableId={tableId}
       />
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu open={open} onOpenChange={onOpenChange}>
+        <DropdownMenu
+          open={open}
+          onOpenChange={onOpenChange}
+          triggerId={open ? menuTriggerId : null}
+        >
           <DropdownMenuTrigger
+            ref={attachMenuHotkeyWorkflow}
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
             data-bruno-active-header-menu-trigger=""
-            id={headerDomId(instanceId, tableId, `${column.columnId}-menu-proxy`)}
+            data-bruno-column-menu-trigger={column.columnId}
+            id={menuTriggerId}
             style={VISUALLY_HIDDEN}
             tabIndex={-1}
-            onKeyDown={(event) => {
-              if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
-                event.preventDefault();
-                setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
-                setOpen(true);
-              }
-            }}
           />
           {open ? (
             <ColumnManagementMenu
@@ -2649,7 +2627,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   announce,
   navigation,
   onColumnPointerDown,
-  onColumnResizeKeyDown,
   openHeaderFilter,
   restoreColumnFocus,
   toggleHeaderFilter,
@@ -2672,10 +2649,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
     event: ReactPointerEvent<HTMLElement>,
     column: CompiledColumn,
     kind: "resize" | "reorder",
-  ) => void;
-  readonly onColumnResizeKeyDown: (
-    event: ReactKeyboardEvent<HTMLElement>,
-    column: CompiledColumn,
   ) => void;
   readonly openHeaderFilter: (columnId: string) => void;
   readonly restoreColumnFocus: (columnId: string) => void;
@@ -2726,7 +2699,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             toggleHeaderFilter={toggleHeaderFilter}
             toggleHeaderSort={toggleHeaderSort}
             onColumnPointerDown={onColumnPointerDown}
-            onColumnResizeKeyDown={onColumnResizeKeyDown}
             restoreColumnFocus={restoreColumnFocus}
             style={pinnedCellStyle("start", columnWindow.pinnedStart, index)}
             visibleColumnIds={visibleColumnIds}
@@ -2760,7 +2732,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             toggleHeaderFilter={toggleHeaderFilter}
             toggleHeaderSort={toggleHeaderSort}
             onColumnPointerDown={onColumnPointerDown}
-            onColumnResizeKeyDown={onColumnResizeKeyDown}
             restoreColumnFocus={restoreColumnFocus}
             style={{ width: column.semantics.width }}
             visibleColumnIds={visibleColumnIds}
@@ -2804,7 +2775,6 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             toggleHeaderFilter={toggleHeaderFilter}
             toggleHeaderSort={toggleHeaderSort}
             onColumnPointerDown={onColumnPointerDown}
-            onColumnResizeKeyDown={onColumnResizeKeyDown}
             restoreColumnFocus={restoreColumnFocus}
             style={pinnedCellStyle("end", columnWindow.pinnedEnd, index)}
             visibleColumnIds={visibleColumnIds}
@@ -2821,7 +2791,6 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   allColumns,
   announce,
   onColumnPointerDown,
-  onColumnResizeKeyDown,
   restoreColumnFocus,
   toggleHeaderFilter,
   toggleHeaderSort,
@@ -2846,10 +2815,6 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     event: ReactPointerEvent<HTMLElement>,
     column: CompiledColumn,
     kind: "resize" | "reorder",
-  ) => void;
-  readonly onColumnResizeKeyDown: (
-    event: ReactKeyboardEvent<HTMLElement>,
-    column: CompiledColumn,
   ) => void;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly toggleHeaderFilter: (columnId: string) => void;
@@ -2891,6 +2856,12 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     setOpen: setMenuOpen,
   });
   const pinLabel = command.pinned === undefined ? "unpinned" : `pinned ${command.pinned}`;
+  const menuTriggerId = headerDomId(instanceId, tableId, `${column.columnId}-menu`);
+  const attachMenuHotkeyWorkflow = useBrunoTableHotkeyWorkflowAction(() => {
+    setMenuDirection(readBrunoTableMenuDirection());
+    activateHeaderForResize(column.columnId);
+    setMenuOpen(true);
+  });
   const subscribeActiveResize = useMemo(
     () => (listener: () => void) => navigation.subscribeColumn(column.columnId, listener),
     [column.columnId, navigation],
@@ -2986,24 +2957,23 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         <ArrowsHorizontalIcon aria-hidden="true" />
       </button>
       <DirectionProvider direction={menuDirection}>
-        <DropdownMenu open={menuOpen} onOpenChange={onOpenChange}>
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={onOpenChange}
+          triggerId={menuOpen ? menuTriggerId : null}
+        >
           <DropdownMenuTrigger
+            ref={attachMenuHotkeyWorkflow}
             aria-label={`Column menu for ${column.headerName}`}
             aria-keyshortcuts="Shift+F10 ContextMenu"
             className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+            data-bruno-column-menu-trigger={column.columnId}
+            id={menuTriggerId}
             tabIndex={-1}
             onPointerDown={(event) => {
               if (event.button === 0) {
                 setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
                 activateHeaderForResize(column.columnId);
-              }
-            }}
-            onKeyDown={(event) => {
-              if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
-                event.preventDefault();
-                setMenuDirection(readBrunoTableMenuDirection(event.currentTarget));
-                activateHeaderForResize(column.columnId);
-                setMenuOpen(true);
               }
             }}
           >
@@ -3037,7 +3007,6 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
         role="separator"
         tabIndex={resizeActive ? 0 : -1}
         onFocus={() => activateHeaderForResize(column.columnId)}
-        onKeyDown={(event) => onColumnResizeKeyDown(event, column)}
         onPointerDown={(event) => onColumnPointerDown(event, column, "resize")}
       />
     </div>

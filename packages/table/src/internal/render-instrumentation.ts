@@ -11,7 +11,7 @@ type RowOrderPlanningListener = (tableId: string) => void;
 type ColumnGestureListenerEvent = Readonly<{
   readonly tableId: string;
   readonly phase: "attach" | "detach";
-  readonly event: "pointermove" | "pointerup" | "pointercancel" | "keydown";
+  readonly event: "pointermove" | "pointerup" | "pointercancel";
 }>;
 type ColumnGestureListener = (event: ColumnGestureListenerEvent) => void;
 type ColumnGestureFrame =

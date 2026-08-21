@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
 import { act, Suspense, useEffect, useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
@@ -32,6 +33,13 @@ import {
   BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
 } from "./internal/virtual-viewport";
+import {
+  BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
+  BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
+} from "./internal/hotkey-adapter";
 import {
   installBrunoTableClientCellRenderListener,
   installBrunoTableClientCellRenderListenerForTable,
@@ -83,6 +91,10 @@ type Row = {
   readonly name: string;
   readonly score: number;
 };
+
+function brunoTableModEventInit(): Readonly<{ ctrlKey?: true; metaKey?: true }> {
+  return detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
+}
 
 type FilterRow = {
   readonly id: string;
@@ -4007,7 +4019,9 @@ describe("BrunoTableClient browser surface", () => {
     readyGrid.element().focus();
     readyGrid
       .element()
-      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "End" }));
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ...brunoTableModEventInit(), key: "End" }),
+      );
     const activeBeforeLoading = readyGrid.element().getAttribute("aria-activedescendant");
     expect(activeBeforeLoading).toBe(screen.getByRole("gridcell", { name: "4" }).element().id);
     expect(document.activeElement).toBe(readyGrid.element());
@@ -7117,31 +7131,41 @@ describe("BrunoTableClient browser surface", () => {
     );
     grid
       .element()
-      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "Home" }));
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ...brunoTableModEventInit(), key: "Home" }),
+      );
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(nameHeader.element().id);
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, metaKey: true, key: "ArrowRight" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowRight",
+      }),
+    );
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(scoreHeader.element().id);
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowDown" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowDown",
+      }),
+    );
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(
       screen.getByRole("gridcell", { name: "4" }).element().id,
     );
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowUp" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowUp",
+      }),
+    );
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(scoreHeader.element().id);
     grid
       .element()
-      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "End" }));
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, ...brunoTableModEventInit(), key: "End" }),
+      );
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(
       screen.getByRole("gridcell", { name: "4" }).element().id,
     );
@@ -7336,11 +7360,13 @@ describe("BrunoTableClient browser surface", () => {
       encodeExpectedDomIdSegment("COL_ID_NARROW_START_29"),
     );
 
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowRight" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowRight",
+      }),
+    );
     await vi.waitFor(() =>
       expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("61"),
     );
@@ -7349,11 +7375,13 @@ describe("BrunoTableClient browser surface", () => {
     );
     expect(screen.getByRole("columnheader").all().length).toBeLessThan(10);
 
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowLeft" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowLeft",
+      }),
+    );
     await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
     await vi.waitFor(() => expect(grid.element().scrollLeft).toBe(0));
 
@@ -7425,11 +7453,13 @@ describe("BrunoTableClient browser surface", () => {
     grid.element().focus();
     await vi.waitFor(() => expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("1"));
 
-    grid
-      .element()
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "ArrowRight" }),
-      );
+    grid.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ...brunoTableModEventInit(),
+        key: "ArrowRight",
+      }),
+    );
     await vi.waitFor(() =>
       expect(activeCell()?.element().getAttribute("aria-colindex")).toBe("60"),
     );
@@ -7620,6 +7650,227 @@ describe("BrunoTableClient browser surface", () => {
     input.element().dispatchEvent(arrow);
     expect(arrow.defaultPrevented).toBe(false);
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+  });
+
+  test("keeps text and composition keys native while Escape exits read-only custom controls", async () => {
+    const nativeEditorColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <>
+            <input aria-label={`Input ${row.name}`} defaultValue={row.name} />
+            <textarea aria-label={`Textarea ${row.name}`} defaultValue={row.name} />
+            <div
+              aria-label={`Contenteditable ${row.name}`}
+              contentEditable
+              role="textbox"
+              suppressContentEditableWarning
+            >
+              {row.name}
+            </div>
+          </>
+        ),
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_NATIVE_KEY_OWNERSHIP"
+        getRowId={(row: Row) => row.id}
+        columns={nativeEditorColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_NATIVE_KEY_OWNERSHIP" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+
+    for (const control of [
+      screen.getByRole("textbox", { name: "Input Ada" }),
+      screen.getByRole("textbox", { name: "Textarea Ada" }),
+      screen.getByRole("textbox", { name: "Contenteditable Ada" }),
+    ]) {
+      control.element().focus();
+      for (const init of [
+        { key: "ArrowLeft" },
+        { key: "Home" },
+        { altKey: true, ctrlKey: true, key: "ArrowRight" },
+        { altKey: true, key: "ArrowLeft" },
+        { key: "Dead" },
+        { key: "é" },
+      ]) {
+        const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+        control.element().dispatchEvent(event);
+        await new Promise(requestAnimationFrame);
+        expect(event.defaultPrevented).toBe(false);
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+        expect(document.activeElement).toBe(control.element());
+      }
+      for (let modifiers = 0; modifiers < 16; modifiers += 1) {
+        control.element().focus();
+        const escape = new KeyboardEvent("keydown", {
+          altKey: (modifiers & 1) !== 0,
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: (modifiers & 2) !== 0,
+          key: "Escape",
+          metaKey: (modifiers & 4) !== 0,
+          shiftKey: (modifiers & 8) !== 0,
+        });
+        control.element().dispatchEvent(escape);
+        await vi.waitFor(() => expect(document.activeElement).toBe(grid.element()));
+        expect(escape.defaultPrevented).toBe(true);
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+      }
+    }
+
+    grid.element().focus();
+    const composingArrow = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+      key: "ArrowDown",
+    });
+    grid.element().dispatchEvent(composingArrow);
+    await new Promise(requestAnimationFrame);
+    expect(composingArrow.defaultPrevented).toBe(false);
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+      );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBe(activeId),
+    );
+  });
+
+  test("preserves a custom renderer's descendant Escape ownership", async () => {
+    const ownedEscapeColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <input
+            aria-label={`Owned escape ${row.name}`}
+            defaultValue={row.name}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") event.stopPropagation();
+            }}
+          />
+        ),
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_OWNED_DESCENDANT_ESCAPE"
+        getRowId={(row: Row) => row.id}
+        columns={ownedEscapeColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_OWNED_DESCENDANT_ESCAPE" });
+    const editor = screen.getByRole("textbox", { name: "Owned escape Ada" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    editor.element().focus();
+
+    const escape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    editor.element().dispatchEvent(escape);
+    await new Promise(requestAnimationFrame);
+
+    expect(escape.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(editor.element());
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+  });
+
+  test("keeps real table Escape ownership isolated for a foreign-realm event", async () => {
+    const baselineRegistrations = getHotkeyManager().registrations.state.size;
+    const ownerColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <input aria-label={`Foreign event owner ${row.name}`} defaultValue={row.name} />
+        ),
+      },
+      columns[1],
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <>
+        <iframe
+          aria-label="Foreign table document"
+          role="document"
+          title="Foreign table document"
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FOREIGN_REALM_OWNER"
+          getRowId={(row: Row) => row.id}
+          columns={ownerColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FOREIGN_REALM_SIBLING"
+          getRowId={(row: Row) => row.id}
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </>,
+    );
+    const frame = screen.getByRole("document", { name: "Foreign table document" }).element();
+    if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
+      throw new Error("Expected a same-origin foreign table document.");
+    }
+    const ownerDocument = frame.contentDocument;
+    const ownerWindow = frame.contentWindow;
+    if (ownerWindow === null) throw new Error("Expected a foreign table window.");
+    const ownerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_FOREIGN_REALM_OWNER" });
+    const siblingGrid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_FOREIGN_REALM_SIBLING",
+    });
+    const ownerControl = screen.getByRole("textbox", { name: "Foreign event owner Ada" });
+    ownerGrid.element().focus();
+    await vi.waitFor(() =>
+      expect(ownerGrid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const initialActiveId = ownerGrid.element().getAttribute("aria-activedescendant");
+    const focusOwner = vi.spyOn(ownerGrid.element(), "focus");
+    const focusSibling = vi.spyOn(siblingGrid.element(), "focus");
+    const ForeignKeyboardEvent = (ownerWindow as Window & typeof globalThis).KeyboardEvent;
+
+    focusOwner.mockClear();
+
+    ownerControl.element().focus();
+    const escape = new ForeignKeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    ownerControl.element().dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(ownerGrid.element());
+    expect(focusOwner).toHaveBeenCalledOnce();
+    expect(focusSibling).not.toHaveBeenCalled();
+    expect(ownerGrid.element().getAttribute("aria-activedescendant")).toBe(initialActiveId);
+
+    await screen.unmount();
+    expect(getHotkeyManager().registrations.state.size).toBe(baselineRegistrations);
+    ownerDocument.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(focusSibling).not.toHaveBeenCalled();
   });
 
   test("enters native summary controls only through the grid interaction command", async () => {
@@ -8097,7 +8348,13 @@ describe("BrunoTableClient browser surface", () => {
         columns={heldColumns}
         initialOrderBy={[{ columnId: "COL_ID_HELD_START", direction: "asc" }]}
         clientSource={readySource(heldRows)}
-      />,
+      >
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+          <BrunoTableActiveFilterCount />
+          <BrunoTableActiveSortCount />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_HELD_NAVIGATION" });
     grid.element().focus();
@@ -8107,12 +8364,35 @@ describe("BrunoTableClient browser surface", () => {
 
     let tableRootRenders = 0;
     let gridSurfaceRenders = 0;
+    const toolbarNotifications = vi.fn();
+    const filterNotifications = vi.fn();
+    const filterTriggerRenders = vi.fn();
+    const unrelatedRowRenders = vi.fn();
     const restoreTableRootListener = installBrunoTableClientViewRenderListener(() => {
       tableRootRenders += 1;
     });
     const restoreGridSurfaceListener = installBrunoTableClientGridSurfaceRenderListener(() => {
       gridSurfaceRenders += 1;
     });
+    const restoreToolbarListener = installBrunoTableToolbarSubscriptionListener((event) => {
+      if (event.tableId === "TABLE_ID_HELD_NAVIGATION" && event.phase === "notify") {
+        toolbarNotifications(event);
+      }
+    });
+    const restoreFilterListener = installBrunoTableColumnFilterSubscriptionListener(
+      "TABLE_ID_HELD_NAVIGATION",
+      (event) => {
+        if (event.phase === "notify") filterNotifications(event);
+      },
+    );
+    const restoreFilterTriggerListener =
+      installBrunoTableClientColumnFilterTriggerRenderListener(filterTriggerRenders);
+    const restoreRowListener = installBrunoTableClientRowRenderListenerForTable(
+      "TABLE_ID_HELD_NAVIGATION",
+      (rowId) => {
+        if (rowId === "held-row-000") unrelatedRowRenders(rowId);
+      },
+    );
     try {
       for (let index = 0; index < 75; index += 1) {
         grid
@@ -8142,7 +8422,15 @@ describe("BrunoTableClient browser surface", () => {
       expect(document.activeElement).toBe(grid.element());
       expect(tableRootRenders).toBe(0);
       expect(gridSurfaceRenders).toBeLessThanOrEqual(2);
+      expect(toolbarNotifications).not.toHaveBeenCalled();
+      expect(filterNotifications).not.toHaveBeenCalled();
+      expect(filterTriggerRenders).not.toHaveBeenCalled();
+      expect(unrelatedRowRenders).not.toHaveBeenCalled();
     } finally {
+      restoreRowListener();
+      restoreFilterTriggerListener();
+      restoreFilterListener();
+      restoreToolbarListener();
       restoreGridSurfaceListener();
       restoreTableRootListener();
     }
@@ -8270,6 +8558,184 @@ describe("BrunoTableClient browser surface", () => {
     const firstId = grids[0]!.element().getAttribute("aria-activedescendant");
     const secondId = grids[1]!.element().getAttribute("aria-activedescendant");
     expect(firstId).not.toBe(secondId);
+
+    grids[1]!.element().focus();
+    grids[1]!
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    await vi.waitFor(() =>
+      expect(grids[1]!.element().getAttribute("aria-activedescendant")).not.toBe(secondId),
+    );
+    expect(grids[0]!.element().getAttribute("aria-activedescendant")).toBe(firstId);
+  });
+
+  test("bounds real table and filter-workflow hotkey registrations and cleans them up", async () => {
+    const manager = getHotkeyManager();
+    const addElementListener = vi.spyOn(HTMLElement.prototype, "addEventListener");
+    const removeElementListener = vi.spyOn(HTMLElement.prototype, "removeEventListener");
+    const addWindowListener = vi.spyOn(window, "addEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const addDocumentListener = vi.spyOn(document, "addEventListener");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const baselineRegistrations = manager.registrations.state.size;
+    const baselineDocumentRegistrations = [...manager.registrations.state.values()].filter(
+      (registration) => registration.target === document,
+    ).length;
+    const baselineWindowRegistrations = [...manager.registrations.state.values()].filter(
+      (registration) => registration.target === window,
+    ).length;
+    const screen = await render(
+      <BrunoTableClient<FilterRow, typeof filterColumns>
+        tableId="TABLE_ID_HOTKEY_REGISTRATION_LIFECYCLE"
+        columns={filterColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={readyFilterSource()}
+      />,
+    );
+    const grid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_HOTKEY_REGISTRATION_LIFECYCLE",
+    });
+    const gridElement = grid.element();
+
+    await vi.waitFor(() =>
+      expect(manager.registrations.state.size).toBe(
+        baselineRegistrations + BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
+      ),
+    );
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === gridElement,
+      ),
+    ).toHaveLength(BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT);
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === document,
+      ),
+    ).toHaveLength(
+      baselineDocumentRegistrations + BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+    );
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === window,
+      ),
+    ).toHaveLength(baselineWindowRegistrations);
+    const adapterWindowListenerCalls = addWindowListener.mock.calls.filter(
+      (call) => call[0] === "keydown" && call[2] === true,
+    );
+    expect(adapterWindowListenerCalls).toHaveLength(1);
+    expect(BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS).toHaveLength(16);
+    const adapterDocumentListenerCalls = addDocumentListener.mock.calls.filter(
+      (call) => call[0] === "keydown" || call[0] === "keyup",
+    );
+    expect(adapterDocumentListenerCalls.map((call) => call[0])).toEqual(
+      baselineDocumentRegistrations === 0 ? ["keydown", "keyup"] : [],
+    );
+    expect(
+      addElementListener.mock.calls
+        .map((call, index) => ({
+          eventType: call[0],
+          owner: addElementListener.mock.instances[index],
+        }))
+        .filter(
+          (entry) =>
+            entry.owner === gridElement &&
+            (entry.eventType === "keydown" || entry.eventType === "keyup"),
+        )
+        .map((entry) => entry.eventType),
+    ).toEqual(["keydown", "keyup"]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Name" });
+    const dialogElement = dialog.element();
+    await vi.waitFor(() =>
+      expect(
+        [...manager.registrations.state.values()].filter(
+          (registration) => registration.target === dialogElement,
+        ),
+      ).toHaveLength(BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT),
+    );
+    expect(
+      addElementListener.mock.calls
+        .map((call, index) => ({
+          eventType: call[0],
+          owner: addElementListener.mock.instances[index],
+        }))
+        .filter(
+          (entry) =>
+            entry.owner === dialogElement &&
+            (entry.eventType === "keydown" || entry.eventType === "keyup"),
+        )
+        .map((entry) => entry.eventType),
+    ).toEqual(["keydown", "keyup"]);
+    expect(manager.registrations.state.size).toBe(
+      baselineRegistrations +
+        BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT +
+        BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+    );
+
+    const input = dialog.getByRole("textbox", { name: "Filter value for Name" });
+    input.element().focus();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(dialog).not.toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(manager.registrations.state.size).toBe(
+        baselineRegistrations + BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
+      ),
+    );
+    expect(
+      removeElementListener.mock.calls
+        .map((call, index) => ({
+          eventType: call[0],
+          owner: removeElementListener.mock.instances[index],
+        }))
+        .filter(
+          (entry) =>
+            entry.owner === dialogElement &&
+            (entry.eventType === "keydown" || entry.eventType === "keyup"),
+        )
+        .map((entry) => entry.eventType),
+    ).toEqual(["keydown", "keyup"]);
+
+    await cleanup();
+    expect(manager.registrations.state.size).toBe(baselineRegistrations);
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === window,
+      ),
+    ).toHaveLength(baselineWindowRegistrations);
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === document,
+      ),
+    ).toHaveLength(baselineDocumentRegistrations);
+    expect(
+      removeElementListener.mock.calls
+        .map((call, index) => ({
+          eventType: call[0],
+          owner: removeElementListener.mock.instances[index],
+        }))
+        .filter(
+          (entry) =>
+            entry.owner === gridElement &&
+            (entry.eventType === "keydown" || entry.eventType === "keyup"),
+        )
+        .map((entry) => entry.eventType),
+    ).toEqual(["keydown", "keyup"]);
+    for (const [eventType, listener, options] of adapterWindowListenerCalls) {
+      expect(
+        removeWindowListener.mock.calls.some(
+          (call) => call[0] === eventType && call[1] === listener && call[2] === options,
+        ),
+      ).toBe(true);
+    }
+    for (const [eventType, listener] of adapterDocumentListenerCalls) {
+      expect(
+        removeDocumentListener.mock.calls.some(
+          (call) => call[0] === eventType && call[1] === listener,
+        ),
+      ).toBe(true);
+    }
   });
 
   test("hydrates the restored preference projection without an echo and uses the latest callback", async () => {
