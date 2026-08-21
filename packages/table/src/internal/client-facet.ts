@@ -81,7 +81,7 @@ export function createBrunoTableClientFacetStore(
   let snapshot: BrunoTableClientFacetSnapshot | undefined;
 
   function project(): BrunoTableClientFacetSnapshot {
-    const rowSnapshot = options.rows.getFacetRowsSnapshot();
+    const rowSnapshot = options.rows.getFacetRowsSnapshot(options.runtime.getRowSpaceSnapshot());
     const rows = rowSnapshot.rows;
     const query = options.runtime.getQuerySnapshot();
     if (

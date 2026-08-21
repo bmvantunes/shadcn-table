@@ -444,10 +444,14 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
-type QueuedPublication<TRow> = Readonly<{
-  readonly publication: BrunoTableRowPipelinePublication<TRow>;
+type PublicationConfiguration = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly queryConfiguration: BrunoTableQueryConfiguration;
+}>;
+
+type QueuedPublication<TRow> = Readonly<{
+  readonly publication: BrunoTableRowPipelinePublication<TRow>;
+  readonly configuration: PublicationConfiguration;
 }>;
 
 function activeFilterCount(
@@ -491,6 +495,8 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
   private readonly queuedPublications: (QueuedPublication<TRow> | undefined)[] = [];
   private publishing = false;
+  private installedPublicationConfiguration: PublicationConfiguration;
+  private logicalPublicationConfiguration: PublicationConfiguration;
   private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
@@ -583,6 +589,16 @@ export class BrunoTableGridRuntime<TRow> {
     );
     this.publication = publication;
     this.state = this.createState(publication);
+    this.installedPublicationConfiguration = Object.freeze({
+      columns,
+      queryConfiguration: Object.freeze({
+        baselineFilters: this.baselineFilters,
+        baselineFilterCollection: this.baselineFilterCollection,
+        baselineOrderBy: this.baselineOrderBy,
+        quickFilterFields: this.quickFilterFields,
+      }),
+    });
+    this.logicalPublicationConfiguration = this.installedPublicationConfiguration;
   }
 
   public readonly getView = (): BrunoTableRowPipelineRuntimeView => {
@@ -648,7 +664,7 @@ export class BrunoTableGridRuntime<TRow> {
   };
 
   public readonly publish = (publication: BrunoTableRowPipelinePublication<TRow>): void => {
-    this.reconcile(publication, this.columns);
+    this.acceptPublication(publication, this.logicalPublicationConfiguration);
   };
 
   private readonly publishRowPipeline = (
@@ -660,37 +676,52 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly reconcile = (
     publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
-    queryConfiguration: BrunoTableQueryConfiguration = Object.freeze({
-      baselineFilters: this.baselineFilters,
-      baselineFilterCollection: this.baselineFilterCollection,
-      baselineOrderBy: this.baselineOrderBy,
-      quickFilterFields: this.quickFilterFields,
-    }),
+    queryConfiguration: BrunoTableQueryConfiguration = this.logicalPublicationConfiguration
+      .queryConfiguration,
   ): void => {
+    this.acceptPublication(publication, Object.freeze({ columns, queryConfiguration }));
+  };
+
+  private acceptPublication(
+    publication: BrunoTableRowPipelinePublication<TRow>,
+    configuration: PublicationConfiguration,
+  ): void {
+    this.logicalPublicationConfiguration = configuration;
     if (this.publishing) {
-      this.queuedPublications.push({ publication, columns, queryConfiguration });
+      this.queuedPublications.push({ publication, configuration });
       return;
     }
 
     this.publishing = true;
     let firstError: ListenerError | undefined;
     try {
-      firstError = this.reconcilePublication(publication, columns, queryConfiguration);
+      firstError = this.reconcilePublication(
+        publication,
+        configuration.columns,
+        configuration.queryConfiguration,
+      );
+      this.installedPublicationConfiguration = configuration;
       for (let index = 0; index < this.queuedPublications.length; index += 1) {
         const queued = this.queuedPublications[index];
         this.queuedPublications[index] = undefined;
         if (queued === undefined) continue;
         firstError = firstListenerError(
           firstError,
-          this.reconcilePublication(queued.publication, queued.columns, queued.queryConfiguration),
+          this.reconcilePublication(
+            queued.publication,
+            queued.configuration.columns,
+            queued.configuration.queryConfiguration,
+          ),
         );
+        this.installedPublicationConfiguration = queued.configuration;
       }
     } finally {
       this.queuedPublications.length = 0;
       this.publishing = false;
+      this.logicalPublicationConfiguration = this.installedPublicationConfiguration;
     }
     if (firstError !== undefined) throw firstError.value;
-  };
+  }
 
   private reconcilePublication(
     publication: BrunoTableRowPipelinePublication<TRow>,

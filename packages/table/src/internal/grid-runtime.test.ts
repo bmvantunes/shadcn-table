@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { compileColumns, type CompiledColumn } from "./compile-columns";
+import { createBrunoTableClientFacetStore } from "./client-facet";
 import { BrunoTableSelectColumn } from "../column-helpers";
 import {
   BrunoTableClientRowPipelineAdapter,
@@ -4172,6 +4173,199 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     runtime.publish(adapter.publish(source([outer])));
 
     expect(events).toEqual(["1:1", "2:2"]);
+  });
+
+  it("projects Client facets from each installed publication", () => {
+    const facetColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        enableSetFilter: true,
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial], facetColumns);
+    view.subscribeRowSpace(() => {
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") === "Outer") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+    const facetStore = createBrunoTableClientFacetStore({
+      column: facetColumns[0]!,
+      rows: adapter,
+      runtime: view,
+    });
+    facetStore.getSnapshot();
+    const events: string[] = [];
+    facetStore.subscribe(() => {
+      const values = facetStore
+        .getSnapshot()
+        .options.map((option) => String(option.value))
+        .join(",");
+      events.push(`${values}:${String(view.getCellValueSnapshot("first", "COL_ID_NAME"))}`);
+    });
+
+    runtime.publish(adapter.publish(source([outer])));
+
+    expect(events).toEqual(["Outer:Outer", "Newest:Newest"]);
+  });
+
+  it("inherits queued configuration for later ordinary publications", () => {
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const { adapter, runtime, view } = createSubject();
+    const middle = { id: "first", name: "Middle" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status !== "loading") return;
+      runtime.reconcile(
+        adapter.reconcile(source([middle]), (row) => row.id, replacementColumns),
+        replacementColumns,
+        adapter.getQueryConfiguration(replacementColumns),
+      );
+      runtime.publish(adapter.publish(source([newest])));
+    });
+
+    runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })));
+
+    expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
+    expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
+  it("restores installed configuration authority after an internal failure", () => {
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const { adapter, columns, runtime, view } = createSubject();
+    const internalFailure = new Error("queued configuration failed");
+    const unreadable = {
+      ...adapter.getPublication(),
+      get status(): "ready" {
+        throw internalFailure;
+      },
+    };
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status === "loading") {
+        runtime.reconcile(
+          unreadable,
+          replacementColumns,
+          adapter.getQueryConfiguration(replacementColumns),
+        );
+      }
+    });
+
+    expect(() => runtime.publish(adapter.publish(source([], "loading")))).toThrow(internalFailure);
+
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    runtime.publish(adapter.publish(source([newest])));
+    expect(view.getQuerySnapshot().columns).toBe(columns);
+    expect(view.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Newest");
+  });
+
+  it("preserves undefined failures from Client rows-store subscribers across the drain", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    const laterFailure = new Error("later rows-store listener failed");
+    const events: string[] = [];
+    rowsStore.subscribe(() => {
+      const row = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+      if (row?.name !== "Outer") return;
+      runtime.publish(adapter.publish(source([newest])));
+      throw undefined;
+    });
+    rowsStore.subscribe(() => {
+      const row = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+      if (row?.name === "Outer") throw laterFailure;
+    });
+    rowsStore.subscribe(() => {
+      const row = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+      events.push(String(row?.name));
+    });
+
+    let caught = false;
+    try {
+      runtime.publish(adapter.publish(source([outer])));
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
+    expect(events).toEqual(["Outer", "Newest"]);
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
+  it("preserves an undefined Client row detector failure while draining newer work", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    view.subscribeRowSpace(() => {
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") === "Outer") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+    const rowsStore = adapter.createRowsStore(view, () => (_previousRows, nextRows) => {
+      if ((nextRows[0]?.raw as Row | undefined)?.name === "Outer") throw undefined;
+      return true;
+    });
+    const rowsListener = vi.fn();
+    rowsStore.subscribe(rowsListener);
+
+    let caught = false;
+    try {
+      runtime.publish(adapter.publish(source([outer])));
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
+    expect(rowsListener).toHaveBeenCalledTimes(2);
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
+  it("preserves undefined Result-count listener failures while continuing notification", () => {
+    const { adapter } = createSubject();
+    const laterListener = vi.fn();
+    const unsubscribe = adapter.subscribeResultRowCount(() => {
+      throw undefined;
+    });
+    adapter.subscribeResultRowCount(laterListener);
+
+    let caught = false;
+    try {
+      adapter.publishResultRowCount(2);
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+    expect(caught).toBe(true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(2);
+    expect(laterListener).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    expect(() => adapter.publishResultRowCount(3)).not.toThrow();
+    expect(laterListener).toHaveBeenCalledTimes(2);
   });
 
   it("does not let later outer cell traversal replace newer cached snapshots", () => {

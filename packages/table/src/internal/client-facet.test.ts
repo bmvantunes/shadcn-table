@@ -194,6 +194,7 @@ describe("Client facet projection", () => {
     });
     const runtime = {
       getQuerySnapshot: query,
+      getRowSpaceSnapshot: () => undefined,
       getQuickFilterFieldsSnapshot: () => [],
       subscribeFilter: (listener: () => void) => {
         filterListener = listener;
@@ -258,6 +259,7 @@ describe("Client facet projection", () => {
         generation: 1,
         navigationMode: "reset" as const,
       }),
+      getRowSpaceSnapshot: () => undefined,
       getQuickFilterFieldsSnapshot: () => ["unrelated"],
       subscribeFilter: () => () => undefined,
       subscribeRowSpace: (listener: () => void) => {
@@ -397,6 +399,7 @@ describe("Client facet projection", () => {
         generation: 1,
         navigationMode: "reset" as const,
       }),
+      getRowSpaceSnapshot: () => undefined,
       getQuickFilterFieldsSnapshot: () => [],
       subscribeFilter: () => () => undefined,
       subscribeRowSpace: (listener: () => void) => {

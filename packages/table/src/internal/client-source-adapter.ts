@@ -194,8 +194,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     return count;
   };
 
-  public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {
-    const sequence = this.coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  public readonly getFacetRowsSnapshot = (
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ): BrunoTableClientFacetRowsSnapshot => {
+    const coherent = asClientCoherent(rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const sequence = coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
     return Object.freeze({
       rows: sequence.asArray(),
       token: sequence.token,
@@ -488,7 +491,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         }
       } catch (error) {
         snapshot = nextRows;
-        notifyRowsStoreListeners(listeners, error);
+        notifyRowsStoreListeners(listeners, { value: error });
         return;
       }
       snapshot = nextRows;
@@ -551,7 +554,9 @@ export type BrunoTableClientRowsStore = Readonly<{
 }>;
 
 export type BrunoTableClientFacetRowsSource = Readonly<{
-  readonly getFacetRowsSnapshot: () => BrunoTableClientFacetRowsSnapshot;
+  readonly getFacetRowsSnapshot: (
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ) => BrunoTableClientFacetRowsSnapshot;
 }>;
 
 export type BrunoTableClientFacetRowsSnapshot = Readonly<{
@@ -1444,16 +1449,21 @@ function asClientCoherent<TRow>(
   return rowSpace as ClientCoherentSnapshot<TRow> | undefined;
 }
 
-function notifyRowsStoreListeners(listeners: Set<() => void>, initialError?: unknown): void {
+type ClientListenerError = Readonly<{ readonly value: unknown }>;
+
+function notifyRowsStoreListeners(
+  listeners: Set<() => void>,
+  initialError?: ClientListenerError,
+): void {
   let firstError = initialError;
   for (const listener of listeners) {
     try {
       listener();
     } catch (error) {
-      firstError ??= error;
+      firstError ??= { value: error };
     }
   }
-  if (firstError !== undefined) throw firstError;
+  if (firstError !== undefined) throw firstError.value;
 }
 
 function snapshotSource<TRow>(
