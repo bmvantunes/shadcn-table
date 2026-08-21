@@ -599,15 +599,15 @@ if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
   );
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "2.3.0") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "2.4.0") {
   throw new Error(
-    "The optional Effect build is not pinned to the audited public value-semantics contract.",
+    "The View Server integration is not pinned to the audited public 2.4.0 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "2.3.0",
+    "effect-view-server": "2.4.0",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");
@@ -630,6 +630,7 @@ const expectedRuntimeExports = [
   "BrunoTableQuickFilter",
   "BrunoTableResultRowCount",
   "BrunoTableSelectColumn",
+  "BrunoTableServer",
   "BrunoTableTextColumn",
   "BrunoTableToolbar",
   "BrunoTableToolbarSpacer",

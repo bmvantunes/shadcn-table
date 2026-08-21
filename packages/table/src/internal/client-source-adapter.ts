@@ -22,10 +22,9 @@ import {
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 import {
-  BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS,
   createClientQueryPredicate,
   readClientQuickFilterField,
-  validateBrunoTableQuickFilterFields,
+  snapshotBrunoTableQuickFilterFields,
 } from "./quick-filter";
 import { recordBrunoTableToolbarLifetime } from "./toolbar-instrumentation";
 
@@ -102,7 +101,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     });
     this.initialFilters = this.initialFilterCollection.filters;
     this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
-    this.quickFilterFields = snapshotQuickFilterFields(quickFilterFields);
+    this.quickFilterFields = snapshotBrunoTableQuickFilterFields(quickFilterFields);
     this.source = snapshotSource(source);
     this.observedRows =
       this.source.inputRows === undefined ? undefined : Array.from(this.source.rows.asArray());
@@ -1755,21 +1754,4 @@ function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
     source.totalRows >= 0 &&
     source.rows.length === source.totalRows
   );
-}
-
-function snapshotQuickFilterFields(fields: readonly string[] | undefined): readonly string[] {
-  const result = validateBrunoTableQuickFilterFields(fields);
-  if (result.ok) return result.fields;
-  switch (result.reason) {
-    case "not-array":
-      throw new TypeError("BrunoTable quickFilterFields must be a non-empty tuple when provided.");
-    case "length":
-      throw new TypeError(
-        `BrunoTable quickFilterFields must contain between 1 and ${String(BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS)} fields.`,
-      );
-    case "sparse":
-      throw new TypeError("BrunoTable quickFilterFields must be dense.");
-    case "empty-field":
-      throw new TypeError("BrunoTable quickFilterFields must contain non-empty source fields.");
-  }
 }

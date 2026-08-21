@@ -2,6 +2,7 @@ import {
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
+  BrunoTableServer,
   BrunoTableToolbar,
 } from "@bruno/table";
 
@@ -95,6 +96,96 @@ const validClient = (
   />
 );
 void validClient;
+
+const emittedServerSource = {
+  viewport: {},
+  totalRows: 1_000_000,
+  version: 1,
+  status: "loading" as const,
+};
+
+const validEmittedServer = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+  />
+);
+void validEmittedServer;
+
+const invalidEmittedServerIdentity = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_IDENTITY"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations forbid consumer row identity.
+    getRowId={(row: Row) => row.id}
+  />
+);
+void invalidEmittedServerIdentity;
+
+const invalidEmittedServerEditing = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_EDITING"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations expose no editing capability.
+    editable
+  />
+);
+void invalidEmittedServerEditing;
+
+const invalidEmittedServerRange = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_RANGE"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations expose no range capability.
+    rangeSelection
+  />
+);
+void invalidEmittedServerRange;
+
+const emittedServerProps = {
+  tableId: "TABLE_ID_EMITTED_SERVER_SPREAD",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }] as const,
+  viewportSource: emittedServerSource,
+};
+const emittedSpreadRowSelection = { ...emittedServerProps, rowSelection: true };
+// @ts-expect-error emitted Server row selection remains forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadRowSelection} />);
+const emittedSpreadRangeSelection = { ...emittedServerProps, rangeSelection: true };
+// @ts-expect-error emitted Server range selection remains forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadRangeSelection} />);
+const emittedSpreadPasteFill = {
+  ...emittedServerProps,
+  onPaste: () => undefined,
+  onFill: () => undefined,
+};
+// @ts-expect-error emitted Server Paste and Fill remain forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadPasteFill} />);
+const emittedSpreadUndoRedo = {
+  ...emittedServerProps,
+  onUndo: () => undefined,
+  onRedo: () => undefined,
+};
+// @ts-expect-error emitted Server Undo and Redo remain forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadUndoRedo} />);
+
+const invalidEmittedServerWithoutOrder = (
+  // @ts-expect-error emitted Server declarations require Initial Order By.
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_ORDER"
+    columns={columns}
+    viewportSource={emittedServerSource}
+  />
+);
+void invalidEmittedServerWithoutOrder;
 
 const validQuickFilterClient = (
   <BrunoTableClient

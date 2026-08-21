@@ -36,9 +36,10 @@
     "test:bench:hotkeys:browser": "vp test bench --config vitest.browser.config.ts src/internal/hotkey-adapter.browser.bench.tsx --run",
     "test:bench:column-management": "vp test bench src/internal/column-management.bench.ts --run",
     "test:bench:toolbar": "vp test bench src/internal/toolbar-capabilities.bench.ts --run",
+    "test:bench:server-viewport": "vp test bench src/internal/server-viewport-store.bench.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar"
+    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:server-viewport"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -51,6 +52,7 @@
   },
   "devDependencies": {
     "@bruno/shadcn": "workspace:*",
+    "@effect/atom-react": "4.0.0-beta.100",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.18",
@@ -58,7 +60,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "@vitest/browser-playwright": "4.1.10",
     "effect": "4.0.0-beta.100",
-    "effect-view-server": "2.3.0",
+    "effect-view-server": "2.4.0",
     "oxc-transform-react": "^0.145.0",
     "playwright": "1.60.0",
     "react": "^19.2.8",
@@ -80,6 +82,6 @@
     }
   },
   "inlinedDependencies": {
-    "effect-view-server": "2.3.0"
+    "effect-view-server": "2.4.0"
   }
 }

@@ -356,6 +356,9 @@ importers:
       '@bruno/shadcn':
         specifier: workspace:*
         version: link:../shadcn
+      '@effect/atom-react':
+        specifier: 4.0.0-beta.100
+        version: 4.0.0-beta.100(effect@4.0.0-beta.100)(react@19.2.8)(scheduler@0.27.0)
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))
@@ -378,8 +381,8 @@ importers:
         specifier: 4.0.0-beta.100
         version: 4.0.0-beta.100
       effect-view-server:
-        specifier: 2.3.0
-        version: 2.3.0(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-beta.100)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@7.0.2)
+        specifier: 2.4.0
+        version: 2.4.0(@effect/atom-react@4.0.0-beta.100(effect@4.0.0-beta.100)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-beta.100)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@7.0.2)
       oxc-transform-react:
         specifier: ^0.145.0
         version: 0.145.0
@@ -597,6 +600,13 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/atom-react@4.0.0-beta.100':
+    resolution: {integrity: sha512-NHi/z3iqNbZWrI078+dHB4m2hFWuEjvDwRXFDwTY6Zp8ycQq/EvQI7Bb32g985l3s5fC+QErzdERekDnZZT/oQ==}
+    peerDependencies:
+      effect: ^4.0.0-beta.100
+      react: ^19.2.4
+      scheduler: '*'
 
   '@effect/platform-browser@4.0.0-beta.100':
     resolution: {integrity: sha512-Ezxkl9nQuPQrHqkxSdJWazQmjaD+ZOYhKoFEiQvfCdiSoEKLN7SWWGkaCKlbO451hLyO4NUO7s2UGTGU3CHVsw==}
@@ -2419,8 +2429,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect-view-server@2.3.0:
-    resolution: {integrity: sha512-cWACSN7H7tg9IOjcZOrlFjWEtwyaoJ3N8ZCASy3Xx0UHtU+CoFpmNPh2AYYp1fJ7xGKrVYVTEIK09fz33QvARw==}
+  effect-view-server@2.4.0:
+    resolution: {integrity: sha512-GNBo9ITYfl56DHm9fXa1BqrYPcD3a9SXepD/5K4VNF+SVtxSiaIvPNOOny40vkkvahAysDV7K1X2PsLhTYRhew==}
     engines: {node: '>=26.0.0'}
     peerDependencies:
       '@effect/atom-react': 4.0.0-beta.100
@@ -4154,6 +4164,12 @@ snapshots:
 
   '@dotenvx/primitives@0.8.0': {}
 
+  '@effect/atom-react@4.0.0-beta.100(effect@4.0.0-beta.100)(react@19.2.8)(scheduler@0.27.0)':
+    dependencies:
+      effect: 4.0.0-beta.100
+      react: 19.2.8
+      scheduler: 0.27.0
+
   '@effect/platform-browser@4.0.0-beta.100(effect@4.0.0-beta.100)':
     dependencies:
       effect: 4.0.0-beta.100
@@ -5505,7 +5521,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-view-server@2.3.0(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-beta.100)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@7.0.2):
+  effect-view-server@2.4.0(@effect/atom-react@4.0.0-beta.100(effect@4.0.0-beta.100)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-beta.100)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@7.0.2):
     dependencies:
       '@bufbuild/protobuf': 2.12.0
       '@connectrpc/connect': 2.1.2(@bufbuild/protobuf@2.12.0)
@@ -5517,6 +5533,7 @@ snapshots:
       typescript: 7.0.2
       vite: '@voidzero-dev/vite-plus-core@0.2.7(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)'
     optionalDependencies:
+      '@effect/atom-react': 4.0.0-beta.100(effect@4.0.0-beta.100)(react@19.2.8)(scheduler@0.27.0)
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
     transitivePeerDependencies:

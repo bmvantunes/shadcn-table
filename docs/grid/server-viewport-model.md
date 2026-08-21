@@ -106,6 +106,14 @@ Do not add `routeByFields` to BrunoTable. The source declaration is the only fie
 
 When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
 
+effect-view-server 2.4.0 does not yet expose that source-owned semantic identity at the Viewport
+boundary. [effect-view-server#464](https://github.com/bmvantunes/effect-view-server/issues/464)
+tracks the smallest opaque semantic-key contract needed to ship leased Feed Routes without reference
+equality, generic serialization, duplicated schema logic, or Effect coupling in BrunoTable. The
+leased-route slice remains gated on a compatible release; BrunoTable must not substitute a local
+deduplication fallback. Issue #17 owns that typed `routeBy` surface and the broader leased-routing
+query integration; issue #16 deliberately exposes no route prop.
+
 `externalFilters` is a separate optional Server-only input containing field-keyed View Server conditions. It defaults to no conditions and may reference valid filter fields that have no visible column. The Adapter combines External Filters, Quick Filter, and compiled Grid Filters through `AND`; it never translates External Filter fields through Column Identity. A semantic External Filter change releases the old query generation, invalidates the sparse indexed cache, clears transient focus/selection/scroll state, and starts at row zero while preserving compatible grid preferences and the current Feed Route. Compare filters through exact query semantics rather than React object identity so an equivalent freshly allocated array does not restart the viewport.
 
 ## View Server Translation Adapter
@@ -163,7 +171,7 @@ generation.release();
 
 The Adapter, not the source callback flags, owns the Query Generation token. It allocates one token before `replace`, closes that token over the sink, and rejects every delivery after release or replacement. The optional `keepRenderedRows` argument passed to `setRowCount` is a delivery hint inside the current source controller; it never authorizes old-row retention across a semantic generation boundary.
 
-The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. The published `2.1.0` package currently warns on active viewport unmount because insertion-effect cleanup reaches `sink.setRowCount`; [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) tracks the upstream lifecycle fix. BrunoTable must not hide it with deferred sink publication or warning suppression.
+The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable requires `effect-view-server@2.4.0`, the first compatible release that also includes source-native Match None from #409. BrunoTable does not hide older-package behavior with deferred sink publication or warning suppression.
 
 ## Why a long-lived object
 

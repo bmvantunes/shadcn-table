@@ -9,6 +9,7 @@ export {
   BrunoTableToolbar,
   BrunoTableToolbarSpacer,
 } from "./bruno-table-client";
+export { BrunoTableServer } from "./bruno-table-server";
 export type {
   BrunoTableFilterControlProps,
   BrunoTableGridFilterCommandCapability,

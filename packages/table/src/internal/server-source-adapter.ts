@@ -1,0 +1,531 @@
+import type { BrunoTableServerSource, BrunoTableSourceStatus } from "../public-types";
+import { readCompiledColumnValue } from "./cell-value";
+import type { CompiledColumn } from "./compile-columns";
+import type {
+  BrunoTableQueryConfiguration,
+  BrunoTableQuerySnapshot,
+  BrunoTableRowPipelinePublication,
+  BrunoTableRowSpaceSnapshot,
+} from "./grid-runtime";
+import { compileClientFilterCollection, sanitizeClientInitialOrderBy } from "./grid-query";
+import {
+  compileBrunoTableServerQueryPlan,
+  type BrunoTableCompiledServerQueryPlan,
+} from "./server-query";
+import { snapshotBrunoTableQuickFilterFields } from "./quick-filter";
+import {
+  BrunoTableServerViewportStore,
+  type BrunoTableServerViewportWindow,
+} from "./server-viewport-store";
+
+type Listener = () => void;
+
+type BrunoTableServerViewportSink<TRow> = Readonly<{
+  readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+  readonly setRowData: (
+    rowsByIndex: Readonly<Record<number, TRow>>,
+    rowKeysByIndex: Readonly<Record<number, string>>,
+  ) => void;
+}>;
+
+type BrunoTableServerViewportRequest<TRow> = Readonly<{
+  readonly window: BrunoTableServerViewportWindow;
+  readonly query: unknown;
+  readonly sink: BrunoTableServerViewportSink<TRow>;
+}>;
+
+type BrunoTableServerViewportGeneration = Readonly<{
+  readonly setWindow: (window: BrunoTableServerViewportWindow) => void;
+  readonly release: () => void;
+}>;
+
+export type BrunoTableServerViewportTransport<TRow> = Readonly<{
+  readonly replace: (
+    request: BrunoTableServerViewportRequest<TRow>,
+  ) => BrunoTableServerViewportGeneration;
+}>;
+
+type ActiveGeneration = Readonly<{
+  readonly token: number;
+  readonly controller: BrunoTableServerViewportGeneration;
+  readonly semanticKey: Readonly<{
+    readonly viewport: unknown;
+    readonly queryPlan: BrunoTableCompiledServerQueryPlan;
+  }>;
+}>;
+
+type RowEquivalencePlan = Readonly<{
+  readonly fieldColumns: ReadonlyMap<string, readonly CompiledColumn[]>;
+  readonly computedColumns: readonly CompiledColumn[];
+}>;
+
+type BrunoTableServerRuntimeQuery = Readonly<{
+  readonly generation: number;
+  readonly filters: readonly unknown[];
+  readonly quickFilter: string;
+  readonly orderBy: readonly Readonly<{
+    readonly columnId: string;
+    readonly direction: "asc" | "desc";
+  }>[];
+}>;
+
+const INITIAL_WINDOW: BrunoTableServerViewportWindow = Object.freeze({
+  firstRow: 0,
+  lastRow: 17,
+});
+
+export class BrunoTableServerRowPipelineAdapter<TRow> {
+  private readonly store: BrunoTableServerViewportStore<TRow>;
+  private readonly listeners = new Set<Listener>();
+  private readonly resultRowCountListeners = new Set<Listener>();
+  private readonly quickFilterFields: readonly string[];
+  private columns: readonly CompiledColumn[];
+  private columnsById: ReadonlyMap<string, CompiledColumn>;
+  private rowEquivalencePlan: RowEquivalencePlan;
+  private readonly initialFilters: readonly unknown[];
+  private readonly initialOrderBy: BrunoTableServerRuntimeQuery["orderBy"];
+  private queryConfiguration: BrunoTableQueryConfiguration;
+  private resultRowCount = 0;
+  private active: ActiveGeneration | undefined;
+  private generationReleased = true;
+  private source: BrunoTableServerSource<unknown> = Object.freeze({
+    viewport: undefined,
+    totalRows: 0,
+    version: 0,
+    status: "loading",
+  });
+  private publication: BrunoTableRowPipelinePublication<TRow>;
+
+  public constructor(
+    columns: readonly CompiledColumn[],
+    quickFilterFields: readonly string[] | undefined,
+    initialFilters: readonly unknown[] = Object.freeze([]),
+    initialOrderBy: BrunoTableServerRuntimeQuery["orderBy"] = Object.freeze([]),
+  ) {
+    this.columns = columns;
+    this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
+    this.quickFilterFields = snapshotBrunoTableQuickFilterFields(quickFilterFields);
+    this.columnsById = new Map<string, CompiledColumn>(
+      columns.map((column) => [column.columnId, column]),
+    );
+    const filterCollection = compileClientFilterCollection(initialFilters, columns, {
+      rejectOverBudget: true,
+    });
+    this.initialFilters = filterCollection.filters;
+    this.initialOrderBy = sanitizeClientInitialOrderBy(initialOrderBy, columns);
+    this.queryConfiguration = Object.freeze({
+      baselineFilters: this.initialFilters,
+      baselineFilterCollection: filterCollection,
+      baselineOrderBy: this.initialOrderBy,
+      quickFilterFields: this.quickFilterFields,
+    });
+    this.store = new BrunoTableServerViewportStore(
+      (row, columnId) => {
+        const column = this.columnsById.get(columnId);
+        return column === undefined ? undefined : readCompiledColumnValue(column, row);
+      },
+      (previous, next) => rowsEquivalentBySelectedValues(this.rowEquivalencePlan, previous, next),
+    );
+    this.publication = this.createPublication();
+    this.store.subscribe(() => {
+      this.publication = this.createPublication();
+      this.publishResultRowCount(this.publication.totalRows);
+      notify(this.listeners);
+    });
+  }
+
+  public readonly getPublication = (): BrunoTableRowPipelinePublication<TRow> => this.publication;
+
+  public readonly subscribePublication = (listener: Listener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  public readonly getResultRowCountSnapshot = (): number => this.resultRowCount;
+
+  public readonly subscribeResultRowCount = (listener: Listener): (() => void) => {
+    this.resultRowCountListeners.add(listener);
+    return () => this.resultRowCountListeners.delete(listener);
+  };
+
+  public readonly initializeResultRowCount = (
+    _query: BrunoTableQuerySnapshot,
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ): boolean => {
+    const count = rowSpace?.totalRows ?? this.publication.totalRows;
+    if (this.resultRowCount === count) return false;
+    this.publishResultRowCount(count);
+    return true;
+  };
+
+  public readonly getQueryConfiguration = (): BrunoTableQueryConfiguration =>
+    this.queryConfiguration;
+
+  public reconcileColumns(columns: readonly CompiledColumn[]): BrunoTableQueryConfiguration {
+    if (columns === this.columns) return this.queryConfiguration;
+    const filterCollection = compileClientFilterCollection(this.initialFilters, columns);
+    const initialOrderBy = sanitizeClientInitialOrderBy(this.initialOrderBy, columns);
+    this.columns = columns;
+    this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
+    this.columnsById = new Map(columns.map((column) => [column.columnId, column]));
+    this.queryConfiguration = Object.freeze({
+      baselineFilters: filterCollection.filters,
+      baselineFilterCollection: filterCollection,
+      baselineOrderBy: initialOrderBy,
+      quickFilterFields: this.quickFilterFields,
+    });
+    return this.queryConfiguration;
+  }
+
+  public readonly getGeneration = (): number => this.store.getSnapshot().generation;
+
+  public readonly findRowIndex = (rowId: string): number | undefined =>
+    this.store.findRowIndex(rowId);
+
+  public reconcileSource(source: BrunoTableServerSource<unknown>): void {
+    const next = snapshotSource(source);
+    const replacingActiveSource =
+      this.active !== undefined && this.active.semanticKey.viewport !== next.viewport;
+    this.source = next;
+    if (replacingActiveSource) return;
+    this.publication = this.createPublication();
+    notify(this.listeners);
+  }
+
+  public replace(viewport: unknown, query: BrunoTableServerRuntimeQuery): void {
+    const queryPlan = compileBrunoTableServerQueryPlan(this.columns, {
+      filters: query.filters,
+      quickFilter: query.quickFilter,
+      quickFilterFields: this.quickFilterFields,
+      orderBy: query.orderBy,
+    });
+    const semanticKey = Object.freeze({
+      viewport,
+      queryPlan,
+    });
+    if (sameSemanticKey(this.active?.semanticKey, semanticKey)) return;
+    const transport = requireViewportTransport<TRow>(viewport);
+    const previous = this.active;
+    this.active = undefined;
+    if (previous !== undefined) {
+      this.store.invalidateGeneration(previous.token);
+      this.generationReleased = true;
+      previous.controller.release();
+    }
+    this.generationReleased = false;
+    const activeToken = this.store.beginGeneration(INITIAL_WINDOW);
+    const controller = transport.replace({
+      window: INITIAL_WINDOW,
+      query: queryPlan.query,
+      sink: Object.freeze({
+        setRowCount: (count, keepRenderedRows) => {
+          this.store.setRowCount(activeToken, count, keepRenderedRows);
+        },
+        setRowData: (rowsByIndex, rowKeysByIndex) => {
+          this.store.setRowData(activeToken, rowsByIndex, rowKeysByIndex);
+        },
+      }),
+    });
+    this.active = Object.freeze({ token: activeToken, controller, semanticKey });
+  }
+
+  public readonly setRequiredRange = (start: number, end: number): void => {
+    const active = this.active;
+    if (active === undefined) return;
+    const snapshot = this.store.getSnapshot();
+    const totalRows = snapshot.rowSpace.totalRows;
+    const firstRow = Math.max(0, Math.trunc(start));
+    const requestedLast = Math.max(firstRow, Math.trunc(end) - 1);
+    const lastRow =
+      snapshot.authoritativeTotalRows && totalRows > 0
+        ? Math.min(requestedLast, totalRows - 1)
+        : requestedLast;
+    const window = Object.freeze({ firstRow, lastRow });
+    if (!this.store.setRequiredRange(active.token, window)) return;
+    active.controller.setWindow(window);
+  };
+
+  public release(): void {
+    const active = this.active;
+    if (active === undefined) return;
+    this.active = undefined;
+    this.store.invalidateGeneration(active.token);
+    this.generationReleased = true;
+    this.publication = this.createPublication();
+    active.controller.release();
+  }
+
+  private createPublication(): BrunoTableRowPipelinePublication<TRow> {
+    const snapshot = this.store.getSnapshot();
+    const rowSpace =
+      snapshot.generation === 0 || this.generationReleased ? undefined : snapshot.rowSpace;
+    const totalRows = rowSpace?.totalRows ?? this.source.totalRows;
+    const hasCoherentRows =
+      rowSpace !== undefined &&
+      (rowSpace.loadedRows > 0 || (snapshot.authoritativeTotalRows && rowSpace.totalRows === 0));
+    const status =
+      !hasCoherentRows && this.source.status === "ready" ? "loading" : this.source.status;
+    return Object.freeze({
+      status,
+      totalRows,
+      version: this.source.version,
+      ...(this.source.statusCode === undefined ? {} : { statusCode: this.source.statusCode }),
+      ...(this.source.message === undefined ? {} : { message: this.source.message }),
+      ...(this.source.retry === undefined ? {} : { retry: this.source.retry }),
+      ...(rowSpace === undefined ? {} : { rowSpace }),
+      hasCoherentRows,
+    });
+  }
+
+  private publishResultRowCount(count: number): void {
+    if (this.resultRowCount === count) return;
+    this.resultRowCount = count;
+    notify(this.resultRowCountListeners);
+  }
+}
+
+function requireViewportTransport<TRow>(
+  viewport: unknown,
+): BrunoTableServerViewportTransport<TRow> {
+  if (typeof viewport !== "object" || viewport === null) {
+    throw new TypeError("BrunoTable Server viewportSource.viewport must be an object.");
+  }
+  const replace = Reflect.get(viewport, "replace");
+  if (typeof replace !== "function") {
+    throw new TypeError("BrunoTable Server viewportSource.viewport must expose replace().");
+  }
+  return Object.freeze({
+    replace: (request) => {
+      const candidate = Reflect.apply(replace, viewport, [request]);
+      if (typeof candidate !== "object" || candidate === null) {
+        throw new TypeError("BrunoTable Server viewport.replace() returned no generation.");
+      }
+      const setWindow = Reflect.get(candidate, "setWindow");
+      const release = Reflect.get(candidate, "release");
+      if (typeof setWindow !== "function" || typeof release !== "function") {
+        throw new TypeError(
+          "BrunoTable Server viewport generation must expose setWindow() and release().",
+        );
+      }
+      return Object.freeze({
+        setWindow: (window) => Reflect.apply(setWindow, candidate, [window]),
+        release: () => Reflect.apply(release, candidate, []),
+      });
+    },
+  });
+}
+
+function snapshotSource(source: BrunoTableServerSource<unknown>): BrunoTableServerSource<unknown> {
+  const status: BrunoTableSourceStatus = SOURCE_STATUSES.has(source.status)
+    ? source.status
+    : "error";
+  return Object.freeze({
+    viewport: source.viewport,
+    totalRows:
+      Number.isSafeInteger(source.totalRows) && source.totalRows >= 0 ? source.totalRows : 0,
+    version: Number.isSafeInteger(source.version) && source.version >= 0 ? source.version : 0,
+    status,
+    ...(typeof source.statusCode === "string" ? { statusCode: source.statusCode } : {}),
+    ...(typeof source.message === "string" ? { message: source.message } : {}),
+    ...(source.retry === undefined ? {} : { retry: source.retry }),
+  });
+}
+
+function notify(listeners: ReadonlySet<Listener>): void {
+  let firstError: unknown;
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError !== undefined) throw firstError;
+}
+
+const SOURCE_STATUSES = new Set<BrunoTableSourceStatus>([
+  "loading",
+  "ready",
+  "stale",
+  "closed",
+  "error",
+]);
+
+function sameSemanticKey(
+  previous: ActiveGeneration["semanticKey"] | undefined,
+  next: ActiveGeneration["semanticKey"],
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.viewport === next.viewport &&
+    sameCompiledQuery(previous.queryPlan, next.queryPlan)
+  );
+}
+
+function sameCompiledQuery(
+  leftPlan: BrunoTableCompiledServerQueryPlan,
+  rightPlan: BrunoTableCompiledServerQueryPlan,
+): boolean {
+  const left = leftPlan.query;
+  const right = rightPlan.query;
+  return (
+    sameArray(left.select, right.select, Object.is) &&
+    sameArray(
+      left.orderBy,
+      right.orderBy,
+      (leftOrder, rightOrder) =>
+        leftOrder.field === rightOrder.field && leftOrder.direction === rightOrder.direction,
+    ) &&
+    sameArray(left.where, right.where, (leftWhere, rightWhere) =>
+      sameQueryValue(leftWhere, rightWhere, leftPlan, rightPlan),
+    )
+  );
+}
+
+function sameArray<TValue>(
+  left: readonly TValue[],
+  right: readonly TValue[],
+  equivalent: (left: TValue, right: TValue) => boolean,
+): boolean {
+  return (
+    left.length === right.length && left.every((value, index) => equivalent(value, right[index]!))
+  );
+}
+
+function sameQueryValue(
+  left: unknown,
+  right: unknown,
+  leftPlan: BrunoTableCompiledServerQueryPlan,
+  rightPlan: BrunoTableCompiledServerQueryPlan,
+): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return sameArray(left, right, (leftValue, rightValue) =>
+      sameQueryValue(leftValue, rightValue, leftPlan, rightPlan),
+    );
+  }
+  if (
+    typeof left !== "object" ||
+    left === null ||
+    typeof right !== "object" ||
+    right === null ||
+    Array.isArray(left) ||
+    Array.isArray(right)
+  ) {
+    return false;
+  }
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = Reflect.ownKeys(right);
+  const leftSemantics = leftPlan.operandSemantics.get(left);
+  const rightSemantics = rightPlan.operandSemantics.get(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        (key === "filter" || key === "filterTo"
+          ? sameQueryOperand(
+              Reflect.get(left, key),
+              Reflect.get(right, key),
+              leftSemantics,
+              rightSemantics,
+            )
+          : sameQueryValue(Reflect.get(left, key), Reflect.get(right, key), leftPlan, rightPlan)),
+    )
+  );
+}
+
+function sameQueryOperand(
+  left: unknown,
+  right: unknown,
+  leftSemantics: CompiledColumn["semantics"] | undefined,
+  rightSemantics: CompiledColumn["semantics"] | undefined,
+): boolean {
+  if (leftSemantics === undefined || rightSemantics === undefined) return Object.is(left, right);
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      sameArray(left, right, (leftValue, rightValue) =>
+        sameQueryOperand(leftValue, rightValue, leftSemantics, rightSemantics),
+      )
+    );
+  }
+  if (
+    leftSemantics.codecId !== rightSemantics.codecId ||
+    leftSemantics.codecVersion !== rightSemantics.codecVersion
+  ) {
+    return false;
+  }
+  try {
+    return leftSemantics.equivalent(left, right) && rightSemantics.equivalent(left, right);
+  } catch {
+    return false;
+  }
+}
+
+function compileRowEquivalencePlan(columns: readonly CompiledColumn[]): RowEquivalencePlan {
+  const fieldColumns = new Map<string, CompiledColumn[]>();
+  const computedColumns: CompiledColumn[] = [];
+  for (const column of columns) {
+    if (column.kind === "computed") {
+      computedColumns.push(column);
+      continue;
+    }
+    const matching = fieldColumns.get(column.field) ?? [];
+    matching.push(column);
+    fieldColumns.set(column.field, matching);
+  }
+  return Object.freeze({
+    fieldColumns: new Map(
+      [...fieldColumns].map(([field, matching]) => [field, Object.freeze(matching)] as const),
+    ),
+    computedColumns: Object.freeze(computedColumns),
+  });
+}
+
+function rowsEquivalentBySelectedValues<TRow>(
+  plan: RowEquivalencePlan,
+  previous: TRow,
+  next: TRow,
+): boolean {
+  if (Object.is(previous, next)) return true;
+  if (
+    typeof previous !== "object" ||
+    previous === null ||
+    typeof next !== "object" ||
+    next === null
+  ) {
+    return false;
+  }
+  const previousKeys = Reflect.ownKeys(previous);
+  const nextKeys = Reflect.ownKeys(next);
+  if (previousKeys.length !== nextKeys.length) return false;
+  for (const key of previousKeys) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) return false;
+    const left = Reflect.get(previous, key);
+    const right = Reflect.get(next, key);
+    const matching = typeof key === "string" ? plan.fieldColumns.get(key) : undefined;
+    if (matching === undefined) {
+      if (!Object.is(left, right)) return false;
+      continue;
+    }
+    for (const column of matching) {
+      try {
+        if (!column.semantics.equivalent(left, right)) return false;
+      } catch {
+        return false;
+      }
+    }
+  }
+  for (const column of plan.computedColumns) {
+    try {
+      const left = readCompiledColumnValue(column, previous);
+      const right = readCompiledColumnValue(column, next);
+      if (!column.semantics.equivalent(left, right)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
