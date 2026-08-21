@@ -12,6 +12,25 @@ import { assertReactCompilerStrictness } from "../../../config/react-compiler-op
 assertReactCompilerStrictness(transformSync);
 
 class UninspectableWildcardExportError extends Error {}
+const keyboardEvidenceBindingCache = new WeakMap();
+
+async function readProductionModules(directoryUrl) {
+  const directoryPath = fileURLToPath(directoryUrl);
+  const entries = await readdir(directoryPath, { recursive: true });
+  const sourcePaths = entries
+    .filter(
+      (entry) =>
+        /\.[cm]?tsx?$/u.test(entry) &&
+        !/(?:^|\/)[^/]+\.(?:test|browser\.test|bench)\.[cm]?tsx?$/u.test(entry),
+    )
+    .map((entry) => join(directoryPath, entry));
+  return Promise.all(
+    sourcePaths.map(async (sourcePath) => ({
+      sourcePath,
+      source: await readFile(sourcePath, "utf8"),
+    })),
+  );
+}
 
 async function readDeclarationClosure(entryUrl) {
   const sources = new Map();
@@ -51,6 +70,7 @@ const [
   effectRuntime,
   compilerOutput,
   packageJsonSource,
+  productionModules,
 ] = await Promise.all([
   readDeclarationClosure(new URL("../dist/index.d.mts", import.meta.url)),
   readDeclarationClosure(new URL("../dist/effect.d.mts", import.meta.url)),
@@ -58,6 +78,7 @@ const [
   readFile(new URL("../dist/effect.mjs", import.meta.url), "utf8"),
   readFile(new URL("../dist/internal/compiler-smoke.mjs", import.meta.url), "utf8"),
   readFile(new URL("../package.json", import.meta.url), "utf8"),
+  readProductionModules(new URL("../src/", import.meta.url)),
 ]);
 
 const declarations = rootDeclarationSet.declarations;
@@ -73,6 +94,24 @@ if (!compilerOutput.includes("react/compiler-runtime")) {
 }
 
 const rootRuntimeAst = await parseAstAsync(rootRuntime);
+const productionModuleAsts = await Promise.all(
+  productionModules.map(async ({ sourcePath, source }) => ({
+    sourcePath,
+    ast: await parseAstAsync(source, { lang: sourcePath.endsWith("x") ? "tsx" : "ts" }),
+  })),
+);
+const legacyKeyboardGuardSmokeAsts = await Promise.all(
+  [
+    `function direct(event: KeyboardEvent) { return event.key; }`,
+    `function alias(event: globalThis.KeyboardEvent) { const gesture = event; return gesture.shiftKey; }`,
+    `function assigned(event: KeyboardEvent) { let gesture; gesture = event; return gesture.key; }`,
+    `function destructured(event: KeyboardEvent) { const { key } = event; return key; }`,
+  ].map((source) => parseAstAsync(source, { lang: "ts" })),
+);
+const nativePointerGuardSmokeAst = await parseAstAsync(
+  `function nativePointer(event: MouseEvent) { return event.shiftKey; }`,
+  { lang: "ts" },
+);
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
   layoutEffectBinding === undefined
@@ -116,6 +155,17 @@ if (/\bany\b/u.test(declarations)) {
 if (/tanstack/iu.test(declarations)) {
   throw new Error("A TanStack implementation type leaked into the @bruno/table declarations.");
 }
+
+if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys") === undefined) {
+  throw new Error("The emitted package lost the shared React Hotkeys boundary.");
+}
+
+assertNoLegacyKeyboardSyntax(rootRuntimeAst, "emitted @bruno/table root");
+for (const { sourcePath, ast } of productionModuleAsts) {
+  assertNoLegacyKeyboardSyntax(ast, sourcePath);
+}
+for (const smokeAst of legacyKeyboardGuardSmokeAsts) assertLegacyKeyboardSyntaxDetected(smokeAst);
+assertNoLegacyKeyboardSyntax(nativePointerGuardSmokeAst, "native pointer guard smoke fixture");
 
 if (
   /BrunoTable(?:ToolbarController|ToolbarState|ToolbarRowStore|ToolbarCellStore)/u.test(
@@ -277,6 +327,12 @@ if (packageJson.dependencies?.["@tanstack/react-table"] !== "9.0.0") {
   );
 }
 
+if (packageJson.dependencies?.["@tanstack/react-hotkeys"] !== "0.10.0") {
+  throw new Error(
+    "The private React Hotkeys boundary is not pinned to the audited stable v0.10.0 version.",
+  );
+}
+
 if (packageJson.devDependencies?.["effect-view-server"] !== "2.3.0") {
   throw new Error(
     "The optional Effect build is not pinned to the audited public value-semantics contract.",
@@ -422,6 +478,182 @@ function findImportedBinding(ast, source, importedName) {
       if (imported === importedName) return specifier.local.name;
     }
   }
+  return undefined;
+}
+
+function assertNoLegacyKeyboardSyntax(ast, label) {
+  let violation;
+  walkSyntaxTree(ast, (node, ancestors) => {
+    if (violation !== undefined) return;
+    const parent = ancestors.at(-1);
+    if (
+      node.type === "JSXAttribute" &&
+      node.name?.type === "JSXIdentifier" &&
+      (node.name.name === "onKeyDown" || node.name.name === "onKeyUp")
+    ) {
+      violation = `React ${node.name.name} handler`;
+      return;
+    }
+    if (
+      (node.type === "Property" || node.type === "MethodDefinition") &&
+      (propertyName(node) === "onKeyDown" || propertyName(node) === "onKeyUp")
+    ) {
+      violation = `object ${propertyName(node)} handler`;
+      return;
+    }
+    if (
+      node.type === "CallExpression" &&
+      node.callee.type === "MemberExpression" &&
+      (memberPropertyName(node.callee) === "addEventListener" ||
+        memberPropertyName(node.callee) === "removeEventListener") &&
+      isKeyboardEventTypeLiteral(node.arguments[0])
+    ) {
+      violation = `${memberPropertyName(node.callee)} keyboard listener`;
+      return;
+    }
+    if (
+      node.type === "MemberExpression" &&
+      ["code", "ctrlKey", "metaKey", "altKey"].includes(memberPropertyName(node) ?? "")
+    ) {
+      violation = `manual KeyboardEvent.${memberPropertyName(node)} interpretation`;
+      return;
+    }
+    if (
+      node.type === "MemberExpression" &&
+      ["key", "shiftKey"].includes(memberPropertyName(node) ?? "") &&
+      isKeyboardEvidenceExpression(node.object, ancestors)
+    ) {
+      violation = `manual KeyboardEvent.${memberPropertyName(node)} interpretation`;
+      return;
+    }
+    if (
+      node.type === "Property" &&
+      parent?.type === "ObjectPattern" &&
+      ["code", "ctrlKey", "metaKey", "altKey"].includes(propertyName(node) ?? "")
+    ) {
+      violation = `destructured ${propertyName(node)} keyboard evidence`;
+      return;
+    }
+    if (
+      node.type === "Property" &&
+      parent?.type === "ObjectPattern" &&
+      ["key", "shiftKey"].includes(propertyName(node) ?? "") &&
+      isKeyboardEvidenceDestructuring(ancestors)
+    ) {
+      violation = `destructured KeyboardEvent.${propertyName(node)} evidence`;
+      return;
+    }
+    if (node.type === "Literal" && isKeyboardEventTypeLiteral(node)) {
+      violation = `raw ${String(node.value)} event type`;
+    }
+  });
+  if (violation !== undefined) {
+    throw new Error(
+      `${label} contains a legacy BrunoTable shortcut interpreter: ${String(violation)}.`,
+    );
+  }
+}
+
+function assertLegacyKeyboardSyntaxDetected(ast) {
+  try {
+    assertNoLegacyKeyboardSyntax(ast, "legacy keyboard guard smoke fixture");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("legacy BrunoTable shortcut interpreter")
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("The legacy keyboard guard accepted KeyboardEvent key/modifier interpretation.");
+}
+
+function isKeyboardEvidenceExpression(expression, ancestors) {
+  if (expression.type !== "Identifier") return false;
+  const owner = ancestors.findLast((ancestor) => isFunctionNode(ancestor));
+  if (owner === undefined) return false;
+  return keyboardEvidenceBindings(owner).has(expression.name);
+}
+
+function isKeyboardEvidenceDestructuring(ancestors) {
+  const declarator = ancestors.findLast((ancestor) => ancestor.type === "VariableDeclarator");
+  if (declarator?.init?.type !== "Identifier") return false;
+  return isKeyboardEvidenceExpression(declarator.init, ancestors);
+}
+
+function keyboardEvidenceBindings(owner) {
+  const cached = keyboardEvidenceBindingCache.get(owner);
+  if (cached !== undefined) return cached;
+  const bindings = new Set();
+  for (const parameter of owner.params ?? []) {
+    if (parameter.type !== "Identifier") continue;
+    if (
+      isKeyboardEventTypeAnnotation(parameter.typeAnnotation) ||
+      (!isPointerEventTypeAnnotation(parameter.typeAnnotation) && /event$/iu.test(parameter.name))
+    ) {
+      bindings.add(parameter.name);
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    walkOwnerScope(owner.body, (node) => {
+      if (
+        node.type === "VariableDeclarator" &&
+        node.id.type === "Identifier" &&
+        node.init?.type === "Identifier" &&
+        bindings.has(node.init.name) &&
+        !bindings.has(node.id.name)
+      ) {
+        bindings.add(node.id.name);
+        changed = true;
+      }
+      if (
+        node.type === "AssignmentExpression" &&
+        node.operator === "=" &&
+        node.left.type === "Identifier" &&
+        node.right.type === "Identifier" &&
+        bindings.has(node.right.name) &&
+        !bindings.has(node.left.name)
+      ) {
+        bindings.add(node.left.name);
+        changed = true;
+      }
+    });
+  }
+  keyboardEvidenceBindingCache.set(owner, bindings);
+  return bindings;
+}
+
+function isKeyboardEventTypeAnnotation(annotation) {
+  return typeAnnotationContainsName(annotation, new Set(["KeyboardEvent", "ReactKeyboardEvent"]));
+}
+
+function isPointerEventTypeAnnotation(annotation) {
+  return typeAnnotationContainsName(
+    annotation,
+    new Set(["MouseEvent", "PointerEvent", "ReactMouseEvent", "ReactPointerEvent"]),
+  );
+}
+
+function typeAnnotationContainsName(annotation, names) {
+  if (annotation === null || annotation === undefined) return false;
+  let matched = false;
+  walkSyntaxTree(annotation, (node) => {
+    if (node.type === "Identifier" && names.has(node.name)) matched = true;
+  });
+  return matched;
+}
+
+function isKeyboardEventTypeLiteral(node) {
+  return node?.type === "Literal" && (node.value === "keydown" || node.value === "keyup");
+}
+
+function propertyName(property) {
+  const key = property.key;
+  if (key?.type === "Identifier" && !property.computed) return key.name;
+  if (key?.type === "Literal" && typeof key.value === "string") return key.value;
   return undefined;
 }
 

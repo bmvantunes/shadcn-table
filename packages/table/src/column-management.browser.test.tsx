@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import { detectPlatform } from "@tanstack/react-hotkeys";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumnId } from "./index";
@@ -296,7 +297,7 @@ type ColumnGestureFrameEvent =
 type ColumnGestureListenerEvent = Readonly<{
   readonly tableId: string;
   readonly phase: "attach" | "detach";
-  readonly event: "pointermove" | "pointerup" | "pointercancel" | "keydown";
+  readonly event: "pointermove" | "pointerup" | "pointercancel";
 }>;
 type ColumnCommandSubscriptionEvent = Readonly<{
   readonly tableId: string;
@@ -314,7 +315,9 @@ async function openColumnMenu(screen: BrowserScreen, columnName = "Name") {
   const trigger = screen.getByRole("button", { name: `Column menu for ${columnName}` });
   const targetColumnId = columnName === "Name" ? "COL_ID_NAME" : "COL_ID_SCORE";
   grid.focus();
-  await userEvent.keyboard("{Control>}{Home}{/Control}");
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}{Home}{/Meta}" : "{Control>}{Home}{/Control}",
+  );
   const targetIndex = columnOrder(grid).indexOf(targetColumnId);
   if (targetIndex < 0) throw new Error(`Column ${targetColumnId} is not mounted`);
   for (let index = 0; index < targetIndex; index += 1) {
@@ -2845,7 +2848,7 @@ describe("BrunoTable column management browser surface", () => {
       );
       await vi.waitFor(() => expect(commands).toHaveLength(2));
 
-      for (const event of ["pointermove", "pointerup", "pointercancel", "keydown"] as const) {
+      for (const event of ["pointermove", "pointerup", "pointercancel"] as const) {
         expect(
           gestureListeners.filter((entry) => entry.phase === "attach" && entry.event === event),
         ).toHaveLength(2);
@@ -3106,7 +3109,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
       expect(cancelFrame).toHaveBeenCalled();
 
-      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const events = ["pointermove", "pointerup", "pointercancel"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
           events.includes(event as (typeof events)[number]) && options === true,
@@ -3212,7 +3215,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(gestureFrames.filter((event) => event.phase === "ran")).toHaveLength(0);
       expect(cancelFrame).toHaveBeenCalled();
 
-      const events = ["pointermove", "pointerup", "pointercancel", "keydown"] as const;
+      const events = ["pointermove", "pointerup", "pointercancel"] as const;
       const relevantAdds = addListener.mock.calls.filter(
         ([event, _handler, options]) =>
           events.includes(event as (typeof events)[number]) && options === true,

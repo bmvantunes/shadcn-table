@@ -23,6 +23,7 @@ Row Pipelines
 └── ViewportRowPipelineAdapter (server processing and sparse windows)
 
 Interaction
+├── table-scoped Hotkey Adapter
 ├── navigation engine
 ├── row selection
 ├── cell editing
@@ -82,6 +83,15 @@ BrunoTableServer    -> Viewport Row Pipeline --+
 ```
 
 `BrunoTableView` owns common rendering and interaction. It dispatches grid commands and consumes fine-grained runtime subscriptions; it does not import client or View Server implementations and does not branch on a mode flag.
+
+Keyboard interpretation is one private deep module. The React seam uses
+`@tanstack/react-hotkeys`; TanStack owns matching, `Mod` platform semantics, key-repeat delivery,
+registration cleanup, and listener lifecycle. One bounded binding set per Table Instance dispatches
+into the existing narrow command and workflow owners. Portalled table workflows register supported
+controlled actions with that seam, while Base UI retains overlay focus and Escape semantics. Native
+editor/input/textarea/contenteditable and IME evidence remains at the component that owns the text,
+and Base UI-owned menu, popover, and dialog behavior is not reinterpreted. No public hotkey map,
+TanStack type, or controller crosses the package boundary.
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, optional message, and an optional Source Retry Capability. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store. The capability is a source-owned `run` command plus its `pending` state; the shared view may present it for closed or errored sources but never owns reconnect policy or changes lifecycle state in anticipation of the source.
 

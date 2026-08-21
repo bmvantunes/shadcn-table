@@ -6,6 +6,23 @@ Navigation operates on the logical grid, never on "the next mounted DOM element"
 
 The renderer may have separate pinned and virtualized regions, but navigation sees one coherent coordinate system.
 
+Every BrunoTable-owned shortcut enters through one private, table-scoped Hotkey Adapter. Its React
+boundary uses `@tanstack/react-hotkeys` for registration, matching, listener lifecycle, repeated-key
+delivery, conflict policy, and platform normalization. Cross-platform chords use TanStack's `Mod`
+syntax; feature code receives an already-matched gesture and retains ownership of typed navigation,
+column, filter, sort, and workflow commands. Hotkey registration and DOM-listener cost is bounded
+per Table Instance or active workflow and never varies with mounted rows, cells, or headers.
+
+The Adapter scopes ordinary commands to the owning grid surface and explicitly bridges the few
+portalled table workflows that remain owned by that Table Instance. Mounted menu triggers publish
+only their controlled open action into a weak ownership registry; they add no hotkey or DOM
+listener. A workflow opens through this supported action seam, and the Adapter does not synthesize
+pointer, mouse, or keyboard DOM events. Native inputs, textareas, contenteditable regions, editors, IME composition, dead keys,
+AltGr/Option-produced text, and Base UI-owned menu/dialog behavior keep their native or component
+ownership. These are evidence and interaction semantics, not a second BrunoTable shortcut matcher.
+Later keyboard work—including sparse Server held-arrow behavior—extends this Adapter and the
+existing command/navigation domain rather than adding another event-key interpreter.
+
 ## Coordinate model
 
 ```ts
@@ -47,7 +64,7 @@ Arrow Right from the final pinned-start column enters the first centre column. A
 ## Navigation pipeline
 
 ```text
-keyboard command
+matched table-scoped Hotkey Adapter command
     ↓
 resolve logical destination
     ↓
