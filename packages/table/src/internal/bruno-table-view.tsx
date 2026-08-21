@@ -59,7 +59,6 @@ import {
 import type {
   ComponentType,
   CSSProperties,
-  MouseEvent as ReactMouseEvent,
   NamedExoticComponent,
   PointerEvent as ReactPointerEvent,
   ReactElement,
@@ -2097,10 +2096,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     page: runPageNavigation,
   });
   useBrunoTableColumnGestureEscape((event) => {
-    const gesture = columnGesture.current;
-    if (gesture === undefined || gesture.target.ownerDocument.activeElement !== gesture.target) {
-      return;
-    }
+    if (columnGesture.current === undefined) return;
     event.preventDefault();
     gestureCancel.current();
   });
@@ -2871,7 +2867,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               event.preventDefault();
               activateHeaderCommand(column.columnId);
             }}
-            onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+            onClick={(event) => {
               activateHeaderCommand(column.columnId);
               toggleHeaderSort(column.columnId, event.shiftKey);
             }}

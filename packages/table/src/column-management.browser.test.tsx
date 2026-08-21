@@ -2797,6 +2797,54 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
+  test("cancels an active column gesture when Escape comes from a newly focused text control", async () => {
+    const screen = await render(
+      <>
+        <BrunoTableClient<Row, typeof columns> {...tableProps} />
+        <input aria-label="Column gesture focus destination" />
+      </>,
+    );
+    const statusHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
+    const destination = screen
+      .getByRole("textbox", { name: "Column gesture focus destination" })
+      .element();
+    const statusHeader = screen.getByRole("columnheader", { name: /Status/u }).element();
+
+    statusHandle.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 100,
+        pointerId: 11,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 0,
+        pointerId: 11,
+      }),
+    );
+    destination.focus();
+    const escape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    destination.dispatchEvent(escape);
+    window.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        clientX: 0,
+        pointerId: 11,
+      }),
+    );
+
+    await new Promise(requestAnimationFrame);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(statusHeader).toHaveAttribute("aria-colindex", "3");
+  });
+
   test("detaches global gesture listeners after repeated committed gestures", async () => {
     const tableId = "TABLE_ID_COLUMN_MANAGEMENT_GESTURE_CYCLES";
     const commands: BrunoTableGridCommand[] = [];

@@ -122,6 +122,10 @@ const nativeKeyboardEvidenceGuardSmokeAst = await parseAstAsync(
   `const nativeInput = <input onKeyDown={(event) => recordComposition(event.isComposing)} />;`,
   { lang: "tsx" },
 );
+const nativeNonKeyboardHandlerGuardSmokeAst = await parseAstAsync(
+  `const nativeHandlers = <div onWheel={(event) => event.ctrlKey} onPointerDown={(event) => event.shiftKey} />;`,
+  { lang: "tsx" },
+);
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
   layoutEffectBinding === undefined
@@ -179,6 +183,10 @@ assertNoLegacyKeyboardSyntax(nativePointerGuardSmokeAst, "native pointer guard s
 assertNoLegacyKeyboardSyntax(
   nativeKeyboardEvidenceGuardSmokeAst,
   "native keyboard evidence guard smoke fixture",
+);
+assertNoLegacyKeyboardSyntax(
+  nativeNonKeyboardHandlerGuardSmokeAst,
+  "native non-keyboard handler guard smoke fixture",
 );
 
 if (
@@ -576,8 +584,7 @@ function keyboardEvidenceBindings(owner) {
     if (parameter.type !== "Identifier") continue;
     if (
       isKeyboardEventTypeAnnotation(parameter.typeAnnotation) ||
-      (index === 0 && keyboardHandlerFunctionOwners.has(owner)) ||
-      (!isPointerEventTypeAnnotation(parameter.typeAnnotation) && /event$/iu.test(parameter.name))
+      (index === 0 && keyboardHandlerFunctionOwners.has(owner))
     ) {
       bindings.add(parameter.name);
     }
@@ -638,13 +645,6 @@ function collectKeyboardHandlerFunctions(ast, register) {
 
 function isKeyboardEventTypeAnnotation(annotation) {
   return typeAnnotationContainsName(annotation, new Set(["KeyboardEvent", "ReactKeyboardEvent"]));
-}
-
-function isPointerEventTypeAnnotation(annotation) {
-  return typeAnnotationContainsName(
-    annotation,
-    new Set(["MouseEvent", "PointerEvent", "ReactMouseEvent", "ReactPointerEvent"]),
-  );
 }
 
 function typeAnnotationContainsName(annotation, names) {

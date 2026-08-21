@@ -349,7 +349,7 @@ export function useBrunoTableGridHotkeys(
 export function useBrunoTableColumnGestureEscape(onTrigger: (event: KeyboardEvent) => void): void {
   useBrunoTableHotkeys(
     typeof window === "undefined" ? null : window,
-    [{ hotkey: "Escape", onTrigger }],
+    [{ hotkey: "Escape", allowInTextInput: true, onTrigger }],
     "allow",
   );
 }
