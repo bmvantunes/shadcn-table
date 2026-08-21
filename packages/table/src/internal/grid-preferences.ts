@@ -14,6 +14,7 @@ import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
   compileClientFilterCollection,
+  normalizeBrunoTableFilterText,
   reconcileBrunoTableOrderBy,
   type BrunoTableClientFilterCollection,
   type BrunoTableOrderBy,
@@ -358,6 +359,15 @@ function decodePersistedFilter(
         return undefined;
       }
       if (!hasValidPersistedTextSensitivity(record, true)) return undefined;
+      if (
+        normalizeBrunoTableFilterText(
+          filter,
+          record["caseSensitive"] === true,
+          record["accentSensitive"] === true,
+        ).length === 0
+      ) {
+        return undefined;
+      }
       return Object.freeze({
         type,
         columnId,

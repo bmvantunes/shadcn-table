@@ -763,6 +763,54 @@ describe("Grid Preferences", () => {
     expect(restored.filters).toEqual([{ columnId: "COL_ID_STATUS", type: "blank" }]);
   });
 
+  it("prunes persisted search leaves that normalize empty while preserving their sibling", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_EMPTY_SEARCH_COMPOUND_LEAF",
+        columns,
+        initialFilters: [
+          {
+            type: "AND",
+            conditions: [
+              { columnId: "COL_ID_NAME", type: "blank" },
+              { columnId: "COL_ID_NAME", type: "contains", filter: "open" },
+            ],
+          },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const persistedFilters = snapshot["filters"];
+    const compound = Array.isArray(persistedFilters) ? persistedFilters[0] : undefined;
+    if (typeof compound !== "object" || compound === null || !("conditions" in compound)) {
+      throw new TypeError("Expected one persisted compound filter.");
+    }
+    const conditions = compound.conditions;
+    if (!Array.isArray(conditions) || typeof conditions[1] !== "object" || conditions[1] === null) {
+      throw new TypeError("Expected two persisted compound conditions.");
+    }
+
+    for (const filter of ["", "\u0301"]) {
+      const restored = createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_EMPTY_SEARCH_COMPOUND_LEAF",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+        initialPersistedState: {
+          ...snapshot,
+          filters: [
+            {
+              ...compound,
+              conditions: [conditions[0], { ...conditions[1], filter }],
+            },
+          ],
+        },
+      });
+
+      expect(restored.filters).toEqual([{ columnId: "COL_ID_NAME", type: "blank" }]);
+    }
+  });
+
   it("rejects accessor-backed persisted codec operands without invoking them", () => {
     const valid = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
