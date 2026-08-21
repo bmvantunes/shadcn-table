@@ -18,6 +18,7 @@ import type { CompiledColumn } from "./compile-columns";
 import type {
   BrunoTableQuerySnapshot,
   BrunoTableRowPipelineRuntimeView,
+  BrunoTableRowSpaceSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { compileClientFilterCollection } from "./grid-query";
@@ -34,7 +35,10 @@ type BrunoTableResultRowCountSource = Readonly<{
 
 type BrunoTableInitializableResultRowCountSource = BrunoTableResultRowCountSource &
   Readonly<{
-    readonly initializeResultRowCount: (query: BrunoTableQuerySnapshot) => boolean;
+    readonly initializeResultRowCount: (
+      query: BrunoTableQuerySnapshot,
+      rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+    ) => boolean;
   }>;
 
 type BrunoTableToolbarGridFilterCommands = Readonly<{
@@ -120,7 +124,12 @@ export function BrunoTableToolbarProvider({
     };
     const projectedResultRows = Object.freeze({
       getResultRowCountSnapshot: () => {
-        if (resultRows.initializeResultRowCount(runtime.getQuerySnapshot())) {
+        if (
+          resultRows.initializeResultRowCount(
+            runtime.getQuerySnapshot(),
+            runtime.getRowSpaceSnapshot(),
+          )
+        ) {
           if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
             recordBrunoTableToolbarLifetime({
               tableId,

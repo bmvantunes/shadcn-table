@@ -4087,6 +4087,93 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getCellValueSnapshot("second", "COL_ID_NAME")).toBe("Rear Admiral Hopper");
   });
 
+  it("keeps Client rows-store snapshots aligned with each installed publication", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    view.subscribeRowSpace(() => {
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") === "Outer") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    const events: string[] = [];
+    rowsStore.subscribe(() => {
+      const storeRow = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+      events.push(`${storeRow?.name}:${String(view.getCellValueSnapshot("first", "COL_ID_NAME"))}`);
+    });
+
+    runtime.publish(adapter.publish(source([outer])));
+
+    expect(events).toEqual(["Outer:Outer", "Newest:Newest"]);
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(newest);
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
+  it("re-subscribes a Client rows store to the installed publication", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const rowsStore = adapter.createRowsStore(
+      view,
+      () => (previousRows, nextRows) => previousRows !== nextRows,
+    );
+    rowsStore.subscribe(() => undefined)();
+    const events: string[] = [];
+    let disposeRowsStore: (() => void) | undefined;
+    view.subscribeRowSpace(() => {
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") !== "Outer") return;
+      const newestPublication = adapter.publish(source([newest]));
+      disposeRowsStore = rowsStore.subscribe(() => {
+        const storeRow = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+        events.push(
+          `notify:${storeRow?.name}:${String(view.getCellValueSnapshot("first", "COL_ID_NAME"))}`,
+        );
+      });
+      const installedRow = rowsStore.getSnapshot()[0]?.raw as Row | undefined;
+      events.push(
+        `subscribe:${installedRow?.name}:${String(view.getCellValueSnapshot("first", "COL_ID_NAME"))}`,
+      );
+      runtime.publish(newestPublication);
+    });
+
+    runtime.publish(adapter.publish(source([outer])));
+
+    expect(events).toEqual(["subscribe:Outer:Outer", "notify:Newest:Newest"]);
+    disposeRowsStore?.();
+  });
+
+  it("initializes lazy Result count from the installed publication", () => {
+    const initial = { id: "initial", name: "Initial" } satisfies Row;
+    const outer = { id: "outer", name: "Outer" } satisfies Row;
+    const newest = { id: "newest", name: "Newest" } satisfies Row;
+    const second = { id: "second", name: "Second" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const events: string[] = [];
+    view.subscribeRowSpace(() => {
+      const installedName = String(
+        view.getCellValueSnapshot(view.getRowSpaceSnapshot()?.getRowId(0) ?? "", "COL_ID_NAME"),
+      );
+      if (installedName === "Outer") {
+        runtime.publish(adapter.publish(source([newest, second])));
+        expect(
+          adapter.initializeResultRowCount(view.getQuerySnapshot(), view.getRowSpaceSnapshot()),
+        ).toBe(true);
+      } else {
+        adapter.publishResultRowCount(view.getLoadedRowCountSnapshot());
+      }
+      events.push(
+        `${String(adapter.getResultRowCountSnapshot())}:${String(view.getLoadedRowCountSnapshot())}`,
+      );
+    });
+
+    runtime.publish(adapter.publish(source([outer])));
+
+    expect(events).toEqual(["1:1", "2:2"]);
+  });
+
   it("does not let later outer cell traversal replace newer cached snapshots", () => {
     const { adapter, runtime, view } = createSubject();
     const newest = { id: "first", name: "Newest name", note: "newest note" } satisfies Row;

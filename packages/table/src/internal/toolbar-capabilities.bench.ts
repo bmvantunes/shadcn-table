@@ -77,7 +77,7 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
   });
 
   bench(
-    "keeps the queued-drain fast path within budget for one 20 Hz publication over 10,000 rows",
+    "keeps the non-reentrant publication fast path within budget at 20 Hz over 10,000 rows",
     () => {
       const startedAt = performance.now();
       const previousRowNotifications = rowNotifications;
