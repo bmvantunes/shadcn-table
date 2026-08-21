@@ -4352,6 +4352,59 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
   });
 
+  it("retains an accepted adapter configuration when the outer pass aborts", () => {
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const queued = { id: "first", name: "Queued" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const internalFailure = new Error("outer row space failed");
+    let accepted = false;
+    view.subscribeRowSpace(() => {
+      if (accepted) return;
+      accepted = true;
+      runtime.reconcile(
+        adapter.reconcile(source([queued]), (row) => row.id, replacementColumns),
+        replacementColumns,
+        adapter.getQueryConfiguration(replacementColumns),
+      );
+    });
+    view.subscribeRow("first", () => undefined);
+    const rejected = adapter.publish(source([outer]));
+    const rejectedRowSpace = rejected.rowSpace;
+    if (rejectedRowSpace === undefined) throw new Error("Expected a resident row space");
+    let rowReadFailed = false;
+
+    expect(() =>
+      runtime.publish({
+        ...rejected,
+        rowSpace: {
+          ...rejectedRowSpace,
+          getRow(rowId: string): Row | undefined {
+            if (!rowReadFailed) {
+              rowReadFailed = true;
+              throw internalFailure;
+            }
+            return rejectedRowSpace.getRow(rowId);
+          },
+        },
+      }),
+    ).toThrow(internalFailure);
+
+    runtime.publish(adapter.publish(source([newest])));
+    expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
+    expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
   it("falls back to complete change evidence after discarded Client candidates", () => {
     const initialFirst = { id: "first", name: "Outer first", note: "initial" } satisfies Row;
     const initialSecond = { id: "second", name: "Outer second", note: "initial" } satisfies Row;

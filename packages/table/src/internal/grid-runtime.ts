@@ -709,10 +709,18 @@ export class BrunoTableGridRuntime<TRow> {
         );
       }
     } finally {
+      let acceptedConfiguration: PublicationConfiguration | undefined;
+      for (let index = this.queuedPublications.length - 1; index >= 0; index -= 1) {
+        const queued = this.queuedPublications[index];
+        if (queued === undefined) continue;
+        acceptedConfiguration = queued.configuration;
+        break;
+      }
       this.queuedPublications.length = 0;
       this.publishing = false;
       this.logicalPublication = this.publication;
-      this.logicalPublicationConfiguration = this.installedPublicationConfiguration;
+      this.logicalPublicationConfiguration =
+        acceptedConfiguration ?? this.installedPublicationConfiguration;
     }
     if (firstError !== undefined) throw firstError.value;
   }
