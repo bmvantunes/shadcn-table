@@ -2214,7 +2214,11 @@ function snapshotInputEntries(
     const snapshot: unknown[] = [];
     for (const index of indexes) {
       try {
-        snapshot.push(values[index]);
+        const descriptor = Object.getOwnPropertyDescriptor(values, index);
+        if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+          continue;
+        }
+        snapshot.push(descriptor.value);
       } catch {
         // Ignore only this unreadable external entry so valid siblings remain usable.
       }
@@ -2231,21 +2235,17 @@ function readOwnArrayIndexes(
 ): readonly number[] | undefined | typeof FILTER_ENTRIES_OVER_BUDGET {
   try {
     const indexes: number[] = [];
-    const ownKeys = Reflect.ownKeys(values);
-    // An Array always owns its non-data `length` key. Count every other own
-    // key, including symbols and non-index properties, before inspecting any
-    // indexed values so hostile metadata cannot bypass the public-entry bound.
-    if (ownKeys.length > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES + 1) {
-      return FILTER_ENTRIES_OVER_BUDGET;
-    }
-    for (const key of ownKeys) {
-      if (typeof key !== "string" || key === "length") continue;
+    let enumerableOwnKeys = 0;
+    const enumerableProjection = values as unknown as Readonly<Record<string, unknown>>;
+    for (const key in enumerableProjection) {
+      if (!Object.hasOwn(values, key)) continue;
+      enumerableOwnKeys += 1;
+      if (enumerableOwnKeys > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
+        return FILTER_ENTRIES_OVER_BUDGET;
+      }
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
         indexes.push(index);
-        if (indexes.length > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
-          return FILTER_ENTRIES_OVER_BUDGET;
-        }
       }
     }
     indexes.sort((left, right) => left - right);

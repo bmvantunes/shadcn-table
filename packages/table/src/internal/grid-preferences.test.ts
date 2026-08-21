@@ -454,6 +454,67 @@ describe("Grid Preferences", () => {
 
     expect(directionGetter).not.toHaveBeenCalled();
     expect(restored.orderBy).toEqual(initialOrderBy);
+
+    const entryGetter = vi.fn(() => ({ columnId: "COL_ID_QUANTITY", direction: "desc" }));
+    const hostileOrder = Object.defineProperty([], 0, {
+      enumerable: true,
+      get: entryGetter,
+    });
+    Reflect.set(hostileOrder, "length", 1);
+    const restoredArray = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_HOSTILE_SORT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: { ...baseline, orderBy: hostileOrder },
+    });
+    expect(entryGetter).not.toHaveBeenCalled();
+    expect(restoredArray.orderBy).toEqual(initialOrderBy);
+  });
+
+  it("preserves valid siblings when a compound persisted filter leaf becomes stale", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_STALE_COMPOUND_LEAF",
+        columns,
+        initialFilters: [
+          {
+            type: "AND",
+            conditions: [
+              { columnId: "COL_ID_ACCOUNT", type: "blank" },
+              { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
+            ],
+          },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const persistedFilters = snapshot["filters"];
+    const compound = Array.isArray(persistedFilters) ? persistedFilters[0] : undefined;
+    if (typeof compound !== "object" || compound === null || !("conditions" in compound)) {
+      throw new TypeError("Expected one persisted compound filter.");
+    }
+    const conditions = compound.conditions;
+    if (!Array.isArray(conditions) || typeof conditions[1] !== "object" || conditions[1] === null) {
+      throw new TypeError("Expected two persisted compound conditions.");
+    }
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_STALE_COMPOUND_LEAF",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...snapshot,
+        filters: [
+          {
+            ...compound,
+            conditions: [conditions[0], { ...conditions[1], codecVersion: 999 }],
+          },
+        ],
+      },
+    });
+
+    expect(restored.filters).toEqual([{ columnId: "COL_ID_ACCOUNT", type: "blank" }]);
   });
 
   it("rejects accessor-backed persisted codec operands without invoking them", () => {
@@ -893,6 +954,73 @@ describe("Grid Preferences", () => {
     });
 
     expect(() => createBrunoTablePersistedState(preferences)).toThrow("JSON-safe");
+  });
+
+  it("rejects an over-keyed nested persisted codec object", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_OVER_KEYED_CODEC",
+        columns,
+        initialFilters: [
+          { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const filters = snapshot["filters"];
+    const filter = Array.isArray(filters) ? filters[0] : undefined;
+    if (typeof filter !== "object" || filter === null) {
+      throw new TypeError("Expected one persisted account filter.");
+    }
+    const payload = Object.fromEntries([
+      ["account", "acct-42"],
+      ...Array.from({ length: 4_097 }, (_unused, index) => [`irrelevant-${String(index)}`, index]),
+    ]);
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_OVER_KEYED_CODEC",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: { ...snapshot, filters: [{ ...filter, filter: payload }] },
+    });
+
+    expect(restored.filters).toEqual([]);
+  });
+
+  it("does not materialize non-JSON nested codec metadata", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_CODEC_METADATA",
+        columns,
+        initialFilters: [
+          { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const filters = snapshot["filters"];
+    const filter = Array.isArray(filters) ? filters[0] : undefined;
+    if (typeof filter !== "object" || filter === null) {
+      throw new TypeError("Expected one persisted account filter.");
+    }
+    const payload = { account: "acct-42" };
+    for (let index = 0; index <= 4_096; index += 1) {
+      Object.defineProperty(payload, `metadata-${String(index)}`, { value: index });
+      Object.defineProperty(payload, Symbol(`metadata-${String(index)}`), { value: index });
+    }
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_CODEC_METADATA",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: { ...snapshot, filters: [{ ...filter, filter: payload }] },
+    });
+
+    expect(restored.filters).toEqual([
+      { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
+    ]);
+    expect(ownKeys.mock.calls.some(([target]) => target === payload)).toBe(false);
   });
 
   it("validates a codec object's prototype from one observation", () => {

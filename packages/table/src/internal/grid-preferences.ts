@@ -47,6 +47,7 @@ const PERSISTED_FILTER_KEYS = Object.freeze([
 ]);
 const BRUNO_TABLE_PERSISTED_JSON_MAX_DEPTH = 64;
 const BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES = BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS * 8;
+const BRUNO_TABLE_PERSISTED_JSON_MAX_OBJECT_KEYS = 4_096;
 
 type BrunoTablePersistedJsonBudget = {
   nodes: number;
@@ -310,9 +311,11 @@ function decodePersistedFilter(
       const conditions: Readonly<Record<string, unknown>>[] = [];
       for (const condition of candidates) {
         const decoded = decodePersistedFilter(condition, columnsById, budget, depth + 1);
-        if (decoded === undefined) return undefined;
-        conditions.push(decoded);
+        if (budget.overBudget) return undefined;
+        if (decoded !== undefined) conditions.push(decoded);
       }
+      if (conditions.length === 0) return undefined;
+      if (conditions.length === 1) return conditions[0];
       return Object.freeze({ type, conditions: Object.freeze(conditions) });
     }
     if (type === "NOT") {
@@ -478,13 +481,18 @@ function snapshotUnknownJsonValue(
       return INVALID_JSON_VALUE;
     }
     const result: Record<string, BrunoTableJsonValue> = Object.create(null);
-    const keys = Reflect.ownKeys(value);
-    if (keys.length > BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES - budget.nodes) {
-      budget.overBudget = true;
-      return INVALID_JSON_VALUE;
+    const remainingNodes = BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES - budget.nodes;
+    const maximumKeys = Math.min(remainingNodes, BRUNO_TABLE_PERSISTED_JSON_MAX_OBJECT_KEYS);
+    const enumerableKeys: string[] = [];
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      enumerableKeys.push(key);
+      if (enumerableKeys.length > maximumKeys) {
+        budget.overBudget = true;
+        return INVALID_JSON_VALUE;
+      }
     }
-    for (const key of keys) {
-      if (typeof key !== "string") return INVALID_JSON_VALUE;
+    for (const key of enumerableKeys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
         return INVALID_JSON_VALUE;

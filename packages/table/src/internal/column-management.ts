@@ -377,14 +377,12 @@ export function reconcileBrunoTableColumnLayout(
     state.orderOverride === undefined
       ? undefined
       : Object.freeze(state.orderOverride.filter((columnId) => nextById.has(columnId)));
+  const orderMembership = orderOverride === undefined ? undefined : new Set(orderOverride);
   const baselineOrder = baselineColumns.map((column) => column.columnId);
   const orderedIds =
     orderOverride === undefined
       ? baselineOrder
-      : [
-          ...orderOverride,
-          ...baselineOrder.filter((columnId) => !orderOverride.includes(columnId)),
-        ];
+      : [...orderOverride, ...baselineOrder.filter((columnId) => !orderMembership!.has(columnId))];
   const reconciledColumns = orderedIds.flatMap((columnId) => {
     const next = nextById.get(columnId);
     return next === undefined

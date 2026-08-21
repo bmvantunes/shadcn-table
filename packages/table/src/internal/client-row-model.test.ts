@@ -1303,7 +1303,15 @@ describe("Client row model", () => {
     ]);
     const root = Array<unknown>(1_000_000);
     root[0] = { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" };
-    root[1] = { columnId: "COL_ID_NAME", type: "equals", filter: "blocked" };
+    let accessorReads = 0;
+    Object.defineProperty(root, "1", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        throw new Error("Unreadable root entry.");
+      },
+    });
     root[2] = { columnId: "COL_ID_NAME", type: "notBlank" };
     let indexedProbes = 0;
     let ownKeyReads = 0;
@@ -1315,7 +1323,6 @@ describe("Client row model", () => {
     const hostileRoot = new Proxy(root, {
       get: (target, property, receiver) => {
         countIndexedProbe(property);
-        if (property === "1") throw new Error("Unreadable root entry.");
         return Reflect.get(target, property, receiver) as unknown;
       },
       getOwnPropertyDescriptor: (target, property) => {
@@ -1343,8 +1350,32 @@ describe("Client row model", () => {
         ],
       },
     ]);
-    expect(indexedProbes).toBeLessThanOrEqual(3);
+    expect(indexedProbes).toBeLessThanOrEqual(12);
     expect(ownKeyReads).toBe(1);
+    expect(accessorReads).toBe(0);
+  });
+
+  it("does not materialize non-JSON root-array metadata", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const root: unknown[] = [{ columnId: "COL_ID_NAME", type: "startsWith", filter: "A" }];
+    for (let index = 0; index <= 16_384; index += 1) {
+      Object.defineProperty(root, `metadata-${String(index)}`, { value: index });
+    }
+    for (let index = 0; index <= 4_096; index += 1) {
+      Object.defineProperty(root, Symbol(`metadata-${String(index)}`), { value: index });
+    }
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    expect(sanitizeClientInitialFilters(root, columns)).toEqual([
+      { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+    ]);
+    expect(ownKeys.mock.calls.some(([target]) => target === root)).toBe(false);
   });
 
   it("caps hostile filter-array materialization before canonicalization", () => {
@@ -1378,7 +1409,7 @@ describe("Client row model", () => {
     expect(sanitizeClientInitialFilters(metadataRoot, columns)).toEqual([]);
     expect(() =>
       sanitizeClientInitialFilters(metadataRoot, columns, { rejectOverBudget: true }),
-    ).toThrow(/contains more than 16384 entries/u);
+    ).not.toThrow();
   });
 
   it("canonicalizes one committed expression per Column Identity", () => {
@@ -1638,7 +1669,15 @@ describe("Client row model", () => {
       },
     ]);
     const root = Array<unknown>(1_000_000);
-    root[0] = { columnId: "COL_ID_NAME", direction: "desc" };
+    let accessorReads = 0;
+    Object.defineProperty(root, "0", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        throw new Error("Unreadable root entry.");
+      },
+    });
     root[1] = { columnId: "COL_ID_NAME", direction: "asc" };
     let indexedProbes = 0;
     let ownKeyReads = 0;
@@ -1650,7 +1689,6 @@ describe("Client row model", () => {
     const hostileRoot = new Proxy(root, {
       get: (target, property, receiver) => {
         countIndexedProbe(property);
-        if (property === "0") throw new Error("Unreadable root entry.");
         return Reflect.get(target, property, receiver) as unknown;
       },
       getOwnPropertyDescriptor: (target, property) => {
@@ -1670,8 +1708,9 @@ describe("Client row model", () => {
     expect(sanitizeClientOrderBy(hostileRoot as never, columns)).toEqual([
       { columnId: "COL_ID_NAME", direction: "asc" },
     ]);
-    expect(indexedProbes).toBeLessThanOrEqual(2);
+    expect(indexedProbes).toBeLessThanOrEqual(8);
     expect(ownKeyReads).toBe(1);
+    expect(accessorReads).toBe(0);
 
     const unreadableLength = new Proxy([], {
       get: (target, property, receiver) => {

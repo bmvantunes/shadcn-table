@@ -623,6 +623,11 @@ describe("BrunoTable column management", () => {
 
     expect(performance.now() - start).toBeLessThan(150);
     expect(restored.allColumns[0]?.columnId).toBe("COL_ID_WIDE_9999");
+
+    const reconcileStart = performance.now();
+    const reconciled = reconcileBrunoTableColumnLayout(restored, wideColumns);
+    expect(performance.now() - reconcileStart).toBeLessThan(150);
+    expect(reconciled.allColumns[0]?.columnId).toBe("COL_ID_WIDE_9999");
   });
 
   it("reconciles visible order when definitions are reordered", () => {
