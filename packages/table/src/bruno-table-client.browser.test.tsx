@@ -9348,6 +9348,97 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(screen.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
   });
 
+  test("contains row-aware source reads in mounted cells and the active proxy", async () => {
+    const rowAwareColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => row.name,
+      },
+    ] as const;
+    const compiledColumns = compileColumns(rowAwareColumns);
+    const initialRow = rows[0]!;
+    const rowSpace = (version: number, getRow: (rowId: string) => Row | undefined) =>
+      Object.freeze({
+        status: "ready" as const,
+        totalRows: 1,
+        version,
+        rowSpace: Object.freeze({
+          totalRows: 1,
+          loadedRows: 1,
+          getRowId: (index: number) => (index === 0 ? initialRow.id : undefined),
+          getRow,
+          getCellValue: (rowId: string) => getRow(rowId)?.name,
+        }),
+        hasCoherentRows: true,
+      });
+    const runtime = new BrunoTableGridRuntime(
+      rowSpace(1, (rowId) => (rowId === initialRow.id ? initialRow : undefined)),
+      compiledColumns,
+      Object.freeze({
+        baselineFilters: Object.freeze([]),
+        baselineOrderBy: Object.freeze([
+          Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
+        ]),
+      }),
+      "TABLE_ID_ROW_READ_CONTAINMENT",
+    );
+    const logicalRowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      totalRows: 1,
+      getRowId: (index) => (index === 0 ? initialRow.id : undefined),
+      findRowIndex: (rowId) => (rowId === initialRow.id ? 0 : undefined),
+      setRequiredRange: () => undefined,
+    });
+    const screen = await render(
+      <BrunoTableView
+        runtime={runtime.getView()}
+        tableId="TABLE_ID_ROW_READ_CONTAINMENT"
+        compiledColumns={compiledColumns}
+        toolbar={new BrunoTableToolbarStore(undefined)}
+        rowPipeline={SparseRowPipeline}
+        rowPipelineAdapter={{ rowSpace: logicalRowSpace, queryGeneration: 0 }}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ROW_READ_CONTAINMENT" });
+    await expect.element(screen.getByRole("gridcell", { name: "Ada" }).first()).toBeInTheDocument();
+    grid.element().focus();
+    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+
+    const sourceReadFailure = new Error("row read failed");
+    const failingGetRow = vi.fn((): Row | undefined => {
+      throw sourceReadFailure;
+    });
+    await act(async () => {
+      expect(() => runtime.publish(rowSpace(2, failingGetRow))).toThrow(sourceReadFailure);
+    });
+
+    expect(failingGetRow).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(
+        screen
+          .getByRole("gridcell")
+          .all()
+          .every((cell) => cell.element().textContent === ""),
+      ).toBe(true);
+    });
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    expect(activeId).not.toBeNull();
+    expect(grid.element().ownerDocument.getElementById(activeId!)?.textContent).toBe("");
+
+    const recoveredRow = { ...initialRow, name: "Augusta" };
+    await act(async () => {
+      runtime.publish(
+        rowSpace(3, (rowId) => (rowId === recoveredRow.id ? recoveredRow : undefined)),
+      );
+    });
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Augusta" }).first())
+      .toBeInTheDocument();
+    expect(grid.element().ownerDocument.getElementById(activeId!)?.textContent).toBe("Augusta");
+  });
+
   test("does not mount an empty toolbar and isolates unchanged cell islands", async () => {
     const gridSurfaceRenders = vi.fn();
     const removeRenderListener =

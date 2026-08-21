@@ -57,9 +57,16 @@ adapter.subscribeResultRowCount(() => {
 let version = 1;
 let changed = false;
 let rowNotifications = 0;
+let cellNotifications = 0;
 view.subscribeRow(`row-${String(residentRows - 1)}`, () => {
   rowNotifications += 1;
 });
+const mountedCellSubscriptions = 256;
+for (let index = residentRows - mountedCellSubscriptions; index < residentRows; index += 1) {
+  view.subscribeCell(`row-${String(index)}`, "COL_ID_BENCH_NAME", () => {
+    cellNotifications += 1;
+  });
+}
 const warmupIterations = 10;
 const durationsMs: number[] = [];
 
@@ -77,10 +84,11 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
   });
 
   bench(
-    "keeps the non-reentrant publication fast path within budget at 20 Hz over 10,000 rows",
+    "keeps the non-reentrant publication fast path within budget with 256 subscribed cells",
     () => {
       const startedAt = performance.now();
       const previousRowNotifications = rowNotifications;
+      const previousCellNotifications = cellNotifications;
       version += 1;
       changed = !changed;
       runtime.publish(
@@ -98,6 +106,9 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
       }
       if (rowNotifications !== previousRowNotifications + 1) {
         throw new Error("One semantic row change did not produce exactly one row notification.");
+      }
+      if (cellNotifications !== previousCellNotifications + 1) {
+        throw new Error("One semantic cell change did not produce exactly one cell notification.");
       }
     },
     { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },

@@ -413,6 +413,14 @@ invariant failure instead aborts the remaining accepted publications and is prop
 preference to any collected listener failure. This guarantee applies equally to Client and future
 Viewport Row Pipeline Adapters without exposing the Grid Runtime's private ownership mechanism.
 
+Adapter row and cell reads performed for subscribed-cell notification follow the same deterministic
+first-failure-and-continue policy as listener notification. A failed cell read replaces any cached
+success with a private non-success Cell Snapshot and invalidates that cell's subscribers, so an old
+value cannot remain presented as current; successful sibling reads install snapshots from the
+committed publication and notify normally. A later successful publication can recover the failed
+cell. Read and listener failures retain their traversal order, while an internal publication
+invariant failure still takes precedence over all collected notification failures.
+
 ## Column construction seam
 
 Raw definitions, built-in Column Helpers, and application Column Presets all converge into the same validated normalized-column representation before TanStack columns or render plans are created. Helpers are construction-time modules, not runtime column kinds: normalized cells do not branch on whether their definition came from `BrunoTableNumberColumn`, `priceColumn`, or a raw object.
