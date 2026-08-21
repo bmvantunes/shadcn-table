@@ -1022,6 +1022,7 @@ export class BrunoTableGridRuntime<TRow> {
     columnId: string,
     listener: Listener,
   ): (() => void) => {
+    const snapshot = this.currentRowCellSnapshot(rowId, columnId);
     let rowListeners = this.rowCellListeners.get(rowId);
     if (rowListeners === undefined) {
       rowListeners = new Map();
@@ -1032,7 +1033,6 @@ export class BrunoTableGridRuntime<TRow> {
       listeners = new Set();
       rowListeners.set(columnId, listeners);
     }
-    const snapshot = this.currentRowCellSnapshot(rowId, columnId);
     listeners.add(listener);
     this.clearPendingRowCellSnapshot(rowId, columnId);
     this.installRowCellSnapshot(rowId, columnId, snapshot);
@@ -1056,6 +1056,7 @@ export class BrunoTableGridRuntime<TRow> {
     columnId: string,
     listener: Listener,
   ): (() => void) => {
+    const snapshot = this.currentCellSnapshot(rowId, columnId);
     let rowListeners = this.cellListeners.get(rowId);
     if (rowListeners === undefined) {
       rowListeners = new Map();
@@ -1066,7 +1067,6 @@ export class BrunoTableGridRuntime<TRow> {
       listeners = new Set();
       rowListeners.set(columnId, listeners);
     }
-    const snapshot = this.currentCellSnapshot(rowId, columnId);
     listeners.add(listener);
     this.clearPendingCellSnapshot(rowId, columnId);
     this.installCellSnapshot(rowId, columnId, snapshot);
@@ -1804,19 +1804,24 @@ export class BrunoTableGridRuntime<TRow> {
           nextSnapshot = readRowCellSnapshot(next, this.columnsById, rowId, columnId);
         } catch (error) {
           firstError = firstNotificationFailure(firstError, notificationFailure(error));
-          this.installRowCellSnapshot(
-            rowId,
-            columnId,
-            unavailableRowCellSnapshot(next, this.columnsById.get(columnId)),
+          const unavailableSnapshot = unavailableRowCellSnapshot(
+            next,
+            this.columnsById.get(columnId),
           );
-          firstError = firstNotificationFailure(firstError, notify(listeners));
+          if (
+            previousSnapshot === undefined ||
+            !sameRowCellSnapshot(previousSnapshot, unavailableSnapshot)
+          ) {
+            this.installRowCellSnapshot(rowId, columnId, unavailableSnapshot);
+            firstError = firstNotificationFailure(firstError, notify(listeners));
+          }
           continue;
         }
-        this.installRowCellSnapshot(rowId, columnId, nextSnapshot);
         if (
           previousSnapshot === undefined ||
           !sameRowCellSnapshot(previousSnapshot, nextSnapshot)
         ) {
+          this.installRowCellSnapshot(rowId, columnId, nextSnapshot);
           firstError = firstNotificationFailure(firstError, notify(listeners));
         }
       }
@@ -1836,12 +1841,14 @@ export class BrunoTableGridRuntime<TRow> {
           nextSnapshot = readCellSnapshot(next, this.columnsById, rowId, columnId);
         } catch (error) {
           firstError = firstNotificationFailure(firstError, notificationFailure(error));
-          this.installCellSnapshot(
-            rowId,
-            columnId,
-            unavailableCellSnapshot(next, this.columnsById.get(columnId)),
-          );
-          firstError = firstNotificationFailure(firstError, notify(listeners));
+          const unavailableSnapshot = unavailableCellSnapshot(next, this.columnsById.get(columnId));
+          if (
+            previousSnapshot === undefined ||
+            !sameCellSnapshot(previousSnapshot, unavailableSnapshot)
+          ) {
+            this.installCellSnapshot(rowId, columnId, unavailableSnapshot);
+            firstError = firstNotificationFailure(firstError, notify(listeners));
+          }
           continue;
         }
         if (previousSnapshot === undefined) {
@@ -1879,10 +1886,11 @@ export class BrunoTableGridRuntime<TRow> {
   ): BrunoTableRowCellSnapshot {
     const column = this.columnsById.get(columnId);
     const current = this.rowCellSnapshots.get(rowId)?.get(columnId);
+    const subscribed = this.rowCellListeners.get(rowId)?.has(columnId) ?? false;
     if (
       current !== undefined &&
       current.column === column &&
-      current.rowSpace === this.state.rowSpace
+      (subscribed || current.rowSpace === this.state.rowSpace)
     ) {
       return current;
     }
