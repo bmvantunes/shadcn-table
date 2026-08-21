@@ -9359,8 +9359,11 @@ describe("BrunoTableClient browser surface", () => {
     const initialRow = rows[0]!;
     const recoveredRow = { ...initialRow, name: "Augusta" };
     const sourceReadFailure = new Error("row read failed");
+    const cellReadFailure = new Error("cell read failed");
     let sourceState: "missing" | "failing" | "recovered" = "missing";
+    let cellReadFails = false;
     const failedRowReads = vi.fn();
+    const failedCellReads = vi.fn();
     const getRow = vi.fn((rowId: string): Row | undefined => {
       if (rowId !== recoveredRow.id) return undefined;
       if (sourceState === "failing") {
@@ -9380,8 +9383,14 @@ describe("BrunoTableClient browser surface", () => {
               : `row-${String(index)}`
             : undefined,
         getRow: readRow,
-        getCellValue: (rowId: string) =>
-          sourceState === "recovered" && rowId === recoveredRow.id ? recoveredRow.name : undefined,
+        getCellValue: (rowId: string) => {
+          if (rowId !== recoveredRow.id) return undefined;
+          if (cellReadFails) {
+            failedCellReads();
+            throw cellReadFailure;
+          }
+          return sourceState === "recovered" ? recoveredRow.name : undefined;
+        },
       });
     const initialSourceRowSpace = createSourceRowSpace(() => undefined);
     const mountedSourceRowSpace = createSourceRowSpace(getRow);
@@ -9435,14 +9444,14 @@ describe("BrunoTableClient browser surface", () => {
       expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
     );
     getRow.mockClear();
-    sourceState = "failing";
+    sourceState = "recovered";
+    cellReadFails = true;
     await act(async () => {
-      expect(() => runtime.publish(publication(2, mountedSourceRowSpace))).toThrow(
-        sourceReadFailure,
-      );
+      expect(() => runtime.publish(publication(2, mountedSourceRowSpace))).toThrow(cellReadFailure);
     });
 
-    expect(failedRowReads).toHaveBeenCalledOnce();
+    expect(failedRowReads).not.toHaveBeenCalled();
+    expect(failedCellReads).toHaveBeenCalledOnce();
     await vi.waitFor(() => {
       expect(
         screen
@@ -9451,7 +9460,7 @@ describe("BrunoTableClient browser surface", () => {
           .every((cell) => cell.element().textContent === ""),
       ).toBe(true);
     });
-    sourceState = "recovered";
+    cellReadFails = false;
     await act(async () => {
       runtime.publish(publication(3, mountedSourceRowSpace));
     });
