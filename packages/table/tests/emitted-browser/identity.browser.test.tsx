@@ -50,6 +50,60 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+test("restores and emits versioned Grid Preferences from the emitted package", async () => {
+  const columns = [
+    {
+      columnId: "COL_ID_EMITTED_PREFERENCE_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+    },
+  ] satisfies BrunoTableColumns<FilterRow>;
+  const onPersistChange = vi.fn();
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EMITTED_PREFERENCES"
+      getRowId={(row: FilterRow) => row.id}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_EMITTED_PREFERENCE_NAME", direction: "asc" }]}
+      initialPersistedState={{
+        version: 1,
+        tableId: "TABLE_ID_EMITTED_PREFERENCES",
+        filters: [
+          {
+            columnId: "COL_ID_EMITTED_PREFERENCE_NAME",
+            type: "equals",
+            codecId: "@bruno/table/text",
+            codecVersion: 1,
+            filter: { $brunoTableValue: "text", version: 1, value: "Grace" },
+          },
+        ],
+        orderBy: [{ columnId: "COL_ID_EMITTED_PREFERENCE_NAME", direction: "desc" }],
+        groupBy: [],
+        groupOrderBy: [],
+        columnOrder: ["COL_ID_EMITTED_PREFERENCE_NAME"],
+        columnVisibility: { COL_ID_EMITTED_PREFERENCE_NAME: true },
+        columnWidths: { COL_ID_EMITTED_PREFERENCE_NAME: 180 },
+        columnPinning: { start: [], end: [] },
+      }}
+      onPersistChange={onPersistChange}
+      clientSource={filterSource}
+    />,
+  );
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
+  expect(onPersistChange).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
+  await vi.waitFor(() => expect(onPersistChange).toHaveBeenCalledOnce());
+  expect(JSON.stringify(onPersistChange.mock.lastCall?.[0])).toContain(
+    '"codecId":"@bruno/table/text"',
+  );
+});
+
 test("applies emitted Quick Filter and column filter interactions", async () => {
   const columns = [
     {

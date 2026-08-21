@@ -19,6 +19,7 @@ import {
   type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableFilterExpressions,
+  type BrunoTablePersistedState,
   type BrunoTableQuickFilterField,
   type BrunoTableQuickFilterFields,
   type BrunoTableGroupKeyCellParams,
@@ -123,6 +124,48 @@ const emittedCallableProps: Parameters<typeof BrunoTableClient<Order, Columns>>[
   emittedClientProps;
 const emittedNamedProps: BrunoTableClientProps<Order, Columns> = emittedCallableProps;
 void BrunoTableClient(emittedNamedProps);
+const emittedPersistedState = {
+  version: 1,
+  tableId: "TABLE_ID_EMITTED_PREFERENCES",
+  filters: [],
+  orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
+  groupBy: [],
+  groupOrderBy: [],
+  columnOrder: ["COL_ID_PRICE", "COL_ID_SYMBOL", "COL_ID_DOUBLE_QUANTITY"],
+  columnVisibility: { COL_ID_SYMBOL: true },
+  columnWidths: { COL_ID_PRICE: 222 },
+  columnPinning: { start: ["COL_ID_PRICE"], end: [] },
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedPersistedState;
+const emittedInvalidPersistedState = {
+  ...emittedPersistedState,
+  // @ts-expect-error Emitted persisted identities retain exact tuple autocomplete.
+  columnPinning: { start: ["COL_ID_UNKNOWN"], end: [] },
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedInvalidPersistedState;
+const emittedInvalidPersistedFilter = {
+  ...emittedPersistedState,
+  filters: [
+    // @ts-expect-error Emitted persisted filters retain operator-family inference.
+    {
+      columnId: "COL_ID_PRICE",
+      type: "contains",
+      codecId: "@bruno/table/number",
+      codecVersion: 1,
+      filter: { value: "10" },
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedInvalidPersistedFilter;
+const emittedPersistedProps = {
+  ...emittedClientProps,
+  initialPersistedState: emittedPersistedState,
+  onPersistChange: (state) => {
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns>>> = true;
+    void exactState;
+  },
+} satisfies BrunoTableClientProps<Order, Columns>;
+void emittedPersistedProps;
 const emittedQuickFields = [
   "symbol",
   "hiddenLabel",

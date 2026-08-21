@@ -2,7 +2,11 @@ import { useLayoutEffect, useMemo, useState } from "react";
 
 import type { ReactNode } from "react";
 
-import type { BrunoTableClientProps, BrunoTableColumns } from "./public-types";
+import type {
+  BrunoTableClientProps,
+  BrunoTableColumns,
+  BrunoTablePersistedState,
+} from "./public-types";
 import {
   BrunoTableToolbar,
   BrunoTableToolbarStore,
@@ -45,6 +49,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
         compiledColumns,
         rowPipelineAdapter.getQueryConfiguration(compiledColumns),
         tableId,
+        { initialPersistedState: props.initialPersistedState },
       ),
   );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
@@ -60,6 +65,15 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
     const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
     runtime.reconcile(publication, compiledColumns, queryConfiguration);
   }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
+
+  useLayoutEffect(() => {
+    const notify = props.onPersistChange;
+    runtime.setOnPersistChange(
+      notify === undefined
+        ? undefined
+        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns>),
+    );
+  }, [props.onPersistChange, runtime]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);

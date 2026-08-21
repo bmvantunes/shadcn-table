@@ -65,7 +65,7 @@ export type BrunoTableClientFilterCollection = Readonly<{
 }>;
 
 export function reconcileBrunoTableOrderBy(
-  orderBy: BrunoTableOrderBy,
+  orderBy: unknown,
   baseline: BrunoTableOrderBy,
   columns: readonly CompiledColumn[],
 ): BrunoTableOrderBy {
@@ -73,7 +73,7 @@ export function reconcileBrunoTableOrderBy(
 }
 
 export function sanitizeBrunoTableOrderBy(
-  orderBy: BrunoTableOrderBy | undefined,
+  orderBy: unknown,
   columns: readonly CompiledColumn[],
 ): BrunoTableOrderBy {
   return sanitizeClientOrderBy(orderBy, columns);
@@ -112,7 +112,7 @@ export function sanitizeClientInitialOrderBy(
 }
 
 export function reconcileClientOrderBy(
-  orderBy: ClientOrderBy,
+  orderBy: unknown,
   baseline: ClientOrderBy,
   columns: readonly CompiledColumn[],
 ): ClientOrderBy {
@@ -129,7 +129,7 @@ export function reconcileClientOrderBy(
 }
 
 export function sanitizeClientOrderBy(
-  orderBy: ClientOrderBy | undefined,
+  orderBy: unknown,
   columns: readonly CompiledColumn[],
 ): ClientOrderBy {
   const candidates = snapshotInputEntries(orderBy);

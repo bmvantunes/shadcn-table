@@ -121,6 +121,29 @@ state or controls. Server-side runtime virtualization remains planned backlog wo
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.
 
+## Grid Preferences
+
+`initialPersistedState` accepts one version-1, JSON-safe replacement snapshot when a Table Instance
+is constructed. BrunoTable deterministically sanitizes it against the current `tableId`, compiled
+Column Definitions, operator capabilities, and Value Type codec identities before the first server
+or client render. Valid restored filters, sorting, and layout win over their initial baselines;
+changing the prop later does not control the runtime. Filter and sorting Reset commands still return
+to `initialFilters` and the mandatory non-empty `initialOrderBy`, while Clear removes Grid Filters.
+
+`onPersistChange` synchronously receives one complete replacement snapshot after a committed Grid
+Filter, sorting, column-order, visibility, width, or pinning change. Restoration, hydration, source
+publications, Quick Filter, focus, selection, scrolling, and other transient activity do not emit.
+The callback may be replaced without recreating the Grid Runtime; its return value and failures do
+not roll back committed grid state. Applications own storage, transport, retry, authorization, and
+publication ordering—BrunoTable does not access Local Storage or any persistence backend.
+
+Persisted operands carry the owning column's `codecId` and `codecVersion` and contain only that
+compiled Value Type's JSON-safe `encodePersisted` output. Restoration calls the matching
+`decodePersisted` implementation and drops stale, malformed, unknown, or incompatible evidence.
+Native `bigint` and Effect BigDecimal objects therefore never appear directly in the snapshot.
+The format reserves ordered Group By and grouped-sort fields for capable future runtimes, but the
+current Client runtime drops them because it does not install grouping.
+
 ## Application styles
 
 Import the canonical shadcn stylesheet once from an application CSS entry point, include the

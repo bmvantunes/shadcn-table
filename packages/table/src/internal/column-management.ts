@@ -147,6 +147,13 @@ type BrunoTableCommittedColumnOverride = Readonly<{
   readonly pinningCommitted?: boolean;
 }>;
 
+export type BrunoTablePersistedColumnLayoutInput = Readonly<{
+  readonly columnOrder?: unknown;
+  readonly columnVisibility?: unknown;
+  readonly columnWidths?: unknown;
+  readonly columnPinning?: unknown;
+}>;
+
 const EMPTY_COMMITTED_OVERRIDES: ReadonlyMap<string, BrunoTableCommittedColumnOverride> = new Map();
 
 export function createBrunoTableColumnLayout(
@@ -166,6 +173,186 @@ export function createBrunoTableColumnLayout(
     orderOverride: undefined,
     version,
   });
+}
+
+/** Restores one untrusted durable base layout without replaying user commands or notifications. */
+export function restoreBrunoTableColumnLayout(
+  columns: readonly CompiledColumn[],
+  input: BrunoTablePersistedColumnLayoutInput,
+): BrunoTableColumnLayoutState {
+  const baseline = createBrunoTableColumnLayout(columns);
+  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  const capturedOrder = captureSanitizedColumnIdArray(input.columnOrder, columnsById);
+  const order = capturedOrder ?? Object.freeze([]);
+  const orderedIds = [
+    ...order,
+    ...columns.map((column) => column.columnId).filter((id) => !order.includes(id)),
+  ];
+  const pinning = sanitizeColumnPinning(
+    input.columnPinning,
+    columnsById,
+    capturedOrder === undefined ? undefined : new Set(capturedOrder),
+  );
+  const widths = sanitizeColumnWidths(input.columnWidths, columnsById);
+  const allColumns = Object.freeze(
+    orderedIds.flatMap((columnId) => {
+      const column = columnsById.get(columnId);
+      if (column === undefined) return [];
+      const pinned = pinning.get(columnId);
+      const width = widths.get(columnId);
+      const withPin = pinned === column.pinned ? column : withColumnPin(column, pinned);
+      return [
+        width === undefined || width === withPin.semantics.width
+          ? withPin
+          : withColumnWidth(withPin, width),
+      ];
+    }),
+  );
+  const visible = sanitizeColumnVisibility(
+    input.columnVisibility,
+    orderedIds,
+    new Set(baseline.visibleColumnIds),
+  );
+  const visibleColumnIds = visible.length === 0 ? baseline.visibleColumnIds : visible;
+  const committedOverrides = new Map<string, BrunoTableCommittedColumnOverride>();
+  for (const column of allColumns) {
+    const baselineColumn = columnsById.get(column.columnId);
+    if (baselineColumn === undefined) continue;
+    const widthChanged = column.semantics.width !== baselineColumn.semantics.width;
+    const pinChanged = column.pinned !== baselineColumn.pinned;
+    if (widthChanged || pinChanged) {
+      committedOverrides.set(column.columnId, {
+        ...(widthChanged ? { width: column.semantics.width } : {}),
+        ...(pinChanged ? { pinned: column.pinned, pinningCommitted: true } : {}),
+      });
+    }
+  }
+  return Object.freeze({
+    baselineColumns: baseline.baselineColumns,
+    allColumns,
+    visibleColumnIds: deriveVisibleColumnIdsFromLogicalOrder(allColumns, visibleColumnIds),
+    committedOverrides,
+    orderOverride: Object.freeze(orderedIds),
+    version: 0,
+  });
+}
+
+function captureSanitizedColumnIdArray(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): readonly CompiledColumn["columnId"][] | undefined {
+  try {
+    if (!Array.isArray(input) || !Number.isSafeInteger(input.length)) return undefined;
+    const seen = new Set<string>();
+    const result: CompiledColumn["columnId"][] = [];
+    for (let index = 0; index < input.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, index);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      const value = descriptor.value;
+      if (typeof value !== "string" || seen.has(value) || !columnsById.has(value)) continue;
+      seen.add(value);
+      const column = columnsById.get(value);
+      if (column !== undefined) result.push(column.columnId);
+    }
+    return Object.freeze(result);
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeColumnPinning(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  snapshotColumnIds: ReadonlySet<string> | undefined,
+): ReadonlyMap<string, BrunoTableColumnPin> {
+  const result = new Map<string, BrunoTableColumnPin>();
+  const record = capturePlainRecord(input);
+  const start = captureSanitizedColumnIdArray(record?.["start"], columnsById);
+  const end = captureSanitizedColumnIdArray(record?.["end"], columnsById);
+  if (
+    record === undefined ||
+    start === undefined ||
+    end === undefined ||
+    snapshotColumnIds === undefined
+  ) {
+    for (const column of columnsById.values()) result.set(column.columnId, column.pinned);
+    return result;
+  }
+  for (const [side, candidates] of [
+    ["start", start],
+    ["end", end],
+  ] as const) {
+    for (const columnId of candidates) {
+      if (!result.has(columnId)) result.set(columnId, side);
+    }
+  }
+  for (const [columnId, column] of columnsById) {
+    if (!result.has(columnId)) {
+      result.set(columnId, snapshotColumnIds.has(columnId) ? undefined : column.pinned);
+    }
+  }
+  return result;
+}
+
+function sanitizeColumnWidths(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): ReadonlyMap<string, number> {
+  const result = new Map<string, number>();
+  const record = capturePlainRecord(input);
+  if (record === undefined) return result;
+  for (const [columnId, column] of columnsById) {
+    const value = record[columnId];
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    const normalized = clampBrunoTableColumnWidth(value, getBrunoTableColumnWidthBounds(column));
+    if (normalized !== value) continue;
+    result.set(columnId, value);
+  }
+  return result;
+}
+
+function sanitizeColumnVisibility(
+  input: unknown,
+  orderedIds: readonly string[],
+  baselineVisible: ReadonlySet<string>,
+): readonly string[] {
+  const record = capturePlainRecord(input);
+  if (record === undefined) {
+    return Object.freeze(orderedIds.filter((columnId) => baselineVisible.has(columnId)));
+  }
+  return Object.freeze(
+    orderedIds.filter((columnId) => {
+      const value = record[columnId];
+      return typeof value === "boolean" ? value : baselineVisible.has(columnId);
+    }),
+  );
+}
+
+function capturePlainRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+    ) {
+      return undefined;
+    }
+    const snapshot: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      snapshot[key] = descriptor.value;
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

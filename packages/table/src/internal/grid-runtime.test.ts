@@ -166,6 +166,209 @@ describe("BrunoTableGridRuntime sorting invariant", () => {
   });
 });
 
+describe("BrunoTable Grid Preferences runtime boundary", () => {
+  it("restores once and emits one complete replacement only for committed durable commands", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "baseline" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_PREFERENCES_RUNTIME",
+      {
+        initialPersistedState: {
+          version: 1,
+          tableId: "TABLE_ID_PREFERENCES_RUNTIME",
+          filters: [],
+          orderBy: [{ columnId: "COL_ID_NAME", direction: "desc" }],
+          groupBy: [],
+          groupOrderBy: [],
+          columnOrder: ["COL_ID_NAME"],
+          columnVisibility: { COL_ID_NAME: true },
+          columnWidths: { COL_ID_NAME: 222 },
+          columnPinning: { start: [], end: ["COL_ID_NAME"] },
+        },
+        getOnPersistChange: () => onPersistChange,
+      },
+    );
+    const view = runtime.getView();
+
+    expect(view.getSortingSnapshot()).toEqual([{ columnId: "COL_ID_NAME", direction: "desc" }]);
+    expect(view.getFilterSnapshot().filters).toEqual([]);
+    expect(view.getColumnLayoutSnapshot().allColumns[0]).toMatchObject({
+      columnId: "COL_ID_NAME",
+      pinned: "end",
+    });
+    expect(view.getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(222);
+    expect(onPersistChange).not.toHaveBeenCalled();
+
+    view.dispatchGridCommand({ type: "column.filter.reset", columnId: "COL_ID_NAME" });
+    expect(view.getFilterSnapshot().filters).toEqual([
+      { columnId: "COL_ID_NAME", type: "equals", filter: "baseline" },
+    ]);
+    view.dispatchGridCommand({ type: "column.filter.clear", columnId: "COL_ID_NAME" });
+    expect(view.getFilterSnapshot().filters).toEqual([]);
+
+    view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Grace" },
+    });
+    view.dispatchGridCommand({ type: "column.resize.commit", columnId: "COL_ID_NAME", width: 240 });
+    view.dispatchGridCommand({ type: "column.sort.toggle", columnId: "COL_ID_NAME", multi: false });
+    expect(onPersistChange).toHaveBeenCalledTimes(5);
+    expect(onPersistChange.mock.lastCall?.[0]).toMatchObject({
+      version: 1,
+      tableId: "TABLE_ID_PREFERENCES_RUNTIME",
+      orderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      columnWidths: { COL_ID_NAME: 240 },
+    });
+    expect(JSON.stringify(onPersistChange.mock.lastCall?.[0])).toContain(
+      '"codecId":"@bruno/table/text"',
+    );
+
+    view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" });
+    runtime.publish(adapter.publish({ ...source([{ id: "first", name: "Augusta" }]), version: 2 }));
+    expect(onPersistChange).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps committed state when the latest callback throws", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_PREFERENCES_CALLBACK_FAILURE",
+      {
+        getOnPersistChange: () => () => {
+          throw new Error("consumer transport failed");
+        },
+      },
+    );
+    expect(() =>
+      runtime.getView().dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 321,
+      }),
+    ).toThrow("consumer transport failed");
+    expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
+  });
+
+  it("replaces the callback without recreating the runtime or waking row and cell subscribers", () => {
+    const row = { id: "first", name: "Ada" };
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([row]),
+      (candidate: Row) => candidate.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const firstCallback = vi.fn();
+    const secondCallback = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_PREFERENCES_CALLBACK_REPLACEMENT",
+      { getOnPersistChange: () => firstCallback },
+    );
+    const view = runtime.getView();
+    const rowListener = vi.fn();
+    const cellListener = vi.fn();
+    const rowId = adapter.resolveRowId(row);
+    const unsubscribeRow = view.subscribeRow(rowId, rowListener);
+    const unsubscribeCell = view.subscribeCell(rowId, "COL_ID_NAME", cellListener);
+
+    runtime.setOnPersistChange(secondCallback);
+
+    expect(runtime.getView()).toBe(view);
+    expect(rowListener).not.toHaveBeenCalled();
+    expect(cellListener).not.toHaveBeenCalled();
+    view.dispatchGridCommand({ type: "column.resize.commit", columnId: "COL_ID_NAME", width: 222 });
+    expect(firstCallback).not.toHaveBeenCalled();
+    expect(secondCallback).toHaveBeenCalledOnce();
+    expect(rowListener).not.toHaveBeenCalled();
+    expect(cellListener).not.toHaveBeenCalled();
+    unsubscribeCell();
+    unsubscribeRow();
+  });
+
+  it("emits the single logical order, visibility, widths, and pinning projection", () => {
+    const columns = compileColumns([
+      { columnId: "COL_ID_FIRST", field: "name", headerName: "First", valueType: "text" },
+      { columnId: "COL_ID_SECOND", field: "name", headerName: "Second", valueType: "text" },
+      { columnId: "COL_ID_THIRD", field: "name", headerName: "Third", valueType: "text" },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_FIRST", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_LAYOUT_PREFERENCES",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const view = runtime.getView();
+
+    view.dispatchGridCommand({
+      type: "column.pin.commit",
+      columnId: "COL_ID_THIRD",
+      pinned: "start",
+    });
+    view.dispatchGridCommand({
+      type: "column.reorder.commit",
+      columnId: "COL_ID_FIRST",
+      targetIndex: 2,
+      pinned: undefined,
+    });
+    view.dispatchGridCommand({
+      type: "column.visibility.commit",
+      columnId: "COL_ID_SECOND",
+      visible: false,
+    });
+    view.dispatchGridCommand({
+      type: "column.resize.commit",
+      columnId: "COL_ID_FIRST",
+      width: 245,
+    });
+
+    expect(onPersistChange).toHaveBeenCalledTimes(4);
+    expect(onPersistChange.mock.lastCall?.[0]).toMatchObject({
+      columnOrder: ["COL_ID_THIRD", "COL_ID_SECOND", "COL_ID_FIRST"],
+      columnVisibility: {
+        COL_ID_THIRD: true,
+        COL_ID_FIRST: true,
+        COL_ID_SECOND: false,
+      },
+      columnWidths: {
+        COL_ID_THIRD: 160,
+        COL_ID_FIRST: 245,
+        COL_ID_SECOND: 160,
+      },
+      columnPinning: { start: ["COL_ID_THIRD"], end: [] },
+    });
+  });
+});
+
 describe("BrunoTable filter runtime primitives", () => {
   it("gates every filter and sorting command through the optional active editor seam", () => {
     const runtime = createClientRuntime(
