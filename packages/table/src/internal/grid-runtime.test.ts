@@ -4112,6 +4112,29 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getRowSnapshot("first")).toBe(newest);
   });
 
+  it("constructs a Client rows store from the installed publication", () => {
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const outer = { id: "first", name: "Outer" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    let constructedName: string | undefined;
+    view.subscribeRowSpace(() => {
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") === "Outer") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+    view.subscribeRowSpace(() => {
+      if (constructedName !== undefined) return;
+      const rowsStore = adapter.createRowsStore(view, () => () => true);
+      constructedName = (rowsStore.getSnapshot()[0]?.raw as Row | undefined)?.name;
+    });
+
+    runtime.publish(adapter.publish(source([outer])));
+
+    expect(constructedName).toBe("Outer");
+    expect(view.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Newest");
+  });
+
   it("re-subscribes a Client rows store to the installed publication", () => {
     const initial = { id: "first", name: "Initial" } satisfies Row;
     const outer = { id: "first", name: "Outer" } satisfies Row;

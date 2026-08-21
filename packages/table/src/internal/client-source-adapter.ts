@@ -448,14 +448,15 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       asClientCoherent(
         runtime.getRowSpaceSnapshot() as BrunoTableRowSpaceSnapshot<TRow> | undefined,
       );
+    const installedCoherent = readRuntimeCoherent();
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
-      this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
-    let evaluatedCoherent = this.coherent;
+      installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    let evaluatedCoherent = installedCoherent;
     let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
     const identity = Object.freeze({});
     let unsubscribeRuntime: (() => void) | undefined;
-    let displayedRowSpace = this.publication.rowSpace !== undefined;
+    let displayedRowSpace = installedCoherent !== undefined;
     const publish = () => {
       const previousRows = snapshot;
       const nextCoherent = readRuntimeCoherent();

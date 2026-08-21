@@ -5725,6 +5725,7 @@ describe("BrunoTableClient browser surface", () => {
         status: "stale",
         message: "Waiting for a valid projection",
       });
+      runtime.publish(stalePublication);
       const rejectedRows = adapter
         .createRowsStore(runtime.getView(), () => () => true)
         .getSnapshot();
