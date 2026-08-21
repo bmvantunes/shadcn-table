@@ -8,8 +8,8 @@ import type {
   BrunoTableQuerySnapshot,
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
+  BrunoTableRowPipelineRuntimeView,
   BrunoTableRowSpaceSnapshot,
-  BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { createBrunoTableInvalidCellValue, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { CompiledColumn } from "./compile-columns";
@@ -149,6 +149,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): boolean => {
     if (this.resultRowCountInitialized) return false;
     this.resultRowCountInitialized = true;
+    this.resultRowCount = this.projectResultRowCount(query);
+    return true;
+  };
+
+  private readonly projectResultRowCount = (query: BrunoTableQuerySnapshot): number => {
     const rows = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
     const filterPlan = compileClientFilterPlan(
       query.columns,
@@ -176,8 +181,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     } catch {
       count = 0;
     }
-    this.resultRowCount = count;
-    return true;
+    return count;
   };
 
   public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {
@@ -423,7 +427,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   };
 
   public readonly createRowsStore = (
-    runtime: BrunoTableRuntimeView,
+    runtime: BrunoTableRowPipelineRuntimeView,
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
     tableId = "",
   ): BrunoTableClientRowsStore => {
@@ -433,10 +437,26 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     const listeners = new Set<() => void>();
     const identity = Object.freeze({});
     let unsubscribeRuntime: (() => void) | undefined;
+    let displayedRowSpace = this.publication.rowSpace !== undefined;
     const publish = () => {
-      if (this.publication.status === "loading" && this.publication.rowSpace === undefined) {
+      const nextDisplayedRowSpace = this.publication.rowSpace !== undefined;
+      if (!nextDisplayedRowSpace) {
         this.publishResultRowCount(0);
+      } else if (!displayedRowSpace) {
+        if (this.resultRowCountListeners.size > 0) {
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+            recordBrunoTableToolbarLifetime({
+              tableId,
+              kind: "result-row-count-project",
+              identity: this,
+            });
+          }
+          this.publishResultRowCount(this.projectResultRowCount(runtime.getQuerySnapshot()));
+        } else {
+          this.resultRowCountInitialized = false;
+        }
       }
+      displayedRowSpace = nextDisplayedRowSpace;
       const previousRows = snapshot;
       const nextCoherent = this.coherent;
       const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;

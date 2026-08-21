@@ -9806,6 +9806,114 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("does not project retained lifecycle rows for absent or command-only toolbars", async () => {
+    const lifetimeEvents = vi.fn();
+    const removeLifetime = installBrunoTableToolbarLifetimeListener(lifetimeEvents);
+    try {
+      const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{ rows, totalRows: rows.length, version: 2, status: "loading" }}
+        />,
+      );
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{ ...readySource(), version: 3, status: "stale", message: "Delayed" }}
+        />,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+
+      const commandToolbar = (
+        <BrunoTableToolbar>
+          <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+            {(commands) => (
+              <button type="button" onClick={() => commands.clearAll()}>
+                Clear Grid Filters
+              </button>
+            )}
+          </BrunoTableFilterControl>
+        </BrunoTableToolbar>
+      );
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{ rows, totalRows: rows.length, version: 4, status: "loading" }}
+        >
+          {commandToolbar}
+        </BrunoTableClient>,
+      );
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{
+            ...readySource(),
+            version: 5,
+            status: "error",
+            message: "Retained error",
+          }}
+        >
+          {commandToolbar}
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "Clear Grid Filters" }))
+        .toBeInTheDocument();
+      expect(
+        lifetimeEvents.mock.calls.filter(
+          ([event]) =>
+            event.kind === "result-row-count-initialize" ||
+            event.kind === "result-row-count-project",
+        ),
+      ).toHaveLength(0);
+
+      await screen.rerender(
+        <BrunoTableClient {...props} clientSource={{ ...readySource(), version: 6 }}>
+          <BrunoTableToolbar>
+            <BrunoTableResultRowCount />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("2 result rows");
+      lifetimeEvents.mockClear();
+
+      await screen.rerender(
+        <BrunoTableClient {...props} clientSource={{ ...readySource(), version: 7 }}>
+          {commandToolbar}
+        </BrunoTableClient>,
+      );
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{ rows, totalRows: rows.length, version: 8, status: "loading" }}
+        >
+          {commandToolbar}
+        </BrunoTableClient>,
+      );
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{ ...readySource(), version: 9, status: "stale", message: "Delayed" }}
+        >
+          {commandToolbar}
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "Clear Grid Filters" }))
+        .toBeInTheDocument();
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "result-row-count-project"),
+      ).toHaveLength(0);
+    } finally {
+      removeLifetime();
+    }
+  });
+
   test("composes typed toolbar controls with isolated semantic subscriptions", async () => {
     const subscriptionEvents = vi.fn();
     const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);
@@ -9972,6 +10080,86 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("grid", { name: "Loading table rows" }))
       .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("status", { name: "Loaded rows" }))
+      .toHaveTextContent("0 loaded rows");
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }))
+      .toHaveTextContent("0 result rows");
+
+    for (const [index, status] of (["stale", "error", "closed"] as const).entries()) {
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={{
+            ...readySource(),
+            version: index * 2 + 3,
+            status,
+            message: `Retained ${status}`,
+          }}
+        >
+          {toolbar}
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("status", { name: "Loaded rows" }))
+        .toHaveTextContent("2 loaded rows");
+      await expect
+        .element(screen.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("2 result rows");
+
+      if (status !== "closed") {
+        await screen.rerender(
+          <BrunoTableClient
+            {...props}
+            clientSource={{
+              rows,
+              totalRows: rows.length,
+              version: index * 2 + 4,
+              status: "loading",
+            }}
+          >
+            {toolbar}
+          </BrunoTableClient>,
+        );
+        await expect
+          .element(screen.getByRole("status", { name: "Result rows" }))
+          .toHaveTextContent("0 result rows");
+      }
+    }
+  });
+
+  test("resets Result Row Count when invalid input removes the displayed row space", async () => {
+    const toolbar = (
+      <BrunoTableToolbar>
+        <BrunoTableResultRowCount />
+        <BrunoTableLoadedRowCount />
+      </BrunoTableToolbar>
+    );
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource()}>
+        {toolbar}
+      </BrunoTableClient>,
+    );
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }))
+      .toHaveTextContent("2 result rows");
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows, totalRows: rows.length + 1, version: 2, status: "ready" }}
+      >
+        {toolbar}
+      </BrunoTableClient>,
+    );
+
+    await expect
+      .element(screen.getByRole("alert"))
+      .toHaveTextContent("Expected 3 rows but received 2.");
     await expect
       .element(screen.getByRole("status", { name: "Loaded rows" }))
       .toHaveTextContent("0 loaded rows");

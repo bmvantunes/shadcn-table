@@ -17,7 +17,8 @@ export type BrunoTableToolbarLifetimeEvent = Readonly<{
     | "runtime-create"
     | "row-pipeline-subscribe"
     | "row-pipeline-unsubscribe"
-    | "result-row-count-initialize";
+    | "result-row-count-initialize"
+    | "result-row-count-project";
   readonly identity: object;
 }>;
 
