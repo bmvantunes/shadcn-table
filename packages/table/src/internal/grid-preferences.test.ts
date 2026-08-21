@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
+import type { BrunoTableColumns, BrunoTableJsonValue, BrunoTableValueType } from "../public-types";
 import { BrunoTableSelectColumn } from "../column-helpers";
 import { compileColumns } from "./compile-columns";
 import {
@@ -209,13 +209,13 @@ describe("Grid Preferences", () => {
     ]);
   });
 
-  it("prunes restored match-none leaves when Set Filter is no longer supported", () => {
+  it("prunes restored Set Filter leaves when the capability is no longer supported", () => {
     const persistedColumns = compileColumns([
       {
-        columnId: "COL_ID_NAME",
-        field: "name",
-        headerName: "Name",
-        valueType: "text",
+        columnId: "COL_ID_ACCOUNT",
+        field: "account",
+        headerName: "Account",
+        valueType: accountValueType,
         enableSetFilter: true,
       },
     ]);
@@ -227,8 +227,9 @@ describe("Grid Preferences", () => {
           {
             type: "AND",
             conditions: [
-              { columnId: "COL_ID_NAME", type: "matchNone" },
-              { columnId: "COL_ID_NAME", type: "blank" },
+              { columnId: "COL_ID_ACCOUNT", type: "matchNone" },
+              { columnId: "COL_ID_ACCOUNT", type: "in", filter: [{ address: "acct-42" }] },
+              { columnId: "COL_ID_ACCOUNT", type: "blank" },
             ],
           },
         ],
@@ -237,10 +238,10 @@ describe("Grid Preferences", () => {
     );
     const currentColumns = compileColumns([
       {
-        columnId: "COL_ID_NAME",
-        field: "name",
-        headerName: "Name",
-        valueType: "text",
+        columnId: "COL_ID_ACCOUNT",
+        field: "account",
+        headerName: "Account",
+        valueType: accountValueType,
         enableSetFilter: false,
       },
     ]);
@@ -252,7 +253,130 @@ describe("Grid Preferences", () => {
       initialPersistedState: snapshot,
     });
 
-    expect(restored.filters).toEqual([{ columnId: "COL_ID_NAME", type: "blank" }]);
+    expect(restored.filters).toEqual([{ columnId: "COL_ID_ACCOUNT", type: "blank" }]);
+  });
+
+  it("persists custom text-search operands as raw bounded strings", () => {
+    type SearchValue = Readonly<{ readonly text: string }>;
+    const encodePersisted = vi.fn((value: SearchValue) => ({ text: value.text }));
+    const valueType: BrunoTableValueType<SearchValue, "text", "text"> = {
+      codecId: "test/object-text",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 160,
+      decodeRuntime: (input) =>
+        typeof input === "object" && input !== null && "text" in input
+          ? { _tag: "Success", value: { text: String(input.text) } }
+          : { _tag: "Failure", message: "Expected object text." },
+      equivalent: (left, right) => left.text === right.text,
+      compare: (left, right) => (left.text === right.text ? 0 : left.text < right.text ? -1 : 1),
+      formatCanonicalText: (value) => value.text,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: { text } }),
+      formatDisplay: (value) => value.text,
+      encodePersisted,
+      decodePersisted: (input) =>
+        typeof input === "object" && input !== null && "text" in input
+          ? { _tag: "Success", value: { text: String(input.text) } }
+          : { _tag: "Failure", message: "Expected persisted object text." },
+    };
+    const searchColumns = compileColumns([
+      {
+        columnId: "COL_ID_SEARCH",
+        field: "account",
+        headerName: "Search",
+        valueType,
+      },
+    ]);
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_OBJECT_TEXT_SEARCH",
+        columns: searchColumns,
+        initialFilters: [
+          { columnId: "COL_ID_SEARCH", type: "contains", filter: "needle", caseSensitive: true },
+        ],
+        initialOrderBy: [{ columnId: "COL_ID_SEARCH", direction: "asc" }],
+      }),
+    );
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_OBJECT_TEXT_SEARCH",
+      columns: searchColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_SEARCH", direction: "asc" }],
+      initialPersistedState: JSON.parse(JSON.stringify(snapshot)),
+    });
+
+    expect(encodePersisted).not.toHaveBeenCalled();
+    expect(restored.filters).toEqual([
+      { columnId: "COL_ID_SEARCH", type: "contains", filter: "needle", caseSensitive: true },
+    ]);
+  });
+
+  it("rejects over-budget persisted strings before invoking exact codecs", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_OVERSIZED_PERSISTED_STRING",
+        columns,
+        initialFilters: [{ columnId: "COL_ID_QUANTITY", type: "equals", filter: 1n }],
+        initialOrderBy,
+      }),
+    );
+    const filters = snapshot["filters"];
+    const filter = Array.isArray(filters) ? filters[0] : undefined;
+    if (typeof filter !== "object" || filter === null) {
+      throw new TypeError("Expected one persisted BigInt filter.");
+    }
+    const operand = filter["filter"];
+    if (typeof operand !== "object" || operand === null) {
+      throw new TypeError("Expected one tagged persisted BigInt operand.");
+    }
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_OVERSIZED_PERSISTED_STRING",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...snapshot,
+        filters: [
+          {
+            ...filter,
+            filter: {
+              ...operand,
+              value: "9".repeat(1_048_577),
+            },
+          },
+        ],
+      },
+    });
+
+    expect(restored.filters).toEqual([]);
+
+    const numericSnapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_UNSUPPORTED_SENSITIVITY",
+        columns,
+        initialFilters: [{ columnId: "COL_ID_QUANTITY", type: "equals", filter: 1n }],
+        initialOrderBy,
+      }),
+    );
+    const numericFilters = numericSnapshot["filters"];
+    const numericFilter = Array.isArray(numericFilters) ? numericFilters[0] : undefined;
+    if (typeof numericFilter !== "object" || numericFilter === null) {
+      throw new TypeError("Expected one persisted numeric filter.");
+    }
+    const unsupported = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_UNSUPPORTED_SENSITIVITY",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...numericSnapshot,
+        filters: [{ ...numericFilter, caseSensitive: false }],
+      },
+    });
+    expect(unsupported.filters).toEqual([]);
   });
 
   it("rejects malformed persisted text-sensitivity flags", () => {
@@ -1105,6 +1229,72 @@ describe("Grid Preferences", () => {
     } finally {
       ownKeys.mockRestore();
     }
+  });
+
+  it("rejects over-budget persisted JSON value and key text before codecs", () => {
+    let output: BrunoTableJsonValue = { value: "ok" };
+    const decodePersisted = vi.fn((input: unknown) =>
+      typeof input === "object" && input !== null && "value" in input
+        ? { _tag: "Success" as const, value: String(input.value) }
+        : { _tag: "Failure" as const, message: "Expected persisted text." },
+    );
+    const valueType: BrunoTableValueType<string, "equality", "text"> = {
+      ...accountValueType,
+      codecId: "test/text-budget",
+      codecVersion: 1,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => output,
+      decodePersisted,
+    };
+    const budgetColumns = compileColumns([
+      {
+        columnId: "COL_ID_TEXT_BUDGET",
+        field: "name",
+        headerName: "Text budget",
+        valueType,
+      },
+    ]);
+    const preferences = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_TEXT_BUDGET",
+      columns: budgetColumns,
+      initialFilters: [{ columnId: "COL_ID_TEXT_BUDGET", type: "equals", filter: "value" }],
+      initialOrderBy: [{ columnId: "COL_ID_TEXT_BUDGET", direction: "asc" }],
+    });
+    const valid = createBrunoTablePersistedState(preferences);
+    const hugeText = "x".repeat(1_048_577);
+
+    output = hugeText;
+    expect(() => createBrunoTablePersistedState(preferences)).toThrow("JSON-safe");
+    output = { [hugeText]: "short" };
+    expect(() => createBrunoTablePersistedState(preferences)).toThrow("JSON-safe");
+
+    const filters = valid["filters"];
+    const filter = Array.isArray(filters) ? filters[0] : undefined;
+    if (typeof filter !== "object" || filter === null) {
+      throw new TypeError("Expected one persisted text-budget filter.");
+    }
+    decodePersisted.mockClear();
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_TEXT_BUDGET",
+      columns: budgetColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_TEXT_BUDGET", direction: "asc" }],
+      initialPersistedState: {
+        ...valid,
+        filters: [{ ...filter, filter: { [hugeText]: "short" } }],
+      },
+    });
+
+    expect(restored.filters).toEqual([]);
+    expect(decodePersisted).not.toHaveBeenCalled();
   });
 
   it("rejects negative-zero custom codec output before JSON changes its meaning", () => {

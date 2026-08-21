@@ -137,6 +137,33 @@ const emittedPersistedState = {
   columnPinning: { start: ["COL_ID_PRICE"], end: [] },
 } as const satisfies BrunoTablePersistedState<Order, Columns>;
 void emittedPersistedState;
+const emittedPersistedTextSearch = {
+  ...emittedPersistedState,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      filter: "AAPL",
+    },
+  ],
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedPersistedTextSearch;
+const emittedInvalidPersistedTextSearch = {
+  ...emittedPersistedTextSearch,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      // @ts-expect-error Emitted persisted Text searches require raw string operands.
+      filter: ["AAPL"],
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedInvalidPersistedTextSearch;
 const emittedInvalidPersistedState = {
   ...emittedPersistedState,
   // @ts-expect-error Emitted persisted identities retain exact tuple autocomplete.

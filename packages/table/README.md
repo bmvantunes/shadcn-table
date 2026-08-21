@@ -139,9 +139,12 @@ transport, retry, authorization, error reporting, and publication ordering—Bru
 access Local Storage or any persistence backend. `columnWidths` contains only explicit committed
 user width overrides, so definition-provided defaults remain free to evolve between releases.
 
-Persisted operands carry the owning column's `codecId` and `codecVersion` and contain only that
-compiled Value Type's JSON-safe `encodePersisted` output. Restoration calls the matching
-`decodePersisted` implementation and drops stale, malformed, unknown, or incompatible evidence.
+Persisted value operands carry the owning column's `codecId` and `codecVersion` and contain only
+that compiled Value Type's JSON-safe `encodePersisted` output. Text-search operators persist their
+bounded search operand directly as a string because it is search intent rather than a column value;
+codec identity and version are still checked for compatibility. Restoration calls the matching
+`decodePersisted` implementation for value operands and drops stale, malformed, unknown, or
+incompatible evidence.
 Native `bigint` and Effect BigDecimal objects therefore never appear directly in the snapshot.
 If a custom `encodePersisted` implementation returns a value that is not JSON-safe, the committing
 preference command throws a `TypeError`; column compilation does not pre-execute value codecs.

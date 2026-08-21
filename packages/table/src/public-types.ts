@@ -1101,8 +1101,10 @@ type PersistedFilterLeaf<
       ? {
           readonly columnId: TColumnId;
           readonly type: "contains" | "notContains" | "startsWith" | "endsWith";
-        } & PersistedCodecOperand &
-          PersistedTextSensitivity<"text">
+          readonly codecId: string;
+          readonly codecVersion: number;
+          readonly filter: string;
+        } & PersistedTextSensitivity<"text">
       : never)
   | (ColumnFilterFamily<TColumns, TColumnId> extends "numeric"
       ? {

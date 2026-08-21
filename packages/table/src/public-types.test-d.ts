@@ -102,6 +102,35 @@ const persistedPreferences = {
 
 expectTypeOf(persistedPreferences.filters[0]!.columnId).toEqualTypeOf<"COL_ID_PRICE">();
 
+const persistedTextSearch = {
+  ...persistedPreferences,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      filter: "AAPL",
+    },
+  ],
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+void persistedTextSearch;
+
+const invalidPersistedTextSearch = {
+  ...persistedTextSearch,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      // @ts-expect-error Persisted Text search operands are raw strings, not codec payloads.
+      filter: { value: "AAPL" },
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedTextSearch;
+
 const invalidPersistedNumericOperator = {
   ...persistedPreferences,
   filters: [

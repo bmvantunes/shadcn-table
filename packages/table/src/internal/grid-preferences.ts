@@ -12,6 +12,7 @@ import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH,
   compileClientFilterCollection,
   reconcileBrunoTableOrderBy,
   type BrunoTableClientFilterCollection,
@@ -51,6 +52,8 @@ const BRUNO_TABLE_PERSISTED_JSON_MAX_OBJECT_KEYS = 4_096;
 
 type BrunoTablePersistedJsonBudget = {
   nodes: number;
+  textLength: number;
+  keyTextLength: number;
   overBudget: boolean;
 };
 
@@ -193,7 +196,12 @@ function encodePersistedFilters(
   columns: readonly CompiledColumn[],
 ): readonly PersistedFilter[] {
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  const jsonBudget: BrunoTablePersistedJsonBudget = { nodes: 0, overBudget: false };
+  const jsonBudget: BrunoTablePersistedJsonBudget = {
+    nodes: 0,
+    textLength: 0,
+    keyTextLength: 0,
+    overBudget: false,
+  };
   return Object.freeze(
     filters.map((filter) => encodePersistedFilter(filter, columnsById, jsonBudget)),
   );
@@ -232,7 +240,12 @@ function encodePersistedFilter(
   if (type === "blank" || type === "notBlank" || type === "matchNone") return Object.freeze(result);
   result["codecId"] = column.semantics.codecId;
   result["codecVersion"] = column.semantics.codecVersion;
-  if (type === "in") {
+  if (isTextSearchFilterType(type)) {
+    if (typeof input["filter"] !== "string") {
+      throw new TypeError("BrunoTable cannot persist an invalid text-search filter.");
+    }
+    result["filter"] = snapshotJsonValue(input["filter"], jsonBudget);
+  } else if (type === "in") {
     if (!Array.isArray(input["filter"]))
       throw new TypeError("BrunoTable cannot persist an invalid in filter.");
     result["filter"] = Object.freeze(
@@ -267,7 +280,7 @@ function decodePersistedFilters(
     nodes: 0,
     operands: 0,
     overBudget: false,
-    json: { nodes: 0, overBudget: false },
+    json: { nodes: 0, textLength: 0, keyTextLength: 0, overBudget: false },
   };
   const decoded: Readonly<Record<string, unknown>>[] = [];
   for (const filter of entries) {
@@ -324,20 +337,35 @@ function decodePersistedFilter(
     }
     const columnId = record["columnId"];
     const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
-    if (column === undefined) return undefined;
-    if (
-      type === "blank" ||
-      type === "notBlank" ||
-      (type === "matchNone" && column.enableSetFilter)
-    ) {
+    if (column === undefined || !supportsPersistedFilterType(column, type)) return undefined;
+    if (type === "blank" || type === "notBlank" || type === "matchNone") {
       return Object.freeze({ type, columnId });
     }
-    if (type === "matchNone") return undefined;
     if (
       record["codecId"] !== column.semantics.codecId ||
       record["codecVersion"] !== column.semantics.codecVersion
     )
       return undefined;
+    if (isTextSearchFilterType(type)) {
+      if (budget.operands >= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS) {
+        budget.overBudget = true;
+        return undefined;
+      }
+      budget.operands += 1;
+      const filter = snapshotUnknownJsonValue(record["filter"], new WeakSet(), budget.json, 0);
+      if (filter === INVALID_JSON_VALUE || typeof filter !== "string") {
+        budget.overBudget ||= budget.json.overBudget;
+        return undefined;
+      }
+      if (!hasValidPersistedTextSensitivity(record, true)) return undefined;
+      return Object.freeze({
+        type,
+        columnId,
+        filter,
+        ...(record["caseSensitive"] === true ? { caseSensitive: true } : {}),
+        ...(record["accentSensitive"] === true ? { accentSensitive: true } : {}),
+      });
+    }
     const decode = (value: unknown) => {
       const snapshot = snapshotUnknownJsonValue(value, new WeakSet(), budget.json, 0);
       if (snapshot === INVALID_JSON_VALUE) {
@@ -391,10 +419,7 @@ function decodePersistedFilter(
       if (filterTo === DECODE_FAILURE) return undefined;
       result["filterTo"] = filterTo;
     }
-    if (
-      (Object.hasOwn(record, "caseSensitive") && typeof record["caseSensitive"] !== "boolean") ||
-      (Object.hasOwn(record, "accentSensitive") && typeof record["accentSensitive"] !== "boolean")
-    ) {
+    if (!hasValidPersistedTextSensitivity(record, column.semantics.filterFamily === "text")) {
       return undefined;
     }
     if (record["caseSensitive"] === true) result["caseSensitive"] = true;
@@ -403,6 +428,47 @@ function decodePersistedFilter(
   } catch {
     return undefined;
   }
+}
+
+function supportsPersistedFilterType(column: CompiledColumn, type: string): boolean {
+  if (column.kind !== "field" || !column.enableFilter) return false;
+  if (type === "blank" || type === "notBlank") return true;
+  if (type === "matchNone") return column.enableSetFilter;
+  if (type === "in") {
+    return (
+      column.semantics.filterFamily === "text" ||
+      column.semantics.filterFamily === "numeric" ||
+      column.semantics.filterFamily === "boolean" ||
+      column.semantics.filterFamily === "select" ||
+      (column.semantics.filterFamily === "equality" && column.enableSetFilter)
+    );
+  }
+  if (
+    type === "inRange" ||
+    type === "greaterThan" ||
+    type === "greaterThanOrEqual" ||
+    type === "lessThan" ||
+    type === "lessThanOrEqual"
+  ) {
+    return column.semantics.filterFamily === "numeric";
+  }
+  if (type === "equals" || type === "notEqual") return true;
+  return isTextSearchFilterType(type) && column.semantics.filterFamily === "text";
+}
+
+function isTextSearchFilterType(type: string): boolean {
+  return (
+    type === "contains" || type === "notContains" || type === "startsWith" || type === "endsWith"
+  );
+}
+
+function hasValidPersistedTextSensitivity(
+  record: Readonly<Record<string, unknown>>,
+  supported: boolean,
+): boolean {
+  return ["caseSensitive", "accentSensitive"].every(
+    (key) => !Object.hasOwn(record, key) || (supported && typeof record[key] === "boolean"),
+  );
 }
 
 function captureDenseArray(input: unknown, maximumLength: number): readonly unknown[] | undefined {
@@ -463,7 +529,15 @@ function snapshotUnknownJsonValue(
     return INVALID_JSON_VALUE;
   }
   budget.nodes += 1;
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.length > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH - budget.textLength) {
+      budget.overBudget = true;
+      return INVALID_JSON_VALUE;
+    }
+    budget.textLength += value.length;
+    return value;
+  }
   if (typeof value === "number")
     return Number.isFinite(value) && !Object.is(value, -0) ? value : INVALID_JSON_VALUE;
   if (typeof value !== "object" || active.has(value)) return INVALID_JSON_VALUE;
@@ -504,6 +578,11 @@ function snapshotUnknownJsonValue(
         return INVALID_JSON_VALUE;
       }
       if (!Object.hasOwn(value, key)) continue;
+      if (key.length > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_TEXT_LENGTH - budget.keyTextLength) {
+        budget.overBudget = true;
+        return INVALID_JSON_VALUE;
+      }
+      budget.keyTextLength += key.length;
       enumerableKeys.push(key);
     }
     for (const key of enumerableKeys) {
