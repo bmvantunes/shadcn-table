@@ -206,7 +206,7 @@ export type BrunoTableRuntimeView = {
   readonly getBodySnapshot: () => BrunoTableBodySnapshot;
   readonly getRowSpaceSnapshot: () => BrunoTableRowSpaceSnapshot<unknown> | undefined;
   readonly getRowSnapshot: (rowId: BrunoTableRowId) => unknown;
-  readonly isRowSnapshotUnavailable: (rowId: BrunoTableRowId) => boolean;
+  readonly getRowPresentationSnapshot: (rowId: BrunoTableRowId) => BrunoTableRowSnapshot;
   readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
   readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
@@ -427,6 +427,18 @@ export type BrunoTableCellSnapshot =
       readonly value: undefined;
     }>;
 
+export type BrunoTableRowSnapshot =
+  | Readonly<{
+      readonly kind: "available";
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: unknown;
+    }>
+  | Readonly<{
+      readonly kind: "unavailable";
+      readonly rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined;
+      readonly row: undefined;
+    }>;
+
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 
@@ -480,6 +492,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly bodyListeners = new Set<Listener>();
   private readonly rowSpaceListeners = new Set<Listener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
+  private readonly rowSnapshots = new Map<BrunoTableRowId, BrunoTableRowSnapshot>();
   private readonly cellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
   private readonly cellSnapshots = new Map<BrunoTableRowId, Map<string, BrunoTableCellSnapshot>>();
   private readonly unavailableRows = new Set<BrunoTableRowId>();
@@ -622,7 +635,7 @@ export class BrunoTableGridRuntime<TRow> {
         getBodySnapshot: this.getBodySnapshot,
         getRowSpaceSnapshot: this.getRowSpaceSnapshot,
         getRowSnapshot: this.getRowSnapshot,
-        isRowSnapshotUnavailable: this.isRowSnapshotUnavailable,
+        getRowPresentationSnapshot: this.getRowPresentationSnapshot,
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
@@ -858,10 +871,10 @@ export class BrunoTableGridRuntime<TRow> {
     this.state.rowSpace;
 
   public readonly getRowSnapshot = (rowId: BrunoTableRowId): TRow | undefined =>
-    this.unavailableRows.has(rowId) ? undefined : this.state.rowSpace?.getRow(rowId);
+    this.currentRowSnapshot(rowId).row as TRow | undefined;
 
-  public readonly isRowSnapshotUnavailable = (rowId: BrunoTableRowId): boolean =>
-    this.unavailableRows.has(rowId);
+  public readonly getRowPresentationSnapshot = (rowId: BrunoTableRowId): BrunoTableRowSnapshot =>
+    this.currentRowSnapshot(rowId);
 
   public readonly getCellSnapshot = (
     rowId: BrunoTableRowId,
@@ -950,6 +963,7 @@ export class BrunoTableGridRuntime<TRow> {
       listeners.delete(listener);
       if (listeners.size === 0) {
         this.rowListeners.delete(rowId);
+        this.rowSnapshots.delete(rowId);
         this.unavailableRows.delete(rowId);
       }
     };
@@ -1647,36 +1661,54 @@ export class BrunoTableGridRuntime<TRow> {
     previous: BrunoTableRowSpaceSnapshot<TRow> | undefined,
     next: BrunoTableRowSpaceSnapshot<TRow> | undefined,
   ): NotificationFailure | undefined {
-    if (previous === next) return undefined;
+    if (
+      previous === next &&
+      this.unavailableRows.size === 0 &&
+      !this.hasUnavailableCellSnapshot()
+    ) {
+      return undefined;
+    }
     let firstError: NotificationFailure | undefined;
     for (const [rowId, listeners] of this.rowListeners) {
+      if (previous === next && !this.unavailableRows.has(rowId)) continue;
       const recovering = this.unavailableRows.delete(rowId);
-      let previousRow: TRow | undefined;
-      let nextRow: TRow | undefined;
+      let previousSnapshot = this.rowSnapshots.get(rowId);
+      let nextSnapshot: BrunoTableRowSnapshot;
       let previousReadFailed = false;
       let nextReadFailed = false;
-      if (!recovering) {
+      if (!recovering && previousSnapshot === undefined) {
         try {
-          previousRow = previous?.getRow(rowId);
+          previousSnapshot = readRowSnapshot(previous, rowId);
+          this.installRowSnapshot(rowId, previousSnapshot);
         } catch (error) {
           previousReadFailed = true;
           firstError = firstNotificationFailure(firstError, notificationFailure(error));
         }
       }
       try {
-        nextRow = next?.getRow(rowId);
+        nextSnapshot = readRowSnapshot(next, rowId);
       } catch (error) {
         nextReadFailed = true;
         firstError = firstNotificationFailure(firstError, notificationFailure(error));
+        nextSnapshot = unavailableRowSnapshot(next);
       }
       if (nextReadFailed) this.unavailableRows.add(rowId);
-      if (previousReadFailed || nextReadFailed || recovering || previousRow !== nextRow) {
+      this.installRowSnapshot(rowId, nextSnapshot);
+      if (
+        previousReadFailed ||
+        nextReadFailed ||
+        recovering ||
+        previousSnapshot === undefined ||
+        previousSnapshot.kind !== nextSnapshot.kind ||
+        previousSnapshot.row !== nextSnapshot.row
+      ) {
         firstError = firstNotificationFailure(firstError, notify(listeners));
       }
     }
     for (const [rowId, columns] of this.cellListeners) {
       for (const [columnId, listeners] of columns) {
         const previousSnapshot = this.cellSnapshots.get(rowId)?.get(columnId);
+        if (previous === next && previousSnapshot?.kind !== "unavailable") continue;
         let nextSnapshot: BrunoTableCellSnapshot;
         try {
           nextSnapshot = readCellSnapshot(next, this.columnsById, rowId, columnId);
@@ -1705,6 +1737,27 @@ export class BrunoTableGridRuntime<TRow> {
       }
     }
     return firstError;
+  }
+
+  private currentRowSnapshot(rowId: BrunoTableRowId): BrunoTableRowSnapshot {
+    const current = this.rowSnapshots.get(rowId);
+    if (current !== undefined && current.rowSpace === this.state.rowSpace) return current;
+    const next = readRowSnapshot(this.state.rowSpace, rowId);
+    this.installRowSnapshot(rowId, next);
+    return next;
+  }
+
+  private installRowSnapshot(rowId: BrunoTableRowId, snapshot: BrunoTableRowSnapshot): void {
+    this.rowSnapshots.set(rowId, snapshot);
+  }
+
+  private hasUnavailableCellSnapshot(): boolean {
+    for (const rowSnapshots of this.cellSnapshots.values()) {
+      for (const snapshot of rowSnapshots.values()) {
+        if (snapshot.kind === "unavailable") return true;
+      }
+    }
+    return false;
   }
 
   private currentCellSnapshot(rowId: BrunoTableRowId, columnId: string): BrunoTableCellSnapshot {
@@ -1792,6 +1845,23 @@ function readCellSnapshot<TRow>(
     rowPresent,
     value: rowPresent ? rowSpace?.getCellValue(rowId, columnId) : undefined,
   });
+}
+
+function readRowSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+  rowId: BrunoTableRowId,
+): BrunoTableRowSnapshot {
+  return Object.freeze({
+    kind: "available",
+    rowSpace,
+    row: rowSpace?.getRow(rowId),
+  });
+}
+
+function unavailableRowSnapshot<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+): BrunoTableRowSnapshot {
+  return Object.freeze({ kind: "unavailable", rowSpace, row: undefined });
 }
 
 function unavailableCellSnapshot<TRow>(

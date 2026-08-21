@@ -107,6 +107,7 @@ import type {
   BrunoTableChromeSnapshot,
   BrunoTableColumnCommandSnapshot,
   BrunoTableQueryNavigationMode,
+  BrunoTableRowSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -3480,15 +3481,16 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
       rowId === undefined
         ? undefined
         : rowAware
-          ? runtime.getRowSnapshot(rowId)
+          ? runtime.getRowPresentationSnapshot(rowId)
           : runtime.getCellSnapshot(rowId, column.columnId),
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot | undefined);
-  const row = rowAware ? snapshot : undefined;
+  const rowSnapshot = rowAware ? (snapshot as BrunoTableRowSnapshot | undefined) : undefined;
+  const row = rowSnapshot?.row;
   const unavailable = rowAware
-    ? rowId !== undefined && runtime.isRowSnapshotUnavailable(rowId)
+    ? rowSnapshot?.kind === "unavailable"
     : cellSnapshot?.kind === "unavailable";
   const rowPresent = rowAware
     ? row !== undefined
@@ -3869,14 +3871,17 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   );
   const getSnapshot = useMemo(
     () => () =>
-      rowAware ? runtime.getRowSnapshot(rowId) : runtime.getCellSnapshot(rowId, column.columnId),
+      rowAware
+        ? runtime.getRowPresentationSnapshot(rowId)
+        : runtime.getCellSnapshot(rowId, column.columnId),
     [column.columnId, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
-  const row = rowAware ? snapshot : undefined;
+  const rowSnapshot = rowAware ? (snapshot as BrunoTableRowSnapshot) : undefined;
+  const row = rowSnapshot?.row;
   const unavailable = rowAware
-    ? runtime.isRowSnapshotUnavailable(rowId)
+    ? rowSnapshot?.kind === "unavailable"
     : cellSnapshot?.kind === "unavailable";
   const rowMissing = rowAware
     ? row === undefined

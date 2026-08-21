@@ -9357,22 +9357,47 @@ describe("BrunoTableClient browser surface", () => {
     ] as const;
     const compiledColumns = compileColumns(rowAwareColumns);
     const initialRow = rows[0]!;
-    const rowSpace = (version: number, getRow: (rowId: string) => Row | undefined) =>
+    const recoveredRow = { ...initialRow, name: "Augusta" };
+    const sourceReadFailure = new Error("row read failed");
+    let sourceState: "missing" | "failing" | "recovered" = "missing";
+    const failedRowReads = vi.fn();
+    const getRow = vi.fn((rowId: string): Row | undefined => {
+      if (rowId !== recoveredRow.id) return undefined;
+      if (sourceState === "failing") {
+        failedRowReads();
+        throw sourceReadFailure;
+      }
+      return sourceState === "recovered" && rowId === recoveredRow.id ? recoveredRow : undefined;
+    });
+    const createSourceRowSpace = (readRow: (rowId: string) => Row | undefined) =>
+      Object.freeze({
+        totalRows: 100,
+        loadedRows: 0,
+        getRowId: (index: number) =>
+          index >= 0 && index < 100
+            ? index === 0
+              ? initialRow.id
+              : `row-${String(index)}`
+            : undefined,
+        getRow: readRow,
+        getCellValue: (rowId: string) =>
+          sourceState === "recovered" && rowId === recoveredRow.id ? recoveredRow.name : undefined,
+      });
+    const initialSourceRowSpace = createSourceRowSpace(() => undefined);
+    const mountedSourceRowSpace = createSourceRowSpace(getRow);
+    const publication = (
+      version: number,
+      sourceRowSpace: ReturnType<typeof createSourceRowSpace>,
+    ) =>
       Object.freeze({
         status: "ready" as const,
-        totalRows: 1,
+        totalRows: 100,
         version,
-        rowSpace: Object.freeze({
-          totalRows: 1,
-          loadedRows: 1,
-          getRowId: (index: number) => (index === 0 ? initialRow.id : undefined),
-          getRow,
-          getCellValue: (rowId: string) => getRow(rowId)?.name,
-        }),
+        rowSpace: sourceRowSpace,
         hasCoherentRows: true,
       });
     const runtime = new BrunoTableGridRuntime(
-      rowSpace(1, (rowId) => (rowId === initialRow.id ? initialRow : undefined)),
+      publication(1, initialSourceRowSpace),
       compiledColumns,
       Object.freeze({
         baselineFilters: Object.freeze([]),
@@ -9383,8 +9408,13 @@ describe("BrunoTableClient browser surface", () => {
       "TABLE_ID_ROW_READ_CONTAINMENT",
     );
     const logicalRowSpace: BrunoTableLogicalRowSpace = Object.freeze({
-      totalRows: 1,
-      getRowId: (index) => (index === 0 ? initialRow.id : undefined),
+      totalRows: 100,
+      getRowId: (index) =>
+        index >= 0 && index < 100
+          ? index === 0
+            ? initialRow.id
+            : `row-${String(index)}`
+          : undefined,
       findRowIndex: (rowId) => (rowId === initialRow.id ? 0 : undefined),
       setRequiredRange: () => undefined,
     });
@@ -9399,22 +9429,20 @@ describe("BrunoTableClient browser surface", () => {
       />,
     );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ROW_READ_CONTAINMENT" });
-    await expect.element(screen.getByRole("gridcell", { name: "Ada" }).first()).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getByRole("gridcell").all().length).toBeGreaterThan(0));
     grid.element().focus();
-    grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     await vi.waitFor(() =>
       expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
     );
-
-    const sourceReadFailure = new Error("row read failed");
-    const failingGetRow = vi.fn((): Row | undefined => {
-      throw sourceReadFailure;
-    });
+    getRow.mockClear();
+    sourceState = "failing";
     await act(async () => {
-      expect(() => runtime.publish(rowSpace(2, failingGetRow))).toThrow(sourceReadFailure);
+      expect(() => runtime.publish(publication(2, mountedSourceRowSpace))).toThrow(
+        sourceReadFailure,
+      );
     });
 
-    expect(failingGetRow).toHaveBeenCalledOnce();
+    expect(failedRowReads).toHaveBeenCalledOnce();
     await vi.waitFor(() => {
       expect(
         screen
@@ -9423,20 +9451,33 @@ describe("BrunoTableClient browser surface", () => {
           .every((cell) => cell.element().textContent === ""),
       ).toBe(true);
     });
-    const activeId = grid.element().getAttribute("aria-activedescendant");
-    expect(activeId).not.toBeNull();
-    expect(grid.element().ownerDocument.getElementById(activeId!)?.textContent).toBe("");
-
-    const recoveredRow = { ...initialRow, name: "Augusta" };
+    sourceState = "recovered";
     await act(async () => {
-      runtime.publish(
-        rowSpace(3, (rowId) => (rowId === recoveredRow.id ? recoveredRow : undefined)),
-      );
+      runtime.publish(publication(3, mountedSourceRowSpace));
     });
     await expect
       .element(screen.getByRole("gridcell", { name: "Augusta" }).first())
       .toBeInTheDocument();
-    expect(grid.element().ownerDocument.getElementById(activeId!)?.textContent).toBe("Augusta");
+
+    await grid.wheel({ delta: { y: 1200 } });
+    const activeProxy = screen.getByRole("gridcell", { name: "Augusta" });
+    await expect.element(activeProxy).toHaveAttribute("data-bruno-active-proxy", "");
+    const activeProxyElement = activeProxy.element();
+
+    failedRowReads.mockClear();
+    const proxySourceRowSpace = createSourceRowSpace(getRow);
+    sourceState = "failing";
+    await act(async () => {
+      expect(() => runtime.publish(publication(4, proxySourceRowSpace))).toThrow(sourceReadFailure);
+    });
+    expect(failedRowReads).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(activeProxyElement.textContent).toBe(""));
+
+    sourceState = "recovered";
+    await act(async () => {
+      runtime.publish(publication(5, proxySourceRowSpace));
+    });
+    expect(activeProxyElement.textContent).toBe("Augusta");
   });
 
   test("does not mount an empty toolbar and isolates unchanged cell islands", async () => {

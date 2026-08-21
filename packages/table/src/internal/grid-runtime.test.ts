@@ -4977,18 +4977,21 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const publication = adapter.publish(source([failed]));
     const rowSpace = publication.rowSpace;
     if (rowSpace === undefined) throw new Error("Expected a resident row space.");
+    let currentRow = failed;
+    let cellReadFails = true;
+    const sharedRowSpace = {
+      ...rowSpace,
+      getRow(rowId: string) {
+        return rowId === currentRow.id ? currentRow : undefined;
+      },
+      getCellValue() {
+        if (cellReadFails) throw new Error("unreadable current value");
+        return currentRow.name;
+      },
+    };
+    const sharedPublication = { ...publication, rowSpace: sharedRowSpace };
 
-    expect(() =>
-      runtime.publish({
-        ...publication,
-        rowSpace: {
-          ...rowSpace,
-          getCellValue() {
-            throw new Error("unreadable current value");
-          },
-        },
-      }),
-    ).toThrow("unreadable current value");
+    expect(() => runtime.publish(sharedPublication)).toThrow("unreadable current value");
     expect(listener).toHaveBeenCalledOnce();
     const unavailableSnapshot = view.getCellSnapshot("first", "COL_ID_NAME");
     expect(unavailableSnapshot).toMatchObject({
@@ -5001,7 +5004,9 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     ]);
     expect(observedSnapshots[0]).not.toHaveProperty("rowPresent");
 
-    runtime.publish(adapter.publish(source([recovered])));
+    currentRow = recovered;
+    cellReadFails = false;
+    runtime.publish(sharedPublication);
     expect(listener).toHaveBeenCalledTimes(2);
     expect(view.getCellSnapshot("first", "COL_ID_NAME").value).toBe("Recovered");
     expect(observedSnapshots.at(-1)).toMatchObject({ kind: "available", value: "Recovered" });
