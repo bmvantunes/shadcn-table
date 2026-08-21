@@ -237,17 +237,17 @@ function encodePersistedFilter(
       throw new TypeError("BrunoTable cannot persist an invalid in filter.");
     result["filter"] = Object.freeze(
       input["filter"].map((value) =>
-        snapshotJsonValue(column.semantics.encodePersisted(value), jsonBudget),
+        snapshotJsonValue(column.semantics.encodePersistedCandidate(value), jsonBudget),
       ),
     );
   } else {
     result["filter"] = snapshotJsonValue(
-      column.semantics.encodePersisted(input["filter"]),
+      column.semantics.encodePersistedCandidate(input["filter"]),
       jsonBudget,
     );
     if (type === "inRange")
       result["filterTo"] = snapshotJsonValue(
-        column.semantics.encodePersisted(input["filterTo"]),
+        column.semantics.encodePersistedCandidate(input["filterTo"]),
         jsonBudget,
       );
   }
@@ -325,9 +325,14 @@ function decodePersistedFilter(
     const columnId = record["columnId"];
     const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
     if (column === undefined) return undefined;
-    if (type === "blank" || type === "notBlank" || type === "matchNone") {
+    if (
+      type === "blank" ||
+      type === "notBlank" ||
+      (type === "matchNone" && column.enableSetFilter)
+    ) {
       return Object.freeze({ type, columnId });
     }
+    if (type === "matchNone") return undefined;
     if (
       record["codecId"] !== column.semantics.codecId ||
       record["codecVersion"] !== column.semantics.codecVersion
@@ -386,6 +391,12 @@ function decodePersistedFilter(
       if (filterTo === DECODE_FAILURE) return undefined;
       result["filterTo"] = filterTo;
     }
+    if (
+      (Object.hasOwn(record, "caseSensitive") && typeof record["caseSensitive"] !== "boolean") ||
+      (Object.hasOwn(record, "accentSensitive") && typeof record["accentSensitive"] !== "boolean")
+    ) {
+      return undefined;
+    }
     if (record["caseSensitive"] === true) result["caseSensitive"] = true;
     if (record["accentSensitive"] === true) result["accentSensitive"] = true;
     return Object.freeze(result);
@@ -428,7 +439,7 @@ function encodeOrderBy(orderBy: BrunoTableOrderBy): readonly BrunoTableJsonValue
 }
 
 function snapshotJsonValue(
-  value: BrunoTableJsonValue,
+  value: unknown,
   budget: BrunoTablePersistedJsonBudget,
 ): BrunoTableJsonValue {
   const snapshot = snapshotUnknownJsonValue(value, new WeakSet(), budget, 0);
@@ -453,7 +464,8 @@ function snapshotUnknownJsonValue(
   }
   budget.nodes += 1;
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : INVALID_JSON_VALUE;
+  if (typeof value === "number")
+    return Number.isFinite(value) && !Object.is(value, -0) ? value : INVALID_JSON_VALUE;
   if (typeof value !== "object" || active.has(value)) return INVALID_JSON_VALUE;
   active.add(value);
   try {

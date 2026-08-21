@@ -33,7 +33,7 @@ type RuntimeValueTypeDescriptor = {
   readonly formatCanonicalText: (value: unknown) => string;
   readonly parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>;
   readonly formatDisplay: (value: unknown) => string;
-  readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
+  readonly encodePersisted: (value: unknown) => unknown;
   readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
 };
 
@@ -52,6 +52,7 @@ export type CompiledColumnValueSemantics = {
   readonly formatCanonicalText: (value: unknown) => string;
   readonly parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>;
   readonly formatDisplay: (value: unknown) => string;
+  readonly encodePersistedCandidate: (value: unknown) => unknown;
   readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
   readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
 };
@@ -185,7 +186,8 @@ export function compileColumnValueSemantics(
         ? descriptor.parseCanonicalText(text)
         : { _tag: "Failure", message: "Expected canonical text input." },
     formatDisplay,
-    encodePersisted: (value) => descriptor.encodePersisted(value),
+    encodePersistedCandidate: (value) => descriptor.encodePersisted(value),
+    encodePersisted: (value) => validateJsonValue(descriptor.encodePersisted(value)),
     decodePersisted: (input) => descriptor.decodePersisted(input),
   });
 }
@@ -273,8 +275,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
       safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText"),
     formatDisplay: (value) =>
       validateText(Reflect.apply(formatDisplayFunction, undefined, [value])),
-    encodePersisted: (value) =>
-      validateJsonValue(Reflect.apply(encodePersistedFunction, undefined, [value])),
+    encodePersisted: (value) => Reflect.apply(encodePersistedFunction, undefined, [value]),
     decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
@@ -557,7 +558,7 @@ function validateJsonValue(value: unknown): BrunoTableJsonValue {
 
 function isJsonValue(value: unknown, ancestors: Set<object>): value is BrunoTableJsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "number") return Number.isFinite(value) && !Object.is(value, -0);
   if (typeof value !== "object") return false;
   if (ancestors.has(value)) return false;
 
