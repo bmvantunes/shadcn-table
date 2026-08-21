@@ -40,6 +40,9 @@ listener. A workflow opens through this supported action seam, and the Adapter d
 pointer, mouse, or keyboard DOM events. Native inputs, textareas, contenteditable regions, editors, IME composition, dead keys,
 AltGr/Option-produced text, and Base UI-owned menu/dialog behavior keep their native or component
 ownership. These are evidence and interaction semantics, not a second BrunoTable shortcut matcher.
+An ancestor application `HotkeysProvider` cannot override BrunoTable's private binding options or
+`Mod` platform detection. When Tables are nested, descendant-exit commands belong to the nearest
+`data-bruno-table` boundary, independent of registration order.
 Later keyboard work—including sparse Server held-arrow behavior—extends this Adapter and the
 existing command/navigation domain rather than adding another event-key interpreter.
 

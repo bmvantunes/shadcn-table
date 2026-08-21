@@ -92,6 +92,9 @@ controlled actions with that seam, while Base UI retains overlay focus and Escap
 editor/input/textarea/contenteditable and IME evidence remains at the component that owns the text,
 and Base UI-owned menu, popover, and dialog behavior is not reinterpreted. No public hotkey map,
 TanStack type, or controller crosses the package boundary.
+The Adapter supplies its complete private Hotkeys option policy, including detected `Mod` platform,
+so an ancestor application provider cannot renormalize or disable Table commands. Nested Tables
+arbitrate descendant exit at the nearest Table boundary rather than listener registration order.
 Descendant-exit Escape bindings stay table-scoped through an ownership check but register on the
 owning document, after React's delegated bubble phase, so a custom renderer can retain Escape with
 `stopPropagation()`. Active column gestures keep immediate capture-phase cancellation through a

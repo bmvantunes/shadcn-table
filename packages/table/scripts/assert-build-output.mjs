@@ -214,20 +214,39 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
       mode: "native-evidence",
     },
-    ...["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].flatMap((property) => [
-      {
-        source: `function adapter(event: KeyboardEvent) { return event.${property}; }`,
-        mode: "adapter",
-      },
-      {
-        source: `function adapter({ ${property} }: KeyboardEvent) { return ${property}; }`,
-        mode: "adapter",
-      },
-      {
-        source: `function capture(event: KeyboardEvent) { return event.${property}; }`,
-        mode: "capture-adapter",
-      },
-    ]),
+    ...[
+      "key",
+      "code",
+      "keyCode",
+      "which",
+      "charCode",
+      "location",
+      "repeat",
+      "ctrlKey",
+      "metaKey",
+      "altKey",
+      "shiftKey",
+      "getModifierState",
+    ].flatMap((property) =>
+      ["adapter", "capture-adapter", "native-evidence"].flatMap((mode) => [
+        {
+          source: `function boundary(event: KeyboardEvent) { return event.${property}; }`,
+          mode,
+        },
+        {
+          source: `function boundary(event: KeyboardEvent) { return event["${property}"]; }`,
+          mode,
+        },
+        {
+          source: `function boundary({ ${property} }: KeyboardEvent) { return ${property}; }`,
+          mode,
+        },
+      ]),
+    ),
+    {
+      source: `function adapter(event: KeyboardEvent) { return event.getModifierState("Shift"); }`,
+      mode: "adapter",
+    },
     {
       source: `const captureHandler = <input onKeyDown={() => undefined} />;`,
       lang: "tsx",
@@ -944,7 +963,20 @@ function keyboardHandlerPropertyName(node) {
 }
 
 function isKeyboardInterpretationProperty(name) {
-  return ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(name ?? "");
+  return [
+    "key",
+    "code",
+    "keyCode",
+    "which",
+    "charCode",
+    "location",
+    "repeat",
+    "ctrlKey",
+    "metaKey",
+    "altKey",
+    "shiftKey",
+    "getModifierState",
+  ].includes(name ?? "");
 }
 
 function staticStringValue(node) {

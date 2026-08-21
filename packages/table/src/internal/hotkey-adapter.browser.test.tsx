@@ -1,5 +1,5 @@
-import { getHotkeyManager, HotkeysProvider } from "@tanstack/react-hotkeys";
-import { StrictMode, useCallback, useRef } from "react";
+import { detectPlatform, getHotkeyManager, HotkeysProvider } from "@tanstack/react-hotkeys";
+import { StrictMode, useCallback, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cleanup, render } from "vitest-browser-react";
@@ -17,17 +17,20 @@ import { compileColumns } from "./compile-columns";
 import { BrunoTableNavigationRuntime } from "./navigation";
 
 function AdapterProbe({
+  children,
   commands,
   label,
 }: Readonly<{
+  readonly children?: ReactNode;
   readonly commands: BrunoTableGridHotkeyCommands;
   readonly label: string;
 }>) {
   const ownerRef = useRef<HTMLElement>(null);
   useBrunoTableGridHotkeys(ownerRef, commands);
   return (
-    <section ref={ownerRef} role="region" aria-label={label} tabIndex={0}>
+    <section ref={ownerRef} role="region" aria-label={label} data-bruno-table={label} tabIndex={0}>
       {label}
+      {children}
     </section>
   );
 }
@@ -78,7 +81,12 @@ function OwningDocumentAdapterProbe({
   useBrunoTableGridHotkeys(ownerRef, commands);
   useBrunoTableColumnGestureEscape(ownerRef, captureAction);
   return createPortal(
-    <section ref={ownerRef} role="region" aria-label="Secondary-document table hotkeys">
+    <section
+      ref={ownerRef}
+      role="region"
+      aria-label="Secondary-document table hotkeys"
+      data-bruno-table="secondary-document"
+    >
       <input ref={setInput} aria-label="Secondary-document descendant" />
     </section>,
     ownerDocument.body,
@@ -95,6 +103,12 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     { platform: "windows" as const, modifier: { ctrlKey: true } },
     { platform: "mac" as const, modifier: { metaKey: true } },
   ])("routes every grid Mod chord on $platform", async ({ platform, modifier }) => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(
+      platform === "mac" ? "MacIntel" : "Win32",
+    );
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      platform === "mac" ? "Macintosh" : "Windows",
+    );
     const gestures = [
       {
         hotkey: "Mod+ArrowUp" as const,
@@ -165,9 +179,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     ];
     const navigate = vi.fn();
     const screen = await render(
-      <HotkeysProvider defaultOptions={{ hotkey: { platform } }}>
-        <AdapterProbe commands={probeCommands({ navigate })} label={`${platform} table hotkeys`} />
-      </HotkeysProvider>,
+      <AdapterProbe commands={probeCommands({ navigate })} label={`${platform} table hotkeys`} />,
     );
     const owner = screen.getByRole("region", { name: `${platform} table hotkeys` }).element();
 
@@ -186,6 +198,101 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     }
 
     expect(navigate).toHaveBeenCalledTimes(gestures.length);
+  });
+
+  test("isolates table bindings from an ancestor Hotkeys provider", async () => {
+    const platform = detectPlatform();
+    const modifier = platform === "mac" ? { metaKey: true } : { ctrlKey: true };
+    const conflictingPlatform = platform === "mac" ? "windows" : "mac";
+    const navigate = vi.fn();
+    const screen = await render(
+      <HotkeysProvider
+        defaultOptions={{
+          hotkey: {
+            enabled: false,
+            eventType: "keyup",
+            platform: conflictingPlatform,
+            preventDefault: true,
+            requireReset: true,
+            stopPropagation: true,
+          },
+        }}
+      >
+        <AdapterProbe
+          commands={probeCommands({ navigate })}
+          label="Provider-isolated table hotkeys"
+        />
+      </HotkeysProvider>,
+    );
+    const owner = screen.getByRole("region", { name: "Provider-isolated table hotkeys" }).element();
+
+    owner.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowDown",
+        ...modifier,
+      }),
+    );
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(navigate.mock.calls[0]?.[1]).toEqual({ type: "column-edge", edge: "end" });
+  });
+
+  test("routes descendant commands to the innermost dynamically mounted table", async () => {
+    const outerEscape = vi.fn();
+    const innerEscape = vi.fn();
+    const outerNavigate = vi.fn();
+    const innerNavigate = vi.fn();
+    const outerResize = vi.fn();
+    const innerResize = vi.fn();
+    const screen = await render(
+      <AdapterProbe
+        commands={probeCommands({
+          escape: outerEscape,
+          navigate: outerNavigate,
+          resize: outerResize,
+        })}
+        label="Outer table hotkeys"
+      />,
+    );
+
+    await screen.rerender(
+      <AdapterProbe
+        commands={probeCommands({
+          escape: outerEscape,
+          navigate: outerNavigate,
+          resize: outerResize,
+        })}
+        label="Outer table hotkeys"
+      >
+        <AdapterProbe
+          commands={probeCommands({
+            escape: innerEscape,
+            navigate: innerNavigate,
+            resize: innerResize,
+          })}
+          label="Inner table hotkeys"
+        />
+      </AdapterProbe>,
+    );
+    const inner = screen.getByRole("region", { name: "Inner table hotkeys" }).element();
+    inner.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+
+    expect(innerEscape).toHaveBeenCalledOnce();
+    expect(outerEscape).not.toHaveBeenCalled();
+
+    inner.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    expect(innerNavigate).toHaveBeenCalledOnce();
+    expect(outerNavigate).not.toHaveBeenCalled();
+
+    inner.dispatchEvent(
+      new KeyboardEvent("keydown", { altKey: true, bubbles: true, key: "ArrowRight" }),
+    );
+    expect(innerResize).toHaveBeenCalledOnce();
+    expect(outerResize).not.toHaveBeenCalled();
   });
 
   test("scopes simultaneous owners and cleans up Strict Mode and HMR-like remounts", async () => {

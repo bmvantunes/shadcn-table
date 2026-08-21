@@ -1,4 +1,4 @@
-import { useHotkeys } from "@tanstack/react-hotkeys";
+import { detectPlatform, useHotkeys } from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import type {
@@ -374,11 +374,26 @@ function useBrunoTableHotkeys(
 
   useHotkeys(definitions, {
     conflictBehavior,
+    enabled: true,
+    eventType: "keydown",
+    platform: detectPlatform(),
     preventDefault: false,
     requireReset: false,
     stopPropagation: false,
     target,
   });
+}
+
+function ownsBrunoTableHotkeyTarget(owner: HTMLElement | null, eventTarget: EventTarget | null) {
+  const OwnerElement = owner?.ownerDocument.defaultView?.Element;
+  const ownerBoundary = owner?.closest("[data-bruno-table]");
+  return (
+    owner !== null &&
+    OwnerElement !== undefined &&
+    eventTarget instanceof OwnerElement &&
+    ownerBoundary !== null &&
+    eventTarget.closest("[data-bruno-table]") === ownerBoundary
+  );
 }
 
 export function useBrunoTableGridHotkeys(
@@ -396,28 +411,23 @@ export function useBrunoTableGridHotkeys(
         : null;
   });
   const bindings = createBrunoTableGridHotkeyBindings(commands);
+  const ownerScopedBindings = bindings.map((binding) => ({
+    ...binding,
+    onTrigger: ((event, context) => {
+      if (!ownsBrunoTableHotkeyTarget(target.current, event.target)) return;
+      binding.onTrigger(event, context);
+    }) satisfies HotkeyCallback,
+  }));
   const escapeCommandRef = useRef(commands.escape);
   useEffect(() => {
     escapeCommandRef.current = commands.escape;
   }, [commands.escape]);
-  const escapeBindings = bindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length).map((binding) => ({
-    ...binding,
-    onTrigger: ((event, context) => {
-      const owner = target.current;
-      const eventTarget = event.target;
-      const OwnerNode = owner?.ownerDocument.defaultView?.Node;
-      if (
-        owner === null ||
-        OwnerNode === undefined ||
-        !(eventTarget instanceof OwnerNode) ||
-        !owner.contains(eventTarget)
-      ) {
-        return;
-      }
-      binding.onTrigger(event, context);
-    }) satisfies HotkeyCallback,
-  }));
-  useBrunoTableHotkeys(target, bindings.slice(BRUNO_TABLE_ESCAPE_HOTKEYS.length), "error");
+  const escapeBindings = ownerScopedBindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length);
+  useBrunoTableHotkeys(
+    target,
+    ownerScopedBindings.slice(BRUNO_TABLE_ESCAPE_HOTKEYS.length),
+    "error",
+  );
   // React Hotkeys accepts Documents directly but types refs as element-only.
   // The ref is resolved after this hook's layout effect and before its effect.
   useBrunoTableHotkeys(
@@ -446,16 +456,7 @@ export function useBrunoTableGridHotkeys(
       hotkey,
       onTrigger: ((event) => {
         const currentOwner = target.current;
-        const eventTarget = event.target;
-        const OwnerNode = currentOwner?.ownerDocument.defaultView?.Node;
-        if (
-          currentOwner === null ||
-          OwnerNode === undefined ||
-          !(eventTarget instanceof OwnerNode) ||
-          !currentOwner.contains(eventTarget)
-        ) {
-          return;
-        }
+        if (!ownsBrunoTableHotkeyTarget(currentOwner, event.target)) return;
         escapeCommandRef.current(event);
       }) satisfies HotkeyCallback,
     }));
