@@ -13,6 +13,7 @@ assertReactCompilerStrictness(transformSync);
 
 class UninspectableWildcardExportError extends Error {}
 const keyboardEvidenceBindingCache = new WeakMap();
+const keyboardHandlerFunctionOwners = new WeakSet();
 
 async function readProductionModules(directoryUrl) {
   const directoryPath = fileURLToPath(directoryUrl);
@@ -21,7 +22,10 @@ async function readProductionModules(directoryUrl) {
     .filter(
       (entry) =>
         /\.[cm]?tsx?$/u.test(entry) &&
-        !/(?:^|\/)[^/]+\.(?:test|browser\.test|bench)\.[cm]?tsx?$/u.test(entry),
+        !/(?:^|\/)[^/]+\.(?:bench|setup|test|test-d)\.[cm]?tsx?$/u.test(entry) &&
+        !/(?:^|\/)(?:commit-diagnostic-probes|compiler-smoke|test-diagnostic-build-contract)\.[cm]?tsx?$/u.test(
+          entry,
+        ),
     )
     .map((entry) => join(directoryPath, entry));
   return Promise.all(
@@ -106,11 +110,17 @@ const legacyKeyboardGuardSmokeAsts = await Promise.all(
     `function alias(event: globalThis.KeyboardEvent) { const gesture = event; return gesture.shiftKey; }`,
     `function assigned(event: KeyboardEvent) { let gesture; gesture = event; return gesture.key; }`,
     `function destructured(event: KeyboardEvent) { const { key } = event; return key; }`,
-  ].map((source) => parseAstAsync(source, { lang: "ts" })),
+    `function nested(event: KeyboardEvent) { return [1].map(() => event.metaKey); }`,
+    `const inferred = <input onKeyDown={(gesture) => gesture.key} />;`,
+  ].map((source) => parseAstAsync(source, { lang: source.includes("<input") ? "tsx" : "ts" })),
 );
 const nativePointerGuardSmokeAst = await parseAstAsync(
   `function nativePointer(event: MouseEvent) { return event.shiftKey; }`,
   { lang: "ts" },
+);
+const nativeKeyboardEvidenceGuardSmokeAst = await parseAstAsync(
+  `const nativeInput = <input onKeyDown={(event) => recordComposition(event.isComposing)} />;`,
+  { lang: "tsx" },
 );
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
@@ -166,6 +176,10 @@ for (const { sourcePath, ast } of productionModuleAsts) {
 }
 for (const smokeAst of legacyKeyboardGuardSmokeAsts) assertLegacyKeyboardSyntaxDetected(smokeAst);
 assertNoLegacyKeyboardSyntax(nativePointerGuardSmokeAst, "native pointer guard smoke fixture");
+assertNoLegacyKeyboardSyntax(
+  nativeKeyboardEvidenceGuardSmokeAst,
+  "native keyboard evidence guard smoke fixture",
+);
 
 if (
   /BrunoTable(?:ToolbarController|ToolbarState|ToolbarRowStore|ToolbarCellStore)/u.test(
@@ -483,24 +497,10 @@ function findImportedBinding(ast, source, importedName) {
 
 function assertNoLegacyKeyboardSyntax(ast, label) {
   let violation;
+  collectKeyboardHandlerFunctions(ast, (owner) => keyboardHandlerFunctionOwners.add(owner));
   walkSyntaxTree(ast, (node, ancestors) => {
     if (violation !== undefined) return;
     const parent = ancestors.at(-1);
-    if (
-      node.type === "JSXAttribute" &&
-      node.name?.type === "JSXIdentifier" &&
-      (node.name.name === "onKeyDown" || node.name.name === "onKeyUp")
-    ) {
-      violation = `React ${node.name.name} handler`;
-      return;
-    }
-    if (
-      (node.type === "Property" || node.type === "MethodDefinition") &&
-      (propertyName(node) === "onKeyDown" || propertyName(node) === "onKeyUp")
-    ) {
-      violation = `object ${propertyName(node)} handler`;
-      return;
-    }
     if (
       node.type === "CallExpression" &&
       node.callee.type === "MemberExpression" &&
@@ -513,14 +513,9 @@ function assertNoLegacyKeyboardSyntax(ast, label) {
     }
     if (
       node.type === "MemberExpression" &&
-      ["code", "ctrlKey", "metaKey", "altKey"].includes(memberPropertyName(node) ?? "")
-    ) {
-      violation = `manual KeyboardEvent.${memberPropertyName(node)} interpretation`;
-      return;
-    }
-    if (
-      node.type === "MemberExpression" &&
-      ["key", "shiftKey"].includes(memberPropertyName(node) ?? "") &&
+      ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(
+        memberPropertyName(node) ?? "",
+      ) &&
       isKeyboardEvidenceExpression(node.object, ancestors)
     ) {
       violation = `manual KeyboardEvent.${memberPropertyName(node)} interpretation`;
@@ -529,22 +524,13 @@ function assertNoLegacyKeyboardSyntax(ast, label) {
     if (
       node.type === "Property" &&
       parent?.type === "ObjectPattern" &&
-      ["code", "ctrlKey", "metaKey", "altKey"].includes(propertyName(node) ?? "")
-    ) {
-      violation = `destructured ${propertyName(node)} keyboard evidence`;
-      return;
-    }
-    if (
-      node.type === "Property" &&
-      parent?.type === "ObjectPattern" &&
-      ["key", "shiftKey"].includes(propertyName(node) ?? "") &&
+      ["key", "code", "ctrlKey", "metaKey", "altKey", "shiftKey"].includes(
+        propertyName(node) ?? "",
+      ) &&
       isKeyboardEvidenceDestructuring(ancestors)
     ) {
       violation = `destructured KeyboardEvent.${propertyName(node)} evidence`;
       return;
-    }
-    if (node.type === "Literal" && isKeyboardEventTypeLiteral(node)) {
-      violation = `raw ${String(node.value)} event type`;
     }
   });
   if (violation !== undefined) {
@@ -571,9 +557,9 @@ function assertLegacyKeyboardSyntaxDetected(ast) {
 
 function isKeyboardEvidenceExpression(expression, ancestors) {
   if (expression.type !== "Identifier") return false;
-  const owner = ancestors.findLast((ancestor) => isFunctionNode(ancestor));
-  if (owner === undefined) return false;
-  return keyboardEvidenceBindings(owner).has(expression.name);
+  return ancestors
+    .filter((ancestor) => isFunctionNode(ancestor))
+    .some((owner) => keyboardEvidenceBindings(owner).has(expression.name));
 }
 
 function isKeyboardEvidenceDestructuring(ancestors) {
@@ -586,10 +572,11 @@ function keyboardEvidenceBindings(owner) {
   const cached = keyboardEvidenceBindingCache.get(owner);
   if (cached !== undefined) return cached;
   const bindings = new Set();
-  for (const parameter of owner.params ?? []) {
+  for (const [index, parameter] of (owner.params ?? []).entries()) {
     if (parameter.type !== "Identifier") continue;
     if (
       isKeyboardEventTypeAnnotation(parameter.typeAnnotation) ||
+      (index === 0 && keyboardHandlerFunctionOwners.has(owner)) ||
       (!isPointerEventTypeAnnotation(parameter.typeAnnotation) && /event$/iu.test(parameter.name))
     ) {
       bindings.add(parameter.name);
@@ -624,6 +611,29 @@ function keyboardEvidenceBindings(owner) {
   }
   keyboardEvidenceBindingCache.set(owner, bindings);
   return bindings;
+}
+
+function collectKeyboardHandlerFunctions(ast, register) {
+  walkSyntaxTree(ast, (node) => {
+    let handler;
+    if (
+      node.type === "JSXAttribute" &&
+      node.name?.type === "JSXIdentifier" &&
+      (node.name.name === "onKeyDown" || node.name.name === "onKeyUp") &&
+      node.value?.type === "JSXExpressionContainer"
+    ) {
+      handler = node.value.expression;
+    } else if (
+      node.type === "Property" &&
+      (propertyName(node) === "onKeyDown" || propertyName(node) === "onKeyUp")
+    ) {
+      handler = node.value;
+    }
+    if (isFunctionNode(handler)) register(handler);
+    if (handler?.type === "Identifier") {
+      for (const resolved of findAssignedFunctions(ast, handler.name)) register(resolved);
+    }
+  });
 }
 
 function isKeyboardEventTypeAnnotation(annotation) {
@@ -681,6 +691,13 @@ function collectEffectCallbacks(ast, layoutEffectBinding) {
 
 function findAssignedFunctions(owner, bindingName) {
   const functions = [];
+  if (owner.type === "Program") {
+    for (const statement of owner.body) {
+      if (statement.type === "FunctionDeclaration" && statement.id?.name === bindingName) {
+        functions.push(statement);
+      }
+    }
+  }
   walkOwnerScope(owner.type === "Program" ? owner : owner.body, (node) => {
     if (
       node.type === "AssignmentExpression" &&

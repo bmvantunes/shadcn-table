@@ -33,6 +33,7 @@ export default defineConfig({
   test: {
     name: "table-browser",
     include: ["src/**/*.browser.test.tsx"],
+    benchmark: { include: ["src/**/*.browser.bench.tsx"] },
     setupFiles: ["./src/vitest.browser.setup.ts"],
     browser: {
       enabled: true,

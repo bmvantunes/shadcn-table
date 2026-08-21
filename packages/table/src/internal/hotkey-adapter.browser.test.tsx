@@ -5,7 +5,9 @@ import { cleanup, render } from "vitest-browser-react";
 
 import {
   BRUNO_TABLE_GRID_HOTKEYS,
+  requestBrunoTableHotkeyWorkflowAction,
   useBrunoTableGridHotkeys,
+  useBrunoTableHotkeyWorkflowAction,
   type BrunoTableGridHotkeyCommands,
 } from "./hotkey-adapter";
 import { compileColumns } from "./compile-columns";
@@ -42,6 +44,15 @@ function probeCommands(
   };
 }
 
+function WorkflowActionProbe({ action }: Readonly<{ action: () => void }>) {
+  const ref = useBrunoTableHotkeyWorkflowAction(action);
+  return (
+    <button ref={ref} type="button">
+      Workflow action
+    </button>
+  );
+}
+
 afterEach(async () => {
   await cleanup();
   vi.restoreAllMocks();
@@ -53,18 +64,72 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     { platform: "mac" as const, modifier: { metaKey: true } },
   ])("routes every grid Mod chord on $platform", async ({ platform, modifier }) => {
     const gestures = [
-      { hotkey: "Mod+ArrowUp" as const, key: "ArrowUp" },
-      { hotkey: "Mod+ArrowDown" as const, key: "ArrowDown" },
-      { hotkey: "Mod+ArrowLeft" as const, key: "ArrowLeft" },
-      { hotkey: "Mod+ArrowRight" as const, key: "ArrowRight" },
-      { hotkey: "Mod+Shift+ArrowUp" as const, key: "ArrowUp", shiftKey: true },
-      { hotkey: "Mod+Shift+ArrowDown" as const, key: "ArrowDown", shiftKey: true },
-      { hotkey: "Mod+Shift+ArrowLeft" as const, key: "ArrowLeft", shiftKey: true },
-      { hotkey: "Mod+Shift+ArrowRight" as const, key: "ArrowRight", shiftKey: true },
-      { hotkey: "Mod+Home" as const, key: "Home" },
-      { hotkey: "Mod+End" as const, key: "End" },
-      { hotkey: "Mod+Shift+Home" as const, key: "Home", shiftKey: true },
-      { hotkey: "Mod+Shift+End" as const, key: "End", shiftKey: true },
+      {
+        hotkey: "Mod+ArrowUp" as const,
+        key: "ArrowUp",
+        expected: { type: "column-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+ArrowDown" as const,
+        key: "ArrowDown",
+        expected: { type: "column-edge", edge: "end" },
+      },
+      {
+        hotkey: "Mod+ArrowLeft" as const,
+        key: "ArrowLeft",
+        expected: { type: "row-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+ArrowRight" as const,
+        key: "ArrowRight",
+        expected: { type: "row-edge", edge: "end" },
+      },
+      {
+        hotkey: "Mod+Shift+ArrowUp" as const,
+        key: "ArrowUp",
+        shiftKey: true,
+        expected: { type: "column-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+Shift+ArrowDown" as const,
+        key: "ArrowDown",
+        shiftKey: true,
+        expected: { type: "column-edge", edge: "end" },
+      },
+      {
+        hotkey: "Mod+Shift+ArrowLeft" as const,
+        key: "ArrowLeft",
+        shiftKey: true,
+        expected: { type: "row-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+Shift+ArrowRight" as const,
+        key: "ArrowRight",
+        shiftKey: true,
+        expected: { type: "row-edge", edge: "end" },
+      },
+      {
+        hotkey: "Mod+Home" as const,
+        key: "Home",
+        expected: { type: "grid-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+End" as const,
+        key: "End",
+        expected: { type: "grid-edge", edge: "end" },
+      },
+      {
+        hotkey: "Mod+Shift+Home" as const,
+        key: "Home",
+        shiftKey: true,
+        expected: { type: "grid-edge", edge: "start" },
+      },
+      {
+        hotkey: "Mod+Shift+End" as const,
+        key: "End",
+        shiftKey: true,
+        expected: { type: "grid-edge", edge: "end" },
+      },
     ];
     const navigate = vi.fn();
     const screen = await render(
@@ -74,7 +139,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     );
     const owner = screen.getByRole("region", { name: `${platform} table hotkeys` }).element();
 
-    for (const gesture of gestures) {
+    for (const [index, gesture] of gestures.entries()) {
       owner.dispatchEvent(
         new KeyboardEvent("keydown", {
           bubbles: true,
@@ -85,6 +150,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
           shiftKey: gesture.shiftKey ?? false,
         }),
       );
+      expect(navigate.mock.calls[index]?.[1]).toEqual(gesture.expected);
     }
 
     expect(navigate).toHaveBeenCalledTimes(gestures.length);
@@ -111,6 +177,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     await screen.rerender(
       <StrictMode>
         <AdapterProbe
+          key="hmr-remount"
           commands={probeCommands({ navigate: firstReplacement })}
           label="First table hotkeys"
         />
@@ -182,7 +249,25 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  test("benchmarks held-key matching through the real listener and Adapter dispatch path", async () => {
+  test("keeps workflow ownership attached while updating to the latest action", async () => {
+    const first = vi.fn();
+    const replacement = vi.fn();
+    const screen = await render(<WorkflowActionProbe action={first} />);
+    const ownerElement = screen.getByRole("button", { name: "Workflow action" }).element();
+    if (!(ownerElement instanceof HTMLElement)) throw new Error("Expected an HTML action owner.");
+    const owner = ownerElement;
+
+    expect(requestBrunoTableHotkeyWorkflowAction(owner)).toBe(true);
+    expect(first).toHaveBeenCalledOnce();
+
+    await screen.rerender(<WorkflowActionProbe action={replacement} />);
+    expect(screen.getByRole("button", { name: "Workflow action" }).element()).toBe(owner);
+    expect(requestBrunoTableHotkeyWorkflowAction(owner)).toBe(true);
+    expect(first).toHaveBeenCalledOnce();
+    expect(replacement).toHaveBeenCalledOnce();
+  });
+
+  test("dispatches every held-key unit through the real listener and Adapter path", async () => {
     const navigation = new BrunoTableNavigationRuntime();
     navigation.setShape(
       Object.freeze({
@@ -212,10 +297,8 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       />,
     );
     const owner = screen.getByRole("region", { name: "Held-key Adapter benchmark" }).element();
-    const samples: number[] = [];
 
     for (let sample = 0; sample < 100; sample += 1) {
-      const startedAt = performance.now();
       for (let gesture = 0; gesture < 100; gesture += 1) {
         owner.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -225,20 +308,8 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
           }),
         );
       }
-      samples.push(performance.now() - startedAt);
     }
 
-    const sorted = samples.toSorted((left, right) => left - right);
-    const p99Ms = sorted[Math.ceil(sorted.length * 0.99) - 1] ?? Number.POSITIVE_INFINITY;
-    console.info(
-      JSON.stringify({
-        benchmark: "BrunoTable real-listener held-key Adapter dispatch",
-        gestures: dispatchedCommands,
-        p99Ms,
-        referenceFrameBudgetMs: 8.33,
-      }),
-    );
     expect(dispatchedCommands).toBe(10_000);
-    expect(p99Ms).toBeLessThan(8.33);
   });
 });

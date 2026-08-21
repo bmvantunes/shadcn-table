@@ -7650,7 +7650,7 @@ describe("BrunoTableClient browser surface", () => {
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
   });
 
-  test("keeps native text, IME, dead-key, AltGr, and Option ownership outside grid commands", async () => {
+  test("keeps text and composition keys native while Escape exits read-only custom controls", async () => {
     const nativeEditorColumns = [
       {
         ...columns[0],
@@ -7686,27 +7686,36 @@ describe("BrunoTableClient browser surface", () => {
     );
     const activeId = grid.element().getAttribute("aria-activedescendant");
 
-    for (const editor of [
+    for (const control of [
       screen.getByRole("textbox", { name: "Input Ada" }),
       screen.getByRole("textbox", { name: "Textarea Ada" }),
       screen.getByRole("textbox", { name: "Contenteditable Ada" }),
     ]) {
-      editor.element().focus();
+      control.element().focus();
       for (const init of [
         { key: "ArrowLeft" },
         { key: "Home" },
         { altKey: true, ctrlKey: true, key: "ArrowRight" },
         { altKey: true, key: "ArrowLeft" },
-        { key: "Escape" },
         { key: "Dead" },
         { key: "é" },
       ]) {
         const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-        editor.element().dispatchEvent(event);
+        control.element().dispatchEvent(event);
+        await new Promise(requestAnimationFrame);
         expect(event.defaultPrevented).toBe(false);
         expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
-        expect(document.activeElement).toBe(editor.element());
+        expect(document.activeElement).toBe(control.element());
       }
+      const escape = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+      control.element().dispatchEvent(escape);
+      await vi.waitFor(() => expect(document.activeElement).toBe(grid.element()));
+      expect(escape.defaultPrevented).toBe(true);
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
     }
 
     grid.element().focus();

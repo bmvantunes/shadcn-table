@@ -43,7 +43,7 @@ function createBrunoTableGridHotkeyBindings(
   commands: BrunoTableGridHotkeyCommands,
 ): readonly BrunoTableHotkeyBinding[] {
   return [
-    { hotkey: "Escape", onTrigger: commands.escape },
+    { hotkey: "Escape", allowInTextInput: true, onTrigger: commands.escape },
     { hotkey: "Shift+Tab", allowInTextInput: true, onTrigger: commands.shiftTab },
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
@@ -252,6 +252,8 @@ const NOOP_GRID_COMMANDS: BrunoTableGridHotkeyCommands = Object.freeze({
 export const BRUNO_TABLE_GRID_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze(
   createBrunoTableGridHotkeyBindings(NOOP_GRID_COMMANDS).map((binding) => binding.hotkey),
 );
+// One table registers every grid binding plus the single window-scoped
+// column-gesture Escape from useBrunoTableColumnGestureEscape.
 export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_GRID_HOTKEYS.length + 1;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
@@ -279,15 +281,18 @@ export function requestBrunoTableHotkeyWorkflowAction(owner: HTMLElement): boole
 
 export function useBrunoTableHotkeyWorkflowAction(action: () => void): RefCallback<HTMLElement> {
   const cleanupRef = useRef<() => void>(() => undefined);
+  const actionRef = useRef(action);
+  useEffect(() => {
+    actionRef.current = action;
+  }, [action]);
   useEffect(() => () => cleanupRef.current(), []);
-  return useCallback(
-    (owner) => {
-      cleanupRef.current();
-      cleanupRef.current =
-        owner === null ? () => undefined : registerBrunoTableHotkeyWorkflowAction(owner, action);
-    },
-    [action],
-  );
+  return useCallback((owner) => {
+    cleanupRef.current();
+    cleanupRef.current =
+      owner === null
+        ? () => undefined
+        : registerBrunoTableHotkeyWorkflowAction(owner, () => actionRef.current());
+  }, []);
 }
 
 /**
