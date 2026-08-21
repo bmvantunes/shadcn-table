@@ -4278,6 +4278,108 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Newest");
   });
 
+  it("falls back to complete change evidence after discarded Client candidates", () => {
+    const initialFirst = { id: "first", name: "Outer first", note: "initial" } satisfies Row;
+    const initialSecond = { id: "second", name: "Outer second", note: "initial" } satisfies Row;
+    const outerFirst = { ...initialFirst, note: "outer" } satisfies Row;
+    const outerSecond = { ...initialSecond, note: "outer" } satisfies Row;
+    const discardedFirst = { ...outerFirst, name: "Discarded first" } satisfies Row;
+    const discardedSecond = { ...outerSecond, name: "Discarded second" } satisfies Row;
+    const skippedFirst = { ...discardedFirst, name: "Installed first" } satisfies Row;
+    const skippedSecond = { ...discardedSecond, name: "Installed second" } satisfies Row;
+    const finalSecond = { ...skippedSecond, note: "final" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initialFirst, initialSecond]);
+    const internalFailure = new Error("discard queued Client candidates");
+    let queued = false;
+    view.subscribeRowSpace(() => {
+      if (queued || view.getCellValueSnapshot("first", "COL_ID_NOTE") !== "outer") return;
+      queued = true;
+      const rejected = adapter.publish(source([discardedFirst, discardedSecond]));
+      runtime.publish({
+        ...rejected,
+        get status(): "ready" {
+          throw internalFailure;
+        },
+      });
+      runtime.publish(adapter.publish(source([skippedFirst, skippedSecond])));
+    });
+    const rowsStore = adapter.createRowsStore(view, () => (previousRows, nextRows, change) => {
+      if (change.rowIdsChanged) return true;
+      return change.changedIndexes.some(
+        (index) =>
+          (previousRows[index]?.raw as Row | undefined)?.name !==
+          (nextRows[index]?.raw as Row | undefined)?.name,
+      );
+    });
+    const rowsListener = vi.fn();
+    rowsStore.subscribe(rowsListener);
+
+    expect(() => runtime.publish(adapter.publish(source([outerFirst, outerSecond])))).toThrow(
+      internalFailure,
+    );
+    expect(rowsListener).not.toHaveBeenCalled();
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(initialFirst);
+
+    runtime.publish(adapter.publish(source([skippedFirst, finalSecond])));
+
+    expect(rowsListener).toHaveBeenCalledOnce();
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(skippedFirst);
+    expect(rowsStore.getSnapshot()[1]?.raw).toBe(finalSecond);
+    expect(view.getRowSnapshot("first")).toBe(skippedFirst);
+    expect(view.getRowSnapshot("second")).toBe(finalSecond);
+  });
+
+  it("advances Client change lineage after detector-false installed updates", () => {
+    const first = { id: "first", name: "First", note: "initial" } satisfies Row;
+    const second = { id: "second", name: "Second", note: "initial" } satisfies Row;
+    const nextFirst = { ...first, note: "first update" } satisfies Row;
+    const nextSecond = { ...second, note: "second update" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([first, second]);
+    const changes: number[][] = [];
+    const rowsStore = adapter.createRowsStore(view, () => (_previous, _next, change) => {
+      changes.push([...change.changedIndexes]);
+      return false;
+    });
+    const rowsListener = vi.fn();
+    rowsStore.subscribe(rowsListener);
+
+    runtime.publish(adapter.publish(source([nextFirst, second])));
+    runtime.publish(adapter.publish(source([nextFirst, nextSecond])));
+
+    expect(changes).toEqual([[0], [1]]);
+    expect(rowsListener).not.toHaveBeenCalled();
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(first);
+  });
+
+  it("preserves forced row-order evidence when a Client sequence is reused", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const candidate = { id: "first", name: "Candidate" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const changes: { readonly rowIdsChanged: boolean }[] = [];
+    const rowsStore = adapter.createRowsStore(view, () => (_previous, _next, change) => {
+      changes.push(change);
+      return true;
+    });
+    rowsStore.subscribe(() => undefined);
+    adapter.acceptRows(rowsStore.getSnapshot());
+    runtime.publish(adapter.publish(source([candidate], "stale")));
+    const fallback = adapter.rejectQueryRows(rowsStore.getSnapshot(), {
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+      message: "Rejected candidate.",
+    });
+    if (fallback === undefined) throw new Error("Expected a retained-row fallback.");
+    runtime.publish(fallback);
+    const retry = adapter.retryQueryRows();
+    if (retry === undefined) throw new Error("Expected rejected rows to be retryable.");
+
+    runtime.publish(retry);
+
+    expect(changes.at(-1)?.rowIdsChanged).toBe(true);
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(candidate);
+  });
+
   it("preserves undefined failures from Client rows-store subscribers across the drain", () => {
     const initial = { id: "first", name: "Initial" } satisfies Row;
     const outer = { id: "first", name: "Outer" } satisfies Row;

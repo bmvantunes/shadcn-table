@@ -450,6 +450,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       );
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    let evaluatedCoherent = this.coherent;
     let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
     const identity = Object.freeze({});
@@ -479,9 +480,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         }
       }
       displayedRowSpace = nextDisplayedRowSpace;
-      const change =
-        nextCoherent?.changeFromPrevious ??
-        Object.freeze({ rowIdsChanged: previousRows.length > 0, changedIndexes: EMPTY_ROWS });
+      const change = clientRowsStoreChange(evaluatedCoherent, nextCoherent);
+      evaluatedCoherent = nextCoherent;
       const activeDetector = detector;
       if (activeDetector === undefined) return;
       try {
@@ -512,6 +512,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
           detector ??= createDetector();
           const installedCoherent = readRuntimeCoherent();
           snapshot = installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+          evaluatedCoherent = installedCoherent;
           displayedRowSpace = installedCoherent !== undefined;
           unsubscribeRuntime = runtime.subscribeRowSpace(publish);
         }
@@ -558,6 +559,32 @@ export type BrunoTableClientFacetRowsSource = Readonly<{
     rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
   ) => BrunoTableClientFacetRowsSnapshot;
 }>;
+
+function clientRowsStoreChange<TRow>(
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  next: ClientCoherentSnapshot<TRow> | undefined,
+): BrunoTableClientRowOrderChange {
+  const previousSequence = previous?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  const nextSequence = next?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  if (previousSequence === nextSequence) {
+    return next?.changeFromPrevious ?? EMPTY_ROW_ORDER_CHANGE;
+  }
+  if (next !== undefined && nextSequence.parentToken === previousSequence.token) {
+    return next.changeFromPrevious;
+  }
+  let rowIdsChanged = previousSequence.length !== nextSequence.length;
+  const changedIndexes: number[] = [];
+  for (let index = 0; index < nextSequence.length; index += 1) {
+    const previousRow = previousSequence.get(index);
+    const nextRow = nextSequence.get(index);
+    if (previousRow !== nextRow) changedIndexes.push(index);
+    if (previousRow?.rowId !== nextRow?.rowId) rowIdsChanged = true;
+  }
+  return Object.freeze({
+    rowIdsChanged,
+    changedIndexes: Object.freeze(changedIndexes),
+  });
+}
 
 export type BrunoTableClientFacetRowsSnapshot = Readonly<{
   readonly rows: readonly BrunoTableClientAdmittedRow[];
