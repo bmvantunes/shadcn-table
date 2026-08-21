@@ -13,6 +13,7 @@ import {
   BrunoTableActiveSortCount,
   BrunoTableComputedColumn,
   BrunoTableFilterControl,
+  type BrunoTableGridFilterCommandCapability,
   BrunoTableLoadedRowCount,
   BrunoTableQuickFilter,
   BrunoTableResultRowCount,
@@ -10050,6 +10051,127 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
       .toBeVisible();
+  });
+
+  test("propagates a persistence failure after committing a Grid Filter command", async () => {
+    const persistenceFailure = new Error("Persistence codec failed.");
+    const throwingValueType = {
+      codecId: "browser/throwing-text",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected text." } as const),
+      equivalent: (left: string, right: string) => left === right,
+      compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value: string) => value,
+      parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+      formatDisplay: (value: string) => value,
+      encodePersisted: () => {
+        throw persistenceFailure;
+      },
+      decodePersisted: () => ({ _tag: "Failure", message: "Not persisted." }) as const,
+    } satisfies BrunoTableValueType<string, "equality", "text">;
+    const throwingColumns = [
+      {
+        columnId: "COL_ID_THROWING_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: throwingValueType,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    let caught: unknown;
+    let returned: boolean | undefined;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_THROWING_TOOLBAR_FILTER"
+        columns={throwingColumns}
+        getRowId={(row: Row) => row.id}
+        initialOrderBy={[{ columnId: "COL_ID_THROWING_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableFilterControl<Row, typeof throwingColumns> ownership="grid">
+            {(commands) => (
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    returned = commands.replace({
+                      columnId: "COL_ID_THROWING_NAME",
+                      type: "equals",
+                      filter: "Ada",
+                    });
+                  } catch (error) {
+                    caught = error;
+                  }
+                }}
+              >
+                Apply throwing filter
+              </button>
+            )}
+          </BrunoTableFilterControl>
+          <BrunoTableActiveFilterCount />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+
+    await screen.getByRole("button", { name: "Apply throwing filter" }).click();
+    expect(returned).toBeUndefined();
+    expect(caught).toBe(persistenceFailure);
+    await expect
+      .element(screen.getByRole("status", { name: "Active filters" }))
+      .toHaveTextContent("1 active filter");
+  });
+
+  test("rejects stale Grid Filter clear and reset column identities", async () => {
+    const scoreOnlyColumns = [columns[1]] as const;
+    let retainedCommands: BrunoTableGridFilterCommandCapability<Row, typeof columns> | undefined;
+    let outcomes: readonly boolean[] = [];
+    const toolbar = (
+      <BrunoTableToolbar>
+        <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+          {(commands) => {
+            retainedCommands ??= commands;
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  outcomes = [
+                    retainedCommands?.clear("COL_ID_NAME") ?? true,
+                    retainedCommands?.reset("COL_ID_NAME") ?? true,
+                  ];
+                }}
+              >
+                Dispatch stale filter commands
+              </button>
+            );
+          }}
+        </BrunoTableFilterControl>
+      </BrunoTableToolbar>
+    );
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource()}>
+        {toolbar}
+      </BrunoTableClient>,
+    );
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        columns={scoreOnlyColumns}
+        clientSource={{ ...readySource(), version: 2 }}
+      >
+        {toolbar}
+      </BrunoTableClient>,
+    );
+
+    await screen.getByRole("button", { name: "Dispatch stale filter commands" }).click();
+    expect(outcomes).toEqual([false, false]);
   });
 
   test("resets Result Row Count when loading invalidates the displayed row space", async () => {

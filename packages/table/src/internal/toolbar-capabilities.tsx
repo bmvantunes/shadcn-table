@@ -1,4 +1,12 @@
-import { createContext, memo, useContext, useMemo, useSyncExternalStore } from "react";
+import {
+  createContext,
+  memo,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { NamedExoticComponent, ReactElement, ReactNode } from "react";
 import type {
@@ -29,15 +37,17 @@ type BrunoTableInitializableResultRowCountSource = BrunoTableResultRowCountSourc
     readonly initializeResultRowCount: (query: BrunoTableQuerySnapshot) => boolean;
   }>;
 
+type BrunoTableToolbarGridFilterCommands = Readonly<{
+  readonly replace: (filter: unknown) => boolean;
+  readonly clear: (columnId: string) => boolean;
+  readonly reset: (columnId: string) => boolean;
+  readonly clearAll: () => boolean;
+}>;
+
 type BrunoTableToolbarCapabilityContextValue = Readonly<{
   readonly runtime: BrunoTableRuntimeView;
   readonly resultRows: BrunoTableResultRowCountSource;
-  readonly commands: Readonly<{
-    readonly replace: (filter: unknown) => boolean;
-    readonly clear: (columnId: string) => boolean;
-    readonly reset: (columnId: string) => boolean;
-    readonly clearAll: () => boolean;
-  }>;
+  readonly commands: BrunoTableToolbarGridFilterCommands;
   readonly subscribe: (
     projection: BrunoTableToolbarProjection,
     source: (listener: () => void) => () => void,
@@ -84,33 +94,9 @@ export function BrunoTableToolbarProvider({
   readonly tableId: string;
   readonly children: ReactNode;
 }>): ReactElement {
+  const [filterCommands] = useState(() => createToolbarGridFilterCommands(runtime, columns));
+  useLayoutEffect(() => filterCommands.reconcile(columns), [columns, filterCommands]);
   const value = useMemo<BrunoTableToolbarCapabilityContextValue>(() => {
-    const commands = Object.freeze({
-      replace: (filter: unknown) => {
-        try {
-          const admitted = compileClientFilterCollection([filter], columns);
-          if (admitted.columnIds.size !== 1 || admitted.filters.length !== 1) return false;
-          const columnId = admitted.columnIds.values().next().value;
-          const admittedFilter = admitted.filters[0];
-          return (
-            columnId !== undefined &&
-            admittedFilter !== undefined &&
-            runtime.dispatchGridCommand({
-              type: "column.filter.replace",
-              columnId,
-              filter: admittedFilter,
-            })
-          );
-        } catch {
-          return false;
-        }
-      },
-      clear: (columnId: string) =>
-        runtime.dispatchGridCommand({ type: "column.filter.clear", columnId }),
-      reset: (columnId: string) =>
-        runtime.dispatchGridCommand({ type: "column.filter.reset", columnId }),
-      clearAll: () => runtime.dispatchGridCommand({ type: "column.filters.clear" }),
-    });
     const subscribe: BrunoTableToolbarCapabilityContextValue["subscribe"] = (
       projection,
       source,
@@ -147,13 +133,70 @@ export function BrunoTableToolbarProvider({
       },
       subscribeResultRowCount: resultRows.subscribeResultRowCount,
     });
-    return Object.freeze({ runtime, resultRows: projectedResultRows, commands, subscribe });
-  }, [columns, resultRows, runtime, tableId]);
+    return Object.freeze({
+      runtime,
+      resultRows: projectedResultRows,
+      commands: filterCommands.commands,
+      subscribe,
+    });
+  }, [filterCommands, resultRows, runtime, tableId]);
   return (
     <BrunoTableToolbarCapabilityContext.Provider value={value}>
       {children}
     </BrunoTableToolbarCapabilityContext.Provider>
   );
+}
+
+function createToolbarGridFilterCommands(
+  runtime: BrunoTableRowPipelineRuntimeView,
+  initialColumns: readonly CompiledColumn[],
+): Readonly<{
+  readonly commands: BrunoTableToolbarGridFilterCommands;
+  readonly reconcile: (columns: readonly CompiledColumn[]) => void;
+}> {
+  let columns = initialColumns;
+  let filterableColumnIds = compileFilterableColumnIds(columns);
+  const commands = Object.freeze({
+    replace: (filter: unknown) => {
+      let admitted: ReturnType<typeof compileClientFilterCollection>;
+      try {
+        admitted = compileClientFilterCollection([filter], columns);
+      } catch {
+        return false;
+      }
+      if (admitted.columnIds.size !== 1 || admitted.filters.length !== 1) return false;
+      const columnId = admitted.columnIds.values().next().value;
+      const admittedFilter = admitted.filters[0];
+      return (
+        columnId !== undefined &&
+        admittedFilter !== undefined &&
+        runtime.dispatchGridCommand({
+          type: "column.filter.replace",
+          columnId,
+          filter: admittedFilter,
+        })
+      );
+    },
+    clear: (columnId: string) =>
+      filterableColumnIds.has(columnId) &&
+      runtime.dispatchGridCommand({ type: "column.filter.clear", columnId }),
+    reset: (columnId: string) =>
+      filterableColumnIds.has(columnId) &&
+      runtime.dispatchGridCommand({ type: "column.filter.reset", columnId }),
+    clearAll: () => runtime.dispatchGridCommand({ type: "column.filters.clear" }),
+  });
+  return Object.freeze({
+    commands,
+    reconcile: (nextColumns: readonly CompiledColumn[]) => {
+      if (columns === nextColumns) return;
+      columns = nextColumns;
+      filterableColumnIds = compileFilterableColumnIds(nextColumns);
+    },
+  });
+}
+
+function compileFilterableColumnIds(columns: readonly CompiledColumn[]): ReadonlySet<string> {
+  return new Set(columns.filter((column) => column.enableFilter).map((column) => column.columnId));
 }
 
 export function BrunoTableFilterControl<TRow, const TColumns extends BrunoTableColumns<TRow>>(
@@ -192,7 +235,7 @@ export const BrunoTableResultRowCount: NamedExoticComponent<BrunoTableCountProps
       resultRows.getResultRowCountSnapshot,
       resultRows.getResultRowCountSnapshot,
     );
-    return renderCount("Result rows", count, children);
+    return renderCount("Result rows", "result row", count, children);
   },
 );
 
@@ -209,7 +252,7 @@ export const BrunoTableLoadedRowCount: NamedExoticComponent<BrunoTableCountProps
       runtime.getLoadedRowCountSnapshot,
       runtime.getLoadedRowCountSnapshot,
     );
-    return renderCount("Loaded rows", count, children);
+    return renderCount("Loaded rows", "loaded row", count, children);
   },
 );
 
@@ -226,7 +269,7 @@ export const BrunoTableActiveFilterCount: NamedExoticComponent<BrunoTableCountPr
       runtime.getActiveFilterCountSnapshot,
       runtime.getActiveFilterCountSnapshot,
     );
-    return renderCount("Active filters", count, children);
+    return renderCount("Active filters", "active filter", count, children);
   },
 );
 
@@ -243,7 +286,7 @@ export const BrunoTableActiveSortCount: NamedExoticComponent<BrunoTableCountProp
       runtime.getActiveSortCountSnapshot,
       runtime.getActiveSortCountSnapshot,
     );
-    return renderCount("Active sorts", count, children);
+    return renderCount("Active sorts", "active sort", count, children);
   },
 );
 
@@ -253,12 +296,15 @@ export function BrunoTableToolbarSpacer(): ReactElement {
 
 function renderCount(
   label: string,
+  singularLabel: string,
   count: number,
   children: ((count: number) => ReactNode) | undefined,
 ): ReactElement {
   return (
     <output aria-label={label} className="text-muted-foreground text-sm tabular-nums" role="status">
-      {children === undefined ? `${String(count)} ${label.toLowerCase()}` : children(count)}
+      {children === undefined
+        ? `${String(count)} ${count === 1 ? singularLabel : label.toLowerCase()}`
+        : children(count)}
     </output>
   );
 }

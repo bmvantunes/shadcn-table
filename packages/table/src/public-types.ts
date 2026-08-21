@@ -1297,6 +1297,7 @@ export type BrunoTableServerProps<
   readonly getRowId?: never;
   readonly viewportSource: BrunoTableServerSource<TViewport>;
   readonly clientSource?: never;
+  readonly externalFilters?: never;
   readonly editable?: never;
   readonly getRowVersion?: never;
   readonly onSaveEdits?: never;

@@ -231,6 +231,7 @@ type BrunoTableServerProps<
   BrunoTableGroupingCapability<TColumns> & {
     getRowId?: never;
     viewportSource: BrunoTableServerSource<TViewport>;
+    externalFilters?: never;
     editable?: never;
     getRowVersion?: never;
     onSaveEdits?: never;

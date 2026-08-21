@@ -179,7 +179,7 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
     .toBeInTheDocument();
   await expect
     .element(screen.getByRole("status", { name: "Active filters" }))
-    .toHaveTextContent("1 active filters");
+    .toHaveTextContent("1 active filter");
   await userEvent.keyboard("{Escape}");
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
@@ -191,7 +191,7 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await userEvent.click(screen.getByRole("button", { name: "Clear Grid Filters" }));
   await expect
     .element(screen.getByRole("status", { name: "Active filters" }))
-    .toHaveTextContent("1 active filters");
+    .toHaveTextContent("1 active filter");
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
     .toBeInTheDocument();

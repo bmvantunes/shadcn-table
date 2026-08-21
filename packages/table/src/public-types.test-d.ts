@@ -605,6 +605,10 @@ describe("BrunoTable public types", () => {
         expectTypeOf(commands.clear)
           .parameter(0)
           .toEqualTypeOf<BrunoTableFilterableColumnId<Columns>>();
+        expectTypeOf(commands.reset)
+          .parameter(0)
+          .toEqualTypeOf<BrunoTableFilterableColumnId<Columns>>();
+        expectTypeOf(commands.reset).returns.toEqualTypeOf<boolean>();
         expectTypeOf(commands.replace)
           .parameter(0)
           .toEqualTypeOf<BrunoTableFilterExpression<Order, Columns>>();
@@ -889,6 +893,15 @@ describe("BrunoTable public types", () => {
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
     expectTypeOf(serverProps.children).toEqualTypeOf<ReactNode>();
+
+    const serverWithExternalFilters = {
+      ...serverProps,
+      externalFilters: [{ field: "status", type: "equals", filter: "open" }],
+    };
+    // @ts-expect-error Server External Filter transport is deferred and structurally rejected.
+    const invalidServerExternalFilters: BrunoTableServerProps<Order, Columns, typeof viewport> =
+      serverWithExternalFilters;
+    void invalidServerExternalFilters;
 
     void BrunoTableClient({
       ...clientProps,

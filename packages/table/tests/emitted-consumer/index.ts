@@ -686,6 +686,18 @@ const props = {
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
+const emittedServerWithExternalFilters = {
+  ...props,
+  externalFilters: [{ field: "status", type: "equals", filter: "open" }],
+};
+// @ts-expect-error emitted Server declarations reject deferred External Filter transport.
+const invalidEmittedServerExternalFilters: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof source.viewport
+> = emittedServerWithExternalFilters;
+void invalidEmittedServerExternalFilters;
+
 type UnsupportedToolbarCountsStayAbsent = Expect<
   Equal<
     Extract<

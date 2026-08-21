@@ -56,11 +56,13 @@ adapter.subscribeResultRowCount(() => {
 });
 let version = 1;
 let changed = false;
+const warmupIterations = 10;
 const durationsMs: number[] = [];
 
 describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)", () => {
   afterAll(() => {
-    const sortedDurations = durationsMs.toSorted((left, right) => left - right);
+    const measuredDurations = durationsMs.slice(warmupIterations);
+    const sortedDurations = measuredDurations.toSorted((left, right) => left - right);
     const p99Index = Math.max(0, Math.ceil(sortedDurations.length * 0.99) - 1);
     const p99Ms = sortedDurations[p99Index];
     if (p99Ms === undefined || p99Ms > referenceFrameBudgetMs) {
@@ -90,6 +92,6 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
         throw new Error("Stable toolbar projections received an unrelated row notification.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
+    { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },
   );
 });
