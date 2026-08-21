@@ -4245,6 +4245,32 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getRowSnapshot("first")).toBe(newest);
   });
 
+  it("configures the newest publication already accepted by the drain", () => {
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const { adapter, runtime, view } = createSubject();
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    let queued = false;
+    view.subscribeChrome(() => {
+      if (queued || view.getChromeSnapshot().status !== "loading") return;
+      queued = true;
+      runtime.publish(adapter.reconcile(source([newest]), (row) => row.id, replacementColumns));
+      runtime.configure(replacementColumns, adapter.getQueryConfiguration(replacementColumns));
+    });
+
+    runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })));
+
+    expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
+    expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
+    expect(view.getRowSnapshot("first")).toBe(newest);
+  });
+
   it("restores installed configuration authority after an internal failure", () => {
     const replacementColumns = compileColumns([
       {
@@ -4278,6 +4304,52 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     runtime.publish(adapter.publish(source([newest])));
     expect(view.getQuerySnapshot().columns).toBe(columns);
     expect(view.getCellValueSnapshot("first", "COL_ID_NAME")).toBe("Newest");
+  });
+
+  it("retains configuration installed before a post-install internal failure", () => {
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const initial = { id: "first", name: "Initial" } satisfies Row;
+    const failed = { id: "first", name: "Failed" } satisfies Row;
+    const newest = { id: "first", name: "Newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([initial]);
+    const internalFailure = new Error("installed row space failed");
+    view.subscribeRow("first", () => undefined);
+    const rejected = adapter.reconcile(source([failed]), (row) => row.id, replacementColumns);
+    const rejectedRowSpace = rejected.rowSpace;
+    if (rejectedRowSpace === undefined) throw new Error("Expected a resident row space");
+    let rowReadFailed = false;
+    const unreadable = {
+      ...rejected,
+      rowSpace: {
+        ...rejectedRowSpace,
+        getRow(rowId: string): Row | undefined {
+          if (!rowReadFailed) {
+            rowReadFailed = true;
+            throw internalFailure;
+          }
+          return rejectedRowSpace.getRow(rowId);
+        },
+      },
+    };
+
+    expect(() =>
+      runtime.reconcile(
+        unreadable,
+        replacementColumns,
+        adapter.getQueryConfiguration(replacementColumns),
+      ),
+    ).toThrow(internalFailure);
+
+    runtime.publish(adapter.publish(source([newest])));
+    expect(view.getQuerySnapshot().columns).toBe(replacementColumns);
+    expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Newest");
   });
 
   it("falls back to complete change evidence after discarded Client candidates", () => {
