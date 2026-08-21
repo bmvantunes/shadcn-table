@@ -209,6 +209,61 @@ describe("Grid Preferences", () => {
     ]);
   });
 
+  it("preserves an own __proto__ key in a custom JSON-safe codec payload", () => {
+    const protoValueType: BrunoTableValueType<string, "equality", "text"> = Object.freeze({
+      ...accountValueType,
+      codecId: "test/proto-key",
+      codecVersion: 1,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => JSON.parse(`{"__proto__":{"value":${JSON.stringify(value)}}}`),
+      decodePersisted: (input) => {
+        const descriptor =
+          typeof input === "object" && input !== null
+            ? Object.getOwnPropertyDescriptor(input, "__proto__")
+            : undefined;
+        const payload = descriptor?.value;
+        return typeof payload === "object" && payload !== null && "value" in payload
+          ? { _tag: "Success", value: String(payload.value) }
+          : { _tag: "Failure", message: "Expected an own __proto__ payload." };
+      },
+    });
+    const protoColumns = compileColumns([
+      {
+        columnId: "COL_ID_PROTO",
+        field: "name",
+        headerName: "Proto",
+        valueType: protoValueType,
+      },
+    ]);
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_PROTO",
+        columns: protoColumns,
+        initialFilters: [{ columnId: "COL_ID_PROTO", type: "equals", filter: "exact" }],
+        initialOrderBy: [{ columnId: "COL_ID_PROTO", direction: "asc" }],
+      }),
+    );
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_PROTO",
+      columns: protoColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_PROTO", direction: "asc" }],
+      initialPersistedState: JSON.parse(JSON.stringify(snapshot)),
+    });
+    expect(restored.filters).toEqual([
+      { columnId: "COL_ID_PROTO", type: "equals", filter: "exact" },
+    ]);
+  });
+
   it("drops incompatible versions, table identities, codecs, operators, and malformed entries", () => {
     const baseline = [{ columnId: "COL_ID_NAME", type: "equals", filter: "baseline" }];
     const valid = createBrunoTablePersistedState(
@@ -355,6 +410,70 @@ describe("Grid Preferences", () => {
     }
   });
 
+  it("bounds hostile persisted column-order traversal before reading entries", () => {
+    let descriptorCalls = 0;
+    let lengthReads = 0;
+    const overlongOrder = new Proxy(
+      Array.from({ length: 10_000 }, () => "COL_ID_REMOVED"),
+      {
+        get: (target, key, receiver) => {
+          if (key !== "length") return Reflect.get(target, key, receiver);
+          lengthReads += 1;
+          return lengthReads === 1 ? 10_000 : 0;
+        },
+        getOwnPropertyDescriptor: (target, key) => {
+          descriptorCalls += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_BOUNDED_LAYOUT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        version: BRUNO_TABLE_PERSISTED_STATE_VERSION,
+        tableId: "TABLE_ID_BOUNDED_LAYOUT",
+        filters: [],
+        orderBy: initialOrderBy,
+        groupBy: [],
+        groupOrderBy: [],
+        columnOrder: overlongOrder,
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+
+    expect(descriptorCalls).toBe(0);
+    expect(lengthReads).toBe(1);
+    expect(restored.columnLayout.orderOverride).toBeUndefined();
+
+    const negativeLengthOrder = new Proxy([], {
+      get: (target, key, receiver) => (key === "length" ? -1 : Reflect.get(target, key, receiver)),
+    });
+    const negativeLength = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_BOUNDED_LAYOUT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        version: BRUNO_TABLE_PERSISTED_STATE_VERSION,
+        tableId: "TABLE_ID_BOUNDED_LAYOUT",
+        filters: [],
+        orderBy: initialOrderBy,
+        groupBy: [],
+        groupOrderBy: [],
+        columnOrder: negativeLengthOrder,
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+    expect(negativeLength.columnLayout.orderOverride).toBeUndefined();
+  });
+
   it("drops malformed pinning and stale widths instead of coercing them", () => {
     const baseline = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
@@ -376,10 +495,7 @@ describe("Grid Preferences", () => {
       },
     });
     const snapshot = createBrunoTablePersistedState(restored);
-    expect(snapshot["columnWidths"]).toMatchObject({
-      COL_ID_NAME: 120,
-      COL_ID_QUANTITY: 140,
-    });
+    expect(snapshot["columnWidths"]).toEqual({});
     expect(snapshot["columnPinning"]).toEqual({ start: ["COL_ID_NAME"], end: [] });
   });
 
@@ -486,15 +602,35 @@ describe("Grid Preferences", () => {
       COL_ID_SCORE: true,
     });
     expect(snapshot["columnWidths"]).toEqual({
-      COL_ID_ACCOUNT: 180,
-      COL_ID_NAME: 120,
       COL_ID_QUANTITY: 333,
-      COL_ID_STATUS: 160,
-      COL_ID_SCORE: 140,
     });
     expect(snapshot["columnPinning"]).toEqual({
       start: ["COL_ID_ACCOUNT"],
       end: ["COL_ID_QUANTITY"],
+    });
+  });
+
+  it("persists only durable width overrides and retains an explicit baseline-equal width", () => {
+    const pristine = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_WIDTH_INTENT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+    });
+    expect(createBrunoTablePersistedState(pristine)["columnWidths"]).toEqual({});
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_WIDTH_INTENT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...createBrunoTablePersistedState(pristine),
+        columnWidths: { COL_ID_NAME: 120 },
+      },
+    });
+    expect(createBrunoTablePersistedState(restored)["columnWidths"]).toEqual({
+      COL_ID_NAME: 120,
     });
   });
 

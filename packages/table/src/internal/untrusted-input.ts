@@ -11,14 +11,19 @@ export function captureBrunoTablePlainRecord(
     ) {
       return undefined;
     }
-    const snapshot: Record<string, unknown> = {};
+    const snapshot: Record<string, unknown> = Object.create(null);
     for (const key of Reflect.ownKeys(input)) {
       if (typeof key !== "string") return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(input, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
         return undefined;
       }
-      snapshot[key] = descriptor.value;
+      Object.defineProperty(snapshot, key, {
+        value: descriptor.value,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
     }
     return Object.freeze(snapshot);
   } catch {

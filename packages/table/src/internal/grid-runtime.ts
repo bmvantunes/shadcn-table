@@ -971,20 +971,26 @@ export class BrunoTableGridRuntime<TRow> {
         !sameOrderBy(previousOrderBy, this.query.orderBy) ||
         previousLayout !== this.columnLayout)
     ) {
+      let persistedState: Readonly<Record<string, BrunoTableJsonValue>> | undefined;
       try {
-        this.getOnPersistChange()?.(
-          createBrunoTablePersistedState({
-            tableId: this.tableId,
-            columns: this.columns,
-            filters: this.query.filters,
-            orderBy: this.query.orderBy,
-            groupBy: Object.freeze([]),
-            groupOrderBy: Object.freeze([]),
-            columnLayout: this.columnLayout,
-          }),
-        );
+        persistedState = createBrunoTablePersistedState({
+          tableId: this.tableId,
+          columns: this.columns,
+          filters: this.query.filters,
+          orderBy: this.query.orderBy,
+          groupBy: Object.freeze([]),
+          groupOrderBy: Object.freeze([]),
+          columnLayout: this.columnLayout,
+        });
       } catch (error) {
         persistError = error;
+      }
+      if (persistedState !== undefined) {
+        try {
+          this.getOnPersistChange()?.(persistedState);
+        } catch {
+          // Consumer notification failures never participate in grid command ownership.
+        }
       }
     }
     if (commandError !== undefined) throw commandError;

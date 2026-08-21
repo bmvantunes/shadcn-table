@@ -2,6 +2,7 @@ import type { BrunoTableJsonValue } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
 import {
   createBrunoTableColumnLayout,
+  getBrunoTableCommittedColumnWidths,
   getBrunoTableColumnLayoutSnapshot,
   restoreBrunoTableColumnLayout,
   type BrunoTableColumnLayoutState,
@@ -106,9 +107,7 @@ export function createBrunoTablePersistedState(
   const columnVisibility = Object.fromEntries(
     columnOrder.map((columnId) => [columnId, visible.has(columnId)]),
   );
-  const columnWidths = Object.fromEntries(
-    layout.allColumns.map((column) => [column.columnId, column.semantics.width]),
-  );
+  const columnWidths = getBrunoTableCommittedColumnWidths(preferences.columnLayout);
   const columnPinning = {
     start: layout.allColumns
       .filter((column) => column.pinned === "start")
@@ -399,7 +398,7 @@ function snapshotUnknownJsonValue(
     ) {
       return INVALID_JSON_VALUE;
     }
-    const result: Record<string, BrunoTableJsonValue> = {};
+    const result: Record<string, BrunoTableJsonValue> = Object.create(null);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== "string") return INVALID_JSON_VALUE;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -408,7 +407,12 @@ function snapshotUnknownJsonValue(
       }
       const nested = snapshotUnknownJsonValue(descriptor.value, active);
       if (nested === INVALID_JSON_VALUE) return INVALID_JSON_VALUE;
-      result[key] = nested;
+      Object.defineProperty(result, key, {
+        value: nested,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
     }
     return Object.freeze(result);
   } catch {

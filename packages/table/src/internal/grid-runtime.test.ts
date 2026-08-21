@@ -263,7 +263,7 @@ describe("BrunoTable Grid Preferences runtime boundary", () => {
         columnId: "COL_ID_NAME",
         width: 321,
       }),
-    ).toThrow("consumer transport failed");
+    ).not.toThrow();
     expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
   });
 
@@ -360,9 +360,7 @@ describe("BrunoTable Grid Preferences runtime boundary", () => {
         COL_ID_SECOND: false,
       },
       columnWidths: {
-        COL_ID_THIRD: 160,
         COL_ID_FIRST: 245,
-        COL_ID_SECOND: 160,
       },
       columnPinning: { start: ["COL_ID_THIRD"], end: [] },
     });

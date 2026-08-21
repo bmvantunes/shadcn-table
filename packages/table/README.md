@@ -134,8 +134,10 @@ to `initialFilters` and the mandatory non-empty `initialOrderBy`, while Clear re
 Filter, sorting, column-order, visibility, width, or pinning change. Restoration, hydration, source
 publications, Quick Filter, focus, selection, scrolling, and other transient activity do not emit.
 The callback may be replaced without recreating the Grid Runtime; its return value and failures do
-not roll back committed grid state. Applications own storage, transport, retry, authorization, and
-publication ordering—BrunoTable does not access Local Storage or any persistence backend.
+not roll back committed grid state or escape Grid command dispatch. Applications own storage,
+transport, retry, authorization, error reporting, and publication ordering—BrunoTable does not
+access Local Storage or any persistence backend. `columnWidths` contains only explicit committed
+user width overrides, so definition-provided defaults remain free to evolve between releases.
 
 Persisted operands carry the owning column's `codecId` and `codecVersion` and contain only that
 compiled Value Type's JSON-safe `encodePersisted` output. Restoration calls the matching

@@ -4,6 +4,7 @@ import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_MIN_COLUMN_WIDTH = 32;
 export const BRUNO_TABLE_MAX_COLUMN_WIDTH = 1_000;
+const BRUNO_TABLE_PERSISTED_LAYOUT_MAX_STALE_IDENTITIES = 1_024;
 export const BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE = "--bruno-table-live-viewport-fill";
 export const BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE = "--bruno-table-live-left-padding";
 export const BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE = "--bruno-table-live-right-padding";
@@ -219,11 +220,11 @@ export function restoreBrunoTableColumnLayout(
   for (const column of allColumns) {
     const baselineColumn = columnsById.get(column.columnId);
     if (baselineColumn === undefined) continue;
-    const widthChanged = column.semantics.width !== baselineColumn.semantics.width;
+    const restoredWidth = widths.get(column.columnId);
     const pinChanged = column.pinned !== baselineColumn.pinned;
-    if (widthChanged || pinChanged) {
+    if (restoredWidth !== undefined || pinChanged) {
       committedOverrides.set(column.columnId, {
-        ...(widthChanged ? { width: column.semantics.width } : {}),
+        ...(restoredWidth === undefined ? {} : { width: restoredWidth }),
         ...(pinChanged ? { pinned: column.pinned, pinningCommitted: true } : {}),
       });
     }
@@ -243,10 +244,18 @@ function captureSanitizedColumnIdArray(
   columnsById: ReadonlyMap<string, CompiledColumn>,
 ): readonly CompiledColumn["columnId"][] | undefined {
   try {
-    if (!Array.isArray(input) || !Number.isSafeInteger(input.length)) return undefined;
+    if (!Array.isArray(input)) return undefined;
+    const length = input.length;
+    if (
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > columnsById.size + BRUNO_TABLE_PERSISTED_LAYOUT_MAX_STALE_IDENTITIES
+    ) {
+      return undefined;
+    }
     const seen = new Set<string>();
     const result: CompiledColumn["columnId"][] = [];
-    for (let index = 0; index < input.length; index += 1) {
+    for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(input, index);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
         return undefined;
@@ -261,6 +270,17 @@ function captureSanitizedColumnIdArray(
   } catch {
     return undefined;
   }
+}
+
+/** Returns only explicit durable width intent, excluding definition-provided baselines. */
+export function getBrunoTableCommittedColumnWidths(
+  state: BrunoTableColumnLayoutState,
+): Readonly<Record<string, number>> {
+  const widths: Record<string, number> = {};
+  for (const [columnId, override] of state.committedOverrides) {
+    if (override.width !== undefined) widths[columnId] = override.width;
+  }
+  return Object.freeze(widths);
 }
 
 function sanitizeColumnPinning(

@@ -468,6 +468,8 @@ Persisted filters, both sort contexts, grouping, and layouts refer to `columnId`
 
 Rows participates only in the persisted column-width map. A committed user resize is keyed by `COL_ID_BRUNO_TABLE_ROWS`, wins over the `groupRowsColumn.width` baseline, remains dormant while grouping is inactive, and is restored when grouping resumes. Sanitization retains that width while current definitions still provide grouping capability and otherwise drops it. The reserved identity never enters persisted column order, visibility, or pinning.
 
+The persisted column-width map is sparse durable intent: it contains only committed user resize overrides, never definition-provided baseline widths. A valid restored override remains committed even when it currently equals the compiled baseline, so a later definition replacement cannot erase the user's intent.
+
 An Editable Client Table has no grouping capability, so restoration also drops every persisted `groupBy` entry, `groupOrderBy`, and reserved Rows width. Restoration never installs grouping transiently, opens a review, or emits `onPersistChange`; the next committed preference notification contains the sanitized non-grouped snapshot.
 
 Quick Filter is the deliberate exception to filter persistence. Neither its application-provided `quickFilterFields` tuple nor its committed text is serialized, restored, or included in saved views. Every new Table Instance starts with an empty Quick Filter even when other Grid Filter preferences restore successfully.
