@@ -1748,7 +1748,7 @@ describe("BrunoTable column management browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
     await userEvent.click(screen.getByRole("menuitemradio", { name: "Pin to logical start" }));
     await vi.waitFor(() =>
-      expect(columnOrder()).toEqual(["COL_ID_SCORE", "COL_ID_NAME", "COL_ID_STATUS"]),
+      expect(columnOrder()).toEqual(["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"]),
     );
     await expect
       .element(screen.getByRole("columnheader", { name: /Name, width 160 pixels, pinned start/u }))
@@ -1761,7 +1761,7 @@ describe("BrunoTable column management browser surface", () => {
     expect(columnOrder()).toEqual(["COL_ID_NAME", "COL_ID_STATUS"]);
     await vi.waitFor(() =>
       expect(grid.getAttribute("aria-activedescendant")).toBe(
-        screen.getByRole("columnheader", { name: /Name, width 160 pixels/u }).element().id,
+        screen.getByRole("columnheader", { name: /Status, width 140 pixels/u }).element().id,
       ),
     );
     await expect

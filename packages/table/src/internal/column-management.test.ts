@@ -8,8 +8,10 @@ import {
   BRUNO_TABLE_MIN_COLUMN_WIDTH,
   createBrunoTableColumnLayout,
   getBrunoTableColumnLayoutSnapshot,
+  getBrunoTableLogicalColumnOrder,
   reconcileBrunoTableColumnLayout,
 } from "./column-management";
+import type { BrunoTableColumnLayoutState, BrunoTableColumnPin } from "./column-management";
 
 const columns = compileColumns([
   { columnId: "COL_ID_NAME", headerName: "Name", field: "name", valueType: "text", width: 120 },
@@ -26,6 +28,40 @@ const columns = compileColumns([
 
 function ids(value: ReturnType<typeof getBrunoTableColumnLayoutSnapshot>): readonly string[] {
   return value.columns.map((column) => column.columnId);
+}
+
+function expectLogicalVisibleInvariant(state: BrunoTableColumnLayoutState): void {
+  const visible = new Set(state.visibleColumnIds);
+  const expected = [
+    ...state.allColumns.filter((column) => column.pinned === "start"),
+    ...state.allColumns.filter((column) => column.pinned === undefined),
+    ...state.allColumns.filter((column) => column.pinned === "end"),
+  ]
+    .filter((column) => visible.has(column.columnId))
+    .map((column) => column.columnId);
+
+  expect(state.visibleColumnIds).toEqual(expected);
+  expect(new Set(state.visibleColumnIds).size).toBe(state.visibleColumnIds.length);
+}
+
+function randomizedColumnDefinitions(order: readonly string[]) {
+  return compileColumns(
+    order.map((columnId) => ({
+      columnId: `COL_ID_${columnId}` as `COL_ID_${string}`,
+      headerName: columnId,
+      field: "name" as const,
+      valueType: "text" as const,
+    })),
+  );
+}
+
+function nextRandom(seed: { value: number }): number {
+  seed.value = (seed.value * 1_664_525 + 1_013_904_223) >>> 0;
+  return seed.value / 2 ** 32;
+}
+
+function randomIndex(seed: { value: number }, length: number): number {
+  return Math.floor(nextRandom(seed) * length);
 }
 
 describe("BrunoTable column management", () => {
@@ -307,12 +343,12 @@ describe("BrunoTable column management", () => {
     const moved = applyBrunoTableGridCommand(bothPinned, {
       type: "column.reorder.commit",
       columnId: "COL_ID_FIRST",
-      targetIndex: 1,
+      targetIndex: 0,
       pinned: "start",
     });
 
-    expect(bothPinned.visibleColumnIds).toEqual(["COL_ID_FIRST", "COL_ID_SECOND", "COL_ID_CENTER"]);
-    expect(moved.visibleColumnIds).toEqual(["COL_ID_SECOND", "COL_ID_FIRST", "COL_ID_CENTER"]);
+    expect(bothPinned.visibleColumnIds).toEqual(["COL_ID_SECOND", "COL_ID_FIRST", "COL_ID_CENTER"]);
+    expect(moved.visibleColumnIds).toEqual(["COL_ID_FIRST", "COL_ID_SECOND", "COL_ID_CENTER"]);
   });
 
   it("keeps hidden columns hidden when resetting pinning", () => {
@@ -471,6 +507,159 @@ describe("BrunoTable column management", () => {
     expect(name?.headerName).toBe("Renamed Name");
     expect(name?.semantics.width).toBe(220);
     expect(score?.pinned).toBe("start");
+  });
+
+  it("reconciles visible order when definitions are reordered", () => {
+    const state = createBrunoTableColumnLayout(randomizedColumnDefinitions(["A", "B", "C"]));
+    const next = reconcileBrunoTableColumnLayout(
+      state,
+      randomizedColumnDefinitions(["C", "B", "A"]),
+    );
+
+    expect(next.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_C",
+      "COL_ID_B",
+      "COL_ID_A",
+    ]);
+    expect(next.visibleColumnIds).toEqual(["COL_ID_C", "COL_ID_B", "COL_ID_A"]);
+    expect(
+      getBrunoTableColumnLayoutSnapshot(next).columns.map((column) => column.columnId),
+    ).toEqual(next.visibleColumnIds);
+  });
+
+  it("reconciles a newly inserted definition at its definition position", () => {
+    const state = createBrunoTableColumnLayout(randomizedColumnDefinitions(["A", "B"]));
+    const next = reconcileBrunoTableColumnLayout(
+      state,
+      randomizedColumnDefinitions(["A", "NEW", "B"]),
+    );
+
+    expect(next.allColumns.map((column) => column.columnId)).toEqual([
+      "COL_ID_A",
+      "COL_ID_NEW",
+      "COL_ID_B",
+    ]);
+    expect(next.visibleColumnIds).toEqual(["COL_ID_A", "COL_ID_NEW", "COL_ID_B"]);
+  });
+
+  it("keeps pin commits and visibility reset on one logical projection", () => {
+    const state = createBrunoTableColumnLayout(
+      randomizedColumnDefinitions(["CENTER", "SECOND", "FIRST"]),
+    );
+    const firstPinned = applyBrunoTableGridCommand(state, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_FIRST",
+      pinned: "start",
+    });
+    const bothPinned = applyBrunoTableGridCommand(firstPinned, {
+      type: "column.pin.commit",
+      columnId: "COL_ID_SECOND",
+      pinned: "start",
+    });
+    const resetVisibility = applyBrunoTableGridCommand(bothPinned, {
+      type: "column.reset.visibility",
+    });
+
+    expectLogicalVisibleInvariant(bothPinned);
+    expectLogicalVisibleInvariant(resetVisibility);
+    expect(bothPinned.visibleColumnIds).toEqual(["COL_ID_SECOND", "COL_ID_FIRST", "COL_ID_CENTER"]);
+    expect(resetVisibility.visibleColumnIds).toEqual(bothPinned.visibleColumnIds);
+  });
+
+  it("preserves the logical visible projection through randomized command sequences", () => {
+    const definitions = [
+      randomizedColumnDefinitions(["A", "B", "C", "D"]),
+      randomizedColumnDefinitions(["D", "B", "NEW", "A", "C"]),
+      randomizedColumnDefinitions(["C", "A", "E", "B", "D"]),
+    ];
+    const seed = { value: 48 };
+    let state = createBrunoTableColumnLayout(definitions[0]!);
+    const operations = ["reorder", "pin", "hide", "show", "reset", "reconcile"] as const;
+
+    for (let step = 0; step < 240; step += 1) {
+      const operation =
+        operations[step < operations.length ? step : randomIndex(seed, operations.length)]!;
+      const visible = [...state.visibleColumnIds];
+      const hidden = state.allColumns
+        .map((column) => column.columnId)
+        .filter((columnId) => !state.visibleColumnIds.includes(columnId));
+
+      switch (operation) {
+        case "reorder": {
+          if (visible.length > 1) {
+            const columnId = visible[randomIndex(seed, visible.length)]!;
+            const column = state.allColumns.find((candidate) => candidate.columnId === columnId)!;
+            state = applyBrunoTableGridCommand(state, {
+              type: "column.reorder.commit",
+              columnId,
+              targetIndex: randomIndex(seed, visible.length),
+              pinned: column.pinned,
+            });
+          }
+          break;
+        }
+        case "pin": {
+          const column = state.allColumns[randomIndex(seed, state.allColumns.length)]!;
+          const pinned: BrunoTableColumnPin =
+            column.pinned === "start" ? "end" : column.pinned === "end" ? undefined : "start";
+          state = applyBrunoTableGridCommand(state, {
+            type: "column.pin.commit",
+            columnId: column.columnId,
+            pinned,
+          });
+          break;
+        }
+        case "hide": {
+          if (visible.length > 1) {
+            state = applyBrunoTableGridCommand(state, {
+              type: "column.visibility.commit",
+              columnId: visible[randomIndex(seed, visible.length)]!,
+              visible: false,
+            });
+          }
+          break;
+        }
+        case "show": {
+          const columnId =
+            hidden.length > 0
+              ? hidden[randomIndex(seed, hidden.length)]!
+              : visible[randomIndex(seed, visible.length)]!;
+          state = applyBrunoTableGridCommand(state, {
+            type: "column.visibility.commit",
+            columnId,
+            visible: true,
+          });
+          break;
+        }
+        case "reset": {
+          const resetCommands = [
+            { type: "column.reset.order" },
+            { type: "column.reset.visibility" },
+            { type: "column.reset.pinning" },
+            { type: "column.reset.layout" },
+          ] as const;
+          state = applyBrunoTableGridCommand(
+            state,
+            resetCommands[randomIndex(seed, resetCommands.length)]!,
+          );
+          break;
+        }
+        case "reconcile": {
+          state = reconcileBrunoTableColumnLayout(
+            state,
+            definitions[randomIndex(seed, definitions.length)]!,
+          );
+          break;
+        }
+      }
+
+      expectLogicalVisibleInvariant(state);
+      expect(
+        getBrunoTableLogicalColumnOrder(state.allColumns)
+          .filter((column) => state.visibleColumnIds.includes(column.columnId))
+          .map((column) => column.columnId),
+      ).toEqual(state.visibleColumnIds);
+    }
   });
 
   it("applies definition width and pin changes when the user has not overridden them", () => {
