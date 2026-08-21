@@ -167,6 +167,8 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       source: `const listenerType = "keydown"; window.addEventListener(listenerType, () => undefined);`,
     },
     { source: "window.addEventListener(`keydown`, () => undefined);" },
+    { source: "window[`onkeydown`] = (event) => event.key;" },
+    { source: "const handler = { [`onKeyDown`]: (event) => event.key };" },
     { source: `const emittedHandler = { onKeyDown: () => undefined };`, mode: "emitted" },
     {
       source: `window.addEventListener("keydown", () => undefined);`,
@@ -986,8 +988,7 @@ function isTanStackHotkeysCoreModuleReference(node) {
 function propertyName(property) {
   const key = property.key;
   if (key?.type === "Identifier" && !property.computed) return key.name;
-  if (key?.type === "Literal" && typeof key.value === "string") return key.value;
-  return undefined;
+  return staticStringValue(key);
 }
 
 function collectEffectCallbacks(ast, layoutEffectBinding) {
@@ -1092,10 +1093,7 @@ function isFunctionNode(node) {
 
 function memberPropertyName(member) {
   if (member.property.type === "Identifier" && !member.computed) return member.property.name;
-  if (member.property.type === "Literal" && typeof member.property.value === "string") {
-    return member.property.value;
-  }
-  return undefined;
+  return staticStringValue(member.property);
 }
 
 function isRowAcceptanceCall(node) {
