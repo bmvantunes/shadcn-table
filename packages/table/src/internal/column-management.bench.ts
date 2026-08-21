@@ -312,6 +312,7 @@ describe("BrunoTable open-facet live publication benchmark (8.33 ms/120 Hz refer
       generation: 1,
       navigationMode: "reset" as const,
     }),
+    getRowSpaceSnapshot: () => undefined,
     getQuickFilterFieldsSnapshot: () => [],
     subscribeFilter: () => () => undefined,
     subscribeRowSpace: (listener: () => void) => {

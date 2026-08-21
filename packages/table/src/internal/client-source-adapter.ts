@@ -146,15 +146,25 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     notifyRowsStoreListeners(this.resultRowCountListeners);
   };
 
-  public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): boolean => {
+  public readonly initializeResultRowCount = (
+    query: BrunoTableQuerySnapshot,
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ): boolean => {
     if (this.resultRowCountInitialized) return false;
     this.resultRowCountInitialized = true;
-    this.resultRowCount = this.projectResultRowCount(query);
+    const coherent = asClientCoherent(rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    this.resultRowCount = this.projectResultRowCount(
+      query,
+      coherent?.admittedRows.asArray() ?? EMPTY_ROWS,
+    );
     return true;
   };
 
-  private readonly projectResultRowCount = (query: BrunoTableQuerySnapshot): number => {
-    const rows = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+  private readonly projectResultRowCount = (
+    query: BrunoTableQuerySnapshot,
+    rows: readonly BrunoTableClientAdmittedRow[] = this.coherent?.admittedRows.asArray() ??
+      EMPTY_ROWS,
+  ): number => {
     const filterPlan = compileClientFilterPlan(
       query.columns,
       query.filters,
@@ -184,8 +194,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     return count;
   };
 
-  public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {
-    const sequence = this.coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  public readonly getFacetRowsSnapshot = (
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ): BrunoTableClientFacetRowsSnapshot => {
+    const coherent = asClientCoherent(rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const sequence = coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
     return Object.freeze({
       rows: sequence.asArray(),
       token: sequence.token,
@@ -431,15 +444,24 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
     tableId = "",
   ): BrunoTableClientRowsStore => {
+    const readRuntimeCoherent = () =>
+      asClientCoherent(
+        runtime.getRowSpaceSnapshot() as BrunoTableRowSpaceSnapshot<TRow> | undefined,
+      );
+    const installedCoherent = readRuntimeCoherent();
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
-      this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+      installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    let evaluatedCoherent = installedCoherent;
     let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
     const identity = Object.freeze({});
     let unsubscribeRuntime: (() => void) | undefined;
-    let displayedRowSpace = this.publication.rowSpace !== undefined;
+    let displayedRowSpace = installedCoherent !== undefined;
     const publish = () => {
-      const nextDisplayedRowSpace = this.publication.rowSpace !== undefined;
+      const previousRows = snapshot;
+      const nextCoherent = readRuntimeCoherent();
+      const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+      const nextDisplayedRowSpace = nextCoherent !== undefined;
       if (!nextDisplayedRowSpace) {
         this.publishResultRowCount(0);
       } else if (!displayedRowSpace) {
@@ -451,18 +473,16 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
               identity: this,
             });
           }
-          this.publishResultRowCount(this.projectResultRowCount(runtime.getQuerySnapshot()));
+          this.publishResultRowCount(
+            this.projectResultRowCount(runtime.getQuerySnapshot(), nextRows),
+          );
         } else {
           this.resultRowCountInitialized = false;
         }
       }
       displayedRowSpace = nextDisplayedRowSpace;
-      const previousRows = snapshot;
-      const nextCoherent = this.coherent;
-      const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
-      const change =
-        nextCoherent?.changeFromPrevious ??
-        Object.freeze({ rowIdsChanged: previousRows.length > 0, changedIndexes: EMPTY_ROWS });
+      const change = clientRowsStoreChange(evaluatedCoherent, nextCoherent);
+      evaluatedCoherent = nextCoherent;
       const activeDetector = detector;
       if (activeDetector === undefined) return;
       try {
@@ -472,7 +492,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         }
       } catch (error) {
         snapshot = nextRows;
-        notifyRowsStoreListeners(listeners, error);
+        notifyRowsStoreListeners(listeners, Object.freeze({ value: error }));
         return;
       }
       snapshot = nextRows;
@@ -491,7 +511,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         listeners.add(listener);
         if (unsubscribeRuntime === undefined) {
           detector ??= createDetector();
-          snapshot = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+          const installedCoherent = readRuntimeCoherent();
+          snapshot = installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+          evaluatedCoherent = installedCoherent;
+          displayedRowSpace = installedCoherent !== undefined;
           unsubscribeRuntime = runtime.subscribeRowSpace(publish);
         }
         let subscribed = true;
@@ -533,8 +556,36 @@ export type BrunoTableClientRowsStore = Readonly<{
 }>;
 
 export type BrunoTableClientFacetRowsSource = Readonly<{
-  readonly getFacetRowsSnapshot: () => BrunoTableClientFacetRowsSnapshot;
+  readonly getFacetRowsSnapshot: (
+    rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+  ) => BrunoTableClientFacetRowsSnapshot;
 }>;
+
+function clientRowsStoreChange<TRow>(
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  next: ClientCoherentSnapshot<TRow> | undefined,
+): BrunoTableClientRowOrderChange {
+  const previousSequence = previous?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  const nextSequence = next?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
+  if (previousSequence === nextSequence) {
+    return next?.changeFromPrevious ?? EMPTY_ROW_ORDER_CHANGE;
+  }
+  if (next !== undefined && nextSequence.parentToken === previousSequence.token) {
+    return next.changeFromPrevious;
+  }
+  let rowIdsChanged = previousSequence.length !== nextSequence.length;
+  const changedIndexes: number[] = [];
+  for (let index = 0; index < nextSequence.length; index += 1) {
+    const previousRow = previousSequence.get(index);
+    const nextRow = nextSequence.get(index);
+    if (previousRow !== nextRow) changedIndexes.push(index);
+    if (previousRow?.rowId !== nextRow?.rowId) rowIdsChanged = true;
+  }
+  return Object.freeze({
+    rowIdsChanged,
+    changedIndexes: Object.freeze(changedIndexes),
+  });
+}
 
 export type BrunoTableClientFacetRowsSnapshot = Readonly<{
   readonly rows: readonly BrunoTableClientAdmittedRow[];
@@ -1426,16 +1477,21 @@ function asClientCoherent<TRow>(
   return rowSpace as ClientCoherentSnapshot<TRow> | undefined;
 }
 
-function notifyRowsStoreListeners(listeners: Set<() => void>, initialError?: unknown): void {
+type ClientListenerError = Readonly<{ readonly value: unknown }>;
+
+function notifyRowsStoreListeners(
+  listeners: Set<() => void>,
+  initialError?: ClientListenerError,
+): void {
   let firstError = initialError;
   for (const listener of listeners) {
     try {
       listener();
     } catch (error) {
-      firstError ??= error;
+      firstError ??= Object.freeze({ value: error });
     }
   }
-  if (firstError !== undefined) throw firstError;
+  if (firstError !== undefined) throw firstError.value;
 }
 
 function snapshotSource<TRow>(

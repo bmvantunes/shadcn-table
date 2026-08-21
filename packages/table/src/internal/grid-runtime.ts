@@ -265,6 +265,11 @@ export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
   readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
+  /**
+   * Accepts authoritative Adapter input during runtime notifications. When a publication pass is
+   * already active, that pass completes first; re-entrant publications then apply in call order
+   * before the outer publication returns or rethrows its first listener failure.
+   */
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
 
@@ -439,6 +444,16 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
+type PublicationConfiguration = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly queryConfiguration: BrunoTableQueryConfiguration;
+}>;
+
+type QueuedPublication<TRow> = Readonly<{
+  readonly publication: BrunoTableRowPipelinePublication<TRow>;
+  readonly configuration: PublicationConfiguration;
+}>;
+
 function activeFilterCount(
   filterCollection: BrunoTableClientFilterCollection,
   quickFilter: string,
@@ -478,6 +493,11 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
   private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
+  private readonly queuedPublications: (QueuedPublication<TRow> | undefined)[] = [];
+  private publishing = false;
+  private installedPublicationConfiguration: PublicationConfiguration;
+  private logicalPublicationConfiguration: PublicationConfiguration;
+  private logicalPublication: BrunoTableRowPipelinePublication<TRow>;
   private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
@@ -570,6 +590,17 @@ export class BrunoTableGridRuntime<TRow> {
     );
     this.publication = publication;
     this.state = this.createState(publication);
+    this.installedPublicationConfiguration = Object.freeze({
+      columns,
+      queryConfiguration: Object.freeze({
+        baselineFilters: this.baselineFilters,
+        baselineFilterCollection: this.baselineFilterCollection,
+        baselineOrderBy: this.baselineOrderBy,
+        quickFilterFields: this.quickFilterFields,
+      }),
+    });
+    this.logicalPublicationConfiguration = this.installedPublicationConfiguration;
+    this.logicalPublication = publication;
   }
 
   public readonly getView = (): BrunoTableRowPipelineRuntimeView => {
@@ -635,7 +666,7 @@ export class BrunoTableGridRuntime<TRow> {
   };
 
   public readonly publish = (publication: BrunoTableRowPipelinePublication<TRow>): void => {
-    this.reconcile(publication, this.columns);
+    this.acceptPublication(publication, this.logicalPublicationConfiguration);
   };
 
   private readonly publishRowPipeline = (
@@ -647,13 +678,58 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly reconcile = (
     publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
-    queryConfiguration: BrunoTableQueryConfiguration = Object.freeze({
-      baselineFilters: this.baselineFilters,
-      baselineFilterCollection: this.baselineFilterCollection,
-      baselineOrderBy: this.baselineOrderBy,
-      quickFilterFields: this.quickFilterFields,
-    }),
+    queryConfiguration: BrunoTableQueryConfiguration = this.logicalPublicationConfiguration
+      .queryConfiguration,
   ): void => {
+    this.acceptPublication(publication, Object.freeze({ columns, queryConfiguration }));
+  };
+
+  private acceptPublication(
+    publication: BrunoTableRowPipelinePublication<TRow>,
+    configuration: PublicationConfiguration,
+  ): void {
+    this.logicalPublication = publication;
+    this.logicalPublicationConfiguration = configuration;
+    if (this.publishing) {
+      this.queuedPublications.push({ publication, configuration });
+      return;
+    }
+
+    this.publishing = true;
+    let firstError: ListenerError | undefined;
+    try {
+      firstError = this.reconcilePublication(publication, configuration);
+      for (let index = 0; index < this.queuedPublications.length; index += 1) {
+        const queued = this.queuedPublications[index];
+        this.queuedPublications[index] = undefined;
+        if (queued === undefined) continue;
+        firstError = firstListenerError(
+          firstError,
+          this.reconcilePublication(queued.publication, queued.configuration),
+        );
+      }
+    } finally {
+      let acceptedConfiguration: PublicationConfiguration | undefined;
+      for (let index = this.queuedPublications.length - 1; index >= 0; index -= 1) {
+        const queued = this.queuedPublications[index];
+        if (queued === undefined) continue;
+        acceptedConfiguration = queued.configuration;
+        break;
+      }
+      this.queuedPublications.length = 0;
+      this.publishing = false;
+      this.logicalPublication = this.publication;
+      this.logicalPublicationConfiguration =
+        acceptedConfiguration ?? this.installedPublicationConfiguration;
+    }
+    if (firstError !== undefined) throw firstError.value;
+  }
+
+  private reconcilePublication(
+    publication: BrunoTableRowPipelinePublication<TRow>,
+    publicationConfiguration: PublicationConfiguration,
+  ): ListenerError | undefined {
+    const { columns, queryConfiguration } = publicationConfiguration;
     const previous = this.state;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const configuration =
@@ -685,6 +761,7 @@ export class BrunoTableGridRuntime<TRow> {
     this.publication = publication;
     const installed = stabilizeRuntimeState(previous, next);
     this.state = installed;
+    this.installedPublicationConfiguration = publicationConfiguration;
     let configurationError: ListenerError | undefined;
     if (configuration !== undefined) {
       for (const columnId of configuration.invalidatedColumnIds) {
@@ -709,8 +786,8 @@ export class BrunoTableGridRuntime<TRow> {
       firstListenerError(configurationError, transitionError),
       commitError,
     );
-    if (firstError !== undefined) throw firstError.value;
-  };
+    return firstError;
+  }
 
   private commitState(
     previous: RuntimeState<TRow>,
@@ -743,7 +820,7 @@ export class BrunoTableGridRuntime<TRow> {
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
   ): void => {
-    this.reconcile(this.publication, columns, queryConfiguration);
+    this.reconcile(this.logicalPublication, columns, queryConfiguration);
   };
 
   public readonly setOnPersistChange = (
