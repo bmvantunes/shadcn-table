@@ -263,6 +263,12 @@ const groupedPersistedPreferences = {
   columnPinning: { start: [], end: [] },
 } as const satisfies BrunoTablePersistedState<Order, typeof rawGroupedColumns>;
 void groupedPersistedPreferences;
+const invalidGroupedPersistedPreferences = {
+  ...groupedPersistedPreferences,
+  // @ts-expect-error Group By intent rejects columns without groupBy: true.
+  groupBy: ["COL_ID_MAX_PRICE"],
+} satisfies BrunoTablePersistedState<Order, typeof rawGroupedColumns>;
+void invalidGroupedPersistedPreferences;
 
 type OnlySymbolGroupEvidence = readonly [
   {

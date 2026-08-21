@@ -46,6 +46,49 @@ const accountValueType: BrunoTableValueType<
       : { _tag: "Failure", message: "Invalid persisted account." },
 });
 
+function isStringArray(input: unknown): input is string[] {
+  return Array.isArray(input) && input.every((value) => typeof value === "string");
+}
+
+const stringTupleValueType: BrunoTableValueType<readonly string[], "equality", "text"> =
+  Object.freeze({
+    codecId: "test/string-tuple",
+    codecVersion: 1,
+    filterFamily: "equality",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 160,
+    decodeRuntime: (input) =>
+      isStringArray(input)
+        ? { _tag: "Success", value: Object.freeze(Array.from(input)) }
+        : { _tag: "Failure", message: "Expected a string tuple." },
+    equivalent: (left, right) =>
+      left.length === right.length && left.every((value, index) => value === right[index]),
+    compare: (left, right) => {
+      const leftText = JSON.stringify(left);
+      const rightText = JSON.stringify(right);
+      return leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
+    },
+    formatCanonicalText: (value) => JSON.stringify(value),
+    parseCanonicalText: (text) => {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        return isStringArray(parsed)
+          ? { _tag: "Success", value: Object.freeze(Array.from(parsed)) }
+          : { _tag: "Failure", message: "Expected a string tuple." };
+      } catch {
+        return { _tag: "Failure", message: "Expected a string tuple." };
+      }
+    },
+    formatDisplay: (value) => value.join(", "),
+    encodePersisted: (value) => Object.freeze(Array.from(value)),
+    decodePersisted: (input) =>
+      isStringArray(input)
+        ? { _tag: "Success", value: Object.freeze(Array.from(input)) }
+        : { _tag: "Failure", message: "Expected a persisted string tuple." },
+  });
+
 type PreferenceRow = Readonly<{
   name: string;
   quantity: bigint;
@@ -133,6 +176,36 @@ describe("Grid Preferences", () => {
       { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
       { columnId: "COL_ID_STATUS", type: "equals", filter: "closed" },
       { columnId: "COL_ID_SCORE", type: "equals", filter: 1e21 },
+    ]);
+  });
+
+  it("round-trips a scalar array-valued custom operand without treating it as in", () => {
+    const tupleColumns = compileColumns([
+      {
+        columnId: "COL_ID_TAGS",
+        field: "tags",
+        headerName: "Tags",
+        valueType: stringTupleValueType,
+      },
+    ]);
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_ARRAY_OPERAND",
+        columns: tupleColumns,
+        initialFilters: [{ columnId: "COL_ID_TAGS", type: "equals", filter: ["exact", "tuple"] }],
+        initialOrderBy: [{ columnId: "COL_ID_TAGS", direction: "asc" }],
+      }),
+    );
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_ARRAY_OPERAND",
+      columns: tupleColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_TAGS", direction: "asc" }],
+      initialPersistedState: JSON.parse(JSON.stringify(snapshot)),
+    });
+
+    expect(restored.filters).toEqual([
+      { columnId: "COL_ID_TAGS", type: "equals", filter: ["exact", "tuple"] },
     ]);
   });
 
@@ -235,6 +308,50 @@ describe("Grid Preferences", () => {
         initialPersistedState: { ...baseline, filters },
       });
       expect(restored.filters).toEqual(baselineFilters);
+    }
+  });
+
+  it("rejects root snapshot accessors without invoking them", () => {
+    const versionGetter = vi.fn(() => BRUNO_TABLE_PERSISTED_STATE_VERSION);
+    const hostileRoot = Object.defineProperties(
+      {},
+      {
+        version: { enumerable: true, get: versionGetter },
+        tableId: { enumerable: true, value: "TABLE_ID_ORDERS" },
+      },
+    );
+    const baselineFilters = [{ columnId: "COL_ID_NAME", type: "equals", filter: "baseline" }];
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_ORDERS",
+      columns,
+      initialFilters: baselineFilters,
+      initialOrderBy,
+      initialPersistedState: hostileRoot,
+    });
+
+    expect(versionGetter).not.toHaveBeenCalled();
+    expect(restored.filters).toEqual(baselineFilters);
+  });
+
+  it("does not install an order override for an absent or malformed persisted order", () => {
+    const baseline = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_ORDER_BASELINE",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+      }),
+    );
+    for (const columnOrder of [undefined, {}]) {
+      const restored = createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_ORDER_BASELINE",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+        initialPersistedState: { ...baseline, columnOrder },
+      });
+      expect(restored.columnLayout.orderOverride).toBeUndefined();
     }
   });
 

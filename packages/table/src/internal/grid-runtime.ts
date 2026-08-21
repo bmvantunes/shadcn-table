@@ -89,7 +89,31 @@ function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
 }
 
 function isBrunoTableDurablePreferenceCommand(command: BrunoTableGridCommand): boolean {
-  return command.type !== "quick-filter.replace";
+  switch (command.type) {
+    case "column.resize.commit":
+    case "column.reorder.commit":
+    case "column.visibility.commit":
+    case "column.pin.commit":
+    case "column.reset.order":
+    case "column.reset.widths":
+    case "column.reset.visibility":
+    case "column.reset.pinning":
+    case "column.reset.layout":
+    case "column.sort.toggle":
+    case "sorting.add":
+    case "sorting.remove":
+    case "sorting.move":
+    case "sorting.reset":
+    case "column.filter.clear":
+    case "column.filters.clear":
+    case "column.filter.reset":
+    case "column.filter.replace":
+      return true;
+    case "quick-filter.replace":
+      return false;
+    default:
+      return assertNeverBrunoTableGridCommand(command);
+  }
 }
 
 function assertNeverBrunoTableGridCommand(value: never): never {

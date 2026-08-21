@@ -1014,7 +1014,7 @@ export type BrunoTableSortBy<
   }[BrunoTableSortableColumnId<TColumns>][],
 ];
 
-export type BrunoTableRowsColumnId = "COL_ID_BRUNO_TABLE_ROWS";
+export type BrunoTableRowsColumnId = BrunoTableReservedColumnId;
 
 export type BrunoTableGroupableColumnId<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],

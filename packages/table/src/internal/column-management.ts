@@ -1,5 +1,6 @@
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableSortingCommand } from "./sorting";
+import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_MIN_COLUMN_WIDTH = 32;
 export const BRUNO_TABLE_MAX_COLUMN_WIDTH = 1_000;
@@ -232,7 +233,7 @@ export function restoreBrunoTableColumnLayout(
     allColumns,
     visibleColumnIds: deriveVisibleColumnIdsFromLogicalOrder(allColumns, visibleColumnIds),
     committedOverrides,
-    orderOverride: Object.freeze(orderedIds),
+    orderOverride: capturedOrder === undefined ? undefined : Object.freeze(orderedIds),
     version: 0,
   });
 }
@@ -268,7 +269,7 @@ function sanitizeColumnPinning(
   snapshotColumnIds: ReadonlySet<string> | undefined,
 ): ReadonlyMap<string, BrunoTableColumnPin> {
   const result = new Map<string, BrunoTableColumnPin>();
-  const record = capturePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input);
   const start = captureSanitizedColumnIdArray(record?.["start"], columnsById);
   const end = captureSanitizedColumnIdArray(record?.["end"], columnsById);
   if (
@@ -301,7 +302,7 @@ function sanitizeColumnWidths(
   columnsById: ReadonlyMap<string, CompiledColumn>,
 ): ReadonlyMap<string, number> {
   const result = new Map<string, number>();
-  const record = capturePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input);
   if (record === undefined) return result;
   for (const [columnId, column] of columnsById) {
     const value = record[columnId];
@@ -318,7 +319,7 @@ function sanitizeColumnVisibility(
   orderedIds: readonly string[],
   baselineVisible: ReadonlySet<string>,
 ): readonly string[] {
-  const record = capturePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input);
   if (record === undefined) {
     return Object.freeze(orderedIds.filter((columnId) => baselineVisible.has(columnId)));
   }
@@ -328,31 +329,6 @@ function sanitizeColumnVisibility(
       return typeof value === "boolean" ? value : baselineVisible.has(columnId);
     }),
   );
-}
-
-function capturePlainRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  try {
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      Array.isArray(value) ||
-      (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
-    ) {
-      return undefined;
-    }
-    const snapshot: Record<string, unknown> = {};
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== "string") return undefined;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-        return undefined;
-      }
-      snapshot[key] = descriptor.value;
-    }
-    return Object.freeze(snapshot);
-  } catch {
-    return undefined;
-  }
 }
 
 /**

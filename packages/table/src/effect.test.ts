@@ -82,13 +82,13 @@ describe("Effect BigDecimal Value Type", () => {
       initialPersistedState: JSON.parse(json),
     });
     const filter = restored.filters[0];
-    expect(filter).toBeDefined();
-    if (typeof filter === "object" && filter !== null && "filter" in filter) {
-      const decoded = BrunoTableBigDecimalValueType.decodeRuntime(filter.filter);
-      expect(decoded._tag).toBe("Success");
-      if (decoded._tag === "Success") {
-        expect(BrunoTableBigDecimalValueType.equivalent(decoded.value, exact)).toBe(true);
-      }
+    if (typeof filter !== "object" || filter === null || !("filter" in filter)) {
+      throw new TypeError("Expected the restored high-precision BigDecimal filter operand.");
+    }
+    const decoded = BrunoTableBigDecimalValueType.decodeRuntime(filter.filter);
+    expect(decoded._tag).toBe("Success");
+    if (decoded._tag === "Success") {
+      expect(BrunoTableBigDecimalValueType.equivalent(decoded.value, exact)).toBe(true);
     }
   });
 

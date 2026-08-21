@@ -16,6 +16,7 @@ import {
   type BrunoTableClientFilterCollection,
   type BrunoTableOrderBy,
 } from "./grid-query";
+import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_PERSISTED_STATE_VERSION = 1 as const;
 
@@ -137,15 +138,15 @@ function capturePersistedState(
   input: unknown,
   tableId: string,
 ): Readonly<Record<string, unknown>> | undefined {
-  try {
-    if (!isRecord(input)) return undefined;
-    if (input["version"] !== BRUNO_TABLE_PERSISTED_STATE_VERSION || input["tableId"] !== tableId) {
-      return undefined;
-    }
-    return Object.freeze({ ...input });
-  } catch {
+  const snapshot = captureBrunoTablePlainRecord(input);
+  if (
+    snapshot === undefined ||
+    snapshot["version"] !== BRUNO_TABLE_PERSISTED_STATE_VERSION ||
+    snapshot["tableId"] !== tableId
+  ) {
     return undefined;
   }
+  return snapshot;
 }
 
 function encodePersistedFilters(
@@ -233,7 +234,7 @@ function decodePersistedFilter(
       budget.overBudget = true;
       return undefined;
     }
-    const record = capturePlainRecord(input);
+    const record = captureBrunoTablePlainRecord(input);
     if (record === undefined || typeof record["type"] !== "string") return undefined;
     budget.nodes += 1;
     const type = record["type"];
@@ -296,19 +297,20 @@ function decodePersistedFilter(
       return undefined;
     }
     budget.operands += operandCount;
-    const decodedOperand = type === "in" ? decodedFilter!.map(decode) : decode(record["filter"]);
-    if (
-      decodedOperand === DECODE_FAILURE ||
-      (Array.isArray(decodedOperand) && decodedOperand.includes(DECODE_FAILURE))
-    ) {
-      return undefined;
+    let decodedOperand: unknown;
+    if (type === "in") {
+      const decodedValues = decodedFilter!.map(decode);
+      if (decodedValues.includes(DECODE_FAILURE)) return undefined;
+      decodedOperand = Object.freeze(decodedValues);
+    } else {
+      decodedOperand = decode(record["filter"]);
+      if (decodedOperand === DECODE_FAILURE) return undefined;
     }
     const result: Record<string, unknown> = {
       type,
       columnId,
-      filter: Object.freeze(Array.isArray(decodedOperand) ? decodedOperand : [decodedOperand])[0],
+      filter: decodedOperand,
     };
-    if (type === "in") result["filter"] = Object.freeze(decodedOperand as unknown[]);
     if (type === "inRange") {
       if (budget.operands >= BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS) {
         budget.overBudget = true;
@@ -351,31 +353,6 @@ function isArrayLongerThan(input: unknown, maximumLength: number): boolean {
     return Array.isArray(input) && input.length > maximumLength;
   } catch {
     return false;
-  }
-}
-
-function capturePlainRecord(input: unknown): Readonly<Record<string, unknown>> | undefined {
-  try {
-    if (
-      typeof input !== "object" ||
-      input === null ||
-      Array.isArray(input) ||
-      (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
-    ) {
-      return undefined;
-    }
-    const snapshot: Record<string, unknown> = {};
-    for (const key of Reflect.ownKeys(input)) {
-      if (typeof key !== "string") return undefined;
-      const descriptor = Object.getOwnPropertyDescriptor(input, key);
-      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-        return undefined;
-      }
-      snapshot[key] = descriptor.value;
-    }
-    return Object.freeze(snapshot);
-  } catch {
-    return undefined;
   }
 }
 

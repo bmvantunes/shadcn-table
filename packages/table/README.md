@@ -141,6 +141,10 @@ Persisted operands carry the owning column's `codecId` and `codecVersion` and co
 compiled Value Type's JSON-safe `encodePersisted` output. Restoration calls the matching
 `decodePersisted` implementation and drops stale, malformed, unknown, or incompatible evidence.
 Native `bigint` and Effect BigDecimal objects therefore never appear directly in the snapshot.
+If a custom `encodePersisted` implementation returns a value that is not JSON-safe, the committing
+preference command throws a `TypeError`; column compilation does not pre-execute value codecs.
+An unreadable or malformed persisted `filters` slice preserves `initialFilters`, while a readable
+slice containing only stale or incompatible leaves validly restores no active Grid Filters.
 The format reserves ordered Group By and grouped-sort fields for capable future runtimes, but the
 current Client runtime drops them because it does not install grouping.
 
