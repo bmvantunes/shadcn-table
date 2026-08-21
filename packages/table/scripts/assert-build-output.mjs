@@ -191,10 +191,12 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
     { source: `export { useHotkeys } from "@tanstack/react-hotkeys";` },
     { source: `export * from "@tanstack/react-hotkeys";` },
     { source: `const reactHotkeys = import("@tanstack/react-hotkeys");` },
+    { source: "const reactHotkeys = import(`@tanstack/react-hotkeys`);" },
     { source: `import { createMultiHotkeyHandler } from "@tanstack/hotkeys";` },
     { source: `export { createMultiHotkeyHandler } from "@tanstack/hotkeys";` },
     { source: `export * from "@tanstack/hotkeys";` },
     { source: `const hotkeysCore = import("@tanstack/hotkeys");` },
+    { source: "const hotkeysCore = import(`@tanstack/hotkeys`);" },
     {
       source: `import * as HotkeysCore from "@tanstack/hotkeys"; HotkeysCore.createMultiHotkeyHandler({});`,
       mode: "adapter",
@@ -966,11 +968,13 @@ function isReactHotkeysModuleReference(node) {
     (node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
       node.type === "ExportAllDeclaration") &&
-    node.source?.value === "@tanstack/react-hotkeys"
+    staticStringValue(node.source) === "@tanstack/react-hotkeys"
   ) {
     return true;
   }
-  return node.type === "ImportExpression" && node.source.value === "@tanstack/react-hotkeys";
+  return (
+    node.type === "ImportExpression" && staticStringValue(node.source) === "@tanstack/react-hotkeys"
+  );
 }
 
 function isTanStackHotkeysCoreModuleReference(node) {
@@ -978,11 +982,11 @@ function isTanStackHotkeysCoreModuleReference(node) {
     (node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
       node.type === "ExportAllDeclaration") &&
-    node.source?.value === "@tanstack/hotkeys"
+    staticStringValue(node.source) === "@tanstack/hotkeys"
   ) {
     return true;
   }
-  return node.type === "ImportExpression" && node.source.value === "@tanstack/hotkeys";
+  return node.type === "ImportExpression" && staticStringValue(node.source) === "@tanstack/hotkeys";
 }
 
 function propertyName(property) {

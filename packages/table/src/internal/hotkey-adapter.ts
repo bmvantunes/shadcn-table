@@ -445,7 +445,6 @@ export function useBrunoTableGridHotkeys(
     const escapeBindings = BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
       hotkey,
       onTrigger: ((event) => {
-        if (event.isComposing) return;
         const currentOwner = target.current;
         const eventTarget = event.target;
         const OwnerNode = currentOwner?.ownerDocument.defaultView?.Node;

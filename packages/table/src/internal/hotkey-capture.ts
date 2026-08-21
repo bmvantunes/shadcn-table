@@ -32,7 +32,12 @@ export function registerBrunoTableForeignDocumentHotkeys(
   bindings: readonly BrunoTableCoreHotkeyBinding[],
 ): () => void {
   const handlers: Partial<Record<Hotkey, HotkeyCallback>> = {};
-  for (const binding of bindings) handlers[binding.hotkey as Hotkey] = binding.onTrigger;
+  for (const binding of bindings) {
+    handlers[binding.hotkey as Hotkey] = (event, context) => {
+      if (event.isComposing) return;
+      binding.onTrigger(event, context);
+    };
+  }
   const bubbleHandler = createMultiHotkeyHandler(handlers, {
     preventDefault: false,
     stopPropagation: false,

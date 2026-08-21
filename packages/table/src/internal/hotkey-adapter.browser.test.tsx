@@ -411,6 +411,16 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       new ForeignKeyboardEvent("keydown", {
         bubbles: true,
         cancelable: true,
+        isComposing: true,
+        key: "Escape",
+      }),
+    );
+    expect(escape).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    foreignInput.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
         key: "Escape",
       }),
     );
