@@ -339,7 +339,7 @@ The toolbar composition seam works with both public variants, while edit control
 </BrunoTableClient>
 ```
 
-Names beginning with `PageSpecific...` are illustrative consumer components, not BrunoTable requirements. Library-owned exported components retain the `BrunoTable...` brand.
+Consumer components may use application-owned names. Library-owned exported components retain the `BrunoTable...` brand.
 
 The toolbar is a composition seam, not a broad controller seam. Built-in toolbar controls access narrow private Grid Runtime selectors. A page-specific component should receive page-owned state through its ordinary props. A custom control that needs to change Grid Filter state uses a focused typed BrunoTable command/control surface rather than taking ownership through React-controlled filter props, receiving a public TanStack table, or using an untyped imperative handle.
 
