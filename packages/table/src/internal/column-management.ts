@@ -158,8 +158,9 @@ export function createBrunoTableColumnLayout(
   return Object.freeze({
     baselineColumns,
     allColumns,
-    visibleColumnIds: Object.freeze(
-      getBrunoTableLogicalColumnOrder(allColumns).map((column) => column.columnId),
+    visibleColumnIds: deriveVisibleColumnIdsFromLogicalOrder(
+      allColumns,
+      allColumns.map((column) => column.columnId),
     ),
     committedOverrides: EMPTY_COMMITTED_OVERRIDES,
     orderOverride: undefined,
@@ -177,7 +178,9 @@ export function reconcileBrunoTableColumnLayout(
   version: number = state.version + 1,
 ): BrunoTableColumnLayoutState {
   const baselineColumns = Object.freeze(Array.from(columns));
-  const nextById = new Map(baselineColumns.map((column) => [column.columnId, column]));
+  const nextById = new Map<string, CompiledColumn>(
+    baselineColumns.map((column) => [column.columnId, column]),
+  );
   const previousById = new Map(state.allColumns.map((column) => [column.columnId, column]));
   const committedOverrides = filterCommittedOverrides(state.committedOverrides, nextById);
   const orderOverride =
@@ -199,28 +202,13 @@ export function reconcileBrunoTableColumnLayout(
       : [preserveCommittedColumnLayout(committedOverrides.get(columnId), next)];
   });
   const allColumns = Object.freeze(reconciledColumns);
-  const logicalColumns = getBrunoTableLogicalColumnOrder(allColumns);
-  const allColumnsById = new Map<string, CompiledColumn>(
-    allColumns.map((column) => [column.columnId, column]),
-  );
-  const retainedVisible = state.visibleColumnIds.filter((columnId) => allColumnsById.has(columnId));
-  const additions = logicalColumns
-    .filter((column) => !previousById.has(column.columnId))
-    .map((column) => column.columnId);
-  const visibleByPin = (pinned: BrunoTableColumnPin): readonly string[] => [
-    ...retainedVisible.filter((columnId) => allColumnsById.get(columnId)?.pinned === pinned),
-    ...additions.filter((columnId) => allColumnsById.get(columnId)?.pinned === pinned),
+  const visibleMembership = [
+    ...state.visibleColumnIds.filter((columnId) => nextById.has(columnId)),
+    ...baselineColumns
+      .filter((column) => !previousById.has(column.columnId))
+      .map((column) => column.columnId),
   ];
-  const reconciledVisible = [
-    ...visibleByPin("start"),
-    ...visibleByPin(undefined),
-    ...visibleByPin("end"),
-  ];
-  const visibleColumnIds = Object.freeze(
-    reconciledVisible.length > 0 || logicalColumns.length === 0
-      ? reconciledVisible
-      : [logicalColumns[0]!.columnId],
-  );
+  const visibleColumnIds = deriveVisibleColumnIdsFromLogicalOrder(allColumns, visibleMembership);
   return Object.freeze({
     baselineColumns,
     allColumns,
@@ -344,13 +332,12 @@ function reorderColumn(
       : state.allColumns.map((candidate) =>
           candidate.columnId === columnId ? withColumnPin(candidate, targetPinned) : candidate,
         );
-  // The committed visible-id tuple is the authority for order within a pinning
-  // region. Rebuilding it from `allColumns` would lose a prior reorder because
-  // `allColumns` is also kept as the controlled TanStack input projection.
+  // Keep the current visible membership while calculating the requested move. The final
+  // visible projection is derived by `nextState` from the reordered `allColumns`.
   const visibleIds = [
     ...(source.pinned === targetPinned
       ? state.visibleColumnIds
-      : getLogicalVisibleColumnIdsFromColumns(targetColumns, state.visibleColumnIds)),
+      : deriveVisibleColumnIdsFromLogicalOrder(targetColumns, state.visibleColumnIds)),
   ];
   const visibleColumnById = new Map<string, CompiledColumn>(
     getBrunoTableLogicalColumnOrder(targetColumns)
@@ -396,7 +383,7 @@ function setColumnVisibility(
   if (visible === isVisible) return state;
   if (!visible && state.visibleColumnIds.length <= 1) return state;
   const visibleColumnIds = visible
-    ? insertVisibleColumn(state, columnId)
+    ? [...state.visibleColumnIds, columnId]
     : Object.freeze(state.visibleColumnIds.filter((id) => id !== columnId));
   return nextState(state, state.allColumns, visibleColumnIds);
 }
@@ -413,14 +400,10 @@ function setColumnPinning(
       candidate.columnId === columnId ? withColumnPin(candidate, pinned) : candidate,
     ),
   );
-  const visibleColumnIds =
-    pinned === undefined && column.pinned !== undefined
-      ? getLogicalVisibleColumnIdsFromColumns(allColumns, state.visibleColumnIds)
-      : groupVisibleColumnIdsByPin(allColumns, state.visibleColumnIds);
   return nextState(
     state,
     allColumns,
-    visibleColumnIds,
+    state.visibleColumnIds,
     setPinningOverride(state.committedOverrides, columnId, pinned),
   );
 }
@@ -435,13 +418,7 @@ function resetOrder(state: BrunoTableColumnLayoutState): BrunoTableColumnLayoutS
     (column) => !state.baselineColumns.some((baseline) => baseline.columnId === column.columnId),
   );
   const allColumns = Object.freeze([...ordered, ...trailing]);
-  const visible = new Set(state.visibleColumnIds);
-  const visibleColumnIds = Object.freeze(
-    getBrunoTableLogicalColumnOrder(allColumns)
-      .filter((column) => visible.has(column.columnId))
-      .map((column) => column.columnId),
-  );
-  return nextState(state, allColumns, visibleColumnIds, state.committedOverrides, undefined);
+  return nextState(state, allColumns, state.visibleColumnIds, state.committedOverrides, undefined);
 }
 
 function resetWidths(state: BrunoTableColumnLayoutState): BrunoTableColumnLayoutState {
@@ -468,9 +445,7 @@ function resetVisibility(state: BrunoTableColumnLayoutState): BrunoTableColumnLa
   return nextState(
     state,
     state.allColumns,
-    Object.freeze(
-      getBrunoTableLogicalColumnOrder(state.allColumns).map((column) => column.columnId),
-    ),
+    state.allColumns.map((column) => column.columnId),
   );
 }
 
@@ -487,7 +462,7 @@ function resetPinning(state: BrunoTableColumnLayoutState): BrunoTableColumnLayou
   return nextState(
     state,
     allColumns,
-    getLogicalVisibleColumnIdsFromColumns(allColumns, state.visibleColumnIds),
+    state.visibleColumnIds,
     clearPinningOverrides(state.committedOverrides),
   );
 }
@@ -515,14 +490,9 @@ function nextState(
   orderOverride: readonly CompiledColumn["columnId"][] | undefined = state.orderOverride,
 ): BrunoTableColumnLayoutState {
   const nextAllColumns = Object.freeze(Array.from(allColumns));
-  const availableIds = new Set<string>(nextAllColumns.map((column) => column.columnId));
-  const seenVisibleIds = new Set<string>();
-  const nextVisibleColumnIds = Object.freeze(
-    visibleColumnIds.filter((columnId) => {
-      if (seenVisibleIds.has(columnId)) return false;
-      seenVisibleIds.add(columnId);
-      return availableIds.has(columnId);
-    }),
+  const nextVisibleColumnIds = deriveVisibleColumnIdsFromLogicalOrder(
+    nextAllColumns,
+    visibleColumnIds,
   );
   if (
     sameColumnArray(state.allColumns, nextAllColumns) &&
@@ -570,43 +540,25 @@ export function getBrunoTableLogicalColumnOrder(
   ]);
 }
 
-function getLogicalVisibleColumnIdsFromColumns(
-  columns: readonly CompiledColumn[],
-  visibleColumnIds: readonly string[],
+/**
+ * Derives the visible projection from the one logical order owned by `allColumns`.
+ * The input visible IDs carry membership only; their order is intentionally ignored so every
+ * layout command and definition reconciliation publish the same logical projection.
+ */
+function deriveVisibleColumnIdsFromLogicalOrder(
+  allColumns: readonly CompiledColumn[],
+  visibleMembership: readonly string[],
 ): readonly string[] {
-  const visible = new Set(visibleColumnIds);
-  return getBrunoTableLogicalColumnOrder(columns)
+  const visible = new Set(visibleMembership);
+  const logicalColumns = getBrunoTableLogicalColumnOrder(allColumns);
+  const visibleColumnIds = logicalColumns
     .filter((column) => visible.has(column.columnId))
     .map((column) => column.columnId);
-}
-
-function groupVisibleColumnIdsByPin(
-  columns: readonly CompiledColumn[],
-  visibleColumnIds: readonly string[],
-): readonly string[] {
-  const columnsById = new Map<string, CompiledColumn>(
-    columns.map((column) => [column.columnId, column]),
+  return Object.freeze(
+    visibleColumnIds.length > 0 || logicalColumns.length === 0
+      ? visibleColumnIds
+      : [logicalColumns[0]!.columnId],
   );
-  return Object.freeze([
-    ...visibleColumnIds.filter((columnId) => columnsById.get(columnId)?.pinned === "start"),
-    ...visibleColumnIds.filter((columnId) => columnsById.get(columnId)?.pinned === undefined),
-    ...visibleColumnIds.filter((columnId) => columnsById.get(columnId)?.pinned === "end"),
-  ]);
-}
-
-function insertVisibleColumn(
-  state: BrunoTableColumnLayoutState,
-  columnId: string,
-): readonly string[] {
-  const logicalColumns = getBrunoTableLogicalColumnOrder(state.allColumns);
-  const allIndex = logicalColumns.findIndex((column) => column.columnId === columnId);
-  if (allIndex < 0) return state.visibleColumnIds;
-  const precedingVisible = logicalColumns
-    .slice(0, allIndex)
-    .filter((column) => state.visibleColumnIds.includes(column.columnId));
-  const visibleColumnIds = [...state.visibleColumnIds];
-  visibleColumnIds.splice(precedingVisible.length, 0, columnId);
-  return Object.freeze(visibleColumnIds);
 }
 
 function replaceVisibleOrder(
