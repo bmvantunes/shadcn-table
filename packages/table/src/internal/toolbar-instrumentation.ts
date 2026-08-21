@@ -13,7 +13,11 @@ export type BrunoTableToolbarSubscriptionEvent = Readonly<{
 const subscriptionListeners = new Set<(event: BrunoTableToolbarSubscriptionEvent) => void>();
 export type BrunoTableToolbarLifetimeEvent = Readonly<{
   readonly tableId: string;
-  readonly kind: "runtime-create" | "row-pipeline-subscribe" | "row-pipeline-unsubscribe";
+  readonly kind:
+    | "runtime-create"
+    | "row-pipeline-subscribe"
+    | "row-pipeline-unsubscribe"
+    | "result-row-count-initialize";
   readonly identity: object;
 }>;
 

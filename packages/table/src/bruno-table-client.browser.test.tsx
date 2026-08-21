@@ -9764,6 +9764,48 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("initializes Result Row Count only when that projection is composed", async () => {
+    const lifetimeEvents = vi.fn();
+    const removeLifetime = installBrunoTableToolbarLifetimeListener(lifetimeEvents);
+    try {
+      renderToString(<BrunoTableClient {...props} clientSource={readySource()} />);
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "result-row-count-initialize"),
+      ).toHaveLength(0);
+
+      renderToString(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          <BrunoTableToolbar>
+            <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+              {(commands) => (
+                <button type="button" onClick={() => commands.clearAll()}>
+                  Clear Grid Filters
+                </button>
+              )}
+            </BrunoTableFilterControl>
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "result-row-count-initialize"),
+      ).toHaveLength(0);
+
+      const resultMarkup = renderToString(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          <BrunoTableToolbar>
+            <BrunoTableResultRowCount />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      expect(resultMarkup).toContain("2 result rows");
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "result-row-count-initialize"),
+      ).toHaveLength(1);
+    } finally {
+      removeLifetime();
+    }
+  });
+
   test("composes typed toolbar controls with isolated semantic subscriptions", async () => {
     const subscriptionEvents = vi.fn();
     const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);

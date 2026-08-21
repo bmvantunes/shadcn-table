@@ -140,13 +140,14 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   };
 
   public readonly publishResultRowCount = (count: number): void => {
+    this.resultRowCountInitialized = true;
     if (this.resultRowCount === count) return;
     this.resultRowCount = count;
     notifyRowsStoreListeners(this.resultRowCountListeners);
   };
 
-  public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): void => {
-    if (this.resultRowCountInitialized) return;
+  public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): boolean => {
+    if (this.resultRowCountInitialized) return false;
     this.resultRowCountInitialized = true;
     const rows = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
     const filterPlan = compileClientFilterPlan(
@@ -176,6 +177,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       count = 0;
     }
     this.resultRowCount = count;
+    return true;
   };
 
   public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {

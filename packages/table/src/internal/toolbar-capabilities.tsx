@@ -7,9 +7,14 @@ import type {
   BrunoTableFilterableColumnId,
 } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
-import type { BrunoTableRuntimeView } from "./grid-runtime";
+import type {
+  BrunoTableQuerySnapshot,
+  BrunoTableRowPipelineRuntimeView,
+  BrunoTableRuntimeView,
+} from "./grid-runtime";
 import { compileClientFilterCollection } from "./grid-query";
 import {
+  recordBrunoTableToolbarLifetime,
   recordBrunoTableToolbarSubscription,
   type BrunoTableToolbarProjection,
 } from "./toolbar-instrumentation";
@@ -18,6 +23,11 @@ type BrunoTableResultRowCountSource = Readonly<{
   readonly getResultRowCountSnapshot: () => number;
   readonly subscribeResultRowCount: (listener: () => void) => () => void;
 }>;
+
+type BrunoTableInitializableResultRowCountSource = BrunoTableResultRowCountSource &
+  Readonly<{
+    readonly initializeResultRowCount: (query: BrunoTableQuerySnapshot) => boolean;
+  }>;
 
 type BrunoTableToolbarCapabilityContextValue = Readonly<{
   readonly runtime: BrunoTableRuntimeView;
@@ -69,8 +79,8 @@ export function BrunoTableToolbarProvider({
   children,
 }: Readonly<{
   readonly columns: readonly CompiledColumn[];
-  readonly runtime: BrunoTableRuntimeView;
-  readonly resultRows: BrunoTableResultRowCountSource;
+  readonly runtime: BrunoTableRowPipelineRuntimeView;
+  readonly resultRows: BrunoTableInitializableResultRowCountSource;
   readonly tableId: string;
   readonly children: ReactNode;
 }>): ReactElement {
@@ -122,7 +132,22 @@ export function BrunoTableToolbarProvider({
         }
       };
     };
-    return Object.freeze({ runtime, resultRows, commands, subscribe });
+    const projectedResultRows = Object.freeze({
+      getResultRowCountSnapshot: () => {
+        if (resultRows.initializeResultRowCount(runtime.getQuerySnapshot())) {
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+            recordBrunoTableToolbarLifetime({
+              tableId,
+              kind: "result-row-count-initialize",
+              identity: resultRows,
+            });
+          }
+        }
+        return resultRows.getResultRowCountSnapshot();
+      },
+      subscribeResultRowCount: resultRows.subscribeResultRowCount,
+    });
+    return Object.freeze({ runtime, resultRows: projectedResultRows, commands, subscribe });
   }, [columns, resultRows, runtime, tableId]);
   return (
     <BrunoTableToolbarCapabilityContext.Provider value={value}>

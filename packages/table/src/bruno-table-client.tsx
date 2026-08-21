@@ -94,7 +94,6 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
-  rowPipelineAdapter.initializeResultRowCount(runtimeView.getQuerySnapshot());
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
 
   useLayoutEffect(() => {
