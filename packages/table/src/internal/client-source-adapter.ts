@@ -432,6 +432,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     const identity = Object.freeze({});
     let unsubscribeRuntime: (() => void) | undefined;
     const publish = () => {
+      if (this.publication.status === "loading" && this.publication.rowSpace === undefined) {
+        this.publishResultRowCount(0);
+      }
       const previousRows = snapshot;
       const nextCoherent = this.coherent;
       const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;

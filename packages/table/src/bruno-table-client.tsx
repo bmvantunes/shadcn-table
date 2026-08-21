@@ -131,6 +131,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider
+        columns={compiledColumns}
         resultRows={rowPipelineAdapter}
         runtime={runtimeView}
         tableId={tableId}

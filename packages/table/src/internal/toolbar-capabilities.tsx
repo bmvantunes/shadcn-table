@@ -6,8 +6,9 @@ import type {
   BrunoTableFilterExpression,
   BrunoTableFilterableColumnId,
 } from "../public-types";
+import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableRuntimeView } from "./grid-runtime";
-import { collectClientFilterColumnIds } from "./grid-query";
+import { compileClientFilterCollection } from "./grid-query";
 import {
   recordBrunoTableToolbarSubscription,
   type BrunoTableToolbarProjection,
@@ -61,11 +62,13 @@ export type BrunoTableFilterControlProps<TRow, TColumns extends BrunoTableColumn
     }>;
 
 export function BrunoTableToolbarProvider({
+  columns,
   runtime,
   resultRows,
   tableId,
   children,
 }: Readonly<{
+  readonly columns: readonly CompiledColumn[];
   readonly runtime: BrunoTableRuntimeView;
   readonly resultRows: BrunoTableResultRowCountSource;
   readonly tableId: string;
@@ -74,14 +77,23 @@ export function BrunoTableToolbarProvider({
   const value = useMemo<BrunoTableToolbarCapabilityContextValue>(() => {
     const commands = Object.freeze({
       replace: (filter: unknown) => {
-        const columnIds = new Set<string>();
-        collectClientFilterColumnIds(filter, columnIds);
-        if (columnIds.size !== 1) return false;
-        const columnId = columnIds.values().next().value;
-        return (
-          columnId !== undefined &&
-          runtime.dispatchGridCommand({ type: "column.filter.replace", columnId, filter })
-        );
+        try {
+          const admitted = compileClientFilterCollection([filter], columns);
+          if (admitted.columnIds.size !== 1 || admitted.filters.length !== 1) return false;
+          const columnId = admitted.columnIds.values().next().value;
+          const admittedFilter = admitted.filters[0];
+          return (
+            columnId !== undefined &&
+            admittedFilter !== undefined &&
+            runtime.dispatchGridCommand({
+              type: "column.filter.replace",
+              columnId,
+              filter: admittedFilter,
+            })
+          );
+        } catch {
+          return false;
+        }
       },
       clear: (columnId: string) =>
         runtime.dispatchGridCommand({ type: "column.filter.clear", columnId }),
@@ -111,7 +123,7 @@ export function BrunoTableToolbarProvider({
       };
     };
     return Object.freeze({ runtime, resultRows, commands, subscribe });
-  }, [resultRows, runtime, tableId]);
+  }, [columns, resultRows, runtime, tableId]);
   return (
     <BrunoTableToolbarCapabilityContext.Provider value={value}>
       {children}

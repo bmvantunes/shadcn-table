@@ -9863,6 +9863,81 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("rejects an over-depth custom Grid Filter command without throwing", async () => {
+    let hostileFilter: unknown = {
+      columnId: "COL_ID_NAME",
+      type: "contains",
+      filter: "Ada",
+    };
+    for (let depth = 0; depth < 10_000; depth += 1) {
+      hostileFilter = { type: "NOT", condition: hostileFilter };
+    }
+    let result: boolean | undefined;
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource()}>
+        <BrunoTableToolbar>
+          <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+            {(commands) => (
+              <button
+                type="button"
+                onClick={() => (result = commands.replace(hostileFilter as never))}
+              >
+                Apply hostile filter
+              </button>
+            )}
+          </BrunoTableFilterControl>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Apply hostile filter" }));
+    expect(result).toBe(false);
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }))
+      .toHaveTextContent("2 result rows");
+    await expect.element(screen.getByRole("gridcell", { name: "Ada", exact: true })).toBeVisible();
+    await expect
+      .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+      .toBeVisible();
+  });
+
+  test("resets Result Row Count when loading invalidates the displayed row space", async () => {
+    const toolbar = (
+      <BrunoTableToolbar>
+        <BrunoTableResultRowCount />
+        <BrunoTableLoadedRowCount />
+      </BrunoTableToolbar>
+    );
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource()}>
+        {toolbar}
+      </BrunoTableClient>,
+    );
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }))
+      .toHaveTextContent("2 result rows");
+
+    await screen.rerender(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows, totalRows: rows.length, version: 2, status: "loading" }}
+      >
+        {toolbar}
+      </BrunoTableClient>,
+    );
+
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("status", { name: "Loaded rows" }))
+      .toHaveTextContent("0 loaded rows");
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }))
+      .toHaveTextContent("0 result rows");
+  });
+
   test("composes application-controlled External Filter UI without a grid capability", async () => {
     const subscriptionEvents = vi.fn();
     const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);
