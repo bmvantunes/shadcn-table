@@ -265,6 +265,11 @@ export type BrunoTableRowPipelineRuntimeView = BrunoTableRuntimeView & {
   readonly getQuerySnapshot: () => BrunoTableQuerySnapshot;
   readonly subscribeFilter: (listener: Listener) => () => void;
   readonly subscribeQuery: (listener: Listener) => () => void;
+  /**
+   * Accepts authoritative Adapter input during runtime notifications. When a publication pass is
+   * already active, that pass completes first; re-entrant publications then apply in call order
+   * before the outer publication returns or rethrows its first listener failure.
+   */
   readonly publishRowPipeline: (publication: BrunoTableRowPipelinePublication<unknown>) => void;
 };
 
@@ -439,6 +444,12 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
+type QueuedPublication<TRow> = Readonly<{
+  readonly publication: BrunoTableRowPipelinePublication<TRow>;
+  readonly columns: readonly CompiledColumn[];
+  readonly queryConfiguration: BrunoTableQueryConfiguration;
+}>;
+
 function activeFilterCount(
   filterCollection: BrunoTableClientFilterCollection,
   quickFilter: string,
@@ -478,6 +489,8 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
   private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
+  private readonly queuedPublications: (QueuedPublication<TRow> | undefined)[] = [];
+  private publishing = false;
   private view: BrunoTableRowPipelineRuntimeView | undefined;
   private state: RuntimeState<TRow>;
   private publication: BrunoTableRowPipelinePublication<TRow>;
@@ -654,6 +667,36 @@ export class BrunoTableGridRuntime<TRow> {
       quickFilterFields: this.quickFilterFields,
     }),
   ): void => {
+    if (this.publishing) {
+      this.queuedPublications.push({ publication, columns, queryConfiguration });
+      return;
+    }
+
+    this.publishing = true;
+    let firstError: ListenerError | undefined;
+    try {
+      firstError = this.reconcilePublication(publication, columns, queryConfiguration);
+      for (let index = 0; index < this.queuedPublications.length; index += 1) {
+        const queued = this.queuedPublications[index];
+        this.queuedPublications[index] = undefined;
+        if (queued === undefined) continue;
+        firstError = firstListenerError(
+          firstError,
+          this.reconcilePublication(queued.publication, queued.columns, queued.queryConfiguration),
+        );
+      }
+    } finally {
+      this.queuedPublications.length = 0;
+      this.publishing = false;
+    }
+    if (firstError !== undefined) throw firstError.value;
+  };
+
+  private reconcilePublication(
+    publication: BrunoTableRowPipelinePublication<TRow>,
+    columns: readonly CompiledColumn[],
+    queryConfiguration: BrunoTableQueryConfiguration,
+  ): ListenerError | undefined {
     const previous = this.state;
     const previousLayoutSnapshot = this.columnLayoutSnapshot;
     const configuration =
@@ -709,8 +752,8 @@ export class BrunoTableGridRuntime<TRow> {
       firstListenerError(configurationError, transitionError),
       commitError,
     );
-    if (firstError !== undefined) throw firstError.value;
-  };
+    return firstError;
+  }
 
   private commitState(
     previous: RuntimeState<TRow>,

@@ -3969,3 +3969,275 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
   });
 });
+
+describe("BrunoTable Grid Runtime re-entrant publication", () => {
+  const createSubject = (
+    rows: readonly Row[] = [{ id: "first", name: "Ada", note: "math" }],
+    columns: readonly CompiledColumn[] = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]),
+  ) => {
+    const initial = source(rows);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      initial,
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_REENTRANT_PUBLICATION",
+    );
+    return { adapter, columns, runtime, view: runtime.getView() };
+  };
+
+  it("drains a publication queued by a query listener after the configuration pass", () => {
+    const { adapter, runtime, view } = createSubject();
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const newest = { id: "first", name: "Countess Lovelace", note: "newest" } satisfies Row;
+    const events: string[] = [];
+    view.subscribeQuery(() => {
+      events.push("query");
+      view.publishRowPipeline(adapter.publish(source([newest])));
+    });
+    view.subscribeRow("first", () =>
+      events.push(`row:${String(view.getCellValueSnapshot("first", "COL_ID_ALIAS"))}`),
+    );
+
+    runtime.reconcile(
+      adapter.reconcile(
+        source([{ id: "first", name: "Augusta", note: "outer" }]),
+        (row) => row.id,
+        replacementColumns,
+      ),
+      replacementColumns,
+      adapter.getQueryConfiguration(replacementColumns),
+    );
+
+    expect(events).toEqual(["query", "row:Augusta", "row:Countess Lovelace"]);
+    expect(view.getRowSnapshot("first")).toBe(newest);
+    expect(view.getCellValueSnapshot("first", "COL_ID_ALIAS")).toBe("Countess Lovelace");
+  });
+
+  it.each(["chrome", "source"] as const)(
+    "drains a publication queued by a %s listener",
+    (channel) => {
+      const { adapter, runtime, view } = createSubject();
+      const events: string[] = [];
+      const newest = { id: "latest", name: "Grace", note: "ready" } satisfies Row;
+      const listener = () => {
+        events.push(`${channel}:${view.getChromeSnapshot().status}`);
+        if (view.getChromeSnapshot().status === "loading") {
+          runtime.publish(adapter.publish(source([newest])));
+        }
+      };
+      if (channel === "chrome") view.subscribeChrome(listener);
+      else view.subscribeSource(listener);
+
+      runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })));
+
+      expect(events).toEqual([`${channel}:loading`, `${channel}:ready`]);
+      expect(view.getRowSnapshot("latest")).toBe(newest);
+      expect(view.getChromeSnapshot().status).toBe("ready");
+    },
+  );
+
+  it("drains a publication queued by a row listener and adopts its row order and cells", () => {
+    const first = { id: "first", name: "Ada", note: "outer" } satisfies Row;
+    const second = { id: "second", name: "Grace", note: "outer" } satisfies Row;
+    const newestSecond = {
+      id: "second",
+      name: "Rear Admiral Hopper",
+      note: "newest",
+    } satisfies Row;
+    const newestThird = { id: "third", name: "Katherine", note: "newest" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([first, second]);
+    view.subscribeRow("first", () => {
+      if (view.getRowSnapshot("first") !== undefined) {
+        runtime.publish(adapter.publish(source([newestThird, newestSecond])));
+      }
+    });
+
+    runtime.publish(adapter.publish(source([{ ...first, name: "Augusta" }, second])));
+
+    expect(view.getRowSpaceSnapshot()?.getRowId(0)).toBe("third");
+    expect(view.getRowSpaceSnapshot()?.getRowId(1)).toBe("second");
+    expect(view.getRowSnapshot("first")).toBeUndefined();
+    expect(view.getCellValueSnapshot("second", "COL_ID_NAME")).toBe("Rear Admiral Hopper");
+  });
+
+  it("does not let later outer cell traversal replace newer cached snapshots", () => {
+    const { adapter, runtime, view } = createSubject();
+    const newest = { id: "first", name: "Newest name", note: "newest note" } satisfies Row;
+    const events: string[] = [];
+    view.subscribeCell("first", "COL_ID_NAME", () => {
+      events.push(`name:${String(view.getCellValueSnapshot("first", "COL_ID_NAME"))}`);
+      if (view.getCellValueSnapshot("first", "COL_ID_NAME") === "Outer name") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+    view.subscribeCell("first", "COL_ID_NOTE", () => {
+      events.push(`note:${String(view.getCellValueSnapshot("first", "COL_ID_NOTE"))}`);
+    });
+
+    runtime.publish(
+      adapter.publish(source([{ id: "first", name: "Outer name", note: "outer note" }])),
+    );
+
+    expect(events).toEqual([
+      "name:Outer name",
+      "note:outer note",
+      "name:Newest name",
+      "note:newest note",
+    ]);
+    expect(view.getCellSnapshot("first", "COL_ID_NOTE").value).toBe("newest note");
+  });
+
+  it("drains multiple nested publications in call order with the newest terminal state", () => {
+    const { adapter, runtime, view } = createSubject();
+    const events: string[] = [];
+    const middle = { id: "middle", name: "Middle" } satisfies Row;
+    const latest = { id: "latest", name: "Latest" } satisfies Row;
+    view.subscribeChrome(() => {
+      events.push(
+        `first:${view.getChromeSnapshot().status}:${String(view.getRowSpaceSnapshot()?.getRowId(0))}`,
+      );
+      if (view.getChromeSnapshot().status === "loading") {
+        runtime.publish(adapter.publish(source([middle], "stale")));
+      }
+    });
+    view.subscribeChrome(() => {
+      events.push(
+        `second:${view.getChromeSnapshot().status}:${String(view.getRowSpaceSnapshot()?.getRowId(0))}`,
+      );
+      if (view.getChromeSnapshot().status === "loading") {
+        runtime.publish(adapter.publish(source([latest])));
+      }
+    });
+
+    runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })));
+
+    expect(events).toEqual([
+      "first:loading:undefined",
+      "second:loading:undefined",
+      "first:stale:middle",
+      "second:stale:middle",
+      "first:ready:latest",
+      "second:ready:latest",
+    ]);
+    expect(view.getRowSnapshot("latest")).toBe(latest);
+  });
+
+  it("drains newer work after a listener throws before another listener queues it", () => {
+    const { adapter, runtime, view } = createSubject();
+    const firstFailure = new Error("first listener failed");
+    const newest = { id: "latest", name: "Latest" } satisfies Row;
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status === "loading") throw firstFailure;
+    });
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status === "loading") {
+        runtime.publish(adapter.publish(source([newest])));
+      }
+    });
+
+    expect(() => runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })))).toThrow(
+      firstFailure,
+    );
+    expect(view.getRowSnapshot("latest")).toBe(newest);
+
+    expect(() => runtime.publish(adapter.publish(source([], "closed")))).not.toThrow();
+    expect(view.getChromeSnapshot().status).toBe("closed");
+  });
+
+  it("keeps the first error when a listener queues newer work before throwing", () => {
+    const { adapter, runtime, view } = createSubject();
+    const firstFailure = new Error("outer listener failed");
+    const laterFailure = new Error("nested listener failed");
+    const newest = { id: "latest", name: "Latest" } satisfies Row;
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status === "loading") {
+        runtime.publish(adapter.publish(source([newest])));
+        throw firstFailure;
+      }
+      if (view.getChromeSnapshot().status === "ready") throw laterFailure;
+    });
+
+    expect(() => runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })))).toThrow(
+      firstFailure,
+    );
+    expect(view.getRowSnapshot("latest")).toBe(newest);
+
+    expect(() => runtime.publish(adapter.publish(source([], "closed")))).not.toThrow();
+  });
+
+  it("preserves an undefined first failure and listener cleanup across the queued pass", () => {
+    const { adapter, runtime, view } = createSubject();
+    const newest = { id: "latest", name: "Latest" } satisfies Row;
+    const removedListener = vi.fn();
+    const unsubscribe = view.subscribeChrome(removedListener);
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status !== "loading") return;
+      unsubscribe();
+      view.publishRowPipeline(adapter.publish(source([newest])));
+      throw undefined;
+    });
+
+    let caught = false;
+    try {
+      runtime.publish(adapter.publish(source([], "loading", { totalRows: 1 })));
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+    expect(caught).toBe(true);
+    expect(removedListener).toHaveBeenCalledOnce();
+    expect(view.getRowSnapshot("latest")).toBe(newest);
+
+    runtime.publish(adapter.publish(source([], "closed")));
+    expect(removedListener).toHaveBeenCalledOnce();
+  });
+
+  it("does not mask an internal publication failure as a collected listener error", () => {
+    const { adapter, runtime, view } = createSubject();
+    const listenerFailure = new Error("listener failed");
+    const internalFailure = new Error("publication invariant failed");
+    const unreadable = {
+      ...adapter.getPublication(),
+      get status(): "ready" {
+        throw internalFailure;
+      },
+    };
+    view.subscribeChrome(() => {
+      if (view.getChromeSnapshot().status !== "loading") return;
+      view.publishRowPipeline(unreadable);
+      throw listenerFailure;
+    });
+
+    expect(() => runtime.publish(adapter.publish(source([], "loading")))).toThrow(internalFailure);
+
+    expect(() => runtime.publish(adapter.publish(source([], "closed")))).not.toThrow();
+    expect(view.getChromeSnapshot().status).toBe("closed");
+  });
+});

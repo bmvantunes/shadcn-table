@@ -56,6 +56,10 @@ adapter.subscribeResultRowCount(() => {
 });
 let version = 1;
 let changed = false;
+let rowNotifications = 0;
+view.subscribeRow(`row-${String(residentRows - 1)}`, () => {
+  rowNotifications += 1;
+});
 const warmupIterations = 10;
 const durationsMs: number[] = [];
 
@@ -73,9 +77,10 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
   });
 
   bench(
-    "isolates four toolbar projections during one 20 Hz row-value publication over 10,000 rows",
+    "keeps the queued-drain fast path within budget for one 20 Hz publication over 10,000 rows",
     () => {
       const startedAt = performance.now();
+      const previousRowNotifications = rowNotifications;
       version += 1;
       changed = !changed;
       runtime.publish(
@@ -90,6 +95,9 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
       durationsMs.push(performance.now() - startedAt);
       if (unexpectedNotifications !== 0) {
         throw new Error("Stable toolbar projections received an unrelated row notification.");
+      }
+      if (rowNotifications !== previousRowNotifications + 1) {
+        throw new Error("One semantic row change did not produce exactly one row notification.");
       }
     },
     { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },

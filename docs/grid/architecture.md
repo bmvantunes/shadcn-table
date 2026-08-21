@@ -403,6 +403,15 @@ The Viewport Row Pipeline responds by resolving Column Identity through current 
 
 This is a real seam because there are two implementations. Keep source ownership, query replacement, and sparse-cache lifecycle behind the Adapter rather than spreading client/viewport branches through headers, cells, navigation, or filtering code. Editing and range-clipboard capabilities are installed only by the Client composition root; the shared renderer receives capability presence rather than testing the row-model variant throughout its implementation.
 
+Adapter publication remains authoritative when it is triggered synchronously by a Grid Runtime
+listener. When a publication notification pass is already active, that pass completes first, then
+every re-entrant publication applies in call order before the outer publication returns. The last
+accepted publication is the terminal runtime state. Listener failures do not cancel accepted
+publications: notification continues, re-entrant publications finish, and the first failure in
+that deterministic order is rethrown only after publication completes. This guarantee applies
+equally to Client and future Viewport Row Pipeline Adapters without exposing the Grid Runtime's
+private ownership mechanism.
+
 ## Column construction seam
 
 Raw definitions, built-in Column Helpers, and application Column Presets all converge into the same validated normalized-column representation before TanStack columns or render plans are created. Helpers are construction-time modules, not runtime column kinds: normalized cells do not branch on whether their definition came from `BrunoTableNumberColumn`, `priceColumn`, or a raw object.
