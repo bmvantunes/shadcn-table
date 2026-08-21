@@ -9,11 +9,17 @@ import {
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
+  BrunoTableResultRowCount,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
   BrunoTableToolbar,
 } from "./index";
+import * as BrunoTablePublic from "./index";
 
 import type {
   BrunoTableClientProps,
@@ -28,6 +34,7 @@ import type {
   BrunoTableEditableColumnId,
   BrunoTableEditingCapability,
   BrunoTableFilterableColumnId,
+  BrunoTableFilterExpression,
   BrunoTableFilterExpressions,
   BrunoTableQuickFilterField,
   BrunoTableQuickFilterFields,
@@ -553,6 +560,18 @@ void invalidMixedCaseColumnId;
 
 describe("BrunoTable public types", () => {
   it("infers the strict live Client component surface without exposing a table object", () => {
+    expectTypeOf<
+      "BrunoTableSelectedRowCount" extends keyof typeof BrunoTablePublic ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "BrunoTableDirtyCellCount" extends keyof typeof BrunoTablePublic ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "BrunoTableValidationCount" extends keyof typeof BrunoTablePublic ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "BrunoTableConflictCount" extends keyof typeof BrunoTablePublic ? true : false
+    >().toEqualTypeOf<false>();
     const props = {
       tableId: "orders",
       columns,
@@ -574,6 +593,28 @@ describe("BrunoTable public types", () => {
     expectTypeOf(BrunoTableToolbar({ children: "Filters" })).toEqualTypeOf<ReactNode>();
     expectTypeOf(BrunoTableQuickFilter).toExtend<() => ReactNode>();
     expectTypeOf(BrunoTableQuickFilter).toEqualTypeOf<() => ReactElement | null>();
+    expectTypeOf(BrunoTableResultRowCount({})).toEqualTypeOf<ReactNode>();
+    expectTypeOf(BrunoTableLoadedRowCount({})).toEqualTypeOf<ReactNode>();
+    expectTypeOf(BrunoTableActiveFilterCount({})).toEqualTypeOf<ReactNode>();
+    expectTypeOf(BrunoTableActiveSortCount({})).toEqualTypeOf<ReactNode>();
+
+    void BrunoTableFilterControl<Order, Columns>({
+      ownership: "grid",
+      children: (commands) => {
+        expectTypeOf(commands.clearAll).toEqualTypeOf<() => boolean>();
+        expectTypeOf(commands.clear)
+          .parameter(0)
+          .toEqualTypeOf<BrunoTableFilterableColumnId<Columns>>();
+        expectTypeOf(commands.replace)
+          .parameter(0)
+          .toEqualTypeOf<BrunoTableFilterExpression<Order, Columns>>();
+        return null;
+      },
+    });
+    void BrunoTableFilterControl({
+      ownership: "external",
+      children: "Application-owned filter",
+    });
 
     const validQuickFilterFields = [
       "symbol",
@@ -589,6 +630,11 @@ describe("BrunoTable public types", () => {
     void BrunoTableClient({
       ...props,
       quickFilterFields: validQuickFilterFields,
+    });
+    void BrunoTableClient({
+      ...props,
+      // @ts-expect-error External Filters are Server-only application state.
+      externalFilters: [],
     });
     void BrunoTableClient({
       ...props,
@@ -826,6 +872,10 @@ describe("BrunoTable public types", () => {
     };
     const serverProps = {
       ...common,
+      children: BrunoTableFilterControl({
+        ownership: "external",
+        children: "Application-controlled working set",
+      }),
       viewportSource: {
         viewport,
         totalRows: 0,
@@ -838,6 +888,7 @@ describe("BrunoTable public types", () => {
     expectTypeOf(clientProps.initialFilters[0]!.columnId).toEqualTypeOf<"COL_ID_SYMBOL">();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
     expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
+    expectTypeOf(serverProps.children).toEqualTypeOf<ReactNode>();
 
     void BrunoTableClient({
       ...clientProps,

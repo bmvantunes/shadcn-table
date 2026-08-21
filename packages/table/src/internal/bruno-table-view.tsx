@@ -323,7 +323,7 @@ export function BrunoTableToolbar({ children }: { readonly children?: ReactNode 
   return (
     <div
       aria-label="Table controls"
-      className="flex min-w-0 items-center gap-2 overflow-x-auto"
+      className="flex min-w-0 items-center gap-2 overflow-x-auto px-3.5 py-2"
       role="toolbar"
     >
       {children}

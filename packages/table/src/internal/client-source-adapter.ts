@@ -5,6 +5,7 @@ import type {
 } from "../public-types";
 import type {
   BrunoTableInvalidCellValue,
+  BrunoTableQuerySnapshot,
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
   BrunoTableRowSpaceSnapshot,
@@ -15,14 +16,18 @@ import type { CompiledColumn } from "./compile-columns";
 import { readCompiledColumnValue } from "./cell-value";
 import type { BrunoTableClientFilterCollection, ClientOrderBy } from "./grid-query";
 import {
+  compileClientFilterPlan,
   compileClientFilterCollection,
   reconcileClientOrderBy,
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 import {
   BRUNO_TABLE_MAX_QUICK_FILTER_FIELDS,
+  createClientQueryPredicate,
+  readClientQuickFilterField,
   validateBrunoTableQuickFilterFields,
 } from "./quick-filter";
+import { recordBrunoTableToolbarLifetime } from "./toolbar-instrumentation";
 
 // Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
 // The public Quick Filter contract documents this limit alongside its tuple type.
@@ -58,6 +63,9 @@ export function installBrunoTableClientValueCachePruneListener(
 }
 
 export class BrunoTableClientRowPipelineAdapter<TRow> {
+  private readonly resultRowCountListeners = new Set<() => void>();
+  private resultRowCount = 0;
+  private resultRowCountInitialized = false;
   private observedRows: TRow[] | undefined;
   private source: ClientSourceSnapshot<TRow>;
   private getRowId: (row: TRow) => BrunoTableRowId;
@@ -108,6 +116,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       false,
       this.valueCache,
     );
+    this.resultRowCount = this.publication.rowSpace?.loadedRows ?? 0;
     this.coherent = nextCoherent(this.coherent, this.publication);
     this.acceptEmptyCoherent();
     this.sourceColumns = columns;
@@ -122,6 +131,64 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   }
 
   public readonly getPublication = (): BrunoTableRowPipelinePublication<TRow> => this.publication;
+
+  public readonly getResultRowCountSnapshot = (): number => this.resultRowCount;
+
+  public readonly subscribeResultRowCount = (listener: () => void): (() => void) => {
+    this.resultRowCountListeners.add(listener);
+    return () => this.resultRowCountListeners.delete(listener);
+  };
+
+  public readonly publishResultRowCount = (count: number): void => {
+    if (this.resultRowCount === count) return;
+    this.resultRowCount = count;
+    for (const listener of this.resultRowCountListeners) listener();
+  };
+
+  public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): void => {
+    if (this.resultRowCountInitialized) return;
+    this.resultRowCountInitialized = true;
+    const rows = this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    const filterPlan = compileClientFilterPlan(
+      query.columns,
+      query.filters,
+      query.filterCollection,
+    );
+    const predicate = createClientQueryPredicate<BrunoTableClientAdmittedRow>(
+      query.columns,
+      query.filters,
+      query.quickFilter,
+      this.quickFilterFields,
+      (column, row) => {
+        const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+        if (isBrunoTableInvalidCellValue(value)) throw value.invalid;
+        return value;
+      },
+      (row, field) => readClientQuickFilterField(row.raw, field),
+      filterPlan,
+    );
+    const columnsById = new Map<string, CompiledColumn>(
+      query.columns.map((column) => [column.columnId, column] as const),
+    );
+    const activeSortColumns = query.orderBy.flatMap((sort) => {
+      const column = columnsById.get(sort.columnId);
+      return column === undefined || column.enableSorting === false ? [] : [column];
+    });
+    let count = 0;
+    try {
+      for (const row of rows) {
+        if (predicate !== undefined && !predicate(row)) continue;
+        for (const column of activeSortColumns) {
+          const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+          if (isBrunoTableInvalidCellValue(value)) throw value.invalid;
+        }
+        count += 1;
+      }
+    } catch {
+      count = 0;
+    }
+    this.resultRowCount = count;
+  };
 
   public readonly getFacetRowsSnapshot = (): BrunoTableClientFacetRowsSnapshot => {
     const sequence = this.coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
@@ -368,11 +435,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly createRowsStore = (
     runtime: BrunoTableRuntimeView,
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
+    tableId = "",
   ): BrunoTableClientRowsStore => {
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       this.coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
     let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
+    const identity = Object.freeze({});
     let unsubscribeRuntime: (() => void) | undefined;
     const publish = () => {
       const previousRows = snapshot;
@@ -399,6 +468,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     return Object.freeze({
       getSnapshot: () => snapshot,
       subscribe: (listener: () => void) => {
+        if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+          recordBrunoTableToolbarLifetime({
+            tableId,
+            kind: "row-pipeline-subscribe",
+            identity,
+          });
+        }
         listeners.add(listener);
         if (unsubscribeRuntime === undefined) {
           detector ??= createDetector();
@@ -410,6 +486,13 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
           if (!subscribed) return;
           subscribed = false;
           listeners.delete(listener);
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+            recordBrunoTableToolbarLifetime({
+              tableId,
+              kind: "row-pipeline-unsubscribe",
+              identity,
+            });
+          }
           if (listeners.size === 0) {
             unsubscribeRuntime?.();
             unsubscribeRuntime = undefined;

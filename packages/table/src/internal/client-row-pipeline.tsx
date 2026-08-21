@@ -30,6 +30,7 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
   readonly createRowsStore: (
     runtime: BrunoTableRowPipelineRuntimeView,
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
+    tableId?: string,
   ) => BrunoTableClientRowsStore;
   readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
   readonly rejectQueryRows: (
@@ -37,6 +38,7 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
     invalid: BrunoTableInvalidCellValue["invalid"],
   ) => BrunoTableRowPipelinePublication<unknown> | undefined;
   readonly retryQueryRows: () => BrunoTableRowPipelinePublication<unknown> | undefined;
+  readonly publishResultRowCount: (count: number) => void;
 }>;
 
 type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
@@ -126,8 +128,8 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     [columns, filterPlan, filters, orderBy, quickFilter, quickFilterFields, tableId],
   );
   const rowsStore = useMemo(
-    () => rowPipelineAdapter.createRowsStore(runtime, createDetector),
-    [createDetector, rowPipelineAdapter, runtime],
+    () => rowPipelineAdapter.createRowsStore(runtime, createDetector, tableId),
+    [createDetector, rowPipelineAdapter, runtime, tableId],
   );
   const rows = useSyncExternalStore(
     rowsStore.subscribe,
@@ -163,7 +165,8 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   }, [invalid, rowPipelineAdapter, rows, runtime]);
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
-  }, [nextRowIds, orderStore, queryGeneration]);
+    rowPipelineAdapter.publishResultRowCount(nextRowIds.length);
+  }, [nextRowIds, orderStore, queryGeneration, rowPipelineAdapter]);
   const orderSnapshot = useSyncExternalStore(
     orderStore.subscribe,
     orderStore.getSnapshot,

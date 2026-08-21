@@ -23,8 +23,31 @@ import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-ada
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
+import {
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
+  BrunoTableResultRowCount,
+  BrunoTableToolbarProvider,
+  BrunoTableToolbarSpacer,
+} from "./internal/toolbar-capabilities";
+import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 
-export { BrunoTableQuickFilter, BrunoTableToolbar };
+export {
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
+  BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
+  BrunoTableToolbar,
+  BrunoTableToolbarSpacer,
+};
+export type {
+  BrunoTableFilterControlProps,
+  BrunoTableGridFilterCommandCapability,
+} from "./internal/toolbar-capabilities";
 
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableClientProps<TRow, TColumns>,
@@ -52,18 +75,26 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
         props.quickFilterFields,
       ),
   );
-  const [runtime] = useState(
-    () =>
-      new BrunoTableGridRuntime(
-        rowPipelineAdapter.getPublication(),
-        compiledColumns,
-        rowPipelineAdapter.getQueryConfiguration(compiledColumns),
+  const [runtime] = useState(() => {
+    const created = new BrunoTableGridRuntime(
+      rowPipelineAdapter.getPublication(),
+      compiledColumns,
+      rowPipelineAdapter.getQueryConfiguration(compiledColumns),
+      tableId,
+      { initialPersistedState: props.initialPersistedState },
+    );
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableToolbarLifetime({
         tableId,
-        { initialPersistedState: props.initialPersistedState },
-      ),
-  );
+        kind: "runtime-create",
+        identity: created,
+      });
+    }
+    return created;
+  });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  rowPipelineAdapter.initializeResultRowCount(runtimeView.getQuerySnapshot());
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
 
   useLayoutEffect(() => {
@@ -99,16 +130,22 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
 
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
-      <BrunoTableView
+      <BrunoTableToolbarProvider
+        resultRows={rowPipelineAdapter}
         runtime={runtimeView}
         tableId={tableId}
-        compiledColumns={compiledColumns}
-        toolbar={toolbar}
-        rowPipeline={BrunoTableClientRowPipeline}
-        rowPipelineAdapter={rowPipelineAdapter}
-        renderColumnFilter={renderBrunoTableClientColumnFilter}
-        gridOwnedControls={gridOwnedControls}
-      />
+      >
+        <BrunoTableView
+          runtime={runtimeView}
+          tableId={tableId}
+          compiledColumns={compiledColumns}
+          toolbar={toolbar}
+          rowPipeline={BrunoTableClientRowPipeline}
+          rowPipelineAdapter={rowPipelineAdapter}
+          renderColumnFilter={renderBrunoTableClientColumnFilter}
+          gridOwnedControls={gridOwnedControls}
+        />
+      </BrunoTableToolbarProvider>
     </BrunoTableClientFilterProvider>
   );
 }

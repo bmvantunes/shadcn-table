@@ -221,6 +221,9 @@ export type BrunoTableRuntimeView = {
   readonly getQuickFilterCommandEpochSnapshot: () => number;
   readonly getQuickFilterFieldsSnapshot: () => readonly string[];
   readonly getSortingSnapshot: () => BrunoTableOrderBy;
+  readonly getLoadedRowCountSnapshot: () => number;
+  readonly getActiveFilterCountSnapshot: () => number;
+  readonly getActiveSortCountSnapshot: () => number;
   readonly getColumnLayoutSnapshot: () => BrunoTableColumnLayoutSnapshot;
   /** Controlled Client column input; width-only commits do not publish it. */
   readonly getColumnStructureSnapshot: () => BrunoTableColumnLayoutSnapshot;
@@ -244,6 +247,9 @@ export type BrunoTableRuntimeView = {
   /** Imperative invalidation sink for same-value Quick Filter command cancellation. */
   readonly registerQuickFilterInvalidation: (listener: Listener) => () => void;
   readonly subscribeSorting: (listener: Listener) => () => void;
+  readonly subscribeLoadedRowCount: (listener: Listener) => () => void;
+  readonly subscribeActiveFilterCount: (listener: Listener) => () => void;
+  readonly subscribeActiveSortCount: (listener: Listener) => () => void;
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
   readonly registerActiveEditorCommitGate: (gate: BrunoTableActiveEditorCommitGate) => () => void;
@@ -415,6 +421,8 @@ type QueryTransition = Readonly<{
   readonly queryChanged: boolean;
   readonly quickFilterChanged: boolean;
   readonly sortingChanged: boolean;
+  readonly activeFilterCountChanged: boolean;
+  readonly activeSortCountChanged: boolean;
   readonly previousCommands: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>;
   readonly previousColumnFilters: ReadonlyMap<string, unknown>;
 }>;
@@ -450,6 +458,9 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly quickFilterListeners = new Set<Listener>();
   private readonly filterPositionResetListeners = new Set<Listener>();
   private readonly sortingListeners = new Set<Listener>();
+  private readonly loadedRowCountListeners = new Set<Listener>();
+  private readonly activeFilterCountListeners = new Set<Listener>();
+  private readonly activeSortCountListeners = new Set<Listener>();
   private readonly columnCommandListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterListeners = new Map<string, Set<Listener>>();
   private readonly columnFilterCommandEpochListeners = new Map<string, Set<Listener>>();
@@ -573,6 +584,9 @@ export class BrunoTableGridRuntime<TRow> {
         getColumnFilterCommandEpochSnapshot: this.getColumnFilterCommandEpochSnapshot,
         getFilterComplexitySnapshot: this.getFilterComplexitySnapshot,
         getSortingSnapshot: this.getSortingSnapshot,
+        getLoadedRowCountSnapshot: this.getLoadedRowCountSnapshot,
+        getActiveFilterCountSnapshot: this.getActiveFilterCountSnapshot,
+        getActiveSortCountSnapshot: this.getActiveSortCountSnapshot,
         getQuickFilterCommandEpochSnapshot: this.getQuickFilterCommandEpochSnapshot,
         getColumnLayoutSnapshot: this.getColumnLayoutSnapshot,
         getColumnStructureSnapshot: this.getColumnStructureSnapshot,
@@ -593,6 +607,9 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeColumnFilter: this.subscribeColumnFilter,
         subscribeColumnFilterCommandEpoch: this.subscribeColumnFilterCommandEpoch,
         subscribeSorting: this.subscribeSorting,
+        subscribeLoadedRowCount: this.subscribeLoadedRowCount,
+        subscribeActiveFilterCount: this.subscribeActiveFilterCount,
+        subscribeActiveSortCount: this.subscribeActiveSortCount,
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
         registerActiveEditorCommitGate: this.registerActiveEditorCommitGate,
@@ -699,6 +716,9 @@ export class BrunoTableGridRuntime<TRow> {
     let firstError: ListenerError | undefined;
     if (chromeChanged) firstError = notify(this.chromeListeners);
     if (sourceChanged) firstError = firstListenerError(firstError, notify(this.sourceListeners));
+    if (previous.source.loadedRows !== next.source.loadedRows) {
+      firstError = firstListenerError(firstError, notify(this.loadedRowCountListeners));
+    }
     if (sourceVersionChanged) {
       firstError = firstListenerError(firstError, notify(this.sourceVersionListeners));
     }
@@ -765,6 +785,14 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getQuickFilterFieldsSnapshot = (): readonly string[] => this.quickFilterFields;
 
   public readonly getSortingSnapshot = (): BrunoTableOrderBy => this.query.orderBy;
+
+  public readonly getLoadedRowCountSnapshot = (): number => this.state.source.loadedRows;
+
+  public readonly getActiveFilterCountSnapshot = (): number =>
+    this.filterCollection.filters.length +
+    (normalizeBrunoTableFilterText(this.query.quickFilter).length === 0 ? 0 : 1);
+
+  public readonly getActiveSortCountSnapshot = (): number => this.query.orderBy.length;
 
   public readonly getColumnCommandSnapshot = (columnId: string): BrunoTableColumnCommandSnapshot =>
     this.columnCommands.get(columnId) ?? EMPTY_COLUMN_COMMAND;
@@ -873,6 +901,15 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeSorting = (listener: Listener): (() => void) =>
     subscribe(this.sortingListeners, listener);
+
+  public readonly subscribeLoadedRowCount = (listener: Listener): (() => void) =>
+    subscribe(this.loadedRowCountListeners, listener);
+
+  public readonly subscribeActiveFilterCount = (listener: Listener): (() => void) =>
+    subscribe(this.activeFilterCountListeners, listener);
+
+  public readonly subscribeActiveSortCount = (listener: Listener): (() => void) =>
+    subscribe(this.activeSortCountListeners, listener);
 
   public readonly subscribeColumnCommands = (
     columnId: string,
@@ -1264,6 +1301,12 @@ export class BrunoTableGridRuntime<TRow> {
         queryChanged: true,
         quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
+        activeFilterCountChanged:
+          this.filterCollection.filters.length +
+            (normalizeBrunoTableFilterText(this.query.quickFilter).length === 0 ? 0 : 1) !==
+          nextFilterCollection.filters.length +
+            (normalizeBrunoTableFilterText(nextQuickFilter).length === 0 ? 0 : 1),
+        activeSortCountChanged: this.query.orderBy.length !== nextOrderBy.length,
         previousCommands: this.columnCommands,
         previousColumnFilters: this.columnFilterSnapshots,
       }),
@@ -1288,6 +1331,8 @@ export class BrunoTableGridRuntime<TRow> {
     quickFilter: string,
     forceColumnRefresh = false,
   ): QueryTransition | undefined {
+    const previousActiveFilterCount = this.getActiveFilterCountSnapshot();
+    const previousActiveSortCount = this.getActiveSortCountSnapshot();
     const sortingChanged = !sameOrderBy(this.query.orderBy, orderBy);
     const quickFilterChanged = this.query.quickFilter !== quickFilter;
     const quickFilterSemanticsChanged =
@@ -1347,6 +1392,8 @@ export class BrunoTableGridRuntime<TRow> {
       queryChanged,
       quickFilterChanged,
       sortingChanged,
+      activeFilterCountChanged: previousActiveFilterCount !== this.getActiveFilterCountSnapshot(),
+      activeSortCountChanged: previousActiveSortCount !== this.getActiveSortCountSnapshot(),
       previousCommands,
       previousColumnFilters,
     });
@@ -1369,6 +1416,12 @@ export class BrunoTableGridRuntime<TRow> {
     }
     if (transition.sortingChanged) {
       firstError = firstListenerError(firstError, notify(this.sortingListeners));
+    }
+    if (transition.activeFilterCountChanged) {
+      firstError = firstListenerError(firstError, notify(this.activeFilterCountListeners));
+    }
+    if (transition.activeSortCountChanged) {
+      firstError = firstListenerError(firstError, notify(this.activeSortCountListeners));
     }
     const columnIds = new Set([
       ...transition.previousCommands.keys(),

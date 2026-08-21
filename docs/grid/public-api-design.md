@@ -328,10 +328,15 @@ The toolbar composition seam works with both public variants, while edit control
 ```tsx
 <BrunoTableClient {...tableProps}>
   <BrunoTableToolbar>
-    <PageSpecificFilters />
     <BrunoTableQuickFilter />
+    <BrunoTableFilterControl<Order, typeof columns> ownership="grid">
+      {(commands) => <Button onClick={() => commands.clearAll()}>Clear Grid Filters</Button>}
+    </BrunoTableFilterControl>
     <BrunoTableToolbarSpacer />
-    <BrunoTableEditActions />
+    <BrunoTableResultRowCount />
+    <BrunoTableLoadedRowCount />
+    <BrunoTableActiveFilterCount />
+    <BrunoTableActiveSortCount />
   </BrunoTableToolbar>
 </BrunoTableClient>
 ```
@@ -342,12 +347,16 @@ The toolbar is a composition seam, not a broad controller seam. Built-in toolbar
 
 Controls that only dispatch user intent have no grid-state subscription. `BrunoTableQuickFilter`, for example, keeps transient input text locally and dispatches through a stable command capability. It observes only the committed Quick Filter primitive when an external reset must be reflected; streaming row-content changes are outside its notification domain.
 
+`BrunoTableResultRowCount`, `BrunoTableLoadedRowCount`, `BrunoTableActiveFilterCount`, and `BrunoTableActiveSortCount` each subscribe to one separately named numeric projection. Count controls for selection, editing, validation, and conflict state become public only when those capabilities exist; the toolbar does not publish placeholder values for unsupported domains.
+
 Distinguish filter ownership explicitly:
 
 - Grid Filter Expressions are user grid intent, appear in global active-filter UI, and participate in preference persistence.
 - Quick Filter is user grid intent and appears in global active-filter UI, but its field configuration and committed text are session-only and never persisted or included in saved views.
 - External Filters define an application-controlled Server working-set condition before Grid Filters, are supplied through `externalFilters`, and are not persisted, counted, reviewed, reset, or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
+
+`BrunoTableFilterControl` makes that choice explicit. `ownership="grid"` supplies only the stable typed replace, clear, reset, and clear-all Grid Filter commands; it exposes no state reader or subscription. `ownership="external"` supplies no grid capability and simply marks an application-owned Server control; the wrapper never copies, counts, persists, resets, or interprets that application state. The compound-control marker and optional `BrunoTableServerProps.children` seam ship before the Server JSX implementation. The authoritative `externalFilters` transport prop remains deferred to that Adapter slice so its type can come from effect-view-server's source-owned `Where` contract without duplicating schema semantics or making Effect mandatory from the root package. Client Tables reject `externalFilters`, and examples must not present External Filters as Client-owned behavior.
 
 For effect-view-server leased topics, keep Feed Route ownership separate from both categories above. The source declaration owns the exact non-empty Route Field tuple. `BrunoTableServer` receives only the current exact `routeBy` value object, inferred conditionally from `viewportSource`: leased sources require all and only their declared fields, while materialized and source-free sources forbid the prop. Do not expose a duplicated `routeByFields` list.
 

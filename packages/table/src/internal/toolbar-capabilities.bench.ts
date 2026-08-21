@@ -1,0 +1,87 @@
+import { bench, describe } from "vite-plus/test";
+
+import { compileColumns } from "./compile-columns";
+import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
+import { BrunoTableGridRuntime } from "./grid-runtime";
+
+const residentRows = 10_000;
+const referenceFrameBudgetMs = 8.33;
+const columns = compileColumns([
+  {
+    columnId: "COL_ID_BENCH_NAME",
+    field: "name",
+    headerName: "Name",
+    valueType: "text",
+  },
+]);
+const rows = Object.freeze(
+  Array.from({ length: residentRows }, (_unused, index) => ({
+    id: `row-${String(index)}`,
+    name: `Row ${String(index)}`,
+  })),
+);
+const changedRows = Object.freeze([
+  ...rows.slice(0, residentRows - 1),
+  Object.freeze({ id: `row-${String(residentRows - 1)}`, name: "Updated row" }),
+]);
+const adapter = new BrunoTableClientRowPipelineAdapter(
+  { rows, totalRows: residentRows, version: 1, status: "ready" },
+  (row) => row.id,
+  columns,
+  undefined,
+  [{ columnId: "COL_ID_BENCH_NAME", direction: "asc" }],
+);
+const runtime = new BrunoTableGridRuntime(
+  adapter.getPublication(),
+  columns,
+  {
+    baselineFilters: [],
+    baselineOrderBy: [{ columnId: "COL_ID_BENCH_NAME", direction: "asc" }],
+  },
+  "TABLE_ID_TOOLBAR_BENCH",
+);
+const view = runtime.getView();
+let unexpectedNotifications = 0;
+view.subscribeLoadedRowCount(() => {
+  unexpectedNotifications += 1;
+});
+view.subscribeActiveFilterCount(() => {
+  unexpectedNotifications += 1;
+});
+view.subscribeActiveSortCount(() => {
+  unexpectedNotifications += 1;
+});
+adapter.subscribeResultRowCount(() => {
+  unexpectedNotifications += 1;
+});
+let version = 1;
+let changed = false;
+
+describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)", () => {
+  bench(
+    "isolates four toolbar projections during one 20 Hz row-value publication over 10,000 rows",
+    () => {
+      const startedAt = performance.now();
+      version += 1;
+      changed = !changed;
+      runtime.publish(
+        adapter.publish({
+          rows: changed ? changedRows : rows,
+          totalRows: residentRows,
+          version,
+          status: "ready",
+        }),
+      );
+      const durationMs = performance.now() - startedAt;
+      if (unexpectedNotifications !== 0) {
+        throw new Error("Stable toolbar projections received an unrelated row notification.");
+      }
+      if (durationMs > referenceFrameBudgetMs) {
+        throw new Error(
+          `Toolbar publication isolation exceeded ${String(referenceFrameBudgetMs)} ms: ${String(durationMs)} ms.`,
+        );
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
+  );
+});

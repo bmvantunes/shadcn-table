@@ -9,10 +9,16 @@ import * as BigDecimal from "effect/BigDecimal";
 
 import {
   BrunoTableClient,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
   BrunoTableComputedColumn,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
   BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
   BrunoTableSelectColumn,
   BrunoTableToolbar,
+  BrunoTableToolbarSpacer,
 } from "./index";
 import type {
   BrunoTableColumns,
@@ -61,6 +67,10 @@ import {
 } from "./internal/grid-query";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnFilterSubscriptionListener } from "./internal/grid-subscription-instrumentation";
+import {
+  installBrunoTableToolbarLifetimeListener,
+  installBrunoTableToolbarSubscriptionListener,
+} from "./internal/toolbar-instrumentation";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import {
   BrunoTableGridRuntime,
@@ -8307,12 +8317,21 @@ describe("BrunoTableClient browser surface", () => {
         initialPersistedState={initialPersistedState}
         onPersistChange={onPersistChange}
         clientSource={readySource()}
-      />
+      >
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+          <BrunoTableActiveFilterCount />
+        </BrunoTableToolbar>
+      </BrunoTableClient>
     );
     const markup = renderToString(renderTable(firstCallback));
     const host = document.createElement("div");
     host.innerHTML = markup;
     document.body.append(host);
+    await expect.element(page.getByRole("status", { name: "Result rows" })).toHaveTextContent("1");
+    await expect
+      .element(page.getByRole("status", { name: "Active filters" }))
+      .toHaveTextContent("1");
     let root: Root | undefined;
     const recoverable = vi.fn();
     try {
@@ -8322,6 +8341,12 @@ describe("BrunoTableClient browser surface", () => {
       const grid = page.getByRole("grid", { name: "Data for TABLE_ID_PREFERENCES_HYDRATION" });
       await expect.element(grid.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
       await expect.element(grid.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("1");
+      await expect
+        .element(page.getByRole("status", { name: "Active filters" }))
+        .toHaveTextContent("1");
       const headers = grid.getByRole("columnheader").all();
       await expect
         .element(headers[0]!)
@@ -8359,6 +8384,50 @@ describe("BrunoTableClient browser surface", () => {
     } finally {
       removeSubscriptionListener();
       removeRowRenderListener();
+      await act(async () => root?.unmount());
+      host.remove();
+    }
+  });
+
+  test("server-renders a truthful Result Row Count for an invalid active sort value", async () => {
+    const invalidRows = [
+      { ...rows[0]!, score: Number.POSITIVE_INFINITY },
+      rows[1]!,
+    ] satisfies readonly Row[];
+    const table = (
+      <BrunoTableClient
+        tableId="TABLE_ID_INVALID_SORT_HYDRATION"
+        getRowId={(row: Row) => row.id}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={readySource(invalidRows)}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      </BrunoTableClient>
+    );
+    const markup = renderToString(table);
+    const host = document.createElement("div");
+    host.innerHTML = markup;
+    document.body.append(host);
+    const recoverable = vi.fn();
+    let root: Root | undefined;
+    try {
+      await expect
+        .element(page.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("0 result rows");
+      await act(async () => {
+        root = hydrateRoot(host, table, { onRecoverableError: recoverable });
+      });
+      await expect
+        .element(page.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("0 result rows");
+      await expect
+        .element(page.getByRole("alert"))
+        .toHaveTextContent("Expected a finite number value.");
+      expect(recoverable).not.toHaveBeenCalled();
+    } finally {
       await act(async () => root?.unmount());
       host.remove();
     }
@@ -9401,8 +9470,48 @@ describe("BrunoTableClient browser surface", () => {
     ).toBe("flex");
   });
 
-  test("does not expose a toolbar landmark for an empty BrunoTableToolbar", async () => {
+  test("preserves authored toolbar order and required sort, filter, and lifecycle chrome", async () => {
     const screen = await render(
+      <BrunoTableClient
+        {...props}
+        clientSource={{ rows: [], totalRows: 2, version: 1, status: "loading" }}
+      >
+        <BrunoTableToolbar>
+          <button type="button">First custom control</button>
+          <BrunoTableToolbarSpacer />
+          <button type="button">Second custom control</button>
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+    const toolbar = screen.getByRole("toolbar", { name: "Table controls" });
+    await expect.element(toolbar).toBeInTheDocument();
+    expect(
+      toolbar
+        .getByRole("button")
+        .all()
+        .map((button) => button.element().textContent),
+    ).toEqual(["First custom control", "Second custom control"]);
+    await expect
+      .element(screen.getByRole("region", { name: "Sorting controls" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("button", { name: "Active filters (0)" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .toBeInTheDocument();
+  });
+
+  test("does not expose a toolbar landmark for an empty BrunoTableToolbar", async () => {
+    const screen = await render(<BrunoTableClient {...props} clientSource={readySource()} />);
+    const grid = screen.getByRole("grid", { name: `Data for ${props.tableId}` });
+    await expect.element(grid).toBeInTheDocument();
+    const section = grid.element().closest("section");
+    if (section === null) throw new Error("BrunoTable grid must remain inside its owning section.");
+    const baselineOffset =
+      grid.element().getBoundingClientRect().top - section.getBoundingClientRect().top;
+
+    await screen.rerender(
       <BrunoTableClient {...props} clientSource={readySource()}>
         <BrunoTableToolbar />
       </BrunoTableClient>,
@@ -9414,6 +9523,9 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("toolbar", { name: "Table controls" }))
       .not.toBeInTheDocument();
+    expect(grid.element().getBoundingClientRect().top - section.getBoundingClientRect().top).toBe(
+      baselineOffset,
+    );
   });
 
   test("diagnoses incompatible concurrent reuse of one Table Identity", async () => {
@@ -9650,5 +9762,274 @@ describe("BrunoTableClient browser surface", () => {
       removeCells();
       removeRows();
     }
+  });
+
+  test("composes typed toolbar controls with isolated semantic subscriptions", async () => {
+    const subscriptionEvents = vi.fn();
+    const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);
+    const commandRenders = vi.fn();
+    function CommandOnlyControl() {
+      commandRenders();
+      return (
+        <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+          {(commands) => (
+            <button
+              type="button"
+              onClick={() =>
+                commands.replace({
+                  columnId: "COL_ID_NAME",
+                  type: "contains",
+                  filter: "Ada",
+                })
+              }
+            >
+              Show Ada
+            </button>
+          )}
+        </BrunoTableFilterControl>
+      );
+    }
+    try {
+      const toolbar = (
+        <BrunoTableToolbar>
+          <CommandOnlyControl />
+          <BrunoTableResultRowCount />
+          <BrunoTableLoadedRowCount />
+          <BrunoTableActiveFilterCount />
+          <BrunoTableActiveSortCount />
+        </BrunoTableToolbar>
+      );
+      const screen = await render(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          {toolbar}
+        </BrunoTableClient>,
+      );
+
+      await expect
+        .element(screen.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("2");
+      await expect
+        .element(screen.getByRole("status", { name: "Loaded rows" }))
+        .toHaveTextContent("2");
+      await expect
+        .element(screen.getByRole("status", { name: "Active filters" }))
+        .toHaveTextContent("0");
+      await expect
+        .element(screen.getByRole("status", { name: "Active sorts" }))
+        .toHaveTextContent("1");
+      expect(commandRenders).toHaveBeenCalledOnce();
+      expect(
+        subscriptionEvents.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.phase === "subscribe")
+          .map((event) => event.projection)
+          .sort((left, right) => left.localeCompare(right)),
+      ).toEqual([
+        "active-filter-count",
+        "active-sort-count",
+        "loaded-row-count",
+        "result-row-count",
+      ]);
+
+      subscriptionEvents.mockClear();
+      await screen.rerender(
+        <BrunoTableClient
+          {...props}
+          clientSource={readySource([rows[0]!, { ...rows[1]!, score: 99 }])}
+        >
+          {toolbar}
+        </BrunoTableClient>,
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "99" })).toBeInTheDocument();
+      expect(subscriptionEvents).not.toHaveBeenCalled();
+      expect(commandRenders).toHaveBeenCalledOnce();
+
+      await screen.getByRole("button", { name: "Show Ada" }).click();
+      await expect
+        .element(screen.getByRole("status", { name: "Active filters" }))
+        .toHaveTextContent("1");
+      await expect
+        .element(screen.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("1");
+      expect(
+        subscriptionEvents.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.phase === "notify")
+          .map((event) => event.projection)
+          .sort((left, right) => left.localeCompare(right)),
+      ).toEqual(["active-filter-count", "result-row-count"]);
+    } finally {
+      removeSubscriptions();
+    }
+  });
+
+  test("composes application-controlled External Filter UI without a grid capability", async () => {
+    const subscriptionEvents = vi.fn();
+    const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);
+    try {
+      const screen = await render(
+        <BrunoTableFilterControl ownership="external">
+          <button type="button">Application-owned status filter</button>
+        </BrunoTableFilterControl>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "Application-owned status filter" }))
+        .toBeInTheDocument();
+      expect(subscriptionEvents).not.toHaveBeenCalled();
+    } finally {
+      removeSubscriptions();
+    }
+  });
+
+  test("replaces toolbar callbacks without recreating runtime or count subscriptions", async () => {
+    const subscriptionEvents = vi.fn();
+    const rowOrderPlans = vi.fn();
+    const lifetimeEvents = vi.fn();
+    const removeSubscriptions = installBrunoTableToolbarSubscriptionListener(subscriptionEvents);
+    const removePlans = installBrunoTableClientRowOrderPlanningListener(rowOrderPlans);
+    const removeLifetime = installBrunoTableToolbarLifetimeListener(lifetimeEvents);
+    const firstCallback = vi.fn();
+    const secondCallback = vi.fn();
+    function ToolbarContent({
+      label,
+      callback,
+    }: Readonly<{ readonly label: string; readonly callback: () => void }>) {
+      return (
+        <BrunoTableToolbar>
+          <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+            {() => (
+              <button type="button" onClick={callback}>
+                {label}
+              </button>
+            )}
+          </BrunoTableFilterControl>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      );
+    }
+    try {
+      const screen = await render(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          <ToolbarContent callback={firstCallback} label="First action" />
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "First action" }))
+        .toBeInTheDocument();
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+      const initialRuntime = lifetimeEvents.mock.calls.find(
+        ([event]) => event.kind === "runtime-create",
+      )?.[0].identity;
+      const initialPipeline = lifetimeEvents.mock.calls.find(
+        ([event]) => event.kind === "row-pipeline-subscribe",
+      )?.[0].identity;
+      expect(initialRuntime).toBeDefined();
+      expect(initialPipeline).toBeDefined();
+      subscriptionEvents.mockClear();
+      lifetimeEvents.mockClear();
+
+      await screen.rerender(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          <ToolbarContent callback={secondCallback} label="Second action" />
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: "Second action" }))
+        .toBeInTheDocument();
+      await screen.getByRole("button", { name: "Second action" }).click();
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(secondCallback).toHaveBeenCalledOnce();
+      expect(rowOrderPlans).toHaveBeenCalledOnce();
+      expect(subscriptionEvents).not.toHaveBeenCalled();
+      expect(lifetimeEvents).not.toHaveBeenCalled();
+
+      await cleanup();
+      expect(subscriptionEvents).toHaveBeenCalledOnce();
+      expect(subscriptionEvents).toHaveBeenLastCalledWith({
+        tableId: props.tableId,
+        projection: "result-row-count",
+        phase: "unsubscribe",
+      });
+      expect(lifetimeEvents).toHaveBeenCalledOnce();
+      expect(lifetimeEvents).toHaveBeenLastCalledWith({
+        tableId: props.tableId,
+        kind: "row-pipeline-unsubscribe",
+        identity: initialPipeline,
+      });
+
+      lifetimeEvents.mockClear();
+      const remounted = await render(
+        <BrunoTableClient {...props} clientSource={readySource()}>
+          <ToolbarContent callback={secondCallback} label="Remounted action" />
+        </BrunoTableClient>,
+      );
+      await expect
+        .element(remounted.getByRole("button", { name: "Remounted action" }))
+        .toBeInTheDocument();
+      const remountedRuntime = lifetimeEvents.mock.calls.find(
+        ([event]) => event.kind === "runtime-create",
+      )?.[0].identity;
+      const remountedPipeline = lifetimeEvents.mock.calls.find(
+        ([event]) => event.kind === "row-pipeline-subscribe",
+      )?.[0].identity;
+      expect(remountedRuntime).not.toBe(initialRuntime);
+      expect(remountedPipeline).not.toBe(initialPipeline);
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "runtime-create"),
+      ).toHaveLength(1);
+      expect(
+        lifetimeEvents.mock.calls.filter(([event]) => event.kind === "row-pipeline-subscribe"),
+      ).toHaveLength(1);
+    } finally {
+      removeLifetime();
+      removePlans();
+      removeSubscriptions();
+    }
+  });
+
+  test("scopes toolbar commands and projections to their owning table", async () => {
+    function ScopedToolbar({ label }: Readonly<{ readonly label: string }>) {
+      return (
+        <BrunoTableToolbar>
+          <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+            {(commands) => (
+              <button
+                type="button"
+                onClick={() =>
+                  commands.replace({
+                    columnId: "COL_ID_NAME",
+                    type: "contains",
+                    filter: "Ada",
+                  })
+                }
+              >
+                {label}
+              </button>
+            )}
+          </BrunoTableFilterControl>
+          <BrunoTableResultRowCount>
+            {(count) => `${label}: ${String(count)}`}
+          </BrunoTableResultRowCount>
+        </BrunoTableToolbar>
+      );
+    }
+    const screen = await render(
+      <>
+        <BrunoTableClient {...props} tableId="TABLE_ID_TOOLBAR_FIRST" clientSource={readySource()}>
+          <ScopedToolbar label="First table" />
+        </BrunoTableClient>
+        <BrunoTableClient {...props} tableId="TABLE_ID_TOOLBAR_SECOND" clientSource={readySource()}>
+          <ScopedToolbar label="Second table" />
+        </BrunoTableClient>
+      </>,
+    );
+
+    await screen.getByRole("button", { name: "First table" }).click();
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }).nth(0))
+      .toHaveTextContent("First table: 1");
+    await expect
+      .element(screen.getByRole("status", { name: "Result rows" }).nth(1))
+      .toHaveTextContent("Second table: 2");
   });
 });

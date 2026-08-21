@@ -7,10 +7,15 @@ import { cleanup, render } from "vitest-browser-react";
 
 import {
   BrunoTableBigIntColumn,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
   BrunoTableBooleanColumn,
   BrunoTableClient,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
   BrunoTableNumberColumn,
   BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
   BrunoTableSelectColumn,
   BrunoTableToolbar,
 } from "../../dist/index.mjs";
@@ -124,11 +129,28 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
     >
       <BrunoTableToolbar>
         <BrunoTableQuickFilter />
+        <BrunoTableFilterControl<FilterRow, typeof columns> ownership="grid">
+          {(commands) => (
+            <button type="button" onClick={() => commands.clearAll()}>
+              Clear Grid Filters
+            </button>
+          )}
+        </BrunoTableFilterControl>
+        <BrunoTableResultRowCount />
+        <BrunoTableLoadedRowCount />
+        <BrunoTableActiveFilterCount />
+        <BrunoTableActiveSortCount />
       </BrunoTableToolbar>
     </BrunoTableClient>,
   );
 
   await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+  await expect.element(screen.getByRole("status", { name: "Result rows" })).toHaveTextContent("1");
+  await expect.element(screen.getByRole("status", { name: "Loaded rows" })).toHaveTextContent("2");
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1");
+  await expect.element(screen.getByRole("status", { name: "Active sorts" })).toHaveTextContent("1");
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
     .toBeInTheDocument();

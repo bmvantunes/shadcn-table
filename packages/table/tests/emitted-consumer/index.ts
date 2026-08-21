@@ -2,8 +2,13 @@ import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
   BrunoTableClient,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
   BrunoTableComputedColumn,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
   BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
@@ -18,6 +23,7 @@ import {
   type BrunoTableDecodeResult,
   type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
+  type BrunoTableGridFilterCommandCapability,
   type BrunoTableFilterExpressions,
   type BrunoTablePersistedState,
   type BrunoTableQuickFilterField,
@@ -202,9 +208,28 @@ type EmittedQuickField = Expect<
 >;
 const emittedQuickFieldCheck: EmittedQuickField = true;
 const emittedQuickFilter = BrunoTableQuickFilter;
+const emittedResultRowCount = BrunoTableResultRowCount;
+const emittedLoadedRowCount = BrunoTableLoadedRowCount;
+const emittedActiveFilterCount = BrunoTableActiveFilterCount;
+const emittedActiveSortCount = BrunoTableActiveSortCount;
+const emittedGridCommands = null as unknown as BrunoTableGridFilterCommandCapability<
+  Order,
+  typeof columns
+>;
+emittedGridCommands.clear("COL_ID_SYMBOL");
+emittedGridCommands.replace({ columnId: "COL_ID_SYMBOL", type: "contains", filter: "A" });
+BrunoTableFilterControl<Order, typeof columns>({
+  ownership: "grid",
+  children: (commands) => commands.clearAll().toString(),
+});
+BrunoTableFilterControl({ ownership: "external", children: "Application filter" });
 void emittedQuickFieldCheck;
 void emittedQuickFields;
 void emittedQuickFilter;
+void emittedResultRowCount;
+void emittedLoadedRowCount;
+void emittedActiveFilterCount;
+void emittedActiveSortCount;
 const emittedInvalidQuickFields = {
   ...emittedClientProps,
   // @ts-expect-error Emitted Quick Filter fields reject numeric source fields.
@@ -654,8 +679,27 @@ const props = {
   initialOrderBy: [
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ] satisfies BrunoTableSortBy<Columns>,
+  children: BrunoTableFilterControl({
+    ownership: "external",
+    children: "Application-controlled filter",
+  }),
   viewportSource: source,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+
+type UnsupportedToolbarCountsStayAbsent = Expect<
+  Equal<
+    Extract<
+      | "BrunoTableSelectedRowCount"
+      | "BrunoTableDirtyCellCount"
+      | "BrunoTableValidationCount"
+      | "BrunoTableConflictCount",
+      keyof typeof import("@bruno/table")
+    >,
+    never
+  >
+>;
+const unsupportedToolbarCountsStayAbsent: UnsupportedToolbarCountsStayAbsent = true;
+void unsupportedToolbarCountsStayAbsent;
 
 const emittedServerWithoutInitialOrderBy = {
   tableId: "orders-without-order",
@@ -721,6 +765,15 @@ void BrunoTableClient({
   clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
   // @ts-expect-error emitted Client API exposes no table controller.
   table: {},
+});
+void BrunoTableClient({
+  tableId: "orders-no-external-filters",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  // @ts-expect-error emitted Client declarations reject Server-only External Filters.
+  externalFilters: [{ field: "status", type: "equals", filter: "open" }],
 });
 void BrunoTableClient({
   tableId: "private-row-model",
