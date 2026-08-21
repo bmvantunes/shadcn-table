@@ -6,6 +6,7 @@ import {
   hasBrunoTableSetValue,
   type BrunoTableSetValueIndex,
 } from "./set-value-identity";
+import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export type ClientOrderBy = readonly {
   readonly columnId: string;
@@ -143,7 +144,8 @@ export function sanitizeClientOrderBy(
   const sanitized: { readonly columnId: string; readonly direction: "asc" | "desc" }[] = [];
   for (const candidate of candidates) {
     try {
-      const sort = asRecord(candidate);
+      const sort = captureBrunoTablePlainRecord(candidate, ["columnId", "direction"]);
+      if (sort === undefined) continue;
       const direction = sort["direction"];
       const columnId = sort["columnId"];
       if (direction !== "asc" && direction !== "desc") continue;

@@ -267,6 +267,101 @@ describe("BrunoTable Grid Preferences runtime boundary", () => {
     expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
   });
 
+  it("rethrows undefined from command listeners after installing committed state", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      runtimeColumns,
+      adapter.getQueryConfiguration(runtimeColumns),
+      "TABLE_ID_UNDEFINED_COMMAND_ERROR",
+    );
+    runtime.getView().subscribeColumnLayout(() => {
+      throw undefined;
+    });
+    let caught = false;
+
+    try {
+      runtime.getView().dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 321,
+      });
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
+    expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
+  });
+
+  it("rethrows undefined from persisted codecs after installing committed state", () => {
+    const throwingValueType: BrunoTableValueType<string, "equality", "text"> = {
+      codecId: "test/throws-undefined",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => {
+        throw undefined;
+      },
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Not persisted." }),
+    };
+    const throwingColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: throwingValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      throwingColumns,
+      [{ columnId: "COL_ID_NAME", type: "equals", filter: "persist me" }],
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      throwingColumns,
+      adapter.getQueryConfiguration(throwingColumns),
+      "TABLE_ID_UNDEFINED_PERSIST_ERROR",
+    );
+    let caught = false;
+
+    try {
+      runtime.getView().dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 321,
+      });
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
+    expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
+  });
+
   it("replaces the callback without recreating the runtime or waking row and cell subscribers", () => {
     const row = { id: "first", name: "Ada" };
     const adapter = new BrunoTableClientRowPipelineAdapter(

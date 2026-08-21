@@ -185,7 +185,9 @@ export function restoreBrunoTableColumnLayout(
   const baseline = createBrunoTableColumnLayout(columns);
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
   const capturedOrder = captureSanitizedColumnIdArray(input.columnOrder, columnsById);
-  const order = capturedOrder ?? Object.freeze([]);
+  const restoredOrder =
+    capturedOrder !== undefined && capturedOrder.length > 0 ? capturedOrder : undefined;
+  const order = restoredOrder ?? Object.freeze([]);
   const orderedIds = [
     ...order,
     ...columns.map((column) => column.columnId).filter((id) => !order.includes(id)),
@@ -193,7 +195,7 @@ export function restoreBrunoTableColumnLayout(
   const pinning = sanitizeColumnPinning(
     input.columnPinning,
     columnsById,
-    capturedOrder === undefined ? undefined : new Set(capturedOrder),
+    restoredOrder === undefined ? undefined : new Set(restoredOrder),
   );
   const widths = sanitizeColumnWidths(input.columnWidths, columnsById);
   const allColumns = Object.freeze(
@@ -234,7 +236,7 @@ export function restoreBrunoTableColumnLayout(
     allColumns,
     visibleColumnIds: deriveVisibleColumnIdsFromLogicalOrder(allColumns, visibleColumnIds),
     committedOverrides,
-    orderOverride: capturedOrder === undefined ? undefined : Object.freeze(orderedIds),
+    orderOverride: restoredOrder === undefined ? undefined : Object.freeze(orderedIds),
     version: 0,
   });
 }
@@ -292,7 +294,7 @@ function sanitizeColumnPinning(
   readonly committedColumnIds: ReadonlySet<string>;
 }> {
   const result = new Map<string, BrunoTableColumnPin>();
-  const record = captureBrunoTablePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input, ["start", "end"]);
   const start = captureSanitizedColumnIdArray(record?.["start"], columnsById);
   const end = captureSanitizedColumnIdArray(record?.["end"], columnsById);
   if (
@@ -327,7 +329,7 @@ function sanitizeColumnWidths(
   columnsById: ReadonlyMap<string, CompiledColumn>,
 ): ReadonlyMap<string, number> {
   const result = new Map<string, number>();
-  const record = captureBrunoTablePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input, Array.from(columnsById.keys()));
   if (record === undefined) return result;
   for (const [columnId, column] of columnsById) {
     const value = record[columnId];
@@ -344,7 +346,7 @@ function sanitizeColumnVisibility(
   orderedIds: readonly string[],
   baselineVisible: ReadonlySet<string>,
 ): readonly string[] {
-  const record = captureBrunoTablePlainRecord(input);
+  const record = captureBrunoTablePlainRecord(input, orderedIds);
   if (record === undefined) {
     return Object.freeze(orderedIds.filter((columnId) => baselineVisible.has(columnId)));
   }

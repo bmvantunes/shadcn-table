@@ -581,6 +581,27 @@ describe("BrunoTable column management", () => {
     );
   });
 
+  it("does not commit mount-time order when no persisted identity survives", () => {
+    const restored = restoreBrunoTableColumnLayout(columns, {
+      columnOrder: ["COL_ID_REMOVED"],
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    });
+    const replacement = compileColumns([
+      { columnId: "COL_ID_STATUS", headerName: "Status", field: "status", valueType: "text" },
+      { columnId: "COL_ID_NAME", headerName: "Name", field: "name", valueType: "text" },
+      { columnId: "COL_ID_SCORE", headerName: "Score", field: "score", valueType: "number" },
+    ]);
+
+    expect(restored.orderOverride).toBeUndefined();
+    expect(
+      reconcileBrunoTableColumnLayout(restored, replacement).allColumns.map(
+        (column) => column.columnId,
+      ),
+    ).toEqual(["COL_ID_STATUS", "COL_ID_NAME", "COL_ID_SCORE"]);
+  });
+
   it("reconciles visible order when definitions are reordered", () => {
     const state = createBrunoTableColumnLayout(randomizedColumnDefinitions(["A", "B", "C"]));
     const next = reconcileBrunoTableColumnLayout(

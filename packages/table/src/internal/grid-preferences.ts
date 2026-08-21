@@ -21,6 +21,31 @@ import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_PERSISTED_STATE_VERSION = 1 as const;
 
+const PERSISTED_STATE_KEYS = Object.freeze([
+  "version",
+  "tableId",
+  "filters",
+  "orderBy",
+  "groupBy",
+  "groupOrderBy",
+  "columnOrder",
+  "columnVisibility",
+  "columnWidths",
+  "columnPinning",
+]);
+const PERSISTED_FILTER_KEYS = Object.freeze([
+  "type",
+  "conditions",
+  "condition",
+  "columnId",
+  "codecId",
+  "codecVersion",
+  "filter",
+  "filterTo",
+  "caseSensitive",
+  "accentSensitive",
+]);
+
 type PersistedFilter = Readonly<Record<string, BrunoTableJsonValue>>;
 
 export type BrunoTableGridPreferences = Readonly<{
@@ -137,7 +162,7 @@ function capturePersistedState(
   input: unknown,
   tableId: string,
 ): Readonly<Record<string, unknown>> | undefined {
-  const snapshot = captureBrunoTablePlainRecord(input);
+  const snapshot = captureBrunoTablePlainRecord(input, PERSISTED_STATE_KEYS);
   if (
     snapshot === undefined ||
     snapshot["version"] !== BRUNO_TABLE_PERSISTED_STATE_VERSION ||
@@ -233,7 +258,7 @@ function decodePersistedFilter(
       budget.overBudget = true;
       return undefined;
     }
-    const record = captureBrunoTablePlainRecord(input);
+    const record = captureBrunoTablePlainRecord(input, PERSISTED_FILTER_KEYS);
     if (record === undefined || typeof record["type"] !== "string") return undefined;
     budget.nodes += 1;
     const type = record["type"];
@@ -379,9 +404,10 @@ function snapshotUnknownJsonValue(
   active.add(value);
   try {
     if (Array.isArray(value)) {
-      if (!Number.isSafeInteger(value.length)) return INVALID_JSON_VALUE;
+      const length = value.length;
+      if (!Number.isSafeInteger(length) || length < 0) return INVALID_JSON_VALUE;
       const result: BrunoTableJsonValue[] = [];
-      for (let index = 0; index < value.length; index += 1) {
+      for (let index = 0; index < length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, index);
         if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
           return INVALID_JSON_VALUE;
@@ -392,10 +418,8 @@ function snapshotUnknownJsonValue(
       }
       return Object.freeze(result);
     }
-    if (
-      Object.getPrototypeOf(value) !== Object.prototype &&
-      Object.getPrototypeOf(value) !== null
-    ) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
       return INVALID_JSON_VALUE;
     }
     const result: Record<string, BrunoTableJsonValue> = Object.create(null);

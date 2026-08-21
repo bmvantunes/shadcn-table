@@ -1,21 +1,24 @@
-/** Captures one plain data record without invoking accessors from an untrusted snapshot. */
+/** Captures only named plain-data fields without enumerating or invoking untrusted properties. */
 export function captureBrunoTablePlainRecord(
   input: unknown,
+  allowedKeys: readonly string[],
 ): Readonly<Record<string, unknown>> | undefined {
   try {
+    const prototype =
+      typeof input === "object" && input !== null ? Object.getPrototypeOf(input) : undefined;
     if (
       typeof input !== "object" ||
       input === null ||
       Array.isArray(input) ||
-      (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
+      (prototype !== Object.prototype && prototype !== null)
     ) {
       return undefined;
     }
     const snapshot: Record<string, unknown> = Object.create(null);
-    for (const key of Reflect.ownKeys(input)) {
-      if (typeof key !== "string") return undefined;
+    for (const key of allowedKeys) {
       const descriptor = Object.getOwnPropertyDescriptor(input, key);
-      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      if (descriptor === undefined) continue;
+      if (!("value" in descriptor) || !descriptor.enumerable) {
         return undefined;
       }
       Object.defineProperty(snapshot, key, {

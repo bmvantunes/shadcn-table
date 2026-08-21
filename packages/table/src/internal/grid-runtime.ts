@@ -958,12 +958,15 @@ export class BrunoTableGridRuntime<TRow> {
     const previousOrderBy = this.query.orderBy;
     const previousLayout = this.columnLayout;
     let accepted = false;
+    let commandThrew = false;
     let commandError: unknown;
     try {
       accepted = this.dispatchGridCommandImpl(command);
     } catch (error) {
+      commandThrew = true;
       commandError = error;
     }
+    let persistThrew = false;
     let persistError: unknown;
     if (
       isBrunoTableDurablePreferenceCommand(command) &&
@@ -983,6 +986,7 @@ export class BrunoTableGridRuntime<TRow> {
           columnLayout: this.columnLayout,
         });
       } catch (error) {
+        persistThrew = true;
         persistError = error;
       }
       if (persistedState !== undefined) {
@@ -993,8 +997,8 @@ export class BrunoTableGridRuntime<TRow> {
         }
       }
     }
-    if (commandError !== undefined) throw commandError;
-    if (persistError !== undefined) throw persistError;
+    if (commandThrew) throw commandError;
+    if (persistThrew) throw persistError;
     return accepted;
   };
 

@@ -389,6 +389,73 @@ describe("Grid Preferences", () => {
     expect(restored.filters).toEqual(baselineFilters);
   });
 
+  it("captures only known persisted fields without enumerating irrelevant record keys", () => {
+    const baseline = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_BOUNDED_RECORDS",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+      }),
+    );
+    const visibilityOwnKeys = vi.fn(() => {
+      throw new Error("must not enumerate persisted visibility");
+    });
+    const rootOwnKeys = vi.fn(() => {
+      throw new Error("must not enumerate the persisted root");
+    });
+    const visibility = new Proxy(
+      { COL_ID_NAME: false, irrelevant: "ignored" },
+      { ownKeys: visibilityOwnKeys },
+    );
+    const root = new Proxy(
+      { ...baseline, columnVisibility: visibility, irrelevant: "ignored" },
+      { ownKeys: rootOwnKeys },
+    );
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_BOUNDED_RECORDS",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: root,
+    });
+
+    expect(rootOwnKeys).not.toHaveBeenCalled();
+    expect(visibilityOwnKeys).not.toHaveBeenCalled();
+    expect(restored.columnLayout.visibleColumnIds).not.toContain("COL_ID_NAME");
+  });
+
+  it("rejects accessor-backed persisted sorting without invoking it", () => {
+    const directionGetter = vi.fn(() => "desc" as const);
+    const hostileSort = Object.defineProperties(
+      {},
+      {
+        columnId: { enumerable: true, value: "COL_ID_QUANTITY" },
+        direction: { enumerable: true, get: directionGetter },
+      },
+    );
+    const baseline = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_HOSTILE_SORT",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+      }),
+    );
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_HOSTILE_SORT",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: { ...baseline, orderBy: [hostileSort] },
+    });
+
+    expect(directionGetter).not.toHaveBeenCalled();
+    expect(restored.orderBy).toEqual(initialOrderBy);
+  });
+
   it("does not install an order override for an absent or malformed persisted order", () => {
     const baseline = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
@@ -634,6 +701,29 @@ describe("Grid Preferences", () => {
     });
   });
 
+  it("drops the reserved Rows width when the Client has no grouping capability", () => {
+    const pristine = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_ROWS_WIDTH",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+    });
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_ROWS_WIDTH",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...createBrunoTablePersistedState(pristine),
+        columnWidths: { COL_ID_NAME: 222, COL_ID_BRUNO_TABLE_ROWS: 333 },
+      },
+    });
+
+    expect(createBrunoTablePersistedState(restored)["columnWidths"]).toEqual({
+      COL_ID_NAME: 222,
+    });
+  });
+
   it("encodes only at committed preference boundaries", () => {
     accountEncodePersisted.mockClear();
     const preferences = createBrunoTableGridPreferences({
@@ -645,6 +735,127 @@ describe("Grid Preferences", () => {
     expect(accountEncodePersisted).not.toHaveBeenCalled();
     createBrunoTablePersistedState(preferences);
     expect(accountEncodePersisted).toHaveBeenCalledOnce();
+  });
+
+  it("captures codec arrays from one non-negative length observation", () => {
+    let lengthReads = 0;
+    const changingArray = new Proxy(["stable"], {
+      get: (target, key, receiver) => {
+        if (key !== "length") return Reflect.get(target, key, receiver);
+        lengthReads += 1;
+        return lengthReads <= 2 ? 1 : -1;
+      },
+    });
+    const changingValueType: BrunoTableValueType<string, "equality", "text"> = {
+      ...accountValueType,
+      codecId: "test/changing-array",
+      codecVersion: 1,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => changingArray,
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Not restored." }),
+    };
+    const changingColumns = compileColumns([
+      {
+        columnId: "COL_ID_CHANGING_ARRAY",
+        field: "name",
+        headerName: "Changing array",
+        valueType: changingValueType,
+      },
+    ]);
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_CHANGING_ARRAY",
+        columns: changingColumns,
+        initialFilters: [{ columnId: "COL_ID_CHANGING_ARRAY", type: "equals", filter: "value" }],
+        initialOrderBy: [{ columnId: "COL_ID_CHANGING_ARRAY", direction: "asc" }],
+      }),
+    );
+
+    expect(lengthReads).toBe(2);
+    expect(JSON.stringify(snapshot)).toContain('"filter":["stable"]');
+
+    let negativeLengthReads = 0;
+    const negativeArray = new Proxy([], {
+      get: (target, key, receiver) => {
+        if (key !== "length") return Reflect.get(target, key, receiver);
+        negativeLengthReads += 1;
+        return negativeLengthReads === 1 ? 0 : -1;
+      },
+    });
+    const negativeValueType = { ...changingValueType, encodePersisted: () => negativeArray };
+    const negativeColumns = compileColumns([
+      {
+        columnId: "COL_ID_NEGATIVE_ARRAY",
+        field: "name",
+        headerName: "Negative array",
+        valueType: negativeValueType,
+      },
+    ]);
+    const negativePreferences = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_NEGATIVE_ARRAY",
+      columns: negativeColumns,
+      initialFilters: [{ columnId: "COL_ID_NEGATIVE_ARRAY", type: "equals", filter: "value" }],
+      initialOrderBy: [{ columnId: "COL_ID_NEGATIVE_ARRAY", direction: "asc" }],
+    });
+    expect(() => createBrunoTablePersistedState(negativePreferences)).toThrow("JSON-safe");
+  });
+
+  it("validates a codec object's prototype from one observation", () => {
+    let prototypeReads = 0;
+    const changingPrototype = new Proxy(
+      { value: "unsafe" },
+      {
+        getPrototypeOf: () => {
+          prototypeReads += 1;
+          return prototypeReads === 1
+            ? Object.prototype
+            : prototypeReads === 2
+              ? Date.prototype
+              : null;
+        },
+      },
+    );
+    const valueType: BrunoTableValueType<string, "equality", "text"> = {
+      ...accountValueType,
+      codecId: "test/changing-prototype",
+      codecVersion: 1,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => changingPrototype,
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Not restored." }),
+    };
+    const hostileColumns = compileColumns([
+      {
+        columnId: "COL_ID_CHANGING_PROTOTYPE",
+        field: "name",
+        headerName: "Changing prototype",
+        valueType,
+      },
+    ]);
+    const preferences = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_CHANGING_PROTOTYPE",
+      columns: hostileColumns,
+      initialFilters: [{ columnId: "COL_ID_CHANGING_PROTOTYPE", type: "equals", filter: "value" }],
+      initialOrderBy: [{ columnId: "COL_ID_CHANGING_PROTOTYPE", direction: "asc" }],
+    });
+
+    expect(() => createBrunoTablePersistedState(preferences)).toThrow("JSON-safe");
+    expect(prototypeReads).toBe(2);
   });
 
   it("refuses non-JSON-safe output from a custom persisted codec", () => {

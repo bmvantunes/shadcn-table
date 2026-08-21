@@ -570,24 +570,42 @@ function isJsonValue(value: unknown, ancestors: Set<object>): value is BrunoTabl
 }
 
 function isDenseJsonArray(value: readonly unknown[], ancestors: Set<object>): boolean {
+  const length = value.length;
+  if (!Number.isSafeInteger(length) || length < 0) return false;
   const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) return false;
+  if (ownKeys.length !== length + 1 || !ownKeys.includes("length")) return false;
 
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index) || !isJsonValue(value[index], ancestors)) return false;
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !isJsonValue(descriptor.value, ancestors)
+    ) {
+      return false;
+    }
   }
   return true;
 }
 
 function isJsonObject(value: object, ancestors: Set<object>): boolean {
-  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
   const ownKeys = Reflect.ownKeys(value);
-  if (
-    ownKeys.some((key) => typeof key !== "string" || !Object.propertyIsEnumerable.call(value, key))
-  ) {
-    return false;
+  for (const key of ownKeys) {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !isJsonValue(descriptor.value, ancestors)
+    ) {
+      return false;
+    }
   }
-  return ownKeys.every((key) => isJsonValue(Reflect.get(value, key), ancestors));
+  return true;
 }
 
 function isBuiltInValueType(value: unknown): value is BrunoTableBuiltInValueType {
