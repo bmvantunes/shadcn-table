@@ -65,6 +65,11 @@ export type BrunoTableClientFilterCollection = Readonly<{
   readonly hasSharedNodes: boolean;
 }>;
 
+export type BrunoTableFilterComparisonBudget = {
+  comparisons: number;
+  exhausted: boolean;
+};
+
 export function reconcileBrunoTableOrderBy(
   orderBy: unknown,
   baseline: BrunoTableOrderBy,
@@ -177,7 +182,10 @@ export function sanitizeClientInitialFilters(
 export function compileClientFilterCollection(
   filters: readonly unknown[] | undefined,
   columns: readonly CompiledColumn[],
-  options?: Readonly<{ readonly rejectOverBudget?: boolean }>,
+  options?: Readonly<{
+    readonly rejectOverBudget?: boolean;
+    readonly comparisonBudget?: BrunoTableFilterComparisonBudget;
+  }>,
 ): BrunoTableClientFilterCollection {
   const candidates = snapshotInputEntries(filters);
   if (candidates === FILTER_ENTRIES_OVER_BUDGET) {
@@ -194,10 +202,12 @@ export function compileClientFilterCollection(
   const captured = new WeakMap<object, Readonly<Record<string, unknown>> | undefined>();
   const capturedArrays = new WeakMap<object, CapturedFilterArray | undefined>();
   const context = createFilterSanitizationContext({
+    initial: { comparisons: options?.comparisonBudget?.comparisons ?? 0 },
     captured,
     capturedArrays,
     columnLabelsById,
     descriptionMemo: new Map(),
+    comparisonBudgetExhausted: options?.comparisonBudget?.exhausted ?? false,
   });
   const fragments: AdmittedFilterFragment[] = [];
   const acceptedSanitizedEvidence = new WeakMap<object, AcceptedSanitizedFilterEvidence>();
@@ -226,6 +236,7 @@ export function compileClientFilterCollection(
     // comparisons are admission work and remain monotonic across the complete transaction.
     context.comparisons = candidateContext.comparisons;
     context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
+    syncFilterComparisonBudget(context, options?.comparisonBudget);
     if (candidateContext.overBudget && options?.rejectOverBudget === true) {
       throwClientFilterAdmissionBudgetError();
     }
@@ -235,6 +246,7 @@ export function compileClientFilterCollection(
     const fragment = retainClientFilterFragment(next, columnsById, candidateContext, previous);
     context.comparisons = candidateContext.comparisons;
     context.comparisonBudgetExhausted ||= candidateContext.comparisonBudgetExhausted;
+    syncFilterComparisonBudget(context, options?.comparisonBudget);
     if (candidateContext.overBudget && options?.rejectOverBudget === true) {
       throwClientFilterAdmissionBudgetError();
     }
@@ -256,11 +268,21 @@ export function compileClientFilterCollection(
     fragments.push(fragment);
   }
   const expressions = canonicalizeClientFilterFragments(fragments, context);
+  syncFilterComparisonBudget(context, options?.comparisonBudget);
   if (context.overBudget) {
     if (options?.rejectOverBudget === true) throwClientFilterAdmissionBudgetError();
     return createEmptyClientFilterCollection(columns);
   }
   return createClientFilterCollection(columnsById, expressions, context, filters);
+}
+
+function syncFilterComparisonBudget(
+  context: Readonly<FilterSanitizationContext>,
+  budget: BrunoTableFilterComparisonBudget | undefined,
+): void {
+  if (budget === undefined) return;
+  budget.comparisons = context.comparisons;
+  budget.exhausted ||= context.comparisonBudgetExhausted;
 }
 
 function createEmptyClientFilterCollection(
@@ -2209,14 +2231,16 @@ function snapshotInputEntries(
     if (!Array.isArray(values)) return undefined;
     const length = values.length;
     if (!Number.isSafeInteger(length) || length < 0) return undefined;
-    const indexes = readOwnArrayIndexes(values, length);
-    if (indexes === undefined || indexes === FILTER_ENTRIES_OVER_BUDGET) return indexes;
     const snapshot: unknown[] = [];
-    for (const index of indexes) {
+    const probeLength = Math.min(length, BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES + 1);
+    for (let index = 0; index < probeLength; index += 1) {
       try {
         const descriptor = Object.getOwnPropertyDescriptor(values, index);
         if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
           continue;
+        }
+        if (snapshot.length >= BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
+          return FILTER_ENTRIES_OVER_BUDGET;
         }
         snapshot.push(descriptor.value);
       } catch {
@@ -2224,32 +2248,6 @@ function snapshotInputEntries(
       }
     }
     return snapshot;
-  } catch {
-    return undefined;
-  }
-}
-
-function readOwnArrayIndexes(
-  values: readonly unknown[],
-  length: number,
-): readonly number[] | undefined | typeof FILTER_ENTRIES_OVER_BUDGET {
-  try {
-    const indexes: number[] = [];
-    let enumeratedKeys = 0;
-    const enumerableProjection = values as unknown as Readonly<Record<string, unknown>>;
-    for (const key in enumerableProjection) {
-      enumeratedKeys += 1;
-      if (enumeratedKeys > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
-        return FILTER_ENTRIES_OVER_BUDGET;
-      }
-      if (!Object.hasOwn(values, key)) continue;
-      const index = Number(key);
-      if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
-        indexes.push(index);
-      }
-    }
-    indexes.sort((left, right) => left - right);
-    return indexes;
   } catch {
     return undefined;
   }

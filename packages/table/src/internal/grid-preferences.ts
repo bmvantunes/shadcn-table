@@ -16,6 +16,7 @@ import {
   compileClientFilterCollection,
   reconcileBrunoTableOrderBy,
   type BrunoTableClientFilterCollection,
+  type BrunoTableFilterComparisonBudget,
   type BrunoTableOrderBy,
 } from "./grid-query";
 import { captureBrunoTablePlainRecord } from "./untrusted-input";
@@ -62,6 +63,7 @@ type BrunoTablePersistedFilterDecodeBudget = {
   operands: number;
   overBudget: boolean;
   json: BrunoTablePersistedJsonBudget;
+  semanticComparisons: BrunoTableFilterComparisonBudget;
 };
 
 type PersistedFilter = Readonly<Record<string, BrunoTableJsonValue>>;
@@ -281,6 +283,7 @@ function decodePersistedFilters(
     operands: 0,
     overBudget: false,
     json: { nodes: 0, textLength: 0, keyTextLength: 0, overBudget: false },
+    semanticComparisons: { comparisons: 0, exhausted: false },
   };
   const decoded: Readonly<Record<string, unknown>>[] = [];
   for (const filter of entries) {
@@ -339,7 +342,11 @@ function decodePersistedFilter(
     const column = typeof columnId === "string" ? columnsById.get(columnId) : undefined;
     if (column === undefined || !supportsPersistedFilterType(column, type)) return undefined;
     if (type === "blank" || type === "notBlank" || type === "matchNone") {
-      return admitDecodedPersistedLeaf(Object.freeze({ type, columnId }), column);
+      return admitDecodedPersistedLeaf(
+        Object.freeze({ type, columnId }),
+        column,
+        budget.semanticComparisons,
+      );
     }
     if (
       record["codecId"] !== column.semantics.codecId ||
@@ -367,6 +374,7 @@ function decodePersistedFilter(
           ...(record["accentSensitive"] === true ? { accentSensitive: true } : {}),
         }),
         column,
+        budget.semanticComparisons,
       );
     }
     const decode = (value: unknown) => {
@@ -430,7 +438,7 @@ function decodePersistedFilter(
     }
     if (record["caseSensitive"] === true) result["caseSensitive"] = true;
     if (record["accentSensitive"] === true) result["accentSensitive"] = true;
-    return admitDecodedPersistedLeaf(Object.freeze(result), column);
+    return admitDecodedPersistedLeaf(Object.freeze(result), column, budget.semanticComparisons);
   } catch {
     return undefined;
   }
@@ -439,8 +447,9 @@ function decodePersistedFilter(
 function admitDecodedPersistedLeaf(
   filter: Readonly<Record<string, unknown>>,
   column: CompiledColumn,
+  comparisonBudget: BrunoTableFilterComparisonBudget,
 ): Readonly<Record<string, unknown>> | undefined {
-  const admitted = compileClientFilterCollection([filter], [column]).filters;
+  const admitted = compileClientFilterCollection([filter], [column], { comparisonBudget }).filters;
   const leaf = admitted.length === 1 ? admitted[0] : undefined;
   return typeof leaf === "object" && leaf !== null && !Array.isArray(leaf)
     ? (leaf as Readonly<Record<string, unknown>>)

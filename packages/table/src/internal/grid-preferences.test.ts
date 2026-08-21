@@ -8,7 +8,10 @@ import {
   createBrunoTableGridPreferences,
   createBrunoTablePersistedState,
 } from "./grid-preferences";
-import { BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES } from "./grid-query";
+import {
+  BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES,
+  BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS,
+} from "./grid-query";
 
 const accountEncodePersisted = vi.fn((value: Readonly<{ readonly address: string }>) => ({
   account: value.address,
@@ -900,6 +903,87 @@ describe("Grid Preferences", () => {
       initialPersistedState: selectSnapshot,
     });
     expect(restoredSelect.filters).toEqual([{ columnId: "COL_ID_STATUS", type: "blank" }]);
+  });
+
+  it("shares one semantic comparison allowance across restored leaves", () => {
+    const options = Array.from({ length: 64 }, (_, index) =>
+      Object.freeze({ code: String(index) }),
+    );
+    const equivalent = vi.fn(
+      (left: unknown, right: unknown) =>
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        Reflect.get(left, "code") === Reflect.get(right, "code"),
+    );
+    const selectValueType = {
+      codecId: "test/persisted-shared-equivalence-budget",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 160,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+      equivalent,
+      compare: () => 0,
+      formatCanonicalText: () => {
+        throw new Error("No canonical identity");
+      },
+      parseCanonicalText: (text: string) => ({
+        _tag: "Success" as const,
+        value: Object.freeze({ code: text }),
+      }),
+      formatDisplay: (value: unknown) => String(Reflect.get(value as object, "code")),
+      encodePersisted: (value: unknown) => ({ code: String(Reflect.get(value as object, "code")) }),
+      decodePersisted: (input: unknown) => ({ _tag: "Success" as const, value: input }),
+    } as const;
+    const selectColumns = compileColumns([
+      {
+        columnId: "COL_ID_BOUNDED_SELECT",
+        field: "status",
+        headerName: "Status",
+        valueType: selectValueType,
+        options,
+      } as never,
+    ]);
+    const baseline = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_BOUNDED_SELECT",
+        columns: selectColumns,
+        initialFilters: [],
+        initialOrderBy: [{ columnId: "COL_ID_BOUNDED_SELECT", direction: "asc" }],
+      }),
+    );
+    const staleLeaves = Array.from(
+      { length: BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS / options.length + 4 },
+      (_, index) => ({
+        columnId: "COL_ID_BOUNDED_SELECT",
+        type: "equals",
+        codecId: selectValueType.codecId,
+        codecVersion: selectValueType.codecVersion,
+        filter: { code: `missing-${String(index)}` },
+      }),
+    );
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_BOUNDED_SELECT",
+      columns: selectColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_BOUNDED_SELECT", direction: "asc" }],
+      initialPersistedState: {
+        ...baseline,
+        filters: [
+          {
+            type: "AND",
+            conditions: [...staleLeaves, { columnId: "COL_ID_BOUNDED_SELECT", type: "blank" }],
+          },
+        ],
+      },
+    });
+
+    expect(restored.filters).toEqual([{ columnId: "COL_ID_BOUNDED_SELECT", type: "blank" }]);
+    expect(equivalent).toHaveBeenCalledTimes(BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_COMPARISONS);
   });
 
   it("rejects accessor-backed persisted codec operands without invoking them", () => {

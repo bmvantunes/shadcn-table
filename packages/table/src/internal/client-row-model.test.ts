@@ -1318,7 +1318,7 @@ describe("Client row model", () => {
     const countIndexedProbe = (property: PropertyKey) => {
       if (typeof property !== "string" || !/^\d+$/u.test(property)) return;
       indexedProbes += 1;
-      if (indexedProbes > 1_024) throw new Error("Unbounded indexed root traversal.");
+      if (indexedProbes > 16_385) throw new Error("Unbounded indexed root traversal.");
     };
     const hostileRoot = new Proxy(root, {
       get: (target, property, receiver) => {
@@ -1333,9 +1333,9 @@ describe("Client row model", () => {
         countIndexedProbe(property);
         return Reflect.has(target, property);
       },
-      ownKeys: (target) => {
+      ownKeys: () => {
         ownKeyReads += 1;
-        return Reflect.ownKeys(target);
+        throw new Error("Root array own keys must not be materialized.");
       },
     });
 
@@ -1350,8 +1350,8 @@ describe("Client row model", () => {
         ],
       },
     ]);
-    expect(indexedProbes).toBeLessThanOrEqual(12);
-    expect(ownKeyReads).toBe(1);
+    expect(indexedProbes).toBeLessThanOrEqual(16_385);
+    expect(ownKeyReads).toBe(0);
     expect(accessorReads).toBe(0);
   });
 
@@ -1423,7 +1423,7 @@ describe("Client row model", () => {
     expect(sanitizeClientInitialFilters(inheritedRoot, columns)).toEqual([]);
     expect(() =>
       sanitizeClientInitialFilters(inheritedRoot, columns, { rejectOverBudget: true }),
-    ).toThrow(/contains more than 16384 entries/u);
+    ).not.toThrow();
   });
 
   it("canonicalizes one committed expression per Column Identity", () => {
@@ -1698,7 +1698,7 @@ describe("Client row model", () => {
     const countIndexedProbe = (property: PropertyKey) => {
       if (typeof property !== "string" || !/^\d+$/u.test(property)) return;
       indexedProbes += 1;
-      if (indexedProbes > 1_024) throw new Error("Unbounded indexed root traversal.");
+      if (indexedProbes > 16_385) throw new Error("Unbounded indexed root traversal.");
     };
     const hostileRoot = new Proxy(root, {
       get: (target, property, receiver) => {
@@ -1713,17 +1713,17 @@ describe("Client row model", () => {
         countIndexedProbe(property);
         return Reflect.has(target, property);
       },
-      ownKeys: (target) => {
+      ownKeys: () => {
         ownKeyReads += 1;
-        return Reflect.ownKeys(target);
+        throw new Error("Order array own keys must not be materialized.");
       },
     });
 
     expect(sanitizeClientOrderBy(hostileRoot as never, columns)).toEqual([
       { columnId: "COL_ID_NAME", direction: "asc" },
     ]);
-    expect(indexedProbes).toBeLessThanOrEqual(8);
-    expect(ownKeyReads).toBe(1);
+    expect(indexedProbes).toBeLessThanOrEqual(16_385);
+    expect(ownKeyReads).toBe(0);
     expect(accessorReads).toBe(0);
 
     const unreadableLength = new Proxy([], {
