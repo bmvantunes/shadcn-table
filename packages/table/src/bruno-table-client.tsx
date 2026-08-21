@@ -30,6 +30,16 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   props: BrunoTableClientProps<TRow, TColumns>,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
+  return <BrunoTableClientInstance key={tableId} props={props} tableId={tableId} />;
+}
+
+function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns<TRow>>({
+  props,
+  tableId,
+}: Readonly<{
+  readonly props: BrunoTableClientProps<TRow, TColumns>;
+  readonly tableId: string;
+}>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const [rowPipelineAdapter] = useState(
     () =>

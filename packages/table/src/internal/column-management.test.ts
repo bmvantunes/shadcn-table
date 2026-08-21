@@ -602,6 +602,29 @@ describe("BrunoTable column management", () => {
     ).toEqual(["COL_ID_STATUS", "COL_ID_NAME", "COL_ID_SCORE"]);
   });
 
+  it("restores a very wide complete order within one linear initialization budget", () => {
+    const wideColumns = compileColumns(
+      Array.from({ length: 10_000 }, (_unused, index) => ({
+        columnId: `COL_ID_WIDE_${String(index)}`,
+        headerName: `Wide ${String(index)}`,
+        field: "name",
+        valueType: "text" as const,
+      })),
+    );
+    const columnOrder = wideColumns.map((column) => column.columnId).reverse();
+    const start = performance.now();
+
+    const restored = restoreBrunoTableColumnLayout(wideColumns, {
+      columnOrder,
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    });
+
+    expect(performance.now() - start).toBeLessThan(150);
+    expect(restored.allColumns[0]?.columnId).toBe("COL_ID_WIDE_9999");
+  });
+
   it("reconciles visible order when definitions are reordered", () => {
     const state = createBrunoTableColumnLayout(randomizedColumnDefinitions(["A", "B", "C"]));
     const next = reconcileBrunoTableColumnLayout(

@@ -188,15 +188,15 @@ export function restoreBrunoTableColumnLayout(
   const restoredOrder =
     capturedOrder !== undefined && capturedOrder.length > 0 ? capturedOrder : undefined;
   const order = restoredOrder ?? Object.freeze([]);
+  const restoredOrderIds =
+    restoredOrder === undefined ? undefined : new Set<CompiledColumn["columnId"]>(restoredOrder);
   const orderedIds = [
     ...order,
-    ...columns.map((column) => column.columnId).filter((id) => !order.includes(id)),
+    ...columns
+      .map((column) => column.columnId)
+      .filter((id) => restoredOrderIds === undefined || !restoredOrderIds.has(id)),
   ];
-  const pinning = sanitizeColumnPinning(
-    input.columnPinning,
-    columnsById,
-    restoredOrder === undefined ? undefined : new Set(restoredOrder),
-  );
+  const pinning = sanitizeColumnPinning(input.columnPinning, columnsById, restoredOrderIds);
   const widths = sanitizeColumnWidths(input.columnWidths, columnsById);
   const allColumns = Object.freeze(
     orderedIds.flatMap((columnId) => {

@@ -456,6 +456,48 @@ describe("Grid Preferences", () => {
     expect(restored.orderBy).toEqual(initialOrderBy);
   });
 
+  it("rejects accessor-backed persisted codec operands without invoking them", () => {
+    const valid = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_HOSTILE_OPERAND",
+        columns,
+        initialFilters: [{ columnId: "COL_ID_QUANTITY", type: "equals", filter: 42n }],
+        initialOrderBy,
+      }),
+    );
+    const filters = valid["filters"];
+    const validFilter = Array.isArray(filters) ? filters[0] : undefined;
+    if (typeof validFilter !== "object" || validFilter === null) {
+      throw new TypeError("Expected one persisted bigint filter.");
+    }
+    const valueGetter = vi.fn(() => "42");
+    const hostileOperand = Object.defineProperties(
+      {},
+      {
+        $brunoTableValue: { enumerable: true, value: "bigint" },
+        version: { enumerable: true, value: 1 },
+        value: { enumerable: true, get: valueGetter },
+      },
+    );
+    const cases = [
+      { ...validFilter, filter: hostileOperand },
+      { ...validFilter, type: "in", filter: [hostileOperand] },
+      { ...validFilter, type: "inRange", filterTo: hostileOperand },
+    ];
+
+    for (const filter of cases) {
+      const restored = createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_HOSTILE_OPERAND",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+        initialPersistedState: { ...valid, filters: [filter] },
+      });
+      expect(restored.filters).toEqual([]);
+    }
+    expect(valueGetter).not.toHaveBeenCalled();
+  });
+
   it("does not install an order override for an absent or malformed persisted order", () => {
     const baseline = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
@@ -806,6 +848,51 @@ describe("Grid Preferences", () => {
       initialOrderBy: [{ columnId: "COL_ID_NEGATIVE_ARRAY", direction: "asc" }],
     });
     expect(() => createBrunoTablePersistedState(negativePreferences)).toThrow("JSON-safe");
+  });
+
+  it("rejects a filter collection whose combined codec output exceeds the restore budget", () => {
+    const largeTuple = Object.freeze(Array.from({ length: 70_000 }, () => "exact"));
+    const largeValueType: BrunoTableValueType<string, "equality", "text"> = {
+      ...accountValueType,
+      codecId: "test/large-output",
+      codecVersion: 1,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => largeTuple,
+      decodePersisted: () => ({ _tag: "Failure" as const, message: "Not restored." }),
+    };
+    const largeColumns = compileColumns([
+      {
+        columnId: "COL_ID_LARGE_FIRST",
+        field: "name",
+        headerName: "Large first",
+        valueType: largeValueType,
+      },
+      {
+        columnId: "COL_ID_LARGE_SECOND",
+        field: "name",
+        headerName: "Large second",
+        valueType: largeValueType,
+      },
+    ]);
+    const preferences = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_COMBINED_CODEC_BUDGET",
+      columns: largeColumns,
+      initialFilters: [
+        { columnId: "COL_ID_LARGE_FIRST", type: "equals", filter: "first" },
+        { columnId: "COL_ID_LARGE_SECOND", type: "equals", filter: "second" },
+      ],
+      initialOrderBy: [{ columnId: "COL_ID_LARGE_FIRST", direction: "asc" }],
+    });
+
+    expect(() => createBrunoTablePersistedState(preferences)).toThrow("JSON-safe");
   });
 
   it("validates a codec object's prototype from one observation", () => {

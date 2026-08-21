@@ -45,6 +45,20 @@ const PERSISTED_FILTER_KEYS = Object.freeze([
   "caseSensitive",
   "accentSensitive",
 ]);
+const BRUNO_TABLE_PERSISTED_JSON_MAX_DEPTH = 64;
+const BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES = BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS * 8;
+
+type BrunoTablePersistedJsonBudget = {
+  nodes: number;
+  overBudget: boolean;
+};
+
+type BrunoTablePersistedFilterDecodeBudget = {
+  nodes: number;
+  operands: number;
+  overBudget: boolean;
+  json: BrunoTablePersistedJsonBudget;
+};
 
 type PersistedFilter = Readonly<Record<string, BrunoTableJsonValue>>;
 
@@ -178,12 +192,16 @@ function encodePersistedFilters(
   columns: readonly CompiledColumn[],
 ): readonly PersistedFilter[] {
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  return Object.freeze(filters.map((filter) => encodePersistedFilter(filter, columnsById)));
+  const jsonBudget: BrunoTablePersistedJsonBudget = { nodes: 0, overBudget: false };
+  return Object.freeze(
+    filters.map((filter) => encodePersistedFilter(filter, columnsById, jsonBudget)),
+  );
 }
 
 function encodePersistedFilter(
   input: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  jsonBudget: BrunoTablePersistedJsonBudget,
 ): PersistedFilter {
   if (!isRecord(input) || typeof input["type"] !== "string") {
     throw new TypeError("BrunoTable cannot persist an invalid Grid Filter Expression.");
@@ -193,14 +211,16 @@ function encodePersistedFilter(
     return Object.freeze({
       type,
       conditions: Object.freeze(
-        input["conditions"].map((condition) => encodePersistedFilter(condition, columnsById)),
+        input["conditions"].map((condition) =>
+          encodePersistedFilter(condition, columnsById, jsonBudget),
+        ),
       ),
     });
   }
   if (type === "NOT") {
     return Object.freeze({
       type,
-      condition: encodePersistedFilter(input["condition"], columnsById),
+      condition: encodePersistedFilter(input["condition"], columnsById, jsonBudget),
     });
   }
   const columnId = input["columnId"];
@@ -215,12 +235,20 @@ function encodePersistedFilter(
     if (!Array.isArray(input["filter"]))
       throw new TypeError("BrunoTable cannot persist an invalid in filter.");
     result["filter"] = Object.freeze(
-      input["filter"].map((value) => snapshotJsonValue(column.semantics.encodePersisted(value))),
+      input["filter"].map((value) =>
+        snapshotJsonValue(column.semantics.encodePersisted(value), jsonBudget),
+      ),
     );
   } else {
-    result["filter"] = snapshotJsonValue(column.semantics.encodePersisted(input["filter"]));
+    result["filter"] = snapshotJsonValue(
+      column.semantics.encodePersisted(input["filter"]),
+      jsonBudget,
+    );
     if (type === "inRange")
-      result["filterTo"] = snapshotJsonValue(column.semantics.encodePersisted(input["filterTo"]));
+      result["filterTo"] = snapshotJsonValue(
+        column.semantics.encodePersisted(input["filterTo"]),
+        jsonBudget,
+      );
   }
   if (input["caseSensitive"] === true) result["caseSensitive"] = true;
   if (input["accentSensitive"] === true) result["accentSensitive"] = true;
@@ -234,7 +262,12 @@ function decodePersistedFilters(
   const entries = captureDenseArray(input, BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES);
   if (entries === undefined) return undefined;
   const columnsById = new Map(columns.map((column) => [column.columnId, column]));
-  const budget = { nodes: 0, operands: 0, overBudget: false };
+  const budget: BrunoTablePersistedFilterDecodeBudget = {
+    nodes: 0,
+    operands: 0,
+    overBudget: false,
+    json: { nodes: 0, overBudget: false },
+  };
   const decoded: Readonly<Record<string, unknown>>[] = [];
   for (const filter of entries) {
     const next = decodePersistedFilter(filter, columnsById, budget, 0);
@@ -247,7 +280,7 @@ function decodePersistedFilters(
 function decodePersistedFilter(
   input: unknown,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-  budget: { nodes: number; operands: number; overBudget: boolean },
+  budget: BrunoTablePersistedFilterDecodeBudget,
   depth: number,
 ): Readonly<Record<string, unknown>> | undefined {
   try {
@@ -298,7 +331,12 @@ function decodePersistedFilter(
     )
       return undefined;
     const decode = (value: unknown) => {
-      const result = column.semantics.decodePersisted(value);
+      const snapshot = snapshotUnknownJsonValue(value, new WeakSet(), budget.json, 0);
+      if (snapshot === INVALID_JSON_VALUE) {
+        budget.overBudget ||= budget.json.overBudget;
+        return DECODE_FAILURE;
+      }
+      const result = column.semantics.decodePersisted(snapshot);
       return result._tag === "Success" ? result.value : DECODE_FAILURE;
     };
     const decodedFilter =
@@ -386,8 +424,11 @@ function encodeOrderBy(orderBy: BrunoTableOrderBy): readonly BrunoTableJsonValue
   return Object.freeze(orderBy.map((sort) => Object.freeze({ ...sort })));
 }
 
-function snapshotJsonValue(value: BrunoTableJsonValue): BrunoTableJsonValue {
-  const snapshot = snapshotUnknownJsonValue(value, new WeakSet());
+function snapshotJsonValue(
+  value: BrunoTableJsonValue,
+  budget: BrunoTablePersistedJsonBudget,
+): BrunoTableJsonValue {
+  const snapshot = snapshotUnknownJsonValue(value, new WeakSet(), budget, 0);
   if (snapshot === INVALID_JSON_VALUE) {
     throw new TypeError("BrunoTable persisted codecs must emit a JSON-safe value.");
   }
@@ -397,7 +438,17 @@ function snapshotJsonValue(value: BrunoTableJsonValue): BrunoTableJsonValue {
 function snapshotUnknownJsonValue(
   value: unknown,
   active: WeakSet<object>,
+  budget: BrunoTablePersistedJsonBudget,
+  depth: number,
 ): BrunoTableJsonValue | typeof INVALID_JSON_VALUE {
+  if (
+    depth > BRUNO_TABLE_PERSISTED_JSON_MAX_DEPTH ||
+    budget.nodes >= BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES
+  ) {
+    budget.overBudget = true;
+    return INVALID_JSON_VALUE;
+  }
+  budget.nodes += 1;
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : INVALID_JSON_VALUE;
   if (typeof value !== "object" || active.has(value)) return INVALID_JSON_VALUE;
@@ -406,13 +457,17 @@ function snapshotUnknownJsonValue(
     if (Array.isArray(value)) {
       const length = value.length;
       if (!Number.isSafeInteger(length) || length < 0) return INVALID_JSON_VALUE;
+      if (length > BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES - budget.nodes) {
+        budget.overBudget = true;
+        return INVALID_JSON_VALUE;
+      }
       const result: BrunoTableJsonValue[] = [];
       for (let index = 0; index < length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, index);
         if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
           return INVALID_JSON_VALUE;
         }
-        const nested = snapshotUnknownJsonValue(descriptor.value, active);
+        const nested = snapshotUnknownJsonValue(descriptor.value, active, budget, depth + 1);
         if (nested === INVALID_JSON_VALUE) return INVALID_JSON_VALUE;
         result.push(nested);
       }
@@ -423,13 +478,18 @@ function snapshotUnknownJsonValue(
       return INVALID_JSON_VALUE;
     }
     const result: Record<string, BrunoTableJsonValue> = Object.create(null);
-    for (const key of Reflect.ownKeys(value)) {
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES - budget.nodes) {
+      budget.overBudget = true;
+      return INVALID_JSON_VALUE;
+    }
+    for (const key of keys) {
       if (typeof key !== "string") return INVALID_JSON_VALUE;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
         return INVALID_JSON_VALUE;
       }
-      const nested = snapshotUnknownJsonValue(descriptor.value, active);
+      const nested = snapshotUnknownJsonValue(descriptor.value, active, budget, depth + 1);
       if (nested === INVALID_JSON_VALUE) return INVALID_JSON_VALUE;
       Object.defineProperty(result, key, {
         value: nested,

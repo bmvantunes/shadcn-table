@@ -8364,6 +8364,33 @@ describe("BrunoTableClient browser surface", () => {
     }
   });
 
+  test("remounts the persistence boundary when tableId changes", async () => {
+    const firstCallback = vi.fn();
+    const secondCallback = vi.fn();
+    const renderTable = (tableId: string, onPersistChange: typeof firstCallback) => (
+      <BrunoTableClient
+        tableId={tableId}
+        getRowId={(row: Row) => row.id}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        onPersistChange={onPersistChange}
+        clientSource={readySource()}
+      />
+    );
+    const screen = await render(renderTable("TABLE_ID_PREFERENCES_FIRST", firstCallback));
+
+    await screen.rerender(renderTable("TABLE_ID_PREFERENCES_SECOND", secondCallback));
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PREFERENCES_SECOND" });
+    await expect.element(grid).toBeInTheDocument();
+    await userEvent.click(grid.getByRole("button", { name: "Sort by Score" }));
+    await vi.waitFor(() => expect(secondCallback).toHaveBeenCalledOnce());
+
+    expect(firstCallback).not.toHaveBeenCalled();
+    expect(secondCallback.mock.lastCall?.[0]).toMatchObject({
+      tableId: "TABLE_ID_PREFERENCES_SECOND",
+    });
+  });
+
   test("keeps active descendants unique and interactive across separately hydrated roots", async () => {
     const hydrationColumns = [
       {
