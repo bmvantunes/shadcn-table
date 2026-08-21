@@ -17,6 +17,7 @@ import {
 import type {
   BrunoTableColumns,
   BrunoTableFilterExpressions,
+  BrunoTablePersistedState,
   BrunoTableValueType,
 } from "./public-types";
 import { BrunoTableBigDecimalColumn } from "./effect";
@@ -8257,6 +8258,137 @@ describe("BrunoTableClient browser surface", () => {
     const firstId = grids[0]!.element().getAttribute("aria-activedescendant");
     const secondId = grids[1]!.element().getAttribute("aria-activedescendant");
     expect(firstId).not.toBe(secondId);
+  });
+
+  test("hydrates the restored preference projection without an echo and uses the latest callback", async () => {
+    const firstCallback = vi.fn();
+    const secondCallback = vi.fn();
+    const subscriptionEvents: Array<{ readonly phase: "subscribe" | "unsubscribe" | "notify" }> =
+      [];
+    const rowRenders = vi.fn();
+    const removeSubscriptionListener = installBrunoTableColumnFilterSubscriptionListener(
+      "TABLE_ID_PREFERENCES_HYDRATION",
+      (event) => subscriptionEvents.push(event),
+    );
+    const removeRowRenderListener = installBrunoTableClientRowRenderListenerForTable(
+      "TABLE_ID_PREFERENCES_HYDRATION",
+      rowRenders,
+    );
+    const persisted = {
+      version: 1 as const,
+      tableId: "TABLE_ID_PREFERENCES_HYDRATION",
+      filters: [
+        {
+          columnId: "COL_ID_NAME",
+          type: "equals" as const,
+          codecId: "@bruno/table/text",
+          codecVersion: 1,
+          filter: { $brunoTableValue: "text", version: 1, value: "Grace" },
+        },
+      ],
+      orderBy: [{ columnId: "COL_ID_SCORE", direction: "desc" as const }],
+      groupBy: [],
+      groupOrderBy: [],
+      columnOrder: ["COL_ID_SCORE", "COL_ID_NAME"],
+      columnVisibility: { COL_ID_SCORE: true, COL_ID_NAME: true },
+      columnWidths: { COL_ID_SCORE: 222, COL_ID_NAME: 160 },
+      columnPinning: { start: ["COL_ID_SCORE"], end: [] },
+    } as const;
+    const renderTable = (
+      onPersistChange: typeof firstCallback,
+      initialPersistedState: BrunoTablePersistedState<Row, typeof columns> = persisted,
+    ) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_PREFERENCES_HYDRATION"
+        getRowId={(row: Row) => row.id}
+        columns={columns}
+        initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }]}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        initialPersistedState={initialPersistedState}
+        onPersistChange={onPersistChange}
+        clientSource={readySource()}
+      />
+    );
+    const markup = renderToString(renderTable(firstCallback));
+    const host = document.createElement("div");
+    host.innerHTML = markup;
+    document.body.append(host);
+    let root: Root | undefined;
+    const recoverable = vi.fn();
+    try {
+      await act(async () => {
+        root = hydrateRoot(host, renderTable(firstCallback), { onRecoverableError: recoverable });
+      });
+      const grid = page.getByRole("grid", { name: "Data for TABLE_ID_PREFERENCES_HYDRATION" });
+      await expect.element(grid.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+      await expect.element(grid.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+      const headers = grid.getByRole("columnheader").all();
+      await expect
+        .element(headers[0]!)
+        .toHaveAccessibleName(
+          "Score, sorted descending, priority 1, width 222 pixels, pinned start",
+        );
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(recoverable).not.toHaveBeenCalled();
+
+      subscriptionEvents.length = 0;
+      rowRenders.mockClear();
+      await act(async () =>
+        root?.render(renderTable(secondCallback, { ...persisted, filters: [] })),
+      );
+      await expect.element(grid.getByRole("gridcell", { name: "Grace" })).toBeInTheDocument();
+      await expect.element(grid.getByRole("gridcell", { name: "Ada" })).not.toBeInTheDocument();
+      expect(subscriptionEvents).toEqual([]);
+      expect(rowRenders).not.toHaveBeenCalled();
+      await userEvent.click(grid.getByRole("button", { name: "Filter Name (active)" }));
+      await expect.element(page.getByRole("dialog", { name: "Filter Name" })).toBeInTheDocument();
+      expect(secondCallback).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(grid.getByRole("gridcell", { name: "Grace" }));
+      grid.element().scrollTop = 40;
+      grid.element().dispatchEvent(new Event("scroll"));
+      expect(secondCallback).not.toHaveBeenCalled();
+      await userEvent.click(grid.getByRole("button", { name: "Sort by Score" }));
+      await vi.waitFor(() => expect(secondCallback).toHaveBeenCalledOnce());
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(secondCallback.mock.lastCall?.[0]).toMatchObject({
+        tableId: "TABLE_ID_PREFERENCES_HYDRATION",
+        columnOrder: ["COL_ID_SCORE", "COL_ID_NAME"],
+        columnWidths: { COL_ID_SCORE: 222, COL_ID_NAME: 160 },
+      });
+    } finally {
+      removeSubscriptionListener();
+      removeRowRenderListener();
+      await act(async () => root?.unmount());
+      host.remove();
+    }
+  });
+
+  test("remounts the persistence boundary when tableId changes", async () => {
+    const firstCallback = vi.fn();
+    const secondCallback = vi.fn();
+    const renderTable = (tableId: string, onPersistChange: typeof firstCallback) => (
+      <BrunoTableClient
+        tableId={tableId}
+        getRowId={(row: Row) => row.id}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        onPersistChange={onPersistChange}
+        clientSource={readySource()}
+      />
+    );
+    const screen = await render(renderTable("TABLE_ID_PREFERENCES_FIRST", firstCallback));
+
+    await screen.rerender(renderTable("TABLE_ID_PREFERENCES_SECOND", secondCallback));
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PREFERENCES_SECOND" });
+    await expect.element(grid).toBeInTheDocument();
+    await userEvent.click(grid.getByRole("button", { name: "Sort by Score" }));
+    await vi.waitFor(() => expect(secondCallback).toHaveBeenCalledOnce());
+
+    expect(firstCallback).not.toHaveBeenCalled();
+    expect(secondCallback.mock.lastCall?.[0]).toMatchObject({
+      tableId: "TABLE_ID_PREFERENCES_SECOND",
+    });
   });
 
   test("keeps active descendants unique and interactive across separately hydrated roots", async () => {

@@ -33,6 +33,7 @@ import type {
   BrunoTableQuickFilterFields,
   BrunoTableFieldColumnDefinition,
   BrunoTableGroupKeyCellParams,
+  BrunoTablePersistedState,
   BrunoTableSaveCellChange,
   BrunoTableSaveChangeSet,
   BrunoTableServerProps,
@@ -78,6 +79,159 @@ const columns = [
 
 type Columns = typeof columns;
 
+const persistedPreferences = {
+  version: 1,
+  tableId: "TABLE_ID_ORDERS",
+  filters: [
+    {
+      columnId: "COL_ID_PRICE",
+      type: "greaterThan",
+      codecId: "@bruno/table/number",
+      codecVersion: 1,
+      filter: { $brunoTableValue: "number", version: 1, value: "10" },
+    },
+  ],
+  orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  groupBy: [],
+  groupOrderBy: [],
+  columnOrder: ["COL_ID_SYMBOL", "COL_ID_PRICE", "COL_ID_DOUBLE_QUANTITY"],
+  columnVisibility: { COL_ID_SYMBOL: true },
+  columnWidths: { COL_ID_PRICE: 144 },
+  columnPinning: { start: ["COL_ID_SYMBOL"], end: [] },
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+
+expectTypeOf(persistedPreferences.filters[0]!.columnId).toEqualTypeOf<"COL_ID_PRICE">();
+
+const persistedTextSearch = {
+  ...persistedPreferences,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      filter: "AAPL",
+    },
+  ],
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+void persistedTextSearch;
+
+const invalidPersistedTextSearch = {
+  ...persistedTextSearch,
+  filters: [
+    {
+      columnId: "COL_ID_SYMBOL",
+      type: "contains",
+      codecId: "@bruno/table/text",
+      codecVersion: 1,
+      // @ts-expect-error Persisted Text search operands are raw strings, not codec payloads.
+      filter: { value: "AAPL" },
+    },
+  ],
+} as const satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedTextSearch;
+
+const invalidPersistedNumericOperator = {
+  ...persistedPreferences,
+  filters: [
+    // @ts-expect-error Numeric persisted filters reject Text operators.
+    {
+      columnId: "COL_ID_PRICE",
+      type: "contains",
+      codecId: "@bruno/table/number",
+      codecVersion: 1,
+      filter: { value: "10" },
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedNumericOperator;
+
+const invalidPersistedInOperand = {
+  ...persistedPreferences,
+  filters: [
+    {
+      columnId: "COL_ID_PRICE",
+      type: "in",
+      codecId: "@bruno/table/number",
+      codecVersion: 1,
+      // @ts-expect-error Persisted in operands are a non-empty JSON tuple.
+      filter: { value: "10" },
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedInOperand;
+
+const invalidPersistedCompound = {
+  ...persistedPreferences,
+  filters: [
+    {
+      type: "AND",
+      // @ts-expect-error Persisted compound leaves retain one Column Identity.
+      conditions: [
+        {
+          columnId: "COL_ID_PRICE",
+          type: "equals",
+          codecId: "@bruno/table/number",
+          codecVersion: 1,
+          filter: { value: "10" },
+        },
+        {
+          columnId: "COL_ID_SYMBOL",
+          type: "equals",
+          codecId: "@bruno/table/text",
+          codecVersion: 1,
+          filter: { value: "Ada" },
+        },
+      ],
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedCompound;
+
+const invalidPersistedSetCapability = {
+  ...persistedPreferences,
+  filters: [
+    // @ts-expect-error Match None requires an enabled Set Filter capability.
+    { columnId: "COL_ID_PRICE", type: "matchNone" },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSetCapability;
+
+const invalidPersistedSensitivity = {
+  ...persistedPreferences,
+  filters: [
+    {
+      columnId: "COL_ID_PRICE",
+      type: "equals",
+      codecId: "@bruno/table/number",
+      codecVersion: 1,
+      filter: { value: "10" },
+      // @ts-expect-error Numeric persisted filters reject Text sensitivity flags.
+      caseSensitive: true,
+    },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSensitivity;
+
+const invalidPersistedColumn = {
+  ...persistedPreferences,
+  // @ts-expect-error Persisted layout identities autocomplete from the exact columns tuple.
+  columnOrder: ["COL_ID_UNKNOWN"],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedColumn;
+
+const persistedClientProps = {
+  tableId: "TABLE_ID_PERSISTED_PROPS",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" as const },
+  initialPersistedState: persistedPreferences,
+  onPersistChange: (state) =>
+    expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns>>(),
+} satisfies BrunoTableClientProps<Order, Columns>;
+void persistedClientProps;
+
 const directViewServerResult = null as unknown as LiveQueryResult<Order>;
 const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
 const directViewServerClient = BrunoTableClient({
@@ -122,6 +276,28 @@ const rawMaximumPrice = {
 
 const rawGroupedColumns = [rawGroupSymbol, rawMaximumPrice] satisfies BrunoTableColumns<Order>;
 void rawGroupedColumns;
+const groupedPersistedPreferences = {
+  version: 1,
+  tableId: "TABLE_ID_GROUPED_PREFERENCES",
+  filters: [],
+  orderBy: [{ columnId: "COL_ID_GROUP_SYMBOL", direction: "asc" }],
+  groupBy: ["COL_ID_GROUP_SYMBOL"],
+  groupOrderBy: [
+    { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" },
+    { columnId: "COL_ID_MAX_PRICE", direction: "asc" },
+  ],
+  columnOrder: ["COL_ID_GROUP_SYMBOL", "COL_ID_MAX_PRICE"],
+  columnVisibility: {},
+  columnWidths: { COL_ID_BRUNO_TABLE_ROWS: 144 },
+  columnPinning: { start: [], end: [] },
+} as const satisfies BrunoTablePersistedState<Order, typeof rawGroupedColumns>;
+void groupedPersistedPreferences;
+const invalidGroupedPersistedPreferences = {
+  ...groupedPersistedPreferences,
+  // @ts-expect-error Group By intent rejects columns without groupBy: true.
+  groupBy: ["COL_ID_MAX_PRICE"],
+} satisfies BrunoTablePersistedState<Order, typeof rawGroupedColumns>;
+void invalidGroupedPersistedPreferences;
 
 type OnlySymbolGroupEvidence = readonly [
   {

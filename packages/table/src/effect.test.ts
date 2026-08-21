@@ -1,16 +1,34 @@
 import * as BigDecimal from "effect/BigDecimal";
 import { compareTrustedWireSafeBigDecimal } from "effect-view-server/value-semantics";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "./effect";
 import type { BrunoTableColumns } from "./public-types";
 import { createBrunoTableClientFacetSnapshot } from "./internal/client-facet";
 import { compileColumns } from "./internal/compile-columns";
+import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileClientFilterCollection } from "./internal/grid-query";
+import { BrunoTableGridRuntime } from "./internal/grid-runtime";
+import {
+  createBrunoTableGridPreferences,
+  createBrunoTablePersistedState,
+} from "./internal/grid-preferences";
 
 const decimal = BigDecimal.fromStringUnsafe;
 
 describe("Effect BigDecimal Value Type", () => {
+  it("rejects canonical text over the persistence budget at runtime admission", () => {
+    const overBudget = BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0);
+
+    expect(BrunoTableBigDecimalValueType.decodeRuntime(overBudget)).toEqual({
+      _tag: "Failure",
+      message: "Expected a wire-safe Effect BigDecimal value.",
+    });
+    expect(() => BrunoTableBigDecimalValueType.encodePersisted(overBudget)).toThrow(
+      "BrunoTable BigDecimal Value Type received an invalid value.",
+    );
+  });
+
   it("round-trips exact canonical text and tagged persistence without number coercion", () => {
     const exact = decimal("-9007199254740993123456789.0000000000000000001");
 
@@ -36,6 +54,119 @@ describe("Effect BigDecimal Value Type", () => {
     if (restored._tag === "Success") {
       expect(BrunoTableBigDecimalValueType.equivalent(restored.value, exact)).toBe(true);
     }
+  });
+
+  it("round-trips a high-precision filter through the shipping Grid Preferences path", () => {
+    const exact = decimal("123456789012345678901234567890.00000000000000000000000000000012345");
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_EXACT_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: BrunoTableBigDecimalValueType,
+      },
+    ]);
+    const preferences = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_EXACT_PREFERENCES",
+      columns,
+      initialFilters: [{ columnId: "COL_ID_EXACT_PRICE", type: "equals", filter: exact }],
+      initialOrderBy: [{ columnId: "COL_ID_EXACT_PRICE", direction: "asc" }],
+    });
+    const json = JSON.stringify(createBrunoTablePersistedState(preferences));
+    expect(json).not.toContain('"_id":"BigDecimal"');
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_EXACT_PREFERENCES",
+      columns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_EXACT_PRICE", direction: "asc" }],
+      initialPersistedState: JSON.parse(json),
+    });
+    const filter = restored.filters[0];
+    if (typeof filter !== "object" || filter === null || !("filter" in filter)) {
+      throw new TypeError("Expected the restored high-precision BigDecimal filter operand.");
+    }
+    const decoded = BrunoTableBigDecimalValueType.decodeRuntime(filter.filter);
+    expect(decoded._tag).toBe("Success");
+    if (decoded._tag === "Success") {
+      expect(BrunoTableBigDecimalValueType.equivalent(decoded.value, exact)).toBe(true);
+    }
+  });
+
+  it("round-trips the exact 4,096-unit boundary through Grid Preferences", () => {
+    const exact = BigDecimal.make(BigInt("1".repeat(4_096)), 0);
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_BOUNDARY_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: BrunoTableBigDecimalValueType,
+      },
+    ]);
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_BOUNDARY_PREFERENCES",
+        columns,
+        initialFilters: [{ columnId: "COL_ID_BOUNDARY_PRICE", type: "equals", filter: exact }],
+        initialOrderBy: [{ columnId: "COL_ID_BOUNDARY_PRICE", direction: "asc" }],
+      }),
+    );
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_BOUNDARY_PREFERENCES",
+      columns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_BOUNDARY_PRICE", direction: "asc" }],
+      initialPersistedState: JSON.parse(JSON.stringify(snapshot)),
+    });
+    expect(restored.filters).toHaveLength(1);
+    const filter = restored.filters[0];
+    if (typeof filter !== "object" || filter === null || !("filter" in filter)) {
+      throw new TypeError("Expected the restored BigDecimal filter operand.");
+    }
+    const decoded = BrunoTableBigDecimalValueType.decodeRuntime(filter.filter);
+    expect(decoded._tag).toBe("Success");
+    if (decoded._tag === "Success") {
+      expect(BrunoTableBigDecimalValueType.equivalent(decoded.value, exact)).toBe(true);
+    }
+  });
+
+  it("rejects an over-budget command before a persistence notification can be emitted", () => {
+    type PriceRow = Readonly<{ readonly id: string; readonly price: BigDecimal.BigDecimal }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_COMMAND_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: BrunoTableBigDecimalValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter<PriceRow>(
+      { rows: [], totalRows: 0, version: 1, status: "ready" },
+      (row) => row.id,
+      columns,
+      [],
+      [{ columnId: "COL_ID_COMMAND_PRICE", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_BIGDECIMAL_COMMAND",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const accepted = runtime.getView().dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_COMMAND_PRICE",
+      filter: {
+        columnId: "COL_ID_COMMAND_PRICE",
+        type: "equals",
+        filter: BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0),
+      },
+    });
+
+    expect(accepted).toBe(false);
+    expect(runtime.getView().getFilterSnapshot().filters).toEqual([]);
+    expect(onPersistChange).not.toHaveBeenCalled();
   });
 
   it("uses allocation-safe semantic equality and order for scale variants and extreme scales", () => {

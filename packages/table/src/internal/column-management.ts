@@ -1,8 +1,10 @@
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableSortingCommand } from "./sorting";
+import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_MIN_COLUMN_WIDTH = 32;
 export const BRUNO_TABLE_MAX_COLUMN_WIDTH = 1_000;
+const BRUNO_TABLE_PERSISTED_LAYOUT_MAX_STALE_IDENTITIES = 1_024;
 export const BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE = "--bruno-table-live-viewport-fill";
 export const BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE = "--bruno-table-live-left-padding";
 export const BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE = "--bruno-table-live-right-padding";
@@ -147,6 +149,13 @@ type BrunoTableCommittedColumnOverride = Readonly<{
   readonly pinningCommitted?: boolean;
 }>;
 
+export type BrunoTablePersistedColumnLayoutInput = Readonly<{
+  readonly columnOrder?: unknown;
+  readonly columnVisibility?: unknown;
+  readonly columnWidths?: unknown;
+  readonly columnPinning?: unknown;
+}>;
+
 const EMPTY_COMMITTED_OVERRIDES: ReadonlyMap<string, BrunoTableCommittedColumnOverride> = new Map();
 
 export function createBrunoTableColumnLayout(
@@ -168,6 +177,187 @@ export function createBrunoTableColumnLayout(
   });
 }
 
+/** Restores one untrusted durable base layout without replaying user commands or notifications. */
+export function restoreBrunoTableColumnLayout(
+  columns: readonly CompiledColumn[],
+  input: BrunoTablePersistedColumnLayoutInput,
+): BrunoTableColumnLayoutState {
+  const baseline = createBrunoTableColumnLayout(columns);
+  const columnsById = new Map(columns.map((column) => [column.columnId, column]));
+  const capturedOrder = captureSanitizedColumnIdArray(input.columnOrder, columnsById);
+  const restoredOrder =
+    capturedOrder !== undefined && capturedOrder.length > 0 ? capturedOrder : undefined;
+  const order = restoredOrder ?? Object.freeze([]);
+  const restoredOrderIds =
+    restoredOrder === undefined ? undefined : new Set<CompiledColumn["columnId"]>(restoredOrder);
+  const orderedIds = [
+    ...order,
+    ...columns
+      .map((column) => column.columnId)
+      .filter((id) => restoredOrderIds === undefined || !restoredOrderIds.has(id)),
+  ];
+  const pinning = sanitizeColumnPinning(input.columnPinning, columnsById, restoredOrderIds);
+  const widths = sanitizeColumnWidths(input.columnWidths, columnsById);
+  const allColumns = Object.freeze(
+    orderedIds.flatMap((columnId) => {
+      const column = columnsById.get(columnId);
+      if (column === undefined) return [];
+      const pinned = pinning.values.get(columnId);
+      const width = widths.get(columnId);
+      const withPin = pinned === column.pinned ? column : withColumnPin(column, pinned);
+      return [
+        width === undefined || width === withPin.semantics.width
+          ? withPin
+          : withColumnWidth(withPin, width),
+      ];
+    }),
+  );
+  const visible = sanitizeColumnVisibility(
+    input.columnVisibility,
+    orderedIds,
+    new Set(baseline.visibleColumnIds),
+  );
+  const visibleColumnIds = visible.length === 0 ? baseline.visibleColumnIds : visible;
+  const committedOverrides = new Map<string, BrunoTableCommittedColumnOverride>();
+  for (const column of allColumns) {
+    const baselineColumn = columnsById.get(column.columnId);
+    if (baselineColumn === undefined) continue;
+    const restoredWidth = widths.get(column.columnId);
+    const pinningCommitted = pinning.committedColumnIds.has(column.columnId);
+    if (restoredWidth !== undefined || pinningCommitted) {
+      committedOverrides.set(column.columnId, {
+        ...(restoredWidth === undefined ? {} : { width: restoredWidth }),
+        ...(pinningCommitted ? { pinned: column.pinned, pinningCommitted: true } : {}),
+      });
+    }
+  }
+  return Object.freeze({
+    baselineColumns: baseline.baselineColumns,
+    allColumns,
+    visibleColumnIds: deriveVisibleColumnIdsFromLogicalOrder(allColumns, visibleColumnIds),
+    committedOverrides,
+    orderOverride: restoredOrder === undefined ? undefined : Object.freeze(orderedIds),
+    version: 0,
+  });
+}
+
+function captureSanitizedColumnIdArray(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): readonly CompiledColumn["columnId"][] | undefined {
+  try {
+    if (!Array.isArray(input)) return undefined;
+    const length = input.length;
+    if (
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > columnsById.size + BRUNO_TABLE_PERSISTED_LAYOUT_MAX_STALE_IDENTITIES
+    ) {
+      return undefined;
+    }
+    const seen = new Set<string>();
+    const result: CompiledColumn["columnId"][] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, index);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      const value = descriptor.value;
+      if (typeof value !== "string" || seen.has(value) || !columnsById.has(value)) continue;
+      seen.add(value);
+      const column = columnsById.get(value);
+      if (column !== undefined) result.push(column.columnId);
+    }
+    return Object.freeze(result);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Returns only explicit durable width intent, excluding definition-provided baselines. */
+export function getBrunoTableCommittedColumnWidths(
+  state: BrunoTableColumnLayoutState,
+): Readonly<Record<string, number>> {
+  const widths: Record<string, number> = {};
+  for (const [columnId, override] of state.committedOverrides) {
+    if (override.width !== undefined) widths[columnId] = override.width;
+  }
+  return Object.freeze(widths);
+}
+
+function sanitizeColumnPinning(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+  snapshotColumnIds: ReadonlySet<string> | undefined,
+): Readonly<{
+  readonly values: ReadonlyMap<string, BrunoTableColumnPin>;
+  readonly committedColumnIds: ReadonlySet<string>;
+}> {
+  const result = new Map<string, BrunoTableColumnPin>();
+  const record = captureBrunoTablePlainRecord(input, ["start", "end"]);
+  const start = captureSanitizedColumnIdArray(record?.["start"], columnsById);
+  const end = captureSanitizedColumnIdArray(record?.["end"], columnsById);
+  if (
+    record === undefined ||
+    start === undefined ||
+    end === undefined ||
+    snapshotColumnIds === undefined
+  ) {
+    for (const column of columnsById.values()) result.set(column.columnId, column.pinned);
+    return Object.freeze({ values: result, committedColumnIds: new Set<string>() });
+  }
+  for (const [side, candidates] of [
+    ["start", start],
+    ["end", end],
+  ] as const) {
+    for (const columnId of candidates) {
+      if (snapshotColumnIds.has(columnId) && !result.has(columnId)) {
+        result.set(columnId, side);
+      }
+    }
+  }
+  for (const [columnId, column] of columnsById) {
+    if (!result.has(columnId)) {
+      result.set(columnId, snapshotColumnIds.has(columnId) ? undefined : column.pinned);
+    }
+  }
+  return Object.freeze({ values: result, committedColumnIds: snapshotColumnIds });
+}
+
+function sanitizeColumnWidths(
+  input: unknown,
+  columnsById: ReadonlyMap<string, CompiledColumn>,
+): ReadonlyMap<string, number> {
+  const result = new Map<string, number>();
+  const record = captureBrunoTablePlainRecord(input, Array.from(columnsById.keys()));
+  if (record === undefined) return result;
+  for (const [columnId, column] of columnsById) {
+    const value = record[columnId];
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    const normalized = clampBrunoTableColumnWidth(value, getBrunoTableColumnWidthBounds(column));
+    if (normalized !== value) continue;
+    result.set(columnId, value);
+  }
+  return result;
+}
+
+function sanitizeColumnVisibility(
+  input: unknown,
+  orderedIds: readonly string[],
+  baselineVisible: ReadonlySet<string>,
+): readonly string[] {
+  const record = captureBrunoTablePlainRecord(input, orderedIds);
+  if (record === undefined) {
+    return Object.freeze(orderedIds.filter((columnId) => baselineVisible.has(columnId)));
+  }
+  return Object.freeze(
+    orderedIds.filter((columnId) => {
+      const value = record[columnId];
+      return typeof value === "boolean" ? value : baselineVisible.has(columnId);
+    }),
+  );
+}
+
 /**
  * Reconciles a live column-definition replacement without discarding the
  * instance's already-committed layout for identities that survived.
@@ -187,14 +377,12 @@ export function reconcileBrunoTableColumnLayout(
     state.orderOverride === undefined
       ? undefined
       : Object.freeze(state.orderOverride.filter((columnId) => nextById.has(columnId)));
+  const orderMembership = orderOverride === undefined ? undefined : new Set(orderOverride);
   const baselineOrder = baselineColumns.map((column) => column.columnId);
   const orderedIds =
     orderOverride === undefined
       ? baselineOrder
-      : [
-          ...orderOverride,
-          ...baselineOrder.filter((columnId) => !orderOverride.includes(columnId)),
-        ];
+      : [...orderOverride, ...baselineOrder.filter((columnId) => !orderMembership!.has(columnId))];
   const reconciledColumns = orderedIds.flatMap((columnId) => {
     const next = nextById.get(columnId);
     return next === undefined

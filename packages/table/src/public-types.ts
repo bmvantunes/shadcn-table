@@ -1014,6 +1014,166 @@ export type BrunoTableSortBy<
   }[BrunoTableSortableColumnId<TColumns>][],
 ];
 
+export type BrunoTableRowsColumnId = BrunoTableReservedColumnId;
+
+export type BrunoTableGroupableColumnId<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = TColumns[number] extends infer TColumn
+  ? TColumn extends {
+      readonly columnId: infer TColumnId extends BrunoTableColumnId;
+      readonly field: string;
+      readonly groupBy: true;
+    }
+    ? TColumnId
+    : never
+  : never;
+
+export type BrunoTableGroupedSortableColumnId<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> =
+  | BrunoTableGroupableColumnId<TColumns>
+  | (TColumns[number] extends infer TColumn
+      ? TColumn extends {
+          readonly columnId: infer TColumnId extends BrunoTableColumnId;
+          readonly field: string;
+          readonly aggFunc: BrunoTableAggFunc;
+        }
+        ? TColumnId
+        : never
+      : never)
+  | BrunoTableRowsColumnId;
+
+export type BrunoTableGroupSortBy<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = readonly [
+  {
+    readonly columnId: BrunoTableGroupedSortableColumnId<TColumns>;
+    readonly direction: "asc" | "desc";
+  },
+  ...{
+    readonly columnId: BrunoTableGroupedSortableColumnId<TColumns>;
+    readonly direction: "asc" | "desc";
+  }[],
+];
+
+type PersistedCodecOperand = {
+  readonly codecId: string;
+  readonly codecVersion: number;
+  readonly filter: BrunoTableJsonValue;
+};
+
+type PersistedTextSensitivity<TFilterFamily> = TFilterFamily extends "text"
+  ? {
+      readonly caseSensitive?: boolean;
+      readonly accentSensitive?: boolean;
+    }
+  : {
+      readonly caseSensitive?: never;
+      readonly accentSensitive?: never;
+    };
+
+type PersistedFilterLeaf<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TColumnId extends BrunoTableFilterableColumnId<TColumns>,
+> =
+  | {
+      readonly columnId: TColumnId;
+      readonly type: "blank" | "notBlank";
+    }
+  | (ColumnSetFilterEnabled<TColumns, TColumnId> extends true
+      ? { readonly columnId: TColumnId; readonly type: "matchNone" }
+      : never)
+  | ({
+      readonly columnId: TColumnId;
+      readonly type: "equals" | "notEqual";
+    } & PersistedCodecOperand &
+      PersistedTextSensitivity<ColumnFilterFamily<TColumns, TColumnId>>)
+  | (ColumnInFilterEnabled<TColumns, TColumnId> extends true
+      ? {
+          readonly columnId: TColumnId;
+          readonly type: "in";
+          readonly codecId: string;
+          readonly codecVersion: number;
+          readonly filter: readonly [BrunoTableJsonValue, ...BrunoTableJsonValue[]];
+        } & PersistedTextSensitivity<ColumnFilterFamily<TColumns, TColumnId>>
+      : never)
+  | (ColumnFilterFamily<TColumns, TColumnId> extends "text"
+      ? {
+          readonly columnId: TColumnId;
+          readonly type: "contains" | "notContains" | "startsWith" | "endsWith";
+          readonly codecId: string;
+          readonly codecVersion: number;
+          readonly filter: string;
+        } & PersistedTextSensitivity<"text">
+      : never)
+  | (ColumnFilterFamily<TColumns, TColumnId> extends "numeric"
+      ? {
+          readonly columnId: TColumnId;
+          readonly type: "greaterThan" | "greaterThanOrEqual" | "lessThan" | "lessThanOrEqual";
+        } & PersistedCodecOperand
+      : never)
+  | (ColumnFilterFamily<TColumns, TColumnId> extends "numeric"
+      ? {
+          readonly columnId: TColumnId;
+          readonly type: "inRange";
+          readonly codecId: string;
+          readonly codecVersion: number;
+          readonly filter: BrunoTableJsonValue;
+          readonly filterTo: BrunoTableJsonValue;
+        }
+      : never);
+
+type PersistedFilterExpressionForColumn<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+  TColumnId extends BrunoTableFilterableColumnId<TColumns>,
+> =
+  | PersistedFilterLeaf<TColumns, TColumnId>
+  | {
+      readonly type: "AND" | "OR";
+      readonly conditions: readonly [
+        PersistedFilterExpressionForColumn<TColumns, TColumnId>,
+        ...PersistedFilterExpressionForColumn<TColumns, TColumnId>[],
+      ];
+    }
+  | {
+      readonly type: "NOT";
+      readonly condition: PersistedFilterExpressionForColumn<TColumns, TColumnId>;
+    };
+
+export type BrunoTablePersistedFilterExpression<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly [TColumnId in BrunoTableFilterableColumnId<TColumns>]: PersistedFilterExpressionForColumn<
+    TColumns,
+    TColumnId
+  >;
+}[BrunoTableFilterableColumnId<TColumns>];
+
+export type BrunoTablePersistedFilterExpressions<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = readonly BrunoTablePersistedFilterExpression<TRow, TColumns>[];
+
+export type BrunoTablePersistedColumnPinning<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = Readonly<{
+  readonly start: readonly BrunoTableColumnIdOf<TColumns>[];
+  readonly end: readonly BrunoTableColumnIdOf<TColumns>[];
+}>;
+
+export type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = Readonly<{
+  readonly version: 1;
+  readonly tableId: string;
+  readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
+  readonly orderBy: BrunoTableSortBy<TColumns>;
+  readonly groupBy: readonly BrunoTableGroupableColumnId<TColumns>[];
+  readonly groupOrderBy: readonly [] | BrunoTableGroupSortBy<TColumns>;
+  readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
+  readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
+  readonly columnWidths: Readonly<
+    Partial<Record<BrunoTableColumnIdOf<TColumns> | BrunoTableRowsColumnId, number>>
+  >;
+  readonly columnPinning: BrunoTablePersistedColumnPinning<TColumns>;
+}>;
+
 type SaveCellChangeForColumn<TRow, TColumn> = TColumn extends {
   readonly columnId: infer TColumnId extends BrunoTableColumnId;
   readonly field: infer TField extends keyof TRow & string;
@@ -1091,6 +1251,8 @@ type CommonPropsWithoutInitialOrderBy<TRow, TColumns extends BrunoTableColumns<T
   readonly tableId: string;
   readonly columns: TColumns & BrunoTableColumnIdentityGuard<NoInfer<TColumns>>;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
+  readonly initialPersistedState?: BrunoTablePersistedState<TRow, TColumns>;
+  readonly onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns>) => void;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
 };

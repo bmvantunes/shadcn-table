@@ -1,4 +1,5 @@
 import type {
+  BrunoTableJsonValue,
   BrunoTableRowId,
   BrunoTableSourceRetry,
   BrunoTableSourceStatus,
@@ -6,7 +7,6 @@ import type {
 import type { CompiledColumn } from "./compile-columns";
 import {
   applyBrunoTableGridCommand,
-  createBrunoTableColumnLayout,
   getBrunoTableColumnWidthBounds,
   getBrunoTableColumnLayoutSnapshot,
   isBrunoTableColumnLayoutCommand,
@@ -38,6 +38,10 @@ import {
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
 import { isBrunoTableQuickFilterTextWithinLimit } from "./quick-filter";
 import { applyBrunoTableSortingCommand, isBrunoTableSortingCommand } from "./sorting";
+import {
+  createBrunoTableGridPreferences,
+  createBrunoTablePersistedState,
+} from "./grid-preferences";
 
 type Listener = () => void;
 /**
@@ -48,6 +52,13 @@ type Listener = () => void;
  * future editor capabilities out of the filter controls and command implementations.
  */
 export type BrunoTableActiveEditorCommitGate = () => boolean;
+
+export type BrunoTableGridPreferencesRuntimeOptions = Readonly<{
+  readonly initialPersistedState?: unknown;
+  readonly getOnPersistChange?: () =>
+    | ((state: Readonly<Record<string, BrunoTableJsonValue>>) => void)
+    | undefined;
+}>;
 
 function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
   switch (command.type) {
@@ -71,6 +82,34 @@ function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
     case "sorting.remove":
     case "sorting.move":
     case "sorting.reset":
+      return false;
+    default:
+      return assertNeverBrunoTableGridCommand(command);
+  }
+}
+
+function isBrunoTableDurablePreferenceCommand(command: BrunoTableGridCommand): boolean {
+  switch (command.type) {
+    case "column.resize.commit":
+    case "column.reorder.commit":
+    case "column.visibility.commit":
+    case "column.pin.commit":
+    case "column.reset.order":
+    case "column.reset.widths":
+    case "column.reset.visibility":
+    case "column.reset.pinning":
+    case "column.reset.layout":
+    case "column.sort.toggle":
+    case "sorting.add":
+    case "sorting.remove":
+    case "sorting.move":
+    case "sorting.reset":
+    case "column.filter.clear":
+    case "column.filters.clear":
+    case "column.filter.reset":
+    case "column.filter.replace":
+      return true;
+    case "quick-filter.replace":
       return false;
     default:
       return assertNeverBrunoTableGridCommand(command);
@@ -440,12 +479,16 @@ export class BrunoTableGridRuntime<TRow> {
   private columnStructureSnapshot: BrunoTableColumnLayoutSnapshot;
   private columnCommands = new Map<string, BrunoTableColumnCommandSnapshot>();
   private readonly tableId: string;
+  private getOnPersistChange: NonNullable<
+    BrunoTableGridPreferencesRuntimeOptions["getOnPersistChange"]
+  >;
 
   public constructor(
     publication: BrunoTableRowPipelinePublication<TRow>,
     columns: readonly CompiledColumn[],
     queryConfiguration: BrunoTableQueryConfiguration,
     tableId: string,
+    preferencesOptions: BrunoTableGridPreferencesRuntimeOptions = {},
   ) {
     this.tableId = tableId;
     this.columns = columns;
@@ -456,7 +499,6 @@ export class BrunoTableGridRuntime<TRow> {
         rejectOverBudget: true,
       });
     this.baselineFilters = this.baselineFilterCollection.filters;
-    this.filterCollection = this.baselineFilterCollection;
     this.quickFilterFields = queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
     const normalizedBaselineOrderBy = reconcileBrunoTableOrderBy(
       queryConfiguration.baselineOrderBy,
@@ -469,7 +511,22 @@ export class BrunoTableGridRuntime<TRow> {
     )
       ? queryConfiguration.baselineOrderBy
       : normalizedBaselineOrderBy;
-    this.query = createQuerySnapshot(columns, this.filterCollection, "", this.baselineOrderBy, 0);
+    const restoredPreferences = createBrunoTableGridPreferences({
+      tableId,
+      columns,
+      initialFilters: this.baselineFilters,
+      initialOrderBy: this.baselineOrderBy,
+      initialPersistedState: preferencesOptions.initialPersistedState,
+    });
+    this.filterCollection = restoredPreferences.filterCollection;
+    this.getOnPersistChange = preferencesOptions.getOnPersistChange ?? (() => undefined);
+    this.query = createQuerySnapshot(
+      columns,
+      this.filterCollection,
+      "",
+      restoredPreferences.orderBy,
+      0,
+    );
     this.columnFilterSnapshots = createColumnFilterSnapshots(this.filterCollection);
     this.filterSnapshot = createFilterSnapshot(
       this.query,
@@ -480,7 +537,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnFilterVersions.set(columnId, 0);
       this.columnFilterCommandEpochs.set(columnId, 0);
     }
-    this.columnLayout = createBrunoTableColumnLayout(columns);
+    this.columnLayout = restoredPreferences.columnLayout;
     this.columnLayoutSnapshot = getBrunoTableColumnLayoutSnapshot(this.columnLayout);
     this.columnStructureSnapshot = this.columnLayoutSnapshot;
     this.columnCommands = createColumnCommandSnapshots(
@@ -657,6 +714,12 @@ export class BrunoTableGridRuntime<TRow> {
     queryConfiguration: BrunoTableQueryConfiguration,
   ): void => {
     this.reconcile(this.publication, columns, queryConfiguration);
+  };
+
+  public readonly setOnPersistChange = (
+    callback: ((state: Readonly<Record<string, BrunoTableJsonValue>>) => void) | undefined,
+  ): void => {
+    this.getOnPersistChange = () => callback;
   };
 
   public readonly getChromeSnapshot = (): BrunoTableChromeSnapshot => this.state.chrome;
@@ -891,6 +954,55 @@ export class BrunoTableGridRuntime<TRow> {
     subscribe(this.columnStructureListeners, listener);
 
   public readonly dispatchGridCommand = (command: BrunoTableGridCommand): boolean => {
+    const previousFilterCollection = this.filterCollection;
+    const previousOrderBy = this.query.orderBy;
+    const previousLayout = this.columnLayout;
+    let accepted = false;
+    let commandThrew = false;
+    let commandError: unknown;
+    try {
+      accepted = this.dispatchGridCommandImpl(command);
+    } catch (error) {
+      commandThrew = true;
+      commandError = error;
+    }
+    let persistThrew = false;
+    let persistError: unknown;
+    if (
+      isBrunoTableDurablePreferenceCommand(command) &&
+      (previousFilterCollection !== this.filterCollection ||
+        !sameOrderBy(previousOrderBy, this.query.orderBy) ||
+        previousLayout !== this.columnLayout)
+    ) {
+      let persistedState: Readonly<Record<string, BrunoTableJsonValue>> | undefined;
+      try {
+        persistedState = createBrunoTablePersistedState({
+          tableId: this.tableId,
+          columns: this.columns,
+          filters: this.query.filters,
+          orderBy: this.query.orderBy,
+          groupBy: Object.freeze([]),
+          groupOrderBy: Object.freeze([]),
+          columnLayout: this.columnLayout,
+        });
+      } catch (error) {
+        persistThrew = true;
+        persistError = error;
+      }
+      if (persistedState !== undefined) {
+        try {
+          this.getOnPersistChange()?.(persistedState);
+        } catch {
+          // Consumer notification failures never participate in grid command ownership.
+        }
+      }
+    }
+    if (commandThrew) throw commandError;
+    if (persistThrew) throw persistError;
+    return accepted;
+  };
+
+  private readonly dispatchGridCommandImpl = (command: BrunoTableGridCommand): boolean => {
     if (
       command.type === "quick-filter.replace" &&
       !isBrunoTableQuickFilterTextWithinLimit(command.text)

@@ -10,6 +10,7 @@ import {
   getBrunoTableColumnLayoutSnapshot,
   getBrunoTableLogicalColumnOrder,
   reconcileBrunoTableColumnLayout,
+  restoreBrunoTableColumnLayout,
 } from "./column-management";
 import type { BrunoTableColumnLayoutState, BrunoTableColumnPin } from "./column-management";
 
@@ -507,6 +508,126 @@ describe("BrunoTable column management", () => {
     expect(name?.headerName).toBe("Renamed Name");
     expect(name?.semantics.width).toBe(220);
     expect(score?.pinned).toBe("start");
+  });
+
+  it("preserves baseline-equal restored pinning across definition replacement", () => {
+    const currentColumns = compileColumns([
+      { columnId: "COL_ID_NAME", headerName: "Name", field: "name", valueType: "text" },
+      { columnId: "COL_ID_SCORE", headerName: "Score", field: "score", valueType: "number" },
+      {
+        columnId: "COL_ID_STATUS",
+        headerName: "Status",
+        field: "status",
+        valueType: "text",
+        pinned: "end",
+      },
+      {
+        columnId: "COL_ID_NEW",
+        headerName: "New",
+        field: "name",
+        valueType: "text",
+        pinned: "start",
+      },
+    ]);
+    const restored = restoreBrunoTableColumnLayout(currentColumns, {
+      columnOrder: ["COL_ID_NAME", "COL_ID_SCORE", "COL_ID_STATUS"],
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: ["COL_ID_STATUS", "COL_ID_NEW"] },
+    });
+    expect(restored.allColumns.find((column) => column.columnId === "COL_ID_NEW")?.pinned).toBe(
+      "start",
+    );
+    const replacement = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        pinned: "start",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        valueType: "text",
+        pinned: "start",
+      },
+      {
+        columnId: "COL_ID_NEW",
+        field: "name",
+        headerName: "New",
+        valueType: "text",
+        pinned: "start",
+      },
+    ]);
+
+    const next = reconcileBrunoTableColumnLayout(restored, replacement);
+
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_NAME")?.pinned).toBe(
+      undefined,
+    );
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_STATUS")?.pinned).toBe(
+      "end",
+    );
+    expect(next.allColumns.find((column) => column.columnId === "COL_ID_NEW")?.pinned).toBe(
+      "start",
+    );
+  });
+
+  it("does not commit mount-time order when no persisted identity survives", () => {
+    const restored = restoreBrunoTableColumnLayout(columns, {
+      columnOrder: ["COL_ID_REMOVED"],
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    });
+    const replacement = compileColumns([
+      { columnId: "COL_ID_STATUS", headerName: "Status", field: "status", valueType: "text" },
+      { columnId: "COL_ID_NAME", headerName: "Name", field: "name", valueType: "text" },
+      { columnId: "COL_ID_SCORE", headerName: "Score", field: "score", valueType: "number" },
+    ]);
+
+    expect(restored.orderOverride).toBeUndefined();
+    expect(
+      reconcileBrunoTableColumnLayout(restored, replacement).allColumns.map(
+        (column) => column.columnId,
+      ),
+    ).toEqual(["COL_ID_STATUS", "COL_ID_NAME", "COL_ID_SCORE"]);
+  });
+
+  it("restores a very wide complete order within one linear initialization budget", () => {
+    const wideColumns = compileColumns(
+      Array.from({ length: 10_000 }, (_unused, index) => ({
+        columnId: `COL_ID_WIDE_${String(index)}`,
+        headerName: `Wide ${String(index)}`,
+        field: "name",
+        valueType: "text" as const,
+      })),
+    );
+    const columnOrder = wideColumns.map((column) => column.columnId).reverse();
+    const start = performance.now();
+
+    const restored = restoreBrunoTableColumnLayout(wideColumns, {
+      columnOrder,
+      columnVisibility: {},
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    });
+
+    expect(performance.now() - start).toBeLessThan(150);
+    expect(restored.allColumns[0]?.columnId).toBe("COL_ID_WIDE_9999");
+
+    const reconcileStart = performance.now();
+    const reconciled = reconcileBrunoTableColumnLayout(restored, wideColumns);
+    expect(performance.now() - reconcileStart).toBeLessThan(150);
+    expect(reconciled.allColumns[0]?.columnId).toBe("COL_ID_WIDE_9999");
   });
 
   it("reconciles visible order when definitions are reordered", () => {

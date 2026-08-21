@@ -121,6 +121,40 @@ state or controls. Server-side runtime virtualization remains planned backlog wo
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.
 
+## Grid Preferences
+
+`initialPersistedState` accepts one version-1, JSON-safe replacement snapshot when a Table Instance
+is constructed. BrunoTable deterministically sanitizes it against the current `tableId`, compiled
+Column Definitions, operator capabilities, and Value Type codec identities before the first server
+or client render. Valid restored filters, sorting, and layout win over their initial baselines;
+changing the prop later does not control the runtime. Filter and sorting Reset commands still return
+to `initialFilters` and the mandatory non-empty `initialOrderBy`, while Clear removes Grid Filters.
+
+`onPersistChange` synchronously receives one complete replacement snapshot after a committed Grid
+Filter, sorting, column-order, visibility, width, or pinning change. Restoration, hydration, source
+publications, Quick Filter, focus, selection, scrolling, and other transient activity do not emit.
+The callback may be replaced without recreating the Grid Runtime; its return value and failures do
+not roll back committed grid state or escape Grid command dispatch. Applications own storage,
+transport, retry, authorization, error reporting, and publication ordering—BrunoTable does not
+access Local Storage or any persistence backend. `columnWidths` contains only explicit committed
+user width overrides, so definition-provided defaults remain free to evolve between releases.
+
+Persisted value operands carry the owning column's `codecId` and `codecVersion` and contain only
+that compiled Value Type's JSON-safe `encodePersisted` output. Text-search operators persist their
+bounded search operand directly as a string because it is search intent rather than a column value;
+codec identity and version are still checked for compatibility. Restoration calls the matching
+`decodePersisted` implementation for value operands and drops stale, malformed, unknown, or
+incompatible evidence. A restored search operand that normalizes to empty text under its own case
+and accent sensitivity is also dropped because compiled admission rejects search intent that would
+degenerate to Match All or Match None depending on the operator.
+Native `bigint` and Effect BigDecimal objects therefore never appear directly in the snapshot.
+If a custom `encodePersisted` implementation returns a value that is not JSON-safe, the committing
+preference command throws a `TypeError`; column compilation does not pre-execute value codecs.
+An unreadable or malformed persisted `filters` slice preserves `initialFilters`, while a readable
+slice containing only stale or incompatible leaves validly restores no active Grid Filters.
+The format reserves ordered Group By and grouped-sort fields for capable future runtimes, but the
+current Client runtime drops them because it does not install grouping.
+
 ## Application styles
 
 Import the canonical shadcn stylesheet once from an application CSS entry point, include the

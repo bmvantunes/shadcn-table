@@ -74,10 +74,12 @@ function admitBigDecimalParts(
 
   const comparisonMetadata = trustedWireSafeBigDecimalComparisonMetadata(owned);
   if (comparisonMetadata === undefined) return undefined;
+  const canonicalText = BigDecimal.format(owned);
+  if (canonicalText.length > maximumBigDecimalTextCodeUnits) return undefined;
 
   return Object.freeze({
     value: owned,
-    canonicalText: BigDecimal.format(owned),
+    canonicalText,
     comparisonMetadata,
   });
 }
