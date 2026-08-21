@@ -16,16 +16,21 @@ Grid-local commands attach to the grid surface. Descendant-exit Escape attaches 
 the owning document and validates grid containment, allowing a custom renderer's React handler to
 retain Escape by stopping propagation before it reaches that target. Active resize/reorder Escape
 remains an immediate window-capture workflow command. That narrow framework-agnostic capture seam
-uses `@tanstack/hotkeys` for matching because the React Adapter has no capture option.
-The React Adapter and capture Adapter are the only current production modules allowed to receive a raw `KeyboardEvent` and
-passes feature owners a key- and modifier-free gesture capability containing only command effects
+uses `@tanstack/hotkeys` for matching because the React Adapter has no capture option. The same
+core boundary provides a bubble listener only for a foreign owning document, where the React
+manager cannot safely classify events across DOM realms; it preserves the same definitions and
+post-React propagation order.
+The React Adapter and capture Adapter are the only current production modules allowed to receive a raw `KeyboardEvent`. Together they
+pass feature owners a key- and modifier-free gesture capability containing only command effects
 and ownership evidence. The build guard maintains an explicit finite map from exact normalized
 root-relative module paths to evidence capabilities. The React Adapter alone may import React
-Hotkeys; the capture Adapter alone may import Hotkeys core and install its capture listener. Neither
+Hotkeys; the core listener Adapter alone may import Hotkeys core and install its exact capture and
+foreign-document bubble listeners. Neither
 may interpret event keys or modifiers. A future native editor/input/IME owner may add
 a separate `native-evidence` entry whose component-owned handler can inspect composition evidence
-but cannot interpret keys or modifiers. The emitted guard permits handler/listener evidence only
-when that exact source capability exists, with the source scan providing attribution after bundling.
+but cannot interpret keys or modifiers. The emitted guard permits only the exact listener lifecycle
+structurally attributed to a sanctioned boundary; adding a future native boundary also requires a
+correspondingly narrow emitted attribution rule, with the source scan remaining authoritative.
 It must not weaken the rule or reintroduce binding inference.
 
 The Adapter scopes ordinary commands to the owning grid surface and explicitly bridges the few

@@ -242,6 +242,11 @@ function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
   }, 0);
 }
 
+function isNodeInBrunoTableRealm(owner: HTMLElement, target: EventTarget | null): target is Node {
+  const OwnerNode = owner.ownerDocument.defaultView?.Node;
+  return OwnerNode !== undefined && target instanceof OwnerNode;
+}
+
 function cellDomId(instanceId: string, tableId: string, rowId: string, columnId: string): string {
   return `bruno-table-cell-${encodeDomIdSegment(instanceId)}-${encodeDomIdSegment(tableId)}-${encodeDomIdSegment(rowId)}-${encodeDomIdSegment(columnId)}`;
 }
@@ -2079,11 +2084,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         gestureCancel.current();
         return;
       }
+      if (event.defaultPrevented) return;
       const grid = gridElement.current;
       if (
         grid !== null &&
         event.target !== grid &&
-        event.target instanceof Node &&
+        isNodeInBrunoTableRealm(grid, event.target) &&
         grid.contains(event.target)
       ) {
         event.preventDefault();
@@ -2096,7 +2102,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       if (
         grid !== null &&
         event.target !== grid &&
-        event.target instanceof Node &&
+        isNodeInBrunoTableRealm(grid, event.target) &&
         grid.contains(event.target)
       ) {
         yieldGridTabStopForNativeTraversal(grid);
@@ -2108,7 +2114,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     navigate: runNavigation,
     page: runPageNavigation,
   });
-  useBrunoTableColumnGestureEscape((event) => {
+  useBrunoTableColumnGestureEscape(gridElement, (event) => {
     if (columnGesture.current === undefined) return;
     event.preventDefault();
     gestureCancel.current();

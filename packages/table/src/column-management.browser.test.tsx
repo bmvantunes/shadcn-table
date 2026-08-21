@@ -2908,27 +2908,36 @@ describe("BrunoTable column management browser surface", () => {
       (event) => inactiveEvents.push(event),
     );
     try {
+      const ownerColumns = [
+        columns[0],
+        columns[1],
+        {
+          ...columns[2],
+          cellRenderer: () => <input aria-label="Owner gesture focus destination" />,
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
       const screen = await render(
         <>
-          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={ownerTableId} />
-          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
-          <input
-            aria-label="Shared capture focus destination"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") event.stopPropagation();
-            }}
+          <BrunoTableClient<Row, typeof ownerColumns>
+            {...tableProps}
+            columns={ownerColumns}
+            tableId={ownerTableId}
           />
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
         </>,
       );
       const ownerRegion = screen.getByRole("region", { name: ownerTableId, exact: true });
       const inactiveRegion = screen.getByRole("region", { name: inactiveTableId, exact: true });
       const ownerHandle = ownerRegion.getByRole("button", { name: "Reorder Status" }).element();
       const ownerHeader = ownerRegion.getByRole("columnheader", { name: /Status/u }).element();
+      const ownerGrid = ownerRegion.getByRole("grid").element();
+      const focusGrid = vi.spyOn(ownerGrid, "focus");
       const inactiveHeader = inactiveRegion
         .getByRole("columnheader", { name: /Status/u })
         .element();
-      const destination = screen
-        .getByRole("textbox", { name: "Shared capture focus destination" })
+      const destination = ownerRegion
+        .getByRole("textbox", { name: "Owner gesture focus destination" })
+        .first()
         .element();
 
       ownerHandle.dispatchEvent(
@@ -2947,6 +2956,7 @@ describe("BrunoTable column management browser surface", () => {
         }),
       );
       destination.focus();
+      focusGrid.mockClear();
       const escape = new KeyboardEvent("keydown", {
         bubbles: true,
         cancelable: true,
@@ -2961,6 +2971,7 @@ describe("BrunoTable column management browser surface", () => {
 
       await new Promise(requestAnimationFrame);
       expect(escape.defaultPrevented).toBe(true);
+      expect(focusGrid).not.toHaveBeenCalled();
       expect(ownerHeader).toHaveAttribute("aria-colindex", "3");
       expect(inactiveHeader).toHaveAttribute("aria-colindex", "3");
       expect(ownerEvents.filter((event) => event.phase === "attach")).toHaveLength(3);

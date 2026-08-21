@@ -1,5 +1,6 @@
 import { getHotkeyManager, HotkeysProvider } from "@tanstack/react-hotkeys";
-import { StrictMode, useRef } from "react";
+import { StrictMode, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { cleanup, render } from "vitest-browser-react";
 
@@ -56,8 +57,32 @@ function WorkflowActionProbe({ action }: Readonly<{ action: () => void }>) {
 }
 
 function CaptureAdapterProbe({ action, label }: Readonly<{ action: () => void; label: string }>) {
-  useBrunoTableColumnGestureEscape(action);
-  return <section role="region" aria-label={label} />;
+  const ownerRef = useRef<HTMLElement>(null);
+  useBrunoTableColumnGestureEscape(ownerRef, action);
+  return <section ref={ownerRef} role="region" aria-label={label} />;
+}
+
+function OwningDocumentAdapterProbe({
+  captureAction,
+  commands,
+  onInput,
+  ownerDocument,
+}: Readonly<{
+  captureAction: () => void;
+  commands: BrunoTableGridHotkeyCommands;
+  onInput: (input: HTMLInputElement | null) => void;
+  ownerDocument: Document;
+}>) {
+  const ownerRef = useRef<HTMLElement>(null);
+  const setInput = useCallback((input: HTMLInputElement | null) => onInput(input), [onInput]);
+  useBrunoTableGridHotkeys(ownerRef, commands);
+  useBrunoTableColumnGestureEscape(ownerRef, captureAction);
+  return createPortal(
+    <section ref={ownerRef} role="region" aria-label="Secondary-document table hotkeys">
+      <input ref={setInput} aria-label="Secondary-document descendant" />
+    </section>,
+    ownerDocument.body,
+  );
 }
 
 afterEach(async () => {
@@ -324,6 +349,132 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       new KeyboardEvent("keydown", { bubbles: true, isComposing: true, key: "Enter" }),
     );
     expect(command).not.toHaveBeenCalled();
+  });
+
+  test("binds descendant Escape to the grid owner's document and DOM realm", async () => {
+    const manager = getHotkeyManager();
+    const baselineRegistrations = manager.registrations.state.size;
+    const escape = vi.fn();
+    const replacementEscape = vi.fn();
+    const capture = vi.fn();
+    const replacementCapture = vi.fn();
+    let input: HTMLInputElement | null = null;
+    const setInput = (candidate: HTMLInputElement | null) => {
+      input = candidate;
+    };
+    const screen = await render(
+      <iframe aria-label="Secondary document" role="document" title="Secondary document" />,
+    );
+    const frame = screen.getByRole("document", { name: "Secondary document" }).element();
+    if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
+      throw new Error("Expected a same-origin secondary document.");
+    }
+    const ownerDocument = frame.contentDocument;
+    const ownerWindow = frame.contentWindow;
+    if (ownerWindow === null) throw new Error("Expected a secondary window.");
+    const ownerGlobal = ownerWindow as Window & typeof globalThis;
+    const addEventListener = vi.spyOn(ownerDocument, "addEventListener");
+    const removeEventListener = vi.spyOn(ownerDocument, "removeEventListener");
+    const addWindowListener = vi.spyOn(ownerWindow, "addEventListener");
+    const removeWindowListener = vi.spyOn(ownerWindow, "removeEventListener");
+
+    await screen.rerender(
+      <>
+        <iframe aria-label="Secondary document" role="document" title="Secondary document" />
+        <StrictMode>
+          <OwningDocumentAdapterProbe
+            captureAction={capture}
+            commands={probeCommands({ escape })}
+            onInput={setInput}
+            ownerDocument={ownerDocument}
+          />
+        </StrictMode>
+      </>,
+    );
+    await vi.waitFor(() => {
+      expect(input).not.toBeNull();
+      expect(
+        [...manager.registrations.state.values()].filter(
+          (registration) => registration.target === ownerDocument,
+        ),
+      ).toHaveLength(0);
+      expect(
+        addEventListener.mock.calls.filter(([type]) => type === "keydown").length -
+          removeEventListener.mock.calls.filter(([type]) => type === "keydown").length,
+      ).toBe(1);
+    });
+
+    const foreignInput = input as HTMLInputElement | null;
+    if (foreignInput === null) throw new Error("Expected the secondary-document descendant.");
+    const ForeignKeyboardEvent = ownerGlobal.KeyboardEvent;
+    foreignInput.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      }),
+    );
+    expect(escape).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+
+    await screen.rerender(
+      <>
+        <iframe aria-label="Secondary document" role="document" title="Secondary document" />
+        <StrictMode>
+          <OwningDocumentAdapterProbe
+            key="hmr-remount"
+            captureAction={replacementCapture}
+            commands={probeCommands({ escape: replacementEscape })}
+            onInput={setInput}
+            ownerDocument={ownerDocument}
+          />
+        </StrictMode>
+      </>,
+    );
+    const replacementInput = input as HTMLInputElement | null;
+    if (replacementInput === null) {
+      throw new Error("Expected the remounted secondary-document owner.");
+    }
+    replacementInput.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(escape).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(replacementEscape).toHaveBeenCalledOnce();
+    expect(replacementCapture).toHaveBeenCalledOnce();
+    const documentKeydownAdds = () =>
+      addEventListener.mock.calls.filter(([type]) => type === "keydown");
+    const documentKeydownRemoves = () =>
+      removeEventListener.mock.calls.filter(([type]) => type === "keydown");
+    expect(documentKeydownAdds().length - documentKeydownRemoves().length).toBe(1);
+    const captureAdds = () =>
+      addWindowListener.mock.calls.filter((call) => call[0] === "keydown" && call[2] === true);
+    const captureRemoves = () =>
+      removeWindowListener.mock.calls.filter((call) => call[0] === "keydown" && call[2] === true);
+    expect(captureAdds().length - captureRemoves().length).toBe(1);
+
+    await cleanup();
+    expect(documentKeydownAdds().length - documentKeydownRemoves().length).toBe(0);
+    expect(captureAdds().length - captureRemoves().length).toBe(0);
+    for (const [eventType, listener, options] of documentKeydownAdds()) {
+      expect(
+        documentKeydownRemoves().some(
+          (call) => call[0] === eventType && call[1] === listener && call[2] === options,
+        ),
+      ).toBe(true);
+    }
+    for (const [eventType, listener, options] of captureAdds()) {
+      expect(
+        captureRemoves().some(
+          (call) => call[0] === eventType && call[1] === listener && call[2] === options,
+        ),
+      ).toBe(true);
+    }
+    ownerWindow.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(replacementCapture).toHaveBeenCalledOnce();
+    expect(manager.registrations.state.size).toBe(baselineRegistrations);
   });
 
   test("keeps workflow ownership attached while updating to the latest action", async () => {

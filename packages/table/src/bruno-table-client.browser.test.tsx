@@ -7795,6 +7795,84 @@ describe("BrunoTableClient browser surface", () => {
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
   });
 
+  test("keeps real table Escape ownership isolated for a foreign-realm event", async () => {
+    const baselineRegistrations = getHotkeyManager().registrations.state.size;
+    const ownerColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <input aria-label={`Foreign event owner ${row.name}`} defaultValue={row.name} />
+        ),
+      },
+      columns[1],
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <>
+        <iframe
+          aria-label="Foreign table document"
+          role="document"
+          title="Foreign table document"
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FOREIGN_REALM_OWNER"
+          getRowId={(row: Row) => row.id}
+          columns={ownerColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+        <BrunoTableClient
+          tableId="TABLE_ID_FOREIGN_REALM_SIBLING"
+          getRowId={(row: Row) => row.id}
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </>,
+    );
+    const frame = screen.getByRole("document", { name: "Foreign table document" }).element();
+    if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
+      throw new Error("Expected a same-origin foreign table document.");
+    }
+    const ownerDocument = frame.contentDocument;
+    const ownerWindow = frame.contentWindow;
+    if (ownerWindow === null) throw new Error("Expected a foreign table window.");
+    const ownerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_FOREIGN_REALM_OWNER" });
+    const siblingGrid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_FOREIGN_REALM_SIBLING",
+    });
+    const ownerControl = screen.getByRole("textbox", { name: "Foreign event owner Ada" });
+    ownerGrid.element().focus();
+    await vi.waitFor(() =>
+      expect(ownerGrid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const initialActiveId = ownerGrid.element().getAttribute("aria-activedescendant");
+    const focusOwner = vi.spyOn(ownerGrid.element(), "focus");
+    const focusSibling = vi.spyOn(siblingGrid.element(), "focus");
+    const ForeignKeyboardEvent = (ownerWindow as Window & typeof globalThis).KeyboardEvent;
+
+    focusOwner.mockClear();
+
+    ownerControl.element().focus();
+    const escape = new ForeignKeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    ownerControl.element().dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(ownerGrid.element());
+    expect(focusOwner).toHaveBeenCalledOnce();
+    expect(focusSibling).not.toHaveBeenCalled();
+    expect(ownerGrid.element().getAttribute("aria-activedescendant")).toBe(initialActiveId);
+
+    await screen.unmount();
+    expect(getHotkeyManager().registrations.state.size).toBe(baselineRegistrations);
+    ownerDocument.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(focusSibling).not.toHaveBeenCalled();
+  });
+
   test("enters native summary controls only through the grid interaction command", async () => {
     const summaryColumns = [
       {

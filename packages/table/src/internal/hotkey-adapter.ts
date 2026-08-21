@@ -1,5 +1,5 @@
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import type {
   Hotkey,
@@ -9,7 +9,10 @@ import type {
 } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
-import { registerBrunoTableCaptureHotkeys } from "./hotkey-capture";
+import {
+  registerBrunoTableCaptureHotkeys,
+  registerBrunoTableForeignDocumentHotkeys,
+} from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
 // closed Key union. Keep the compatibility assertion at this one Adapter seam.
@@ -382,35 +385,128 @@ export function useBrunoTableGridHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: BrunoTableGridHotkeyCommands,
 ): void {
+  const ownerDocumentRef = useRef<Document | null>(null);
+  const reactDocumentTargetRef = useRef<Document | null>(null);
+  useLayoutEffect(() => {
+    const ownerDocument = target.current?.ownerDocument ?? null;
+    ownerDocumentRef.current = ownerDocument;
+    reactDocumentTargetRef.current =
+      ownerDocument?.defaultView === (typeof window === "undefined" ? undefined : window)
+        ? ownerDocument
+        : null;
+  });
   const bindings = createBrunoTableGridHotkeyBindings(commands);
+  const escapeCommandRef = useRef(commands.escape);
+  useEffect(() => {
+    escapeCommandRef.current = commands.escape;
+  }, [commands.escape]);
   const escapeBindings = bindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length).map((binding) => ({
     ...binding,
     onTrigger: ((event, context) => {
       const owner = target.current;
       const eventTarget = event.target;
-      if (owner === null || !(eventTarget instanceof Node) || !owner.contains(eventTarget)) return;
+      const OwnerNode = owner?.ownerDocument.defaultView?.Node;
+      if (
+        owner === null ||
+        OwnerNode === undefined ||
+        !(eventTarget instanceof OwnerNode) ||
+        !owner.contains(eventTarget)
+      ) {
+        return;
+      }
       binding.onTrigger(event, context);
     }) satisfies HotkeyCallback,
   }));
   useBrunoTableHotkeys(target, bindings.slice(BRUNO_TABLE_ESCAPE_HOTKEYS.length), "error");
-  useBrunoTableHotkeys(typeof document === "undefined" ? null : document, escapeBindings, "allow");
+  // React Hotkeys accepts Documents directly but types refs as element-only.
+  // The ref is resolved after this hook's layout effect and before its effect.
+  useBrunoTableHotkeys(
+    reactDocumentTargetRef as unknown as RefObject<HTMLElement | null>,
+    escapeBindings,
+    "allow",
+  );
+  const foreignRegistrationRef = useRef<
+    Readonly<{ owner: HTMLElement; cleanup: () => void }> | undefined
+  >(undefined);
+  useEffect(() => {
+    const owner = target.current;
+    const ownerDocument = ownerDocumentRef.current;
+    const previous = foreignRegistrationRef.current;
+    if (previous?.owner === owner) return;
+    previous?.cleanup();
+    foreignRegistrationRef.current = undefined;
+    if (
+      owner === null ||
+      ownerDocument === null ||
+      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
+    ) {
+      return;
+    }
+    const escapeBindings = BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
+      hotkey,
+      onTrigger: ((event) => {
+        if (event.isComposing) return;
+        const currentOwner = target.current;
+        const eventTarget = event.target;
+        const OwnerNode = currentOwner?.ownerDocument.defaultView?.Node;
+        if (
+          currentOwner === null ||
+          OwnerNode === undefined ||
+          !(eventTarget instanceof OwnerNode) ||
+          !currentOwner.contains(eventTarget)
+        ) {
+          return;
+        }
+        escapeCommandRef.current(event);
+      }) satisfies HotkeyCallback,
+    }));
+    const cleanupDocument = registerBrunoTableForeignDocumentHotkeys(ownerDocument, escapeBindings);
+    foreignRegistrationRef.current = {
+      owner,
+      cleanup: cleanupDocument,
+    };
+  });
+  useEffect(
+    () => () => {
+      foreignRegistrationRef.current?.cleanup();
+      foreignRegistrationRef.current = undefined;
+    },
+    [],
+  );
 }
 
 export function useBrunoTableColumnGestureEscape(
+  target: RefObject<HTMLElement | null>,
   onTrigger: (event: BrunoTableHotkeyGesture) => void,
 ): void {
   const onTriggerRef = useRef(onTrigger);
   useEffect(() => {
     onTriggerRef.current = onTrigger;
   }, [onTrigger]);
+  const registrationRef = useRef<
+    Readonly<{ ownerWindow: Window; cleanup: () => void }> | undefined
+  >(undefined);
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    return registerBrunoTableCaptureHotkeys(
-      window,
+    const ownerWindow = target.current?.ownerDocument.defaultView;
+    const previous = registrationRef.current;
+    if (previous?.ownerWindow === ownerWindow) return;
+    previous?.cleanup();
+    registrationRef.current = undefined;
+    if (ownerWindow === undefined || ownerWindow === null) return;
+    const cleanup = registerBrunoTableCaptureHotkeys(
+      ownerWindow,
       BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
       (event) => onTriggerRef.current(event),
     );
-  }, []);
+    registrationRef.current = { ownerWindow, cleanup };
+  });
+  useEffect(
+    () => () => {
+      registrationRef.current?.cleanup();
+      registrationRef.current = undefined;
+    },
+    [],
+  );
 }
 
 export function useBrunoTableFilterWorkflowEscape(

@@ -50,7 +50,7 @@ function AdapterBenchmarkProbe() {
     page: () => undefined,
   };
   useBrunoTableGridHotkeys(ownerRef, commands);
-  useBrunoTableColumnGestureEscape(() => undefined);
+  useBrunoTableColumnGestureEscape(ownerRef, () => undefined);
   return <section ref={ownerRef} role="region" aria-label="Adapter Browser benchmark" />;
 }
 

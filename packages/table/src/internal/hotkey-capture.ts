@@ -1,6 +1,11 @@
 import { createMultiHotkeyHandler } from "@tanstack/hotkeys";
 
-import type { Hotkey, HotkeyCallback } from "@tanstack/hotkeys";
+import type { Hotkey, HotkeyCallback, RegisterableHotkey } from "@tanstack/hotkeys";
+
+export type BrunoTableCoreHotkeyBinding = Readonly<{
+  hotkey: RegisterableHotkey;
+  onTrigger: HotkeyCallback;
+}>;
 
 export function registerBrunoTableCaptureHotkeys(
   target: Window,
@@ -20,4 +25,18 @@ export function registerBrunoTableCaptureHotkeys(
   });
   target.addEventListener("keydown", handler, true);
   return () => target.removeEventListener("keydown", handler, true);
+}
+
+export function registerBrunoTableForeignDocumentHotkeys(
+  target: Document,
+  bindings: readonly BrunoTableCoreHotkeyBinding[],
+): () => void {
+  const handlers: Partial<Record<Hotkey, HotkeyCallback>> = {};
+  for (const binding of bindings) handlers[binding.hotkey as Hotkey] = binding.onTrigger;
+  const bubbleHandler = createMultiHotkeyHandler(handlers, {
+    preventDefault: false,
+    stopPropagation: false,
+  });
+  target.addEventListener("keydown", bubbleHandler);
+  return () => target.removeEventListener("keydown", bubbleHandler);
 }
