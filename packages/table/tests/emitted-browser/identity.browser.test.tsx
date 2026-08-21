@@ -7,10 +7,15 @@ import { cleanup, render } from "vitest-browser-react";
 
 import {
   BrunoTableBigIntColumn,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
   BrunoTableBooleanColumn,
   BrunoTableClient,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
   BrunoTableNumberColumn,
   BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
   BrunoTableSelectColumn,
   BrunoTableToolbar,
 } from "../../dist/index.mjs";
@@ -124,11 +129,28 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
     >
       <BrunoTableToolbar>
         <BrunoTableQuickFilter />
+        <BrunoTableFilterControl<FilterRow, typeof columns> ownership="grid">
+          {(commands) => (
+            <button type="button" onClick={() => commands.clearAll()}>
+              Clear Grid Filters
+            </button>
+          )}
+        </BrunoTableFilterControl>
+        <BrunoTableResultRowCount />
+        <BrunoTableLoadedRowCount />
+        <BrunoTableActiveFilterCount />
+        <BrunoTableActiveSortCount />
       </BrunoTableToolbar>
     </BrunoTableClient>,
   );
 
   await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+  await expect.element(screen.getByRole("status", { name: "Result rows" })).toHaveTextContent("1");
+  await expect.element(screen.getByRole("status", { name: "Loaded rows" })).toHaveTextContent("2");
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1");
+  await expect.element(screen.getByRole("status", { name: "Active sorts" })).toHaveTextContent("1");
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
     .toBeInTheDocument();
@@ -155,10 +177,27 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
     .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1 active filter");
   await userEvent.keyboard("{Escape}");
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
     .toHaveFocus();
+  await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("2 active filters");
+  await userEvent.click(screen.getByRole("button", { name: "Clear Grid Filters" }));
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1 active filter");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 test("applies emitted live Set Filter inclusion and normalization", async () => {

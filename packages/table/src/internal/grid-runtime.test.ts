@@ -145,6 +145,25 @@ function createClientRuntime(
 }
 
 describe("BrunoTableGridRuntime sorting invariant", () => {
+  it("notifies every Result Row Count subscriber before rethrowing a listener failure", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const laterListener = vi.fn();
+    adapter.subscribeResultRowCount(() => {
+      throw new Error("listener failed");
+    });
+    adapter.subscribeResultRowCount(laterListener);
+
+    expect(() => adapter.publishResultRowCount(0)).toThrow("listener failed");
+    expect(laterListener).toHaveBeenCalledOnce();
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+  });
+
   it("normalizes an empty baseline when sortable columns are installed", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([]),
@@ -3470,6 +3489,69 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getQuerySnapshot().generation).toBe(3);
     expect(queryListener).toHaveBeenCalledTimes(3);
     expect(sortingListener).toHaveBeenCalledOnce();
+  });
+
+  it("publishes named toolbar counts only when their semantic number changes", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_ALIAS",
+        field: "name",
+        headerName: "Alias",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada" }]),
+      (row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const loaded = vi.fn();
+    const filters = vi.fn();
+    const sorts = vi.fn();
+    runtime.subscribeLoadedRowCount(loaded);
+    runtime.subscribeActiveFilterCount(filters);
+    runtime.subscribeActiveSortCount(sorts);
+
+    runtime.publish(source([{ id: "first", name: "Grace" }]));
+    runtime.dispatchGridCommand({
+      type: "column.sort.toggle",
+      columnId: "COL_ID_NAME",
+      multi: false,
+    });
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "contains", filter: "a" },
+    });
+    runtime.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_NAME",
+      filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
+    });
+    expect(loaded).not.toHaveBeenCalled();
+    expect(filters).toHaveBeenCalledOnce();
+    expect(sorts).not.toHaveBeenCalled();
+
+    runtime.dispatchGridCommand({ type: "sorting.add", columnId: "COL_ID_ALIAS" });
+    runtime.publish(
+      source([
+        { id: "first", name: "Grace" },
+        { id: "second", name: "Ada" },
+      ]),
+    );
+    expect(loaded).toHaveBeenCalledOnce();
+    expect(sorts).toHaveBeenCalledOnce();
+    expect(runtime.getLoadedRowCountSnapshot()).toBe(2);
+    expect(runtime.getActiveFilterCountSnapshot()).toBe(1);
+    expect(runtime.getActiveSortCountSnapshot()).toBe(2);
   });
 
   it("routes panel sorting commands through one non-empty runtime projection", () => {

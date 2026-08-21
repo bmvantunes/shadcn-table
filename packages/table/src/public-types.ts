@@ -1283,6 +1283,7 @@ export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+    readonly externalFilters?: never;
     readonly viewportSource?: never;
   };
 
@@ -1296,6 +1297,7 @@ export type BrunoTableServerProps<
   readonly getRowId?: never;
   readonly viewportSource: BrunoTableServerSource<TViewport>;
   readonly clientSource?: never;
+  readonly externalFilters?: never;
   readonly editable?: never;
   readonly getRowVersion?: never;
   readonly onSaveEdits?: never;

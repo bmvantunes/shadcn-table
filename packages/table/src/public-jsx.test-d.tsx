@@ -1,7 +1,12 @@
 import {
   BrunoTableClient,
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
   BrunoTableComputedColumn,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
   BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
   BrunoTableToolbar,
 } from "./index";
 
@@ -97,6 +102,13 @@ const validClient = (
   >
     <BrunoTableToolbar>
       <BrunoTableQuickFilter />
+      <BrunoTableFilterControl<Row, typeof columns> ownership="grid">
+        {(commands) => <button onClick={() => commands.clearAll()}>Clear Grid Filters</button>}
+      </BrunoTableFilterControl>
+      <BrunoTableResultRowCount />
+      <BrunoTableLoadedRowCount />
+      <BrunoTableActiveFilterCount />
+      <BrunoTableActiveSortCount />
     </BrunoTableToolbar>
   </BrunoTableClient>
 );

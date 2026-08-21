@@ -1,4 +1,18 @@
-export { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "./bruno-table-client";
+export {
+  BrunoTableActiveFilterCount,
+  BrunoTableActiveSortCount,
+  BrunoTableClient,
+  BrunoTableFilterControl,
+  BrunoTableLoadedRowCount,
+  BrunoTableQuickFilter,
+  BrunoTableResultRowCount,
+  BrunoTableToolbar,
+  BrunoTableToolbarSpacer,
+} from "./bruno-table-client";
+export type {
+  BrunoTableFilterControlProps,
+  BrunoTableGridFilterCommandCapability,
+} from "./bruno-table-client";
 export { BrunoTableComputedColumn } from "./public-types";
 export {
   BrunoTableBigIntColumn,

@@ -84,7 +84,7 @@ if (
     (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
   ) ||
   /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
-  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription)/u.test(
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
   /installTableScopedListener/u.test(rootRuntime) ||
@@ -115,6 +115,14 @@ if (/\bany\b/u.test(declarations)) {
 
 if (/tanstack/iu.test(declarations)) {
   throw new Error("A TanStack implementation type leaked into the @bruno/table declarations.");
+}
+
+if (
+  /BrunoTable(?:ToolbarController|ToolbarState|ToolbarRowStore|ToolbarCellStore)/u.test(
+    declarations,
+  )
+) {
+  throw new Error("The toolbar public declarations expose broad or row/cell-owned infrastructure.");
 }
 
 if (
@@ -288,19 +296,25 @@ const actualRuntimeExports = Object.keys(publicModule).toSorted((left, right) =>
   left.localeCompare(right),
 );
 const expectedRuntimeExports = [
+  "BrunoTableActiveFilterCount",
+  "BrunoTableActiveSortCount",
   "BrunoTableBigIntColumn",
   "BrunoTableBooleanColumn",
   "BrunoTableClient",
   "BrunoTableComputedColumn",
+  "BrunoTableFilterControl",
+  "BrunoTableLoadedRowCount",
   "BrunoTableNumberColumn",
   "BrunoTableQuickFilter",
+  "BrunoTableResultRowCount",
   "BrunoTableSelectColumn",
   "BrunoTableTextColumn",
   "BrunoTableToolbar",
+  "BrunoTableToolbarSpacer",
 ].toSorted((left, right) => left.localeCompare(right));
 
 if (JSON.stringify(actualRuntimeExports) !== JSON.stringify(expectedRuntimeExports)) {
-  throw new Error("The @bruno/table runtime exports do not match the strict column surface.");
+  throw new Error("The @bruno/table runtime exports do not match the strict public surface.");
 }
 
 const effectModule = await import("@bruno/table/effect");
