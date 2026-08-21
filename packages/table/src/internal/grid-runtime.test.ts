@@ -4153,15 +4153,16 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const second = { id: "second", name: "Second" } satisfies Row;
     const { adapter, runtime, view } = createSubject([initial]);
     const events: string[] = [];
+    const initializedResults: boolean[] = [];
     view.subscribeRowSpace(() => {
       const installedName = String(
         view.getCellValueSnapshot(view.getRowSpaceSnapshot()?.getRowId(0) ?? "", "COL_ID_NAME"),
       );
       if (installedName === "Outer") {
         runtime.publish(adapter.publish(source([newest, second])));
-        expect(
+        initializedResults.push(
           adapter.initializeResultRowCount(view.getQuerySnapshot(), view.getRowSpaceSnapshot()),
-        ).toBe(true);
+        );
       } else {
         adapter.publishResultRowCount(view.getLoadedRowCountSnapshot());
       }
@@ -4172,6 +4173,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
 
     runtime.publish(adapter.publish(source([outer])));
 
+    expect(initializedResults).toEqual([true]);
     expect(events).toEqual(["1:1", "2:2"]);
   });
 

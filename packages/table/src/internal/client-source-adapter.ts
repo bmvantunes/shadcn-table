@@ -491,7 +491,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         }
       } catch (error) {
         snapshot = nextRows;
-        notifyRowsStoreListeners(listeners, { value: error });
+        notifyRowsStoreListeners(listeners, Object.freeze({ value: error }));
         return;
       }
       snapshot = nextRows;
@@ -1487,7 +1487,7 @@ function notifyRowsStoreListeners(
     try {
       listener();
     } catch (error) {
-      firstError ??= { value: error };
+      firstError ??= Object.freeze({ value: error });
     }
   }
   if (firstError !== undefined) throw firstError.value;
