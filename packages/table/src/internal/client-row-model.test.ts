@@ -1372,10 +1372,14 @@ describe("Client row model", () => {
       Object.defineProperty(root, Symbol(`metadata-${String(index)}`), { value: index });
     }
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
-    expect(sanitizeClientInitialFilters(root, columns)).toEqual([
-      { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
-    ]);
-    expect(ownKeys.mock.calls.some(([target]) => target === root)).toBe(false);
+    try {
+      expect(sanitizeClientInitialFilters(root, columns)).toEqual([
+        { columnId: "COL_ID_NAME", type: "startsWith", filter: "A" },
+      ]);
+      expect(ownKeys.mock.calls.some(([target]) => target === root)).toBe(false);
+    } finally {
+      ownKeys.mockRestore();
+    }
   });
 
   it("caps hostile filter-array materialization before canonicalization", () => {
@@ -1410,6 +1414,16 @@ describe("Client row model", () => {
     expect(() =>
       sanitizeClientInitialFilters(metadataRoot, columns, { rejectOverBudget: true }),
     ).not.toThrow();
+
+    const inheritedMetadata = Object.fromEntries(
+      Array.from({ length: 16_385 }, (_unused, index) => [`metadata-${String(index)}`, index]),
+    );
+    const inheritedRoot: unknown[] = [];
+    Object.setPrototypeOf(inheritedRoot, inheritedMetadata);
+    expect(sanitizeClientInitialFilters(inheritedRoot, columns)).toEqual([]);
+    expect(() =>
+      sanitizeClientInitialFilters(inheritedRoot, columns, { rejectOverBudget: true }),
+    ).toThrow(/contains more than 16384 entries/u);
   });
 
   it("canonicalizes one committed expression per Column Identity", () => {

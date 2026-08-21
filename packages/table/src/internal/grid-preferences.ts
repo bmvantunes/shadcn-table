@@ -484,13 +484,15 @@ function snapshotUnknownJsonValue(
     const remainingNodes = BRUNO_TABLE_PERSISTED_JSON_MAX_TOTAL_NODES - budget.nodes;
     const maximumKeys = Math.min(remainingNodes, BRUNO_TABLE_PERSISTED_JSON_MAX_OBJECT_KEYS);
     const enumerableKeys: string[] = [];
+    let enumeratedKeys = 0;
     for (const key in value) {
-      if (!Object.hasOwn(value, key)) continue;
-      enumerableKeys.push(key);
-      if (enumerableKeys.length > maximumKeys) {
+      enumeratedKeys += 1;
+      if (enumeratedKeys > maximumKeys) {
         budget.overBudget = true;
         return INVALID_JSON_VALUE;
       }
+      if (!Object.hasOwn(value, key)) continue;
+      enumerableKeys.push(key);
     }
     for (const key of enumerableKeys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);

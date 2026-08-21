@@ -2235,14 +2235,14 @@ function readOwnArrayIndexes(
 ): readonly number[] | undefined | typeof FILTER_ENTRIES_OVER_BUDGET {
   try {
     const indexes: number[] = [];
-    let enumerableOwnKeys = 0;
+    let enumeratedKeys = 0;
     const enumerableProjection = values as unknown as Readonly<Record<string, unknown>>;
     for (const key in enumerableProjection) {
-      if (!Object.hasOwn(values, key)) continue;
-      enumerableOwnKeys += 1;
-      if (enumerableOwnKeys > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
+      enumeratedKeys += 1;
+      if (enumeratedKeys > BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES) {
         return FILTER_ENTRIES_OVER_BUDGET;
       }
+      if (!Object.hasOwn(values, key)) continue;
       const index = Number(key);
       if (Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key) {
         indexes.push(index);

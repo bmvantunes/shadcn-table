@@ -1009,18 +1009,22 @@ describe("Grid Preferences", () => {
       Object.defineProperty(payload, Symbol(`metadata-${String(index)}`), { value: index });
     }
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
-    const restored = createBrunoTableGridPreferences({
-      tableId: "TABLE_ID_CODEC_METADATA",
-      columns,
-      initialFilters: [],
-      initialOrderBy,
-      initialPersistedState: { ...snapshot, filters: [{ ...filter, filter: payload }] },
-    });
+    try {
+      const restored = createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_CODEC_METADATA",
+        columns,
+        initialFilters: [],
+        initialOrderBy,
+        initialPersistedState: { ...snapshot, filters: [{ ...filter, filter: payload }] },
+      });
 
-    expect(restored.filters).toEqual([
-      { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
-    ]);
-    expect(ownKeys.mock.calls.some(([target]) => target === payload)).toBe(false);
+      expect(restored.filters).toEqual([
+        { columnId: "COL_ID_ACCOUNT", type: "equals", filter: { address: "acct-42" } },
+      ]);
+      expect(ownKeys.mock.calls.some(([target]) => target === payload)).toBe(false);
+    } finally {
+      ownKeys.mockRestore();
+    }
   });
 
   it("validates a codec object's prototype from one observation", () => {
