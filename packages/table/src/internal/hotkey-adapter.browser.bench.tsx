@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 
 import {
   BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
   useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
   type BrunoTableGridHotkeyCommands,
@@ -61,9 +62,12 @@ beforeAll(async () => {
   owner = candidate;
   if (
     getHotkeyManager().registrations.state.size !==
-    baselineRegistrations + BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT
+    baselineRegistrations + BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT
   ) {
     throw new Error("The Browser benchmark did not mount the complete table registration set.");
+  }
+  if (BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT !== 74) {
+    throw new Error("The Browser benchmark registration-definition bound changed unexpectedly.");
   }
 });
 

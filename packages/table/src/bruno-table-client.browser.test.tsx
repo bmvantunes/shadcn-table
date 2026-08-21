@@ -34,10 +34,11 @@ import {
   BRUNO_TABLE_ROW_HEIGHT,
 } from "./internal/virtual-viewport";
 import {
-  BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
   BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
-  BRUNO_TABLE_GRID_HOTKEYS,
+  BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
 } from "./internal/hotkey-adapter";
 import {
   installBrunoTableClientCellRenderListener,
@@ -7748,6 +7749,52 @@ describe("BrunoTableClient browser surface", () => {
     );
   });
 
+  test("preserves a custom renderer's descendant Escape ownership", async () => {
+    const ownedEscapeColumns = [
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <input
+            aria-label={`Owned escape ${row.name}`}
+            defaultValue={row.name}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") event.stopPropagation();
+            }}
+          />
+        ),
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_OWNED_DESCENDANT_ESCAPE"
+        getRowId={(row: Row) => row.id}
+        columns={ownedEscapeColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={readySource()}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_OWNED_DESCENDANT_ESCAPE" });
+    const editor = screen.getByRole("textbox", { name: "Owned escape Ada" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = grid.element().getAttribute("aria-activedescendant");
+    editor.element().focus();
+
+    const escape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    editor.element().dispatchEvent(escape);
+    await new Promise(requestAnimationFrame);
+
+    expect(escape.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(editor.element());
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+  });
+
   test("enters native summary controls only through the grid interaction command", async () => {
     const summaryColumns = [
       {
@@ -8450,7 +8497,12 @@ describe("BrunoTableClient browser surface", () => {
     const removeElementListener = vi.spyOn(HTMLElement.prototype, "removeEventListener");
     const addWindowListener = vi.spyOn(window, "addEventListener");
     const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const addDocumentListener = vi.spyOn(document, "addEventListener");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
     const baselineRegistrations = manager.registrations.state.size;
+    const baselineDocumentRegistrations = [...manager.registrations.state.values()].filter(
+      (registration) => registration.target === document,
+    ).length;
     const baselineWindowRegistrations = [...manager.registrations.state.values()].filter(
       (registration) => registration.target === window,
     ).length;
@@ -8470,24 +8522,37 @@ describe("BrunoTableClient browser surface", () => {
 
     await vi.waitFor(() =>
       expect(manager.registrations.state.size).toBe(
-        baselineRegistrations + BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+        baselineRegistrations + BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
       ),
     );
     expect(
       [...manager.registrations.state.values()].filter(
         (registration) => registration.target === gridElement,
       ),
-    ).toHaveLength(BRUNO_TABLE_GRID_HOTKEYS.length);
+    ).toHaveLength(BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT);
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === document,
+      ),
+    ).toHaveLength(
+      baselineDocumentRegistrations + BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+    );
     expect(
       [...manager.registrations.state.values()].filter(
         (registration) => registration.target === window,
       ),
-    ).toHaveLength(baselineWindowRegistrations + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length);
-    expect(
-      addWindowListener.mock.calls
-        .map((call) => call[0])
-        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
-    ).toEqual(baselineWindowRegistrations === 0 ? ["keydown", "keyup"] : []);
+    ).toHaveLength(baselineWindowRegistrations);
+    const adapterWindowListenerCalls = addWindowListener.mock.calls.filter(
+      (call) => call[0] === "keydown" && call[2] === true,
+    );
+    expect(adapterWindowListenerCalls).toHaveLength(1);
+    expect(BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS).toHaveLength(16);
+    const adapterDocumentListenerCalls = addDocumentListener.mock.calls.filter(
+      (call) => call[0] === "keydown" || call[0] === "keyup",
+    );
+    expect(adapterDocumentListenerCalls.map((call) => call[0])).toEqual(
+      baselineDocumentRegistrations === 0 ? ["keydown", "keyup"] : [],
+    );
     expect(
       addElementListener.mock.calls
         .map((call, index) => ({
@@ -8527,7 +8592,7 @@ describe("BrunoTableClient browser surface", () => {
     ).toEqual(["keydown", "keyup"]);
     expect(manager.registrations.state.size).toBe(
       baselineRegistrations +
-        BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
+        BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT +
         BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
     );
 
@@ -8537,7 +8602,7 @@ describe("BrunoTableClient browser surface", () => {
     await expect.element(dialog).not.toBeInTheDocument();
     await vi.waitFor(() =>
       expect(manager.registrations.state.size).toBe(
-        baselineRegistrations + BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+        baselineRegistrations + BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
       ),
     );
     expect(
@@ -8562,6 +8627,11 @@ describe("BrunoTableClient browser surface", () => {
       ),
     ).toHaveLength(baselineWindowRegistrations);
     expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === document,
+      ),
+    ).toHaveLength(baselineDocumentRegistrations);
+    expect(
       removeElementListener.mock.calls
         .map((call, index) => ({
           eventType: call[0],
@@ -8574,11 +8644,20 @@ describe("BrunoTableClient browser surface", () => {
         )
         .map((entry) => entry.eventType),
     ).toEqual(["keydown", "keyup"]);
-    expect(
-      removeWindowListener.mock.calls
-        .map((call) => call[0])
-        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
-    ).toEqual(baselineWindowRegistrations === 0 ? ["keydown", "keyup"] : []);
+    for (const [eventType, listener, options] of adapterWindowListenerCalls) {
+      expect(
+        removeWindowListener.mock.calls.some(
+          (call) => call[0] === eventType && call[1] === listener && call[2] === options,
+        ),
+      ).toBe(true);
+    }
+    for (const [eventType, listener] of adapterDocumentListenerCalls) {
+      expect(
+        removeDocumentListener.mock.calls.some(
+          (call) => call[0] === eventType && call[1] === listener,
+        ),
+      ).toBe(true);
+    }
   });
 
   test("hydrates the restored preference projection without an echo and uses the latest callback", async () => {

@@ -92,9 +92,15 @@ controlled actions with that seam, while Base UI retains overlay focus and Escap
 editor/input/textarea/contenteditable and IME evidence remains at the component that owns the text,
 and Base UI-owned menu, popover, and dialog behavior is not reinterpreted. No public hotkey map,
 TanStack type, or controller crosses the package boundary.
+Descendant-exit Escape bindings stay table-scoped through an ownership check but register on the
+owning document, after React's delegated bubble phase, so a custom renderer can retain Escape with
+`stopPropagation()`. Active column gestures keep immediate capture-phase cancellation through a
+narrow framework-agnostic Adapter that delegates matching to `@tanstack/hotkeys`.
 Raw keyboard evidence is admitted only through an explicit build-guard map keyed by exact,
-normalized root-relative module paths; `internal/hotkey-adapter.ts` is its sole current member and
-the only capability allowed to import React Hotkeys. The Adapter exposes a private key- and
+normalized root-relative module paths. Its current members are `internal/hotkey-adapter.ts`, the
+only capability allowed to import React Hotkeys, and `internal/hotkey-capture.ts`, the only
+capability allowed to import Hotkeys core and own a capture listener. Neither may interpret event
+keys or modifiers. The Adapter exposes a private key- and
 modifier-free gesture capability to command owners. Future native editor or IME handling must add
 its own `native-evidence` capability, limited to component-owned composition evidence, instead of
 weakening this rule or teaching the guard JavaScript binding inference. The emitted guard admits

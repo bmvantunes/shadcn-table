@@ -12,11 +12,17 @@ delivery, conflict policy, and platform normalization. Cross-platform chords use
 syntax; feature code receives an already-matched gesture and retains ownership of typed navigation,
 column, filter, sort, and workflow commands. Hotkey registration and DOM-listener cost is bounded
 per Table Instance or active workflow and never varies with mounted rows, cells, or headers.
-The Adapter is the only current production module allowed to receive a raw `KeyboardEvent` and
+Grid-local commands attach to the grid surface. Descendant-exit Escape attaches through TanStack at
+the owning document and validates grid containment, allowing a custom renderer's React handler to
+retain Escape by stopping propagation before it reaches that target. Active resize/reorder Escape
+remains an immediate window-capture workflow command. That narrow framework-agnostic capture seam
+uses `@tanstack/hotkeys` for matching because the React Adapter has no capture option.
+The React Adapter and capture Adapter are the only current production modules allowed to receive a raw `KeyboardEvent` and
 passes feature owners a key- and modifier-free gesture capability containing only command effects
 and ownership evidence. The build guard maintains an explicit finite map from exact normalized
-root-relative module paths to evidence capabilities. The Adapter capability alone may import React
-Hotkeys; it admits no React or DOM keyboard handler. A future native editor/input/IME owner may add
+root-relative module paths to evidence capabilities. The React Adapter alone may import React
+Hotkeys; the capture Adapter alone may import Hotkeys core and install its capture listener. Neither
+may interpret event keys or modifiers. A future native editor/input/IME owner may add
 a separate `native-evidence` entry whose component-owned handler can inspect composition evidence
 but cannot interpret keys or modifiers. The emitted guard permits handler/listener evidence only
 when that exact source capability exists, with the source scan providing attribution after bundling.

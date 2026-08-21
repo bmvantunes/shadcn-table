@@ -2,12 +2,14 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type {
+  Hotkey,
   HotkeyCallback,
   RegisterableHotkey,
   UseHotkeyDefinition,
 } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
+import { registerBrunoTableCaptureHotkeys } from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
 // closed Key union. Keep the compatibility assertion at this one Adapter seam.
@@ -22,7 +24,7 @@ type BrunoTableHotkeyBinding = Readonly<{
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
   Pick<KeyboardEvent, "preventDefault">;
 
-export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze([
+export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
   "Escape",
   "Control+Escape",
   "Alt+Escape",
@@ -39,7 +41,7 @@ export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] = Object.
   "Control+Shift+Meta+Escape",
   "Alt+Shift+Meta+Escape",
   "Control+Alt+Shift+Meta+Escape",
-] satisfies readonly RegisterableHotkey[]);
+] satisfies readonly Hotkey[]);
 
 export type BrunoTableGridHotkeyCommands = Readonly<{
   escape: (event: BrunoTableHotkeyGesture) => void;
@@ -278,10 +280,15 @@ const NOOP_GRID_COMMANDS: BrunoTableGridHotkeyCommands = Object.freeze({
 export const BRUNO_TABLE_GRID_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze(
   createBrunoTableGridHotkeyBindings(NOOP_GRID_COMMANDS).map((binding) => binding.hotkey),
 );
-export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly RegisterableHotkey[] =
+export const BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT: number =
+  BRUNO_TABLE_ESCAPE_HOTKEYS.length;
+export const BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT: number =
+  BRUNO_TABLE_GRID_HOTKEYS.length - BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT;
+export const BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GRID_HOTKEYS.length;
+export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly Hotkey[] =
   BRUNO_TABLE_ESCAPE_HOTKEYS;
-// One table registers every grid binding plus the complete modifier-insensitive
-// window-scoped column-gesture Escape set.
+// One table owns every React registration plus the complete modifier-insensitive
+// capture-phase column-gesture Escape definition set.
 export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_GRID_HOTKEYS.length + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
@@ -375,21 +382,35 @@ export function useBrunoTableGridHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: BrunoTableGridHotkeyCommands,
 ): void {
-  useBrunoTableHotkeys(target, createBrunoTableGridHotkeyBindings(commands), "error");
+  const bindings = createBrunoTableGridHotkeyBindings(commands);
+  const escapeBindings = bindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length).map((binding) => ({
+    ...binding,
+    onTrigger: ((event, context) => {
+      const owner = target.current;
+      const eventTarget = event.target;
+      if (owner === null || !(eventTarget instanceof Node) || !owner.contains(eventTarget)) return;
+      binding.onTrigger(event, context);
+    }) satisfies HotkeyCallback,
+  }));
+  useBrunoTableHotkeys(target, bindings.slice(BRUNO_TABLE_ESCAPE_HOTKEYS.length), "error");
+  useBrunoTableHotkeys(typeof document === "undefined" ? null : document, escapeBindings, "allow");
 }
 
 export function useBrunoTableColumnGestureEscape(
   onTrigger: (event: BrunoTableHotkeyGesture) => void,
 ): void {
-  useBrunoTableHotkeys(
-    typeof window === "undefined" ? null : window,
-    BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.map((hotkey) => ({
-      hotkey,
-      allowInTextInput: true,
-      onTrigger,
-    })),
-    "allow",
-  );
+  const onTriggerRef = useRef(onTrigger);
+  useEffect(() => {
+    onTriggerRef.current = onTrigger;
+  }, [onTrigger]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    return registerBrunoTableCaptureHotkeys(
+      window,
+      BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
+      (event) => onTriggerRef.current(event),
+    );
+  }, []);
 }
 
 export function useBrunoTableFilterWorkflowEscape(

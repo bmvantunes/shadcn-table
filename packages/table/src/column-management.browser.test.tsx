@@ -2838,7 +2838,12 @@ describe("BrunoTable column management browser surface", () => {
     const screen = await render(
       <>
         <BrunoTableClient<Row, typeof columns> {...tableProps} />
-        <input aria-label="Column gesture focus destination" />
+        <input
+          aria-label="Column gesture focus destination"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") event.stopPropagation();
+          }}
+        />
       </>,
     );
     const statusHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
@@ -2886,6 +2891,84 @@ describe("BrunoTable column management browser surface", () => {
       await new Promise(requestAnimationFrame);
       expect(escape.defaultPrevented).toBe(true);
       expect(statusHeader).toHaveAttribute("aria-colindex", "3");
+    }
+  });
+
+  test("cancels only the active table gesture when two tables share the capture target", async () => {
+    const ownerTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_OWNER";
+    const inactiveTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_INACTIVE";
+    const ownerEvents: ColumnGestureListenerEvent[] = [];
+    const inactiveEvents: ColumnGestureListenerEvent[] = [];
+    const removeOwnerListener = installBrunoTableClientColumnGestureListener(
+      ownerTableId,
+      (event) => ownerEvents.push(event),
+    );
+    const removeInactiveListener = installBrunoTableClientColumnGestureListener(
+      inactiveTableId,
+      (event) => inactiveEvents.push(event),
+    );
+    try {
+      const screen = await render(
+        <>
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={ownerTableId} />
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
+          <input
+            aria-label="Shared capture focus destination"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") event.stopPropagation();
+            }}
+          />
+        </>,
+      );
+      const ownerRegion = screen.getByRole("region", { name: ownerTableId, exact: true });
+      const inactiveRegion = screen.getByRole("region", { name: inactiveTableId, exact: true });
+      const ownerHandle = ownerRegion.getByRole("button", { name: "Reorder Status" }).element();
+      const ownerHeader = ownerRegion.getByRole("columnheader", { name: /Status/u }).element();
+      const inactiveHeader = inactiveRegion
+        .getByRole("columnheader", { name: /Status/u })
+        .element();
+      const destination = screen
+        .getByRole("textbox", { name: "Shared capture focus destination" })
+        .element();
+
+      ownerHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: 100,
+          pointerId: 79,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 0,
+          pointerId: 79,
+        }),
+      );
+      destination.focus();
+      const escape = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        key: "Escape",
+        shiftKey: true,
+      });
+      destination.dispatchEvent(escape);
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, clientX: 0, pointerId: 79 }),
+      );
+
+      await new Promise(requestAnimationFrame);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(ownerHeader).toHaveAttribute("aria-colindex", "3");
+      expect(inactiveHeader).toHaveAttribute("aria-colindex", "3");
+      expect(ownerEvents.filter((event) => event.phase === "attach")).toHaveLength(3);
+      expect(ownerEvents.filter((event) => event.phase === "detach")).toHaveLength(3);
+      expect(inactiveEvents).toEqual([]);
+    } finally {
+      removeOwnerListener();
+      removeInactiveListener();
     }
   });
 

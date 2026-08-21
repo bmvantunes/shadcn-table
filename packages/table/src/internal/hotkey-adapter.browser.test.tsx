@@ -5,7 +5,9 @@ import { cleanup, render } from "vitest-browser-react";
 
 import {
   BRUNO_TABLE_GRID_HOTKEYS,
+  BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
   requestBrunoTableHotkeyWorkflowAction,
+  useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
   useBrunoTableHotkeyWorkflowAction,
   type BrunoTableGridHotkeyCommands,
@@ -51,6 +53,11 @@ function WorkflowActionProbe({ action }: Readonly<{ action: () => void }>) {
       Workflow action
     </button>
   );
+}
+
+function CaptureAdapterProbe({ action, label }: Readonly<{ action: () => void; label: string }>) {
+  useBrunoTableColumnGestureEscape(action);
+  return <section role="region" aria-label={label} />;
 }
 
 afterEach(async () => {
@@ -197,11 +204,64 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(firstReplacement).toHaveBeenCalledTimes(3);
   });
 
+  test("dispatches capture workflows exactly once across Strict Mode and HMR-like remounts", async () => {
+    const addWindowListener = vi.spyOn(window, "addEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const first = vi.fn();
+    const replacement = vi.fn();
+    const screen = await render(
+      <StrictMode>
+        <CaptureAdapterProbe action={first} label="Capture workflow" />
+      </StrictMode>,
+    );
+    const captureAdds = () =>
+      addWindowListener.mock.calls.filter((call) => call[0] === "keydown" && call[2] === true);
+    const captureRemoves = () =>
+      removeWindowListener.mock.calls.filter((call) => call[0] === "keydown" && call[2] === true);
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(first).toHaveBeenCalledOnce();
+    expect(captureAdds().length - captureRemoves().length).toBe(1);
+
+    await screen.rerender(
+      <StrictMode>
+        <CaptureAdapterProbe key="hmr-remount" action={replacement} label="Capture workflow" />
+      </StrictMode>,
+    );
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(first).toHaveBeenCalledOnce();
+    expect(replacement).toHaveBeenCalledOnce();
+    expect(captureAdds().length - captureRemoves().length).toBe(1);
+
+    await cleanup();
+    expect(captureAdds().length - captureRemoves().length).toBe(0);
+    for (const [eventType, listener, options] of captureAdds()) {
+      expect(
+        captureRemoves().some(
+          (call) => call[0] === eventType && call[1] === listener && call[2] === options,
+        ),
+      ).toBe(true);
+    }
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+    expect(replacement).toHaveBeenCalledOnce();
+  });
+
   test("uses one listener pair and a geometry-independent registration set per owner", async () => {
     const manager = getHotkeyManager();
     const baselineRegistrations = manager.registrations.state.size;
+    const baselineDocumentRegistrations = [...manager.registrations.state.values()].filter(
+      (registration) => registration.target === document,
+    ).length;
     const addListener = vi.spyOn(HTMLElement.prototype, "addEventListener");
     const removeListener = vi.spyOn(HTMLElement.prototype, "removeEventListener");
+    const addDocumentListener = vi.spyOn(document, "addEventListener");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
     const commands = probeCommands();
     const screen = await render(<AdapterProbe commands={commands} label="Bounded table hotkeys" />);
     const owner = screen.getByRole("region", { name: "Bounded table hotkeys" }).element();
@@ -216,6 +276,18 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       .filter((entry) => entry.owner === owner)
       .map((entry) => entry.eventType);
     expect(ownerListenerTypes).toEqual(["keydown", "keyup"]);
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === document,
+      ),
+    ).toHaveLength(
+      baselineDocumentRegistrations + BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+    );
+    expect(
+      addDocumentListener.mock.calls
+        .map((call) => call[0])
+        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
+    ).toEqual(baselineDocumentRegistrations === 0 ? ["keydown", "keyup"] : []);
 
     await screen.rerender(<AdapterProbe commands={commands} label="Bounded table hotkeys" />);
     expect(manager.registrations.state.size).toBe(
@@ -232,6 +304,11 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       .filter((entry) => entry.owner === owner)
       .map((entry) => entry.eventType);
     expect(removedOwnerListenerTypes).toEqual(["keydown", "keyup"]);
+    expect(
+      removeDocumentListener.mock.calls
+        .map((call) => call[0])
+        .filter((eventType) => eventType === "keydown" || eventType === "keyup"),
+    ).toEqual(baselineDocumentRegistrations === 0 ? ["keydown", "keyup"] : []);
   });
 
   test("does not dispatch a command from an IME-composing gesture", async () => {

@@ -74,14 +74,15 @@ describe("BrunoTable navigation command seam benchmark (8.33 ms/120 Hz reference
         heldGestureCount,
         heldNavigationP99Ms,
         heldNavigationP99WithinReference: heldNavigationP99Ms <= referenceFrameBudgetMs,
-        registrationsPerTable: brunoTableHotkeyRegistrationBound(mountedRows, mountedColumns),
-        registrationsWithFilterWorkflow: brunoTableHotkeyRegistrationBound(
+        bindingDefinitionsPerTable: brunoTableHotkeyRegistrationBound(mountedRows, mountedColumns),
+        bindingDefinitionsWithFilterWorkflow: brunoTableHotkeyRegistrationBound(
           mountedRows,
           mountedColumns,
           1,
         ),
-        expectedBaseRegistrations: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
-        expectedFilterWorkflowRegistrations: BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+        expectedBaseBindingDefinitions: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+        expectedFilterWorkflowBindingDefinitions:
+          BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
         declaredGridHotkeys: BRUNO_TABLE_GRID_HOTKEYS.length,
         mountedRows,
         mountedColumns,
