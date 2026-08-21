@@ -408,9 +408,10 @@ listener. When a publication notification pass is already active, that pass comp
 every re-entrant publication applies in call order before the outer publication returns. The last
 accepted publication is the terminal runtime state. Listener failures do not cancel accepted
 publications: notification continues, re-entrant publications finish, and the first failure in
-that deterministic order is rethrown only after publication completes. This guarantee applies
-equally to Client and future Viewport Row Pipeline Adapters without exposing the Grid Runtime's
-private ownership mechanism.
+that deterministic order is rethrown only after publication completes. An internal publication
+invariant failure instead aborts the remaining accepted publications and is propagated in
+preference to any collected listener failure. This guarantee applies equally to Client and future
+Viewport Row Pipeline Adapters without exposing the Grid Runtime's private ownership mechanism.
 
 ## Column construction seam
 
