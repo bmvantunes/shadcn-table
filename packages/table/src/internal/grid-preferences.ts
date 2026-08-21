@@ -382,12 +382,15 @@ function decodePersistedFilter(
             BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS - budget.operands,
           )
         : undefined;
-    if (type === "in" && decodedFilter === undefined) {
-      budget.overBudget ||= isArrayLongerThan(
-        record["filter"],
-        BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS - budget.operands,
-      );
-      return undefined;
+    if (type === "in") {
+      if (decodedFilter === undefined) {
+        budget.overBudget ||= isArrayLongerThan(
+          record["filter"],
+          BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS - budget.operands,
+        );
+        return undefined;
+      }
+      if (decodedFilter.length === 0) return undefined;
     }
     const operandCount = type === "in" ? (decodedFilter?.length ?? 0) : 1;
     if (budget.operands + operandCount > BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_OPERANDS) {

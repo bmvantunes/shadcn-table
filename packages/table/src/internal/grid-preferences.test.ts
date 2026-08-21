@@ -717,6 +717,52 @@ describe("Grid Preferences", () => {
     expect(restored.filters).toEqual([{ columnId: "COL_ID_ACCOUNT", type: "blank" }]);
   });
 
+  it("prunes an empty persisted in leaf while preserving its valid compound sibling", () => {
+    const snapshot = createBrunoTablePersistedState(
+      createBrunoTableGridPreferences({
+        tableId: "TABLE_ID_EMPTY_IN_COMPOUND_LEAF",
+        columns,
+        initialFilters: [
+          {
+            type: "AND",
+            conditions: [
+              { columnId: "COL_ID_STATUS", type: "blank" },
+              { columnId: "COL_ID_STATUS", type: "in", filter: ["open"] },
+            ],
+          },
+        ],
+        initialOrderBy,
+      }),
+    );
+    const persistedFilters = snapshot["filters"];
+    const compound = Array.isArray(persistedFilters) ? persistedFilters[0] : undefined;
+    if (typeof compound !== "object" || compound === null || !("conditions" in compound)) {
+      throw new TypeError("Expected one persisted compound filter.");
+    }
+    const conditions = compound.conditions;
+    if (!Array.isArray(conditions) || typeof conditions[1] !== "object" || conditions[1] === null) {
+      throw new TypeError("Expected two persisted compound conditions.");
+    }
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_EMPTY_IN_COMPOUND_LEAF",
+      columns,
+      initialFilters: [],
+      initialOrderBy,
+      initialPersistedState: {
+        ...snapshot,
+        filters: [
+          {
+            ...compound,
+            conditions: [conditions[0], { ...conditions[1], filter: [] }],
+          },
+        ],
+      },
+    });
+
+    expect(restored.filters).toEqual([{ columnId: "COL_ID_STATUS", type: "blank" }]);
+  });
+
   it("rejects accessor-backed persisted codec operands without invoking them", () => {
     const valid = createBrunoTablePersistedState(
       createBrunoTableGridPreferences({
