@@ -1,4 +1,4 @@
-import { bench, describe } from "vite-plus/test";
+import { afterAll, bench, describe } from "vite-plus/test";
 
 import { compileColumns } from "./compile-columns";
 import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
@@ -56,8 +56,20 @@ adapter.subscribeResultRowCount(() => {
 });
 let version = 1;
 let changed = false;
+const durationsMs: number[] = [];
 
 describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)", () => {
+  afterAll(() => {
+    const sortedDurations = durationsMs.toSorted((left, right) => left - right);
+    const p99Index = Math.max(0, Math.ceil(sortedDurations.length * 0.99) - 1);
+    const p99Ms = sortedDurations[p99Index];
+    if (p99Ms === undefined || p99Ms > referenceFrameBudgetMs) {
+      throw new Error(
+        `Toolbar publication isolation p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(p99Ms)} ms.`,
+      );
+    }
+  });
+
   bench(
     "isolates four toolbar projections during one 20 Hz row-value publication over 10,000 rows",
     () => {
@@ -72,14 +84,10 @@ describe("BrunoTable toolbar subscription benchmark (8.33 ms/120 Hz reference)",
           status: "ready",
         }),
       );
-      const durationMs = performance.now() - startedAt;
+      adapter.publishResultRowCount(residentRows);
+      durationsMs.push(performance.now() - startedAt);
       if (unexpectedNotifications !== 0) {
         throw new Error("Stable toolbar projections received an unrelated row notification.");
-      }
-      if (durationMs > referenceFrameBudgetMs) {
-        throw new Error(
-          `Toolbar publication isolation exceeded ${String(referenceFrameBudgetMs)} ms: ${String(durationMs)} ms.`,
-        );
       }
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },

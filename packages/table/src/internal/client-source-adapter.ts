@@ -142,7 +142,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly publishResultRowCount = (count: number): void => {
     if (this.resultRowCount === count) return;
     this.resultRowCount = count;
-    for (const listener of this.resultRowCountListeners) listener();
+    notifyRowsStoreListeners(this.resultRowCountListeners);
   };
 
   public readonly initializeResultRowCount = (query: BrunoTableQuerySnapshot): void => {
@@ -154,31 +154,19 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       query.filters,
       query.filterCollection,
     );
-    const predicate = createClientQueryPredicate<BrunoTableClientAdmittedRow>(
+    const { filterPredicate, orderedColumns } = createClientAdmittedQueryProjectionPlan(
       query.columns,
       query.filters,
       query.quickFilter,
       this.quickFilterFields,
-      (column, row) => {
-        const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
-        if (isBrunoTableInvalidCellValue(value)) throw value.invalid;
-        return value;
-      },
-      (row, field) => readClientQuickFilterField(row.raw, field),
+      query.orderBy,
       filterPlan,
     );
-    const columnsById = new Map<string, CompiledColumn>(
-      query.columns.map((column) => [column.columnId, column] as const),
-    );
-    const activeSortColumns = query.orderBy.flatMap((sort) => {
-      const column = columnsById.get(sort.columnId);
-      return column === undefined || column.enableSorting === false ? [] : [column];
-    });
     let count = 0;
     try {
       for (const row of rows) {
-        if (predicate !== undefined && !predicate(row)) continue;
-        for (const column of activeSortColumns) {
+        if (filterPredicate !== undefined && !filterPredicate(row)) continue;
+        for (const column of orderedColumns) {
           const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
           if (isBrunoTableInvalidCellValue(value)) throw value.invalid;
         }
@@ -536,6 +524,42 @@ export type BrunoTableClientAdmittedRow = Readonly<{
   readonly rowIndex: number;
   readonly values: BrunoTableClientValueCache;
 }>;
+
+export function createClientAdmittedQueryProjectionPlan(
+  columns: readonly CompiledColumn[],
+  filters: readonly unknown[],
+  quickFilter: string,
+  quickFilterFields: readonly string[],
+  orderBy: ClientOrderBy,
+  filterPlan: ReturnType<typeof compileClientFilterPlan>,
+): Readonly<{
+  readonly orderedColumns: readonly CompiledColumn[];
+  readonly filterPredicate: ((row: BrunoTableClientAdmittedRow) => boolean) | undefined;
+}> {
+  const columnsById = new Map<string, CompiledColumn>(
+    columns.map((column) => [column.columnId, column] as const),
+  );
+  const orderedColumns = Object.freeze(
+    orderBy.flatMap((sort) => {
+      const column = columnsById.get(sort.columnId);
+      return column === undefined || column.enableSorting === false ? [] : [column];
+    }),
+  );
+  const filterPredicate = createClientQueryPredicate<BrunoTableClientAdmittedRow>(
+    columns,
+    filters,
+    quickFilter,
+    quickFilterFields,
+    (column, row) => {
+      const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+      if (isBrunoTableInvalidCellValue(value)) throw value.invalid;
+      return value;
+    },
+    (row, field) => readClientQuickFilterField(row.raw, field),
+    filterPlan,
+  );
+  return Object.freeze({ orderedColumns, filterPredicate });
+}
 
 export type BrunoTableClientValueCache = Readonly<{
   readonly read: (

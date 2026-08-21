@@ -439,6 +439,16 @@ type ColumnConfiguration = Readonly<{
   readonly transition: QueryTransition;
 }>;
 
+function activeFilterCount(
+  filterCollection: BrunoTableClientFilterCollection,
+  quickFilter: string,
+): number {
+  return (
+    filterCollection.filters.length +
+    (normalizeBrunoTableFilterText(quickFilter).length === 0 ? 0 : 1)
+  );
+}
+
 export class BrunoTableGridRuntime<TRow> {
   private readonly chromeListeners = new Set<Listener>();
   private readonly sourceListeners = new Set<Listener>();
@@ -789,8 +799,7 @@ export class BrunoTableGridRuntime<TRow> {
   public readonly getLoadedRowCountSnapshot = (): number => this.state.source.loadedRows;
 
   public readonly getActiveFilterCountSnapshot = (): number =>
-    this.filterCollection.filters.length +
-    (normalizeBrunoTableFilterText(this.query.quickFilter).length === 0 ? 0 : 1);
+    activeFilterCount(this.filterCollection, this.query.quickFilter);
 
   public readonly getActiveSortCountSnapshot = (): number => this.query.orderBy.length;
 
@@ -1302,10 +1311,8 @@ export class BrunoTableGridRuntime<TRow> {
         quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         activeFilterCountChanged:
-          this.filterCollection.filters.length +
-            (normalizeBrunoTableFilterText(this.query.quickFilter).length === 0 ? 0 : 1) !==
-          nextFilterCollection.filters.length +
-            (normalizeBrunoTableFilterText(nextQuickFilter).length === 0 ? 0 : 1),
+          activeFilterCount(this.filterCollection, this.query.quickFilter) !==
+          activeFilterCount(nextFilterCollection, nextQuickFilter),
         activeSortCountChanged: this.query.orderBy.length !== nextOrderBy.length,
         previousCommands: this.columnCommands,
         previousColumnFilters: this.columnFilterSnapshots,

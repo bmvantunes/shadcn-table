@@ -221,7 +221,7 @@ function renderCount(
 ): ReactElement {
   return (
     <output aria-label={label} className="text-muted-foreground text-sm tabular-nums" role="status">
-      {children === undefined ? `${String(count)} ${label.toLocaleLowerCase()}` : children(count)}
+      {children === undefined ? `${String(count)} ${label.toLowerCase()}` : children(count)}
     </output>
   );
 }

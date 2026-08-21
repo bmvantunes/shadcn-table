@@ -10,39 +10,35 @@ export type BrunoTableToolbarSubscriptionEvent = Readonly<{
   readonly phase: "subscribe" | "unsubscribe" | "notify";
 }>;
 
-let listener: ((event: BrunoTableToolbarSubscriptionEvent) => void) | undefined;
+const subscriptionListeners = new Set<(event: BrunoTableToolbarSubscriptionEvent) => void>();
 export type BrunoTableToolbarLifetimeEvent = Readonly<{
   readonly tableId: string;
   readonly kind: "runtime-create" | "row-pipeline-subscribe" | "row-pipeline-unsubscribe";
   readonly identity: object;
 }>;
 
-let lifetimeListener: ((event: BrunoTableToolbarLifetimeEvent) => void) | undefined;
+const lifetimeListeners = new Set<(event: BrunoTableToolbarLifetimeEvent) => void>();
 
 export function installBrunoTableToolbarSubscriptionListener(
   next: (event: BrunoTableToolbarSubscriptionEvent) => void,
 ): () => void {
-  listener = next;
-  return () => {
-    if (listener === next) listener = undefined;
-  };
+  subscriptionListeners.add(next);
+  return () => subscriptionListeners.delete(next);
 }
 
 export function installBrunoTableToolbarLifetimeListener(
   next: (event: BrunoTableToolbarLifetimeEvent) => void,
 ): () => void {
-  lifetimeListener = next;
-  return () => {
-    if (lifetimeListener === next) lifetimeListener = undefined;
-  };
+  lifetimeListeners.add(next);
+  return () => lifetimeListeners.delete(next);
 }
 
 export function recordBrunoTableToolbarSubscription(
   event: BrunoTableToolbarSubscriptionEvent,
 ): void {
-  listener?.(event);
+  for (const listener of subscriptionListeners) listener(event);
 }
 
 export function recordBrunoTableToolbarLifetime(event: BrunoTableToolbarLifetimeEvent): void {
-  lifetimeListener?.(event);
+  for (const listener of lifetimeListeners) listener(event);
 }

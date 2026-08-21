@@ -188,8 +188,6 @@ type BrunoTableQuickFilterFields<TRow> = readonly [
   ...BrunoTableStringQueryField<TRow>[],
 ];
 
-type BrunoTableExternalFilters<TRow> = readonly BrunoTableExternalFilterExpression<TRow>[];
-
 type BrunoTableGroupingCapability<TColumns> = {
   groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TColumns>;
 };
@@ -233,7 +231,6 @@ type BrunoTableServerProps<
   BrunoTableGroupingCapability<TColumns> & {
     getRowId?: never;
     viewportSource: BrunoTableServerSource<TViewport>;
-    externalFilters?: BrunoTableExternalFilters<TRow>;
     editable?: never;
     getRowVersion?: never;
     onSaveEdits?: never;
@@ -290,7 +287,7 @@ Rules:
 - Lifecycle components subscribe only to the compact source chrome they render, not row contents. They use appropriate status/alert semantics, preserve focus across source publications, and never replace the Grid Runtime or force unrelated mounted cells to rerender.
 - `viewportSource` is a long-lived source, not a row array copied into React state.
 - A semantic Server query change—Feed Route, projection, filters, sorting, Group By, or aggregates—creates a clean private Query Generation. Old rows and `totalRows` are never shown under the new semantics; fixed-height loading rows cover the required viewport until authoritative delivery. Window-only movement retains overlapping slots, and lifecycle retention is permitted only for coherent rows from the same generation. No generation or loading-policy prop enters the public API.
-- `externalFilters` is an optional Server-only application-controlled field-keyed expression. It uses the same value-aware operator vocabulary as View Server `where`, may reference valid fields without visible columns, and is always `AND`-combined with Quick Filter and Grid Filters. It is reactive but never persisted, counted, reviewed, reset, or cleared by BrunoTable. Client Tables reject the prop because their complete `clientSource` already defines the caller's working set.
+- A future Server Adapter capability will accept application-controlled External Filters using effect-view-server's authoritative `Where` contract, including valid source fields without visible columns, and will `AND`-combine them with Quick Filter and Grid Filters. That transport is not available in the current public props. When it ships it will be reactive but never persisted, counted, reviewed, reset, or cleared by BrunoTable. Client Tables reject `externalFilters` because their complete `clientSource` already defines the caller's working set.
 - `BrunoTableServer` exposes no Row Selection or Cell Range Selection interface: no checkbox column, selected-row callback/state, Shift-click row selection, row Select All, or range operation. Its only cell cursor is the private logical Active Cell used by navigation and single-loaded-cell copy. This prohibition does not apply to checkbox options or value-level Select All inside a Set Filter overlay; those controls select filter values and never rows.
 - `BrunoTableClient` Cell Range Selection is permanently limited to zero or one contiguous Linear Cell Range: horizontal `1×N` or vertical `N×1`. No prop, callback, command, or state shape can represent a two-axis target, additive ranges, subtractive holes, or disconnected regions; a new selection replaces the previous range.
 - A Client range retains the exact ordered Row and Column Identity span selected by the user across value-only publications. Sorting, filtering, live membership/order, visibility, and column-order changes preserve it only when both endpoints and the complete intervening identity sequence remain equal; otherwise the private runtime clears it before Copy. Changes outside the span do not disturb it, and no range state or reconciliation callback enters the public API.
@@ -353,10 +350,10 @@ Distinguish filter ownership explicitly:
 
 - Grid Filter Expressions are user grid intent, appear in global active-filter UI, and participate in preference persistence.
 - Quick Filter is user grid intent and appears in global active-filter UI, but its field configuration and committed text are session-only and never persisted or included in saved views.
-- External Filters define an application-controlled Server working-set condition before Grid Filters, are supplied through `externalFilters`, and are not persisted, counted, reviewed, reset, or cleared as grid preferences.
+- External Filters will define an application-controlled Server working-set condition before Grid Filters once the Server Adapter ships. That future transport will not be persisted, counted, reviewed, reset, or cleared as grid preferences.
 - Toolbar placement alone changes neither ownership nor persistence.
 
-`BrunoTableFilterControl` makes that choice explicit. `ownership="grid"` supplies only the stable typed replace, clear, reset, and clear-all Grid Filter commands; it exposes no state reader or subscription. `ownership="external"` supplies no grid capability and simply marks an application-owned Server control; the wrapper never copies, counts, persists, resets, or interprets that application state. The compound-control marker and optional `BrunoTableServerProps.children` seam ship before the Server JSX implementation. The authoritative `externalFilters` transport prop remains deferred to that Adapter slice so its type can come from effect-view-server's source-owned `Where` contract without duplicating schema semantics or making Effect mandatory from the root package. Client Tables reject `externalFilters`, and examples must not present External Filters as Client-owned behavior.
+`BrunoTableFilterControl` makes that choice explicit. `ownership="grid"` supplies only the stable typed replace, clear, reset, and clear-all Grid Filter commands; it exposes no state reader or subscription. `ownership="external"` supplies no grid capability and simply marks an application-owned Server control; the wrapper never copies, counts, persists, resets, or interprets that application state. The compound-control marker and optional `BrunoTableServerProps.children` seam ship before the Server JSX implementation. An `externalFilters` transport prop is planned but not available yet; it remains deferred to that Adapter slice so its type can come from effect-view-server's source-owned `Where` contract without duplicating schema semantics or making Effect mandatory from the root package. Client Tables reject `externalFilters`, and examples must not present External Filters as Client-owned behavior.
 
 For effect-view-server leased topics, keep Feed Route ownership separate from both categories above. The source declaration owns the exact non-empty Route Field tuple. `BrunoTableServer` receives only the current exact `routeBy` value object, inferred conditionally from `viewportSource`: leased sources require all and only their declared fields, while materialized and source-free sources forbid the prop. Do not expose a duplicated `routeByFields` list.
 

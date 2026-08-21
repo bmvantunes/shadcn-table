@@ -177,10 +177,27 @@ test("applies emitted Quick Filter and column filter interactions", async () => 
   await expect
     .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
     .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1 active filters");
   await userEvent.keyboard("{Escape}");
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_FILTERS" }))
     .toHaveFocus();
+  await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "msft");
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("2 active filters");
+  await userEvent.click(screen.getByRole("button", { name: "Clear Grid Filters" }));
+  await expect
+    .element(screen.getByRole("status", { name: "Active filters" }))
+    .toHaveTextContent("1 active filters");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Grace", exact: true }))
+    .toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Ada", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 test("applies emitted live Set Filter inclusion and normalization", async () => {

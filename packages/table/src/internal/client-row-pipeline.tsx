@@ -16,13 +16,13 @@ import type {
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
 import type { BrunoTableRowPipelineProps } from "./bruno-table-view";
-import type {
-  BrunoTableClientAdmittedRow,
-  BrunoTableClientRowOrderChangeDetector,
-  BrunoTableClientRowsStore,
+import {
+  createClientAdmittedQueryProjectionPlan,
+  type BrunoTableClientAdmittedRow,
+  type BrunoTableClientRowOrderChangeDetector,
+  type BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
-import { createClientQueryPredicate, readClientQuickFilterField } from "./quick-filter";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
@@ -197,19 +197,12 @@ function createRowOrderChangeDetector(
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
     recordBrunoTableClientRowOrderPlanning(tableId);
   }
-  const orderedIds = new Set(orderBy.map((sort) => sort.columnId));
-  const orderedColumns = columns.filter((column) => orderedIds.has(column.columnId));
-  const filterPredicate = createClientQueryPredicate<BrunoTableClientAdmittedRow>(
+  const { orderedColumns, filterPredicate } = createClientAdmittedQueryProjectionPlan(
     columns,
     filters,
     quickFilter,
     quickFilterFields,
-    (column, row) => {
-      const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
-      if (isBrunoTableInvalidCellValue(value)) throw FILTER_VALUE_INVALID;
-      return value;
-    },
-    (row, field) => readClientQuickFilterField(row.raw, field),
+    orderBy,
     filterPlan,
   );
   return (previousRows, nextRows, change) =>
@@ -262,8 +255,6 @@ function rowOrderChanged(
   }
   return false;
 }
-
-const FILTER_VALUE_INVALID = Object.freeze({});
 
 function equivalentOrderedValue(
   column: CompiledColumn,

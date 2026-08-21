@@ -145,6 +145,25 @@ function createClientRuntime(
 }
 
 describe("BrunoTableGridRuntime sorting invariant", () => {
+  it("notifies every Result Row Count subscriber before rethrowing a listener failure", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (row: Row) => row.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const laterListener = vi.fn();
+    adapter.subscribeResultRowCount(() => {
+      throw new Error("listener failed");
+    });
+    adapter.subscribeResultRowCount(laterListener);
+
+    expect(() => adapter.publishResultRowCount(0)).toThrow("listener failed");
+    expect(laterListener).toHaveBeenCalledOnce();
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+  });
+
   it("normalizes an empty baseline when sortable columns are installed", () => {
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([]),
