@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compileColumns } from "./compile-columns";
-import { compileBrunoTableServerQuery } from "./server-query";
+import { compileBrunoTableServerQueryPlan } from "./server-query";
 
 const columns = compileColumns([
   {
@@ -29,7 +29,7 @@ const columns = compileColumns([
 describe("compileBrunoTableServerQuery", () => {
   it("maps Column Identity to fields and retains native exact operands", () => {
     const minimum = 9_007_199_254_740_993n;
-    const query = compileBrunoTableServerQuery(columns, {
+    const query = compileBrunoTableServerQueryPlan(columns, {
       filters: [
         {
           type: "AND",
@@ -47,7 +47,7 @@ describe("compileBrunoTableServerQuery", () => {
       quickFilter: "desk",
       quickFilterFields: ["symbol", "desk"],
       orderBy: [{ columnId: "COL_ID_QUANTITY", direction: "desc" }],
-    });
+    }).query;
 
     expect(query).toEqual({
       select: ["symbol", "quantity", "price", "desk"],
@@ -78,15 +78,15 @@ describe("compileBrunoTableServerQuery", () => {
 
   it("compiles empty Set inclusion intent through source-native FALSE", () => {
     expect(
-      compileBrunoTableServerQuery(columns, {
+      compileBrunoTableServerQueryPlan(columns, {
         filters: [{ columnId: "COL_ID_SYMBOL", type: "matchNone" }],
         quickFilter: "",
         quickFilterFields: [],
         orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-      }).where,
+      }).query.where,
     ).toEqual([{ type: "FALSE" }]);
     expect(() =>
-      compileBrunoTableServerQuery(columns, {
+      compileBrunoTableServerQueryPlan(columns, {
         filters: [{ columnId: "COL_ID_QUANTITY", type: "matchNone" }],
         quickFilter: "",
         quickFilterFields: [],
@@ -97,12 +97,12 @@ describe("compileBrunoTableServerQuery", () => {
 
   it("deduplicates projection fields without inferring from formatted output", () => {
     expect(
-      compileBrunoTableServerQuery(columns, {
+      compileBrunoTableServerQueryPlan(columns, {
         filters: [],
         quickFilter: "",
         quickFilterFields: ["price", "symbol"],
         orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-      }).select,
+      }).query.select,
     ).toEqual(["symbol", "quantity", "price"]);
   });
 });

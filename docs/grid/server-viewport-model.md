@@ -65,6 +65,10 @@ Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-se
 
 ## Leased feed routing
 
+This section specifies the issue #17 target contract. The leased-route slice is not shipped yet:
+issue #16 exposes no `routeBy` prop, and the examples below depend on a compatible release resolving
+[effect-view-server#464](https://github.com/bmvantunes/effect-view-server/issues/464).
+
 effect-view-server leased sources declare one authoritative non-empty Route Field tuple when the source is configured:
 
 ```ts
@@ -107,12 +111,9 @@ Do not add `routeByFields` to BrunoTable. The source declaration is the only fie
 When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
 
 effect-view-server 2.4.0 does not yet expose that source-owned semantic identity at the Viewport
-boundary. [effect-view-server#464](https://github.com/bmvantunes/effect-view-server/issues/464)
-tracks the smallest opaque semantic-key contract needed to ship leased Feed Routes without reference
-equality, generic serialization, duplicated schema logic, or Effect coupling in BrunoTable. The
-leased-route slice remains gated on a compatible release; BrunoTable must not substitute a local
-deduplication fallback. Issue #17 owns that typed `routeBy` surface and the broader leased-routing
-query integration; issue #16 deliberately exposes no route prop.
+boundary. The linked upstream issue tracks the smallest opaque semantic-key contract needed to ship
+leased Feed Routes without reference equality, generic serialization, duplicated schema logic, or
+Effect coupling in BrunoTable. BrunoTable must not substitute a local deduplication fallback.
 
 `externalFilters` is a separate optional Server-only input containing field-keyed View Server conditions. It defaults to no conditions and may reference valid filter fields that have no visible column. The Adapter combines External Filters, Quick Filter, and compiled Grid Filters through `AND`; it never translates External Filter fields through Column Identity. A semantic External Filter change releases the old query generation, invalidates the sparse indexed cache, clears transient focus/selection/scroll state, and starts at row zero while preserving compatible grid preferences and the current Feed Route. Compare filters through exact query semantics rather than React object identity so an equivalent freshly allocated array does not restart the viewport.
 

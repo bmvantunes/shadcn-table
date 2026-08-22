@@ -99,10 +99,23 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
 
   useLayoutEffect(() => {
     rowPipelineAdapter.reconcileSource(props.viewportSource);
-    const queryConfiguration = rowPipelineAdapter.reconcileColumns(compiledColumns);
+  }, [props.viewportSource, rowPipelineAdapter]);
+
+  useLayoutEffect(() => {
+    const queryConfiguration = rowPipelineAdapter.reconcileColumns(
+      compiledColumns,
+      props.quickFilterFields,
+    );
     runtime.reconcile(rowPipelineAdapter.getPublication(), compiledColumns, queryConfiguration);
     rowPipelineAdapter.replace(props.viewportSource.viewport, runtimeView.getQuerySnapshot());
-  }, [compiledColumns, props.viewportSource, rowPipelineAdapter, runtime, runtimeView]);
+  }, [
+    compiledColumns,
+    props.quickFilterFields,
+    props.viewportSource.viewport,
+    rowPipelineAdapter,
+    runtime,
+    runtimeView,
+  ]);
 
   useLayoutEffect(() => {
     const replace = () => {

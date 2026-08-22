@@ -24,13 +24,6 @@ export type BrunoTableCompiledServerQueryPlan = Readonly<{
   readonly operandSemantics: ReadonlyMap<object, CompiledFieldColumn["semantics"]>;
 }>;
 
-export function compileBrunoTableServerQuery(
-  columns: readonly CompiledColumn[],
-  input: BrunoTableServerQueryInput,
-): BrunoTableCompiledServerQuery {
-  return compileBrunoTableServerQueryPlan(columns, input).query;
-}
-
 export function compileBrunoTableServerQueryPlan(
   columns: readonly CompiledColumn[],
   input: BrunoTableServerQueryInput,

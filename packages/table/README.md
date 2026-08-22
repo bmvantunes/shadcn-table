@@ -123,8 +123,9 @@ viewport-controller types through BrunoTable's public declarations.
 
 The Server integration requires `effect-view-server@2.4.0` or newer at the application's source
 boundary. It is the first compatible release containing both the insertion-cleanup guarantee from
-#408 and source-native Match None from #409. BrunoTable maps empty Set inclusion intent to the
-source's `{ type: "FALSE" }` expression and does not emulate it by enumerating current facet values.
+issue #408 and source-native Match None from issue #409. BrunoTable maps empty Set inclusion intent
+to the source's `{ type: "FALSE" }` expression and does not emulate it by enumerating current facet
+values.
 
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.

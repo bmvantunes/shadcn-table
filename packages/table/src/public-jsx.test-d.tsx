@@ -133,6 +133,16 @@ const serverComponentProps = {
 const validServer = <BrunoTableServer {...serverComponentProps} />;
 void validServer;
 
+const invalidServerClientSource = { ...serverComponentProps, clientSource };
+// @ts-expect-error Server Tables reject Client Sources through composed props.
+void (<BrunoTableServer {...invalidServerClientSource} />);
+const invalidServerExternalFilters = { ...serverComponentProps, externalFilters: [] };
+// @ts-expect-error Issue #17 owns the future Server External Filter contract.
+void (<BrunoTableServer {...invalidServerExternalFilters} />);
+const invalidServerQuickFilterFields = { ...serverComponentProps, quickFilterFields: [42] };
+// @ts-expect-error Server Quick Filter fields must be string Row fields.
+void (<BrunoTableServer {...invalidServerQuickFilterFields} />);
+
 const invalidServerIdentity = (
   <BrunoTableServer
     tableId="TABLE_ID_JSX_SERVER_IDENTITY"

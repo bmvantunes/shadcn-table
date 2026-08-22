@@ -154,8 +154,21 @@ const emittedServerProps = {
   tableId: "TABLE_ID_EMITTED_SERVER_SPREAD",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }] as const,
+  quickFilterFields: ["name"] as const,
   viewportSource: emittedServerSource,
 };
+const emittedServerClientSource = { ...emittedServerProps, clientSource };
+// @ts-expect-error emitted Server declarations reject Client Sources.
+void (<BrunoTableServer {...emittedServerClientSource} />);
+const emittedServerExternalFilters = { ...emittedServerProps, externalFilters: [] };
+// @ts-expect-error emitted issue #16 declarations expose no External Filter surface.
+void (<BrunoTableServer {...emittedServerExternalFilters} />);
+const emittedServerNumericQuickFilterFields = {
+  ...emittedServerProps,
+  quickFilterFields: [42],
+};
+// @ts-expect-error emitted Server Quick Filter fields must be string Row fields.
+void (<BrunoTableServer {...emittedServerNumericQuickFilterFields} />);
 const emittedSpreadRowSelection = { ...emittedServerProps, rowSelection: true };
 // @ts-expect-error emitted Server row selection remains forbidden through composed props.
 void (<BrunoTableServer {...emittedSpreadRowSelection} />);

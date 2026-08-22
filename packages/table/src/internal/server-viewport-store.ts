@@ -56,7 +56,7 @@ export class BrunoTableServerViewportStore<TRow> {
     this.rowIndexById.get(rowId);
 
   public beginGeneration(window: BrunoTableServerViewportWindow): number {
-    const requiredWindow = snapshotWindow(window);
+    const requiredWindow = sanitizeBrunoTableServerViewportWindow(window);
     this.generation += 1;
     this.authoritativeTotalRows = false;
     this.requiredWindow = requiredWindow;
@@ -69,7 +69,7 @@ export class BrunoTableServerViewportStore<TRow> {
 
   public setRequiredRange(generation: number, window: BrunoTableServerViewportWindow): boolean {
     if (generation !== this.generation) return false;
-    const requiredWindow = snapshotWindow(window);
+    const requiredWindow = sanitizeBrunoTableServerViewportWindow(window);
     if (
       requiredWindow.firstRow === this.requiredWindow.firstRow &&
       requiredWindow.lastRow === this.requiredWindow.lastRow
@@ -77,6 +77,7 @@ export class BrunoTableServerViewportStore<TRow> {
       return false;
     }
     this.requiredWindow = requiredWindow;
+    let prunedRows = false;
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map<number, string>();
       const rowIndexById = new Map<string, number>();
@@ -93,9 +94,11 @@ export class BrunoTableServerViewportStore<TRow> {
         this.indexToRowId = indexToRowId;
         this.rowIndexById = rowIndexById;
         this.rowsById = rowsById;
-        this.publish(this.snapshot.rowSpace.totalRows);
+        prunedRows = true;
       }
     }
+    if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows);
+    else this.publishRequiredWindow();
     return true;
   }
 
@@ -201,7 +204,10 @@ export class BrunoTableServerViewportStore<TRow> {
     this.rowsById = rowsById;
     const totalRows = this.authoritativeTotalRows
       ? this.snapshot.rowSpace.totalRows
-      : Math.max(this.snapshot.rowSpace.totalRows, ...admitted.map((entry) => entry.index + 1));
+      : admitted.reduce(
+          (maximum, entry) => Math.max(maximum, entry.index + 1),
+          this.snapshot.rowSpace.totalRows,
+        );
     this.publish(totalRows);
     return true;
   }
@@ -228,9 +234,16 @@ export class BrunoTableServerViewportStore<TRow> {
     });
     notify(this.listeners);
   }
+
+  private publishRequiredWindow(): void {
+    this.snapshot = Object.freeze({ ...this.snapshot, requiredWindow: this.requiredWindow });
+    notify(this.listeners);
+  }
 }
 
-function snapshotWindow(window: BrunoTableServerViewportWindow): BrunoTableServerViewportWindow {
+export function sanitizeBrunoTableServerViewportWindow(
+  window: BrunoTableServerViewportWindow,
+): BrunoTableServerViewportWindow {
   if (
     !Number.isSafeInteger(window.firstRow) ||
     !Number.isSafeInteger(window.lastRow) ||

@@ -11,13 +11,17 @@ import {
   BrunoTableActiveFilterCount,
   BrunoTableActiveSortCount,
   BrunoTableLoadedRowCount,
+  BrunoTableQuickFilter,
   BrunoTableResultRowCount,
   BrunoTableServer,
   BrunoTableToolbar,
 } from "./index";
+import type { BrunoTableColumns, BrunoTableQuickFilterFields } from "./index";
+import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import { installBrunoTableToolbarSubscriptionListener } from "./internal/toolbar-instrumentation";
 
 type Row = Readonly<{ readonly symbol: string; readonly price: number }>;
+type QuickRow = Row & Readonly<{ readonly desk: string }>;
 
 const columns = [
   {
@@ -34,7 +38,7 @@ const columns = [
     valueType: "number",
     pinned: "end",
   },
-] as const;
+] as const satisfies BrunoTableColumns<Row>;
 const remappedColumns = [
   columns[0],
   {
@@ -44,7 +48,7 @@ const remappedColumns = [
     valueType: "text",
     pinned: "end",
   },
-] as const;
+] as const satisfies BrunoTableColumns<Row>;
 
 const wideCenterIndexes = [
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
@@ -59,7 +63,7 @@ const wideServerColumns = [
     width: 160,
   })),
   { ...columns[1], columnId: "COL_ID_END", headerName: "Pinned end", width: 120 },
-] as const;
+] as const satisfies BrunoTableColumns<Row>;
 
 const actualViewportConfig = defineViewServerConfig({
   topics: {
@@ -170,6 +174,86 @@ describe("BrunoTableServer", () => {
       (row) => row.getAttribute("aria-owns")?.split(" ").includes(aapl.id),
     );
     expect(owningRow?.getAttribute("aria-rowindex")).toBe("14");
+  });
+
+  test("reconciles changed Server Quick Filter fields without a remount", async () => {
+    const transport = makeViewport();
+    const renderServer = (
+      quickFilterFields: BrunoTableQuickFilterFields<QuickRow> | undefined,
+      showQuickFilter: boolean,
+    ) => (
+      <BrunoTableServer<QuickRow, typeof columns>
+        {...serverProps(transport.viewport, "ready")}
+        {...(quickFilterFields === undefined ? {} : { quickFilterFields })}
+      >
+        {showQuickFilter ? (
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+            <BrunoTableActiveFilterCount />
+          </BrunoTableToolbar>
+        ) : null}
+      </BrunoTableServer>
+    );
+    const screen = await render(renderServer(undefined, false));
+    expect(transport.requests).toHaveLength(1);
+
+    await screen.rerender(renderServer(["desk"], true));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toBeVisible();
+    await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "desk");
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
+    await expect
+      .element(screen.getByRole("status", { name: "Active filters" }))
+      .toHaveTextContent("1 active filter");
+    expect(transport.requests.at(-1)?.query).toMatchObject({
+      select: ["symbol", "price", "desk"],
+      where: [
+        {
+          type: "OR",
+          conditions: [{ field: "desk", type: "contains", filter: "desk" }],
+        },
+      ],
+    });
+
+    await screen.rerender(renderServer(["symbol", "desk"], true));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(4));
+    expect(transport.requests.at(-1)?.query).toMatchObject({
+      select: ["symbol", "price", "desk"],
+      where: [
+        {
+          type: "OR",
+          conditions: [
+            { field: "symbol", type: "contains", filter: "desk" },
+            { field: "desk", type: "contains", filter: "desk" },
+          ],
+        },
+      ],
+    });
+
+    await screen.rerender(renderServer(undefined, false));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(5));
+    expect(screen.getByRole("searchbox", { name: "Quick Filter" }).query()).toBeNull();
+    expect(transport.requests.at(-1)?.query).toEqual({
+      select: ["symbol", "price"],
+      where: [],
+      orderBy: [{ field: "symbol", direction: "asc" }],
+    });
+
+    await screen.rerender(renderServer(undefined, false));
+    await settleBrunoTableBrowserFrames();
+    expect(transport.requests).toHaveLength(5);
+
+    await screen.rerender(renderServer(["desk"], true));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(6));
+    await expect.element(screen.getByRole("searchbox", { name: "Quick Filter" })).toHaveValue("");
+    await expect
+      .element(screen.getByRole("status", { name: "Active filters" }))
+      .toHaveTextContent("0 active filters");
+    expect(transport.requests.at(-1)?.query).toEqual({
+      select: ["symbol", "price", "desk"],
+      where: [],
+      orderBy: [{ field: "symbol", direction: "asc" }],
+    });
   });
 
   test("replaces semantic generations, releases old controllers, and rejects late writes", async () => {
@@ -339,8 +423,7 @@ describe("BrunoTableServer", () => {
             }),
           );
         }
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await settleBrunoTableBrowserFrames();
         const active = grid.element().getAttribute("aria-activedescendant");
         const destination = (batch + 1) * 25;
         expect(active).toContain(`-${String(destination)}-`);
@@ -361,8 +444,7 @@ describe("BrunoTableServer", () => {
         { 100: { symbol: "ARRIVED", price: 100 } },
         { 100: "row-arrived" },
       );
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await settleBrunoTableBrowserFrames();
       const arrived = screen.getByRole("gridcell", { name: "ARRIVED" });
       await expect.element(arrived).toBeInTheDocument();
       expect(grid.element().getAttribute("aria-activedescendant")).not.toBe(activeAtDestination);
@@ -397,11 +479,14 @@ describe("BrunoTableServer", () => {
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
     grid.element().focus();
     for (let index = 0; index < 20; index += 1) {
-      grid
-        .element()
-        .dispatchEvent(
-          new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", repeat: index > 0 }),
-        );
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowDown",
+        repeat: index > 0,
+      });
+      grid.element().dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
     }
     await vi.waitFor(() => {
       const active = grid.element().getAttribute("aria-activedescendant");
@@ -425,7 +510,7 @@ describe("BrunoTableServer", () => {
 
   test("uses the published effect-view-server hook without insertion-cleanup sink updates", async () => {
     const firstInMemory = createInMemoryViewServerReact(actualViewportReact);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const consoleError = vi.spyOn(console, "error");
     function ActualServerTable() {
       const viewportSource = actualViewportReact.useLiveQueryViewport("orders");
       return (
@@ -511,7 +596,7 @@ describe("BrunoTableServer", () => {
         }),
       );
       if (index % 10 === 9) {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await settleBrunoTableBrowserFrames(1);
       }
     }
     await vi.waitFor(() => expect(inner.windows.length).toBeGreaterThan(innerWindowCount));
@@ -558,6 +643,8 @@ describe("BrunoTableServer", () => {
     const mountedHeaders = grid.element().querySelectorAll('[role="columnheader"]');
     expect(mountedHeaders.length).toBeLessThan(wideServerColumns.length);
     expect(mountedHeaders.length).toBeGreaterThanOrEqual(3);
-    expect(transport.windows.at(-1)).toMatchObject({ firstRow: expect.any(Number) });
+    expect(transport.windows.at(-1)?.firstRow).toBeGreaterThan(0);
+    expect(transport.windows.at(-1)?.firstRow).toBeLessThanOrEqual(50);
+    expect(transport.windows.at(-1)?.lastRow).toBeGreaterThanOrEqual(50);
   });
 });

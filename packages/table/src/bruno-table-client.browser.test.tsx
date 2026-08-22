@@ -54,6 +54,7 @@ import {
   installBrunoTableClientViewRenderListener,
   installBrunoTableClientViewRenderListenerForTable,
 } from "./internal/render-instrumentation";
+import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import {
   BrunoTableToolbarStore,
   BrunoTableView,
@@ -8396,20 +8397,24 @@ describe("BrunoTableClient browser surface", () => {
     try {
       for (let batch = 0; batch < 3; batch += 1) {
         for (let index = 0; index < 25; index += 1) {
-          grid
-            .element()
-            .dispatchEvent(
-              new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", repeat: true }),
-            );
+          const event = new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowDown",
+            repeat: batch > 0 || index > 0,
+          });
+          grid.element().dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(true);
         }
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await settleBrunoTableBrowserFrames();
         const activeId = grid.element().getAttribute("aria-activedescendant");
         const destination = grid.element().querySelector<HTMLElement>(`[id="${activeId ?? ""}"]`);
         expect(destination?.textContent).toBe(
           `Held row ${String((batch + 1) * 25).padStart(3, "0")}`,
         );
       }
+      const rendersAfterVerticalNavigation = gridSurfaceRenders;
+      expect(rendersAfterVerticalNavigation).toBeLessThanOrEqual(3);
       for (let index = 0; index < heldColumns.length - 1; index += 1) {
         grid
           .element()
@@ -8430,7 +8435,7 @@ describe("BrunoTableClient browser surface", () => {
       });
       expect(document.activeElement).toBe(grid.element());
       expect(tableRootRenders).toBe(0);
-      expect(gridSurfaceRenders).toBeLessThanOrEqual(3);
+      expect(gridSurfaceRenders).toBe(rendersAfterVerticalNavigation);
       expect(toolbarNotifications).not.toHaveBeenCalled();
       expect(filterNotifications).not.toHaveBeenCalled();
       expect(filterTriggerRenders).not.toHaveBeenCalled();

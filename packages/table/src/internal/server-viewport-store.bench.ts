@@ -8,6 +8,17 @@ const referenceFrameBudgetMs = 8.33;
 const virtualRowCount = 1_000_000;
 const windowSize = 60;
 const warmupIterations = 10;
+
+function assertP99FrameBudget(label: string, samples: readonly number[]): void {
+  const measured = samples.slice(warmupIterations).toSorted((left, right) => left - right);
+  const p99 = measured[Math.max(0, Math.ceil(measured.length * 0.99) - 1)];
+  if (p99 === undefined || p99 > referenceFrameBudgetMs) {
+    throw new Error(
+      `${label} p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(p99)} ms.`,
+    );
+  }
+}
+
 const durationsMs: number[] = [];
 const store = new BrunoTableServerViewportStore<Readonly<{ value: number }>>();
 const generation = store.beginGeneration({ firstRow: 0, lastRow: windowSize - 1 });
@@ -16,13 +27,7 @@ let iteration = 0;
 
 describe("BrunoTable sparse Server viewport benchmark (8.33 ms/120 Hz reference)", () => {
   afterAll(() => {
-    const measured = durationsMs.slice(warmupIterations).toSorted((left, right) => left - right);
-    const p99 = measured[Math.max(0, Math.ceil(measured.length * 0.99) - 1)];
-    if (p99 === undefined || p99 > referenceFrameBudgetMs) {
-      throw new Error(
-        `Sparse Server window publication p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(p99)} ms.`,
-      );
-    }
+    assertP99FrameBudget("Sparse Server window publication", durationsMs);
   });
 
   bench(
@@ -107,15 +112,7 @@ let adapterIteration = 0;
 
 describe("BrunoTable Server adapter publication benchmark", () => {
   afterAll(() => {
-    const measured = adapterDurationsMs
-      .slice(warmupIterations)
-      .toSorted((left, right) => left - right);
-    const p99 = measured[Math.max(0, Math.ceil(measured.length * 0.99) - 1)];
-    if (p99 === undefined || p99 > referenceFrameBudgetMs) {
-      throw new Error(
-        `Server adapter 20 Hz publication p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(p99)} ms.`,
-      );
-    }
+    assertP99FrameBudget("Server adapter 20 Hz publication", adapterDurationsMs);
     if (replaceCalls !== 1 || setWindowCalls !== adapterIteration) {
       throw new Error("Server adapter replaced a semantic generation during window-only work.");
     }
@@ -199,6 +196,7 @@ for (let rowIndex = 0; rowIndex < windowSize; rowIndex += 1) {
     ),
   );
 }
+equivalenceAdapter.setRequiredRange(0, windowSize);
 equivalenceSink!.setRowData(firstEquivalenceRows, equivalenceKeys);
 const retainedEquivalenceRows = Object.freeze(
   Object.fromEntries(
@@ -208,19 +206,16 @@ const retainedEquivalenceRows = Object.freeze(
     ]),
   ),
 );
+for (const rowId of Object.values(equivalenceKeys)) {
+  if (retainedEquivalenceRows[rowId] === undefined) {
+    throw new Error(`Equivalence benchmark setup did not admit row ${rowId}.`);
+  }
+}
 const equivalenceDurationsMs: number[] = [];
 
 describe("BrunoTable Server repeated equivalent publication benchmark", () => {
   afterAll(() => {
-    const measured = equivalenceDurationsMs
-      .slice(warmupIterations)
-      .toSorted((left, right) => left - right);
-    const p99 = measured[Math.max(0, Math.ceil(measured.length * 0.99) - 1)];
-    if (p99 === undefined || p99 > referenceFrameBudgetMs) {
-      throw new Error(
-        `Server equivalent-row publication p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(p99)} ms.`,
-      );
-    }
+    assertP99FrameBudget("Server equivalent-row publication", equivalenceDurationsMs);
   });
 
   bench(

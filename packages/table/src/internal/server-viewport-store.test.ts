@@ -5,6 +5,19 @@ import { BrunoTableServerViewportStore } from "./server-viewport-store";
 type Row = Readonly<{ readonly symbol: string; readonly price: number }>;
 
 describe("BrunoTableServerViewportStore", () => {
+  it("publishes an accepted non-pruning required-window snapshot exactly once", () => {
+    const store = new BrunoTableServerViewportStore<Row>();
+    const generation = store.beginGeneration({ firstRow: 0, lastRow: 17 });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    expect(store.setRequiredRange(generation, { firstRow: 10, lastRow: 29 })).toBe(true);
+    expect(store.getSnapshot().requiredWindow).toEqual({ firstRow: 10, lastRow: 29 });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(store.setRequiredRange(generation, { firstRow: 10, lastRow: 29 })).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("writes authoritative row keys into out-of-order absolute slots in one publication", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const listener = vi.fn();

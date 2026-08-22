@@ -108,9 +108,11 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement | null {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientQuickFilterRender();
-  // quickFilterFields is snapshotted by the Client adapter for this Table Instance;
-  // it is configuration, not a reactive row/query publication.
-  const fields = runtime.getQuickFilterFieldsSnapshot();
+  const fields = useSyncExternalStore(
+    runtime.subscribeQuickFilter,
+    runtime.getQuickFilterFieldsSnapshot,
+    runtime.getQuickFilterFieldsSnapshot,
+  );
   const committed = useSyncExternalStore(
     runtime.subscribeQuickFilter,
     runtime.getQuickFilterSnapshot,

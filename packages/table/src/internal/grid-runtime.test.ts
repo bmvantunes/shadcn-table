@@ -1506,6 +1506,49 @@ describe("BrunoTable filter runtime primitives", () => {
     const configuration = adapter.getQueryConfiguration(runtimeColumns);
     expect(view.getQuickFilterFieldsSnapshot()).toBe(configuration.quickFilterFields);
     expect(adapter.getQueryConfiguration(runtimeColumns)).toBe(configuration);
+
+    const quickFilterPublication = vi.fn();
+    const queryPublication = vi.fn();
+    const filterPublication = vi.fn();
+    const bodyPublication = vi.fn();
+    const columnLayoutPublication = vi.fn();
+    const columnStructurePublication = vi.fn();
+    view.subscribeQuickFilter(quickFilterPublication);
+    view.subscribeQuery(queryPublication);
+    view.subscribeFilter(filterPublication);
+    view.subscribeBody(bodyPublication);
+    view.subscribeColumnLayout(columnLayoutPublication);
+    view.subscribeColumnStructure(columnStructurePublication);
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze(["name", "desk"]),
+    });
+    expect(view.getQuickFilterFieldsSnapshot()).toEqual(["name", "desk"]);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(1);
+    expect(queryPublication).toHaveBeenCalledTimes(1);
+    expect(filterPublication).not.toHaveBeenCalled();
+    expect(bodyPublication).not.toHaveBeenCalled();
+    expect(columnLayoutPublication).not.toHaveBeenCalled();
+    expect(columnStructurePublication).not.toHaveBeenCalled();
+    expect(view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" })).toBe(true);
+    expect(view.getActiveFilterCountSnapshot()).toBe(1);
+
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze([]),
+    });
+    expect(view.getQuickFilterFieldsSnapshot()).toEqual([]);
+    expect(view.getQuickFilterSnapshot()).toBe("");
+    expect(view.getActiveFilterCountSnapshot()).toBe(0);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(3);
+
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze(["name"]),
+    });
+    expect(view.getQuickFilterSnapshot()).toBe("");
+    expect(view.getActiveFilterCountSnapshot()).toBe(0);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(4);
   });
 
   it("rejects sparse Quick Filter field tuples", () => {

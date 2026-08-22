@@ -483,6 +483,7 @@ type ColumnConfiguration = Readonly<{
   readonly baselineFilters: readonly unknown[];
   readonly baselineFilterCollection: BrunoTableClientFilterCollection;
   readonly baselineOrderBy: BrunoTableOrderBy;
+  readonly quickFilterFields: readonly string[];
   readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly columnLayout: BrunoTableColumnLayoutState;
@@ -564,7 +565,7 @@ export class BrunoTableGridRuntime<TRow> {
   private baselineFilters: readonly unknown[];
   private baselineFilterCollection: BrunoTableClientFilterCollection;
   private baselineOrderBy: BrunoTableOrderBy;
-  private readonly quickFilterFields: readonly string[];
+  private quickFilterFields: readonly string[];
   private query: BrunoTableQuerySnapshot;
   private filterCollection: BrunoTableClientFilterCollection;
   private filterSnapshot: BrunoTableFilterSnapshot;
@@ -796,7 +797,11 @@ export class BrunoTableGridRuntime<TRow> {
     const configuration =
       this.columns === columns &&
       this.baselineFilterCollection === queryConfiguration.baselineFilterCollection &&
-      this.baselineOrderBy === queryConfiguration.baselineOrderBy
+      this.baselineOrderBy === queryConfiguration.baselineOrderBy &&
+      sameStringArray(
+        this.quickFilterFields,
+        queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS,
+      )
         ? undefined
         : this.stageColumns(columns, queryConfiguration);
     const next = this.createState(publication);
@@ -807,6 +812,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineFilters = configuration.baselineFilters;
       this.baselineFilterCollection = configuration.baselineFilterCollection;
       this.baselineOrderBy = configuration.baselineOrderBy;
+      this.quickFilterFields = configuration.quickFilterFields;
       this.query = configuration.query;
       this.filterCollection = this.query.filterCollection;
       this.updateColumnFilterSnapshots();
@@ -1436,6 +1442,8 @@ export class BrunoTableGridRuntime<TRow> {
       });
     const baselineFilters = baselineFilterCollection.filters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
+    const quickFilterFields = queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
+    const quickFilterFieldsChanged = !sameStringArray(this.quickFilterFields, quickFilterFields);
     const nextColumnsById = indexColumns(columns);
     const invalidatedColumnIds = new Set<string>();
     for (const column of this.columns) {
@@ -1458,11 +1466,12 @@ export class BrunoTableGridRuntime<TRow> {
     }
     const nextFilterCollection = compileClientFilterCollection(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
-    const nextQuickFilter = this.query.quickFilter;
+    const nextQuickFilter = quickFilterFields.length === 0 ? "" : this.query.quickFilter;
     const semanticsChanged =
       !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
       !sameOrderBy(this.query.orderBy, nextOrderBy) ||
       this.query.quickFilter !== nextQuickFilter ||
+      quickFilterFieldsChanged ||
       activeQuerySemanticsChanged(this.columns, columns, this.query);
     const query = createQuerySnapshot(
       columns,
@@ -1476,11 +1485,14 @@ export class BrunoTableGridRuntime<TRow> {
           : "reconcile"
         : this.query.navigationMode,
     );
-    const columnLayout = reconcileBrunoTableColumnLayout(
-      this.columnLayout,
-      columns,
-      this.columnLayout.version + 1,
-    );
+    const columnLayout =
+      this.columns === columns
+        ? this.columnLayout
+        : reconcileBrunoTableColumnLayout(
+            this.columnLayout,
+            columns,
+            this.columnLayout.version + 1,
+          );
     const columnCommands = createColumnCommandSnapshots(
       columns,
       query,
@@ -1493,6 +1505,7 @@ export class BrunoTableGridRuntime<TRow> {
       baselineFilters,
       baselineFilterCollection,
       baselineOrderBy,
+      quickFilterFields,
       query,
       columnCommands,
       columnLayout,
@@ -1503,7 +1516,7 @@ export class BrunoTableGridRuntime<TRow> {
           !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
           this.query.quickFilter !== nextQuickFilter,
         queryChanged: true,
-        quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
+        quickFilterChanged: this.query.quickFilter !== nextQuickFilter || quickFilterFieldsChanged,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         activeFilterCountChanged:
           activeFilterCount(this.filterCollection, this.query.quickFilter) !==
