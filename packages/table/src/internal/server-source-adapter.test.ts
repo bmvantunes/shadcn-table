@@ -96,6 +96,46 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  it("rejects a malformed replacement viewport before changing the active source", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    transport.getRequest()?.sink.setRowCount(250, true);
+    transport.getRequest()?.sink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    const before = adapter.getPublication();
+
+    expect(() =>
+      adapter.reconcileSource({
+        viewport: Object.freeze({}),
+        completeRawSelect,
+        totalRows: 7,
+        version: 2,
+        status: "error",
+        message: "replacement",
+      }),
+    ).toThrow("BrunoTable Server viewportSource.viewport must expose replace().");
+    expect(adapter.getPublication()).toBe(before);
+    expect(adapter.getPublication().rowSpace?.getRow("old")).toEqual({
+      symbol: "OLD",
+      price: 1,
+    });
+    expect(adapter.getResultRowCountSnapshot()).toBe(250);
+    expect(transport.release).not.toHaveBeenCalled();
+  });
+
   it("resets navigation for a replacement viewport even when the runtime query reconciles", () => {
     const first = makeViewport();
     const second = makeViewport();

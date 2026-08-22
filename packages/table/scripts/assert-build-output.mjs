@@ -180,6 +180,17 @@ for (const expected of ["module", "global"]) {
   }
 }
 
+for (const [nodeModulesEntries, virtualStoreEntries, expected] of [
+  [["@bruno", "react"], [], false],
+  [["@effect"], [], true],
+  [[], ["@effect+schema@4.0.0-rc.111"], true],
+  [["effect-view-server"], [], true],
+]) {
+  if (installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries) !== expected) {
+    throw new Error("The clean-consumer dependency-graph fixture misclassified Effect.");
+  }
+}
+
 const [
   rootDeclarationSet,
   effectDeclarationSet,
@@ -1582,18 +1593,20 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
 }
 
 async function assertInstalledGraphExcludesEffect(consumerRoot) {
-  if (
-    existsSync(join(consumerRoot, "node_modules", "effect")) ||
-    existsSync(join(consumerRoot, "node_modules", "effect-view-server"))
-  ) {
-    throw new Error("The clean root consumer unexpectedly installed Effect or View Server.");
-  }
-
+  const nodeModules = join(consumerRoot, "node_modules");
+  const nodeModulesEntries = existsSync(nodeModules) ? await readdir(nodeModules) : [];
   const virtualStore = join(consumerRoot, "node_modules", ".pnpm");
-  const entries = existsSync(virtualStore) ? await readdir(virtualStore) : [];
-  if (entries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))) {
+  const virtualStoreEntries = existsSync(virtualStore) ? await readdir(virtualStore) : [];
+  if (installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries)) {
     throw new Error("The clean root consumer dependency graph contains Effect or View Server.");
   }
+}
+
+function installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries) {
+  return (
+    nodeModulesEntries.some((entry) => /^(?:@effect|effect|effect-view-server)$/u.test(entry)) ||
+    virtualStoreEntries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))
+  );
 }
 
 function runTypeScriptConsumer(consumerRoot, label) {

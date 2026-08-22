@@ -27,7 +27,41 @@ const columns = compileColumns([
 ]);
 const completeRawSelect = ["id", "symbol", "quantity", "price", "desk", "hiddenLabel"] as const;
 
-describe("compileBrunoTableServerQuery", () => {
+describe("compileBrunoTableServerQueryPlan", () => {
+  it("rejects empty and non-field sorting at the runtime boundary", () => {
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        columns,
+        { filters: [], quickFilter: "", quickFilterFields: [], orderBy: [] },
+        completeRawSelect,
+      ),
+    ).toThrow("BrunoTable Server requires a non-empty orderBy query.");
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        columns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_UNKNOWN", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("BrunoTable Server sort has no Query Field: COL_ID_UNKNOWN");
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        columns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_NOTIONAL", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("BrunoTable Server sort has no Query Field: COL_ID_NOTIONAL");
+  });
+
   it("maps Column Identity to fields and retains native exact operands", () => {
     const minimum = 9_007_199_254_740_993n;
     const query = compileBrunoTableServerQueryPlan(

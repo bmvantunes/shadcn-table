@@ -107,7 +107,7 @@ export function compileBrunoTableServerQueryPlan(
   });
 }
 
-function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
+export function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
   return (
     column.valueFormatter !== undefined ||
     typeof column.cellClassName === "function" ||

@@ -535,7 +535,9 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly cellSnapshots = new Map<BrunoTableRowId, Map<string, BrunoTableCellSnapshot>>();
   private readonly unavailableRows = new Set<BrunoTableRowId>();
   private readonly unavailableRowCellRows = new Set<BrunoTableRowId>();
+  private readonly unavailableRowCellCounts = new Map<BrunoTableRowId, number>();
   private readonly unavailableCellRows = new Set<BrunoTableRowId>();
+  private readonly unavailableCellCounts = new Map<BrunoTableRowId, number>();
   private readonly pendingCellTokensByRow = new Map<BrunoTableRowId, Map<string, object>>();
   private readonly pendingCellLru = new Map<
     object,
@@ -1059,8 +1061,7 @@ export class BrunoTableGridRuntime<TRow> {
       listeners.delete(listener);
       if (listeners.size > 0) return;
       rowListeners?.delete(columnId);
-      this.rowCellSnapshots.get(rowId)?.delete(columnId);
-      this.refreshUnavailableRowCellRow(rowId);
+      this.deleteRowCellSnapshot(rowId, columnId);
       this.clearPendingRowCellSnapshot(rowId, columnId);
       if (rowListeners?.size === 0) this.rowCellListeners.delete(rowId);
       if (this.rowCellSnapshots.get(rowId)?.size === 0) this.rowCellSnapshots.delete(rowId);
@@ -1094,8 +1095,7 @@ export class BrunoTableGridRuntime<TRow> {
       listeners.delete(listener);
       if (listeners.size > 0) return;
       rowListeners?.delete(columnId);
-      this.cellSnapshots.get(rowId)?.delete(columnId);
-      this.refreshUnavailableCellRow(rowId);
+      this.deleteCellSnapshot(rowId, columnId);
       this.clearPendingCellSnapshot(rowId, columnId);
       if (rowListeners?.size === 0) this.cellListeners.delete(rowId);
       if (this.cellSnapshots.get(rowId)?.size === 0) this.cellSnapshots.delete(rowId);
@@ -1955,8 +1955,15 @@ export class BrunoTableGridRuntime<TRow> {
       rowSnapshots = new Map();
       this.rowCellSnapshots.set(rowId, rowSnapshots);
     }
+    const previous = rowSnapshots.get(columnId);
     rowSnapshots.set(columnId, snapshot);
-    this.refreshUnavailableRowCellRow(rowId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous?.kind === "unavailable",
+      snapshot.kind === "unavailable",
+      this.unavailableRowCellCounts,
+      this.unavailableRowCellRows,
+    );
   }
 
   private trackPendingRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
@@ -1977,8 +1984,7 @@ export class BrunoTableGridRuntime<TRow> {
     if (oldest === undefined) return;
     this.clearPendingRowCellSnapshot(oldest.rowId, oldest.columnId);
     if (!this.rowCellListeners.get(oldest.rowId)?.has(oldest.columnId)) {
-      this.rowCellSnapshots.get(oldest.rowId)?.delete(oldest.columnId);
-      this.refreshUnavailableRowCellRow(oldest.rowId);
+      this.deleteRowCellSnapshot(oldest.rowId, oldest.columnId);
       if (this.rowCellSnapshots.get(oldest.rowId)?.size === 0) {
         this.rowCellSnapshots.delete(oldest.rowId);
       }
@@ -1994,20 +2000,50 @@ export class BrunoTableGridRuntime<TRow> {
     if (rowTokens?.size === 0) this.pendingRowCellTokensByRow.delete(rowId);
   }
 
-  private refreshUnavailableRowCellRow(rowId: BrunoTableRowId): void {
-    const unavailable = Array.from(this.rowCellSnapshots.get(rowId)?.values() ?? []).some(
-      (snapshot) => snapshot.kind === "unavailable",
+  private deleteRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    const rowSnapshots = this.rowCellSnapshots.get(rowId);
+    const previous = rowSnapshots?.get(columnId);
+    if (previous === undefined) return;
+    rowSnapshots?.delete(columnId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous.kind === "unavailable",
+      false,
+      this.unavailableRowCellCounts,
+      this.unavailableRowCellRows,
     );
-    if (unavailable) this.unavailableRowCellRows.add(rowId);
-    else this.unavailableRowCellRows.delete(rowId);
   }
 
-  private refreshUnavailableCellRow(rowId: BrunoTableRowId): void {
-    const unavailable = Array.from(this.cellSnapshots.get(rowId)?.values() ?? []).some(
-      (snapshot) => snapshot.kind === "unavailable",
+  private deleteCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    const rowSnapshots = this.cellSnapshots.get(rowId);
+    const previous = rowSnapshots?.get(columnId);
+    if (previous === undefined) return;
+    rowSnapshots?.delete(columnId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous.kind === "unavailable",
+      false,
+      this.unavailableCellCounts,
+      this.unavailableCellRows,
     );
-    if (unavailable) this.unavailableCellRows.add(rowId);
-    else this.unavailableCellRows.delete(rowId);
+  }
+
+  private updateUnavailableSnapshotCount(
+    rowId: BrunoTableRowId,
+    previousUnavailable: boolean,
+    nextUnavailable: boolean,
+    counts: Map<BrunoTableRowId, number>,
+    rows: Set<BrunoTableRowId>,
+  ): void {
+    if (previousUnavailable === nextUnavailable) return;
+    const nextCount = (counts.get(rowId) ?? 0) + (nextUnavailable ? 1 : -1);
+    if (nextCount > 0) {
+      counts.set(rowId, nextCount);
+      rows.add(rowId);
+      return;
+    }
+    counts.delete(rowId);
+    rows.delete(rowId);
   }
 
   private hasStaleSubscribedColumnSnapshot(): boolean {
@@ -2064,8 +2100,15 @@ export class BrunoTableGridRuntime<TRow> {
       rowSnapshots = new Map();
       this.cellSnapshots.set(rowId, rowSnapshots);
     }
+    const previous = rowSnapshots.get(columnId);
     rowSnapshots.set(columnId, snapshot);
-    this.refreshUnavailableCellRow(rowId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous?.kind === "unavailable",
+      snapshot.kind === "unavailable",
+      this.unavailableCellCounts,
+      this.unavailableCellRows,
+    );
   }
 
   private trackPendingCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
@@ -2086,8 +2129,7 @@ export class BrunoTableGridRuntime<TRow> {
     if (oldest === undefined) return;
     this.clearPendingCellSnapshot(oldest.rowId, oldest.columnId);
     if (!this.cellListeners.get(oldest.rowId)?.has(oldest.columnId)) {
-      this.cellSnapshots.get(oldest.rowId)?.delete(oldest.columnId);
-      this.refreshUnavailableCellRow(oldest.rowId);
+      this.deleteCellSnapshot(oldest.rowId, oldest.columnId);
       if (this.cellSnapshots.get(oldest.rowId)?.size === 0) {
         this.cellSnapshots.delete(oldest.rowId);
       }

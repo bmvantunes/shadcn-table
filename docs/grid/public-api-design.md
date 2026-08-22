@@ -239,6 +239,10 @@ type BrunoTableServerProps<
     onSaveEdits?: never;
   };
 
+// The abbreviated shape above omits the conditional only for readability. The real Props type
+// requires LiveQueryViewportBaseRow<TViewport> to be exactly TRow in both directions; the source
+// cannot be erased, widened, or paired with a different row domain.
+
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
 type BrunoTableSourceRetry = {

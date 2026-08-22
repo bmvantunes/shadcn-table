@@ -14,6 +14,7 @@ import {
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 import {
+  columnUsesRawRowPresentation,
   compileBrunoTableServerProjectionFields,
   compileBrunoTableServerQueryPlan,
   type BrunoTableCompiledServerQueryPlan,
@@ -294,6 +295,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   public reconcileSource(source: BrunoTableServerSourceInput): void {
     const nextCompleteRawSelect = snapshotCompleteRawSelect(source.completeRawSelect);
     const next = snapshotSource(source);
+    requireViewportTransport<TRow>(next.viewport);
     const nextProjectionFields = compileBrunoTableServerProjectionFields(
       this.columns,
       this.quickFilterFields,
@@ -917,12 +919,4 @@ function rowsEquivalentBySelectedValues<TRow>(
     }
   }
   return true;
-}
-
-function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
-  return (
-    column.valueFormatter !== undefined ||
-    typeof column.cellClassName === "function" ||
-    column.cellRenderer !== undefined
-  );
 }

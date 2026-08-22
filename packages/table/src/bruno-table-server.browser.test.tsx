@@ -18,7 +18,7 @@ import {
   BrunoTableServer,
   BrunoTableToolbar,
 } from "./index";
-import type { BrunoTableColumns, BrunoTableQuickFilterFields } from "./index";
+import type { BrunoTableColumns, BrunoTableQuickFilterFields, BrunoTableValueType } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import { createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import {
@@ -54,9 +54,36 @@ const columns = [
     pinned: "end",
   },
 ] as const satisfies BrunoTableColumns<Row>;
+const throwingCopyTextValueType = {
+  codecId: "browser/throwing-copy-text",
+  codecVersion: 1,
+  filterFamily: "text",
+  editorFamily: "text",
+  cellAlign: "start",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const),
+  equivalent: (left: string, right: string) => left === right,
+  compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
+  formatCanonicalText: (value: string) => {
+    if (value === "THROW") throw new Error("copy formatter failure");
+    return value;
+  },
+  parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+  formatDisplay: (value: string) => value,
+  encodePersisted: (value: string) => value,
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const),
+} as const satisfies BrunoTableValueType<string, "text", "text">;
 const rawRowPresentationColumns = [
   {
     ...columns[0],
+    valueType: throwingCopyTextValueType,
     valueFormatter: ({ row, value }: { readonly row: Row; readonly value: string }) =>
       `${value} (${row.desk})`,
     cellClassName: ({ row }: { readonly row: Row }) => `source-${row.id}`,
@@ -299,8 +326,9 @@ describe("BrunoTableServer", () => {
         {
           0: { id: "actual-1", symbol: "AAPL", price: 240, desk: "LDN" },
           1: { id: "invalid-1", symbol: "INVALID", price: invalidPrice as never, desk: "NYC" },
+          2: { id: "throw-1", symbol: "THROW", price: 7, desk: "LDN" },
         },
-        { 0: "row-aapl", 1: "row-invalid" },
+        { 0: "row-aapl", 1: "row-invalid", 2: "row-throw" },
       );
       const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
       grid.element().focus();
@@ -339,6 +367,27 @@ describe("BrunoTableServer", () => {
       await settleBrunoTableBrowserFrames();
       expect(writeText).toHaveBeenCalledTimes(1);
       expect(copyInvalid.defaultPrevented).toBe(false);
+
+      grid
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+        );
+      grid
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowLeft" }),
+        );
+      const copyThrowing = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
+      });
+      grid.element().dispatchEvent(copyThrowing);
+      await settleBrunoTableBrowserFrames();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(copyThrowing.defaultPrevented).toBe(false);
 
       grid
         .element()

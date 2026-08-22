@@ -2032,10 +2032,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
     if (isBrunoTableInvalidCellValue(snapshot.value)) return;
     if (navigator.clipboard?.writeText === undefined) return;
-    const text =
-      snapshot.value === null || snapshot.value === undefined
-        ? ""
-        : snapshot.column.semantics.formatCanonicalText(snapshot.value);
+    let text: string;
+    try {
+      text =
+        snapshot.value === null || snapshot.value === undefined
+          ? ""
+          : snapshot.column.semantics.formatCanonicalText(snapshot.value);
+    } catch {
+      return;
+    }
     event.preventDefault();
     void navigator.clipboard.writeText(text).catch(() => undefined);
   };
