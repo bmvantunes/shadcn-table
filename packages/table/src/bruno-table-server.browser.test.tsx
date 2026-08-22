@@ -27,9 +27,14 @@ import {
 } from "./internal/render-instrumentation";
 import { installBrunoTableToolbarSubscriptionListener } from "./internal/toolbar-instrumentation";
 
-type Row = Readonly<{ readonly symbol: string; readonly price: number }>;
-type QuickRow = Row & Readonly<{ readonly desk: string }>;
-type ProjectionRow = Row & Readonly<{ readonly desk: string }>;
+type Row = Readonly<{
+  readonly id: string;
+  readonly symbol: string;
+  readonly price: number;
+  readonly desk: string;
+}>;
+type QuickRow = Row;
+type ProjectionRow = Row;
 
 const columns = [
   {
@@ -88,37 +93,51 @@ const actualViewportConfig = defineViewServerConfig({
         id: ViewServerId,
         symbol: Schema.String,
         price: Schema.Number,
+        desk: Schema.String,
       }),
     },
   },
 });
 const actualViewportReact = createViewServerReact(actualViewportConfig);
+type BrowserViewport = Omit<
+  ReturnType<typeof actualViewportReact.useLiveQueryViewport>["viewport"],
+  "destroy" | "replace"
+> &
+  Readonly<{
+    readonly replace: (
+      request: Readonly<{ readonly query: unknown; readonly sink: Sink }>,
+    ) => Readonly<{
+      readonly setWindow: (window: Readonly<{ firstRow: number; lastRow: number }>) => void;
+      readonly release: () => void;
+    }>;
+  }>;
 
 type Sink<TRow = Row> = Readonly<{
   readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
   readonly setRowData: (
-    rows: Readonly<Record<number, TRow>>,
+    rows: Readonly<Record<number, Partial<TRow>>>,
     keys: Readonly<Record<number, string>>,
   ) => void;
 }>;
 
-function makeViewport<TRow = Row>(totalRows = 100, publishCount = true) {
-  const requests: Array<Readonly<{ readonly query: unknown; readonly sink: Sink<TRow> }>> = [];
+function makeViewport(totalRows = 100, publishCount = true) {
+  const requests: Array<Readonly<{ readonly query: unknown; readonly sink: Sink }>> = [];
   const windows: Array<Readonly<{ readonly firstRow: number; readonly lastRow: number }>> = [];
   const releases = vi.fn();
-  return {
-    viewport: {
-      replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink<TRow> }>) {
-        requests.push(request);
-        if (publishCount) request.sink.setRowCount(totalRows, true);
-        return {
-          setWindow(window: Readonly<{ readonly firstRow: number; readonly lastRow: number }>) {
-            windows.push(window);
-          },
-          release: releases,
-        };
-      },
+  const viewport: BrowserViewport = {
+    replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink }>) {
+      requests.push(request);
+      if (publishCount) request.sink.setRowCount(totalRows, true);
+      return {
+        setWindow(window: Readonly<{ readonly firstRow: number; readonly lastRow: number }>) {
+          windows.push(window);
+        },
+        release: releases,
+      };
     },
+  };
+  return {
+    viewport,
     requests,
     windows,
     releases,
@@ -126,7 +145,7 @@ function makeViewport<TRow = Row>(totalRows = 100, publishCount = true) {
 }
 
 function serverProps(
-  viewport: ReturnType<typeof makeViewport>["viewport"],
+  viewport: BrowserViewport,
   status: "loading" | "ready" | "stale" | "closed" | "error" = "loading",
   tableId = "TABLE_ID_SERVER",
 ) {
@@ -144,7 +163,7 @@ describe("BrunoTableServer", () => {
   test("keeps Server condition editing without synthesizing Set Filter facet choices", async () => {
     const transport = makeViewport();
     const screen = await render(
-      <BrunoTableServer<Row, typeof serverFilterColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER_FILTERS"
         columns={serverFilterColumns}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -169,9 +188,7 @@ describe("BrunoTableServer", () => {
 
   test("keeps fixed-height loading geometry when activation publishes a non-authoritative zero hint", async () => {
     const transport = makeViewport(100, false);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport)} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport)} />);
     transport.requests[0]?.sink.setRowCount(0, false);
 
     const grid = screen.getByRole("grid", { name: "Loading table rows" });
@@ -181,17 +198,13 @@ describe("BrunoTableServer", () => {
     expect([...bodyRows].some((row) => row.style.height === "36px")).toBe(true);
 
     transport.requests[0]?.sink.setRowCount(0, true);
-    await screen.rerender(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    await screen.rerender(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     await expect.element(screen.getByRole("region", { name: "No rows" })).toBeInTheDocument();
   });
 
   test("renders fixed-height sparse slots and writes authoritative rows into absolute indexes", async () => {
     const transport = makeViewport();
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
 
     await expect
       .element(screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" }))
@@ -207,9 +220,7 @@ describe("BrunoTableServer", () => {
       { 12: { symbol: "AAPL", price: 240 } },
       { 12: "server-row-aapl" },
     );
-    await screen.rerender(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    await screen.rerender(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
     grid.element().scrollTop = 12 * 36;
     grid.element().dispatchEvent(new Event("scroll"));
@@ -245,7 +256,7 @@ describe("BrunoTableServer", () => {
     );
     try {
       const screen = await render(
-        <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
+        <BrunoTableServer {...serverProps(transport.viewport, "ready")} />,
       );
       transport.requests[0]?.sink.setRowData({ 0: { symbol: "AAPL", price: 240 } }, { 0: "row-a" });
       await expect.element(screen.getByRole("gridcell", { name: "AAPL" })).toBeInTheDocument();
@@ -281,9 +292,7 @@ describe("BrunoTableServer", () => {
 
   test("clears conflicting Server identity without treating sparse eviction as deletion", async () => {
     const transport = makeViewport(1_000);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     transport.requests[0]?.sink.setRowData(
       {
         0: { symbol: "FIRST", price: 1 },
@@ -338,7 +347,7 @@ describe("BrunoTableServer", () => {
       quickFilterFields: BrunoTableQuickFilterFields<QuickRow> | undefined,
       showQuickFilter: boolean,
     ) => (
-      <BrunoTableServer<QuickRow, typeof columns>
+      <BrunoTableServer
         {...serverProps(transport.viewport, "ready")}
         {...(quickFilterFields === undefined ? {} : { quickFilterFields })}
       >
@@ -415,15 +424,11 @@ describe("BrunoTableServer", () => {
   test("replaces semantic generations, releases old controllers, and rejects late writes", async () => {
     const first = makeViewport(25);
     const second = makeViewport(30);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(first.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(first.viewport, "ready")} />);
     first.requests[0]?.sink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
     await expect.element(screen.getByRole("gridcell", { name: "OLD" })).toBeInTheDocument();
 
-    await screen.rerender(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(second.viewport, "ready")} />,
-    );
+    await screen.rerender(<BrunoTableServer {...serverProps(second.viewport, "ready")} />);
     expect(first.releases).toHaveBeenCalledTimes(1);
     expect(second.requests).toHaveLength(1);
     await expect
@@ -439,7 +444,7 @@ describe("BrunoTableServer", () => {
   test("uses one replacement for a semantic sort and resets vertical position", async () => {
     const transport = makeViewport(1_000);
     const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")}>
+      <BrunoTableServer {...serverProps(transport.viewport, "ready")}>
         <BrunoTableToolbar>
           <BrunoTableResultRowCount />
           <BrunoTableLoadedRowCount />
@@ -468,15 +473,13 @@ describe("BrunoTableServer", () => {
 
   test("replaces exactly once when Column field mapping changes the projection", async () => {
     const transport = makeViewport(1_000);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
     grid.element().scrollTop = 360;
     grid.element().dispatchEvent(new Event("scroll"));
 
     await screen.rerender(
-      <BrunoTableServer<Row, typeof remappedColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER"
         columns={remappedColumns}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -499,7 +502,7 @@ describe("BrunoTableServer", () => {
   });
 
   test("invalidates old payloads before installing a new computed projection", async () => {
-    const transport = makeViewport<Partial<ProjectionRow>>();
+    const transport = makeViewport();
     const projectionGetter = vi.fn(({ row }: { readonly row: Pick<ProjectionRow, "desk"> }) => {
       if (row.desk === undefined) throw new TypeError("desk was not projected");
       return row.desk.toUpperCase();
@@ -526,7 +529,7 @@ describe("BrunoTableServer", () => {
       status: "ready" as const,
     };
     const screen = await render(
-      <BrunoTableServer<ProjectionRow, typeof initialColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER_PROJECTION_ORDER"
         columns={initialColumns}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -537,7 +540,7 @@ describe("BrunoTableServer", () => {
     await expect.element(screen.getByRole("gridcell", { name: "OLD" })).toBeInTheDocument();
 
     await screen.rerender(
-      <BrunoTableServer<ProjectionRow, typeof projectedColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER_PROJECTION_ORDER"
         columns={projectedColumns}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -557,7 +560,7 @@ describe("BrunoTableServer", () => {
     projectionGetter.mockClear();
 
     await screen.rerender(
-      <BrunoTableServer<ProjectionRow, typeof presentedColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER_PROJECTION_ORDER"
         columns={presentedColumns}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -574,9 +577,7 @@ describe("BrunoTableServer", () => {
   test("retains coherent rows through stale, closed, and error chrome and delegates Retry exactly once", async () => {
     const transport = makeViewport();
     const retry = vi.fn();
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     transport.requests[0]?.sink.setRowData(
       { 0: { symbol: "RETAINED", price: 7 } },
       { 0: "retained" },
@@ -584,7 +585,7 @@ describe("BrunoTableServer", () => {
     await expect.element(screen.getByRole("gridcell", { name: "RETAINED" })).toBeInTheDocument();
 
     await screen.rerender(
-      <BrunoTableServer<Row, typeof columns>
+      <BrunoTableServer
         {...serverProps(transport.viewport, "loading")}
         viewportSource={{
           viewport: transport.viewport,
@@ -602,7 +603,7 @@ describe("BrunoTableServer", () => {
 
     for (const status of ["stale", "closed"] as const) {
       await screen.rerender(
-        <BrunoTableServer<Row, typeof columns>
+        <BrunoTableServer
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
@@ -616,7 +617,7 @@ describe("BrunoTableServer", () => {
       await expect.element(screen.getByRole("gridcell", { name: "RETAINED" })).toBeInTheDocument();
     }
     await screen.rerender(
-      <BrunoTableServer<Row, typeof columns>
+      <BrunoTableServer
         {...serverProps(transport.viewport, "error")}
         viewportSource={{
           viewport: transport.viewport,
@@ -641,7 +642,7 @@ describe("BrunoTableServer", () => {
       const transport = makeViewport();
       const retry = vi.fn();
       const screen = await render(
-        <BrunoTableServer<Row, typeof columns>
+        <BrunoTableServer
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
@@ -668,9 +669,7 @@ describe("BrunoTableServer", () => {
 
   test("keeps successive held-arrow destinations revealing sparse windows without feedback", async () => {
     const transport = makeViewport(1_000);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
     grid.element().focus();
     await vi.waitFor(() =>
@@ -742,9 +741,7 @@ describe("BrunoTableServer", () => {
 
   test("clamps repeated Server navigation at the authoritative row boundary", async () => {
     const transport = makeViewport(3);
-    const screen = await render(
-      <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />,
-    );
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     transport.requests[0]?.sink.setRowData(
       {
         0: { symbol: "ZERO", price: 0 },
@@ -776,7 +773,7 @@ describe("BrunoTableServer", () => {
     const transport = makeViewport();
     const screen = await render(
       <StrictMode>
-        <BrunoTableServer<Row, typeof columns> {...serverProps(transport.viewport, "ready")} />
+        <BrunoTableServer {...serverProps(transport.viewport, "ready")} />
       </StrictMode>,
     );
     expect(transport.requests).toHaveLength(2);
@@ -791,7 +788,7 @@ describe("BrunoTableServer", () => {
     function ActualServerTable() {
       const viewportSource = actualViewportReact.useLiveQueryViewport("orders");
       return (
-        <BrunoTableServer<Row, typeof columns>
+        <BrunoTableServer
           tableId="TABLE_ID_ACTUAL_VIEWPORT"
           columns={columns}
           initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
@@ -809,7 +806,12 @@ describe("BrunoTableServer", () => {
         </StrictMode>,
       );
       await Effect.runPromise(
-        firstInMemory.client.publish("orders", { id: "actual-1", symbol: "ACTUAL", price: 42 }),
+        firstInMemory.client.publish("orders", {
+          id: "actual-1",
+          symbol: "ACTUAL",
+          price: 42,
+          desk: "LDN",
+        }),
       );
       await expect.element(screen.getByRole("gridcell", { name: "ACTUAL" })).toBeInTheDocument();
       await screen.unmount();
@@ -826,6 +828,7 @@ describe("BrunoTableServer", () => {
           id: "actual-2",
           symbol: "REMOUNTED",
           price: 43,
+          desk: "NYC",
         }),
       );
       await expect
@@ -851,12 +854,8 @@ describe("BrunoTableServer", () => {
     const outer = makeViewport(1_000);
     const inner = makeViewport(1_000);
     const screen = await render(
-      <BrunoTableServer<Row, typeof columns>
-        {...serverProps(outer.viewport, "ready", "TABLE_ID_SERVER_OUTER")}
-      >
-        <BrunoTableServer<Row, typeof columns>
-          {...serverProps(inner.viewport, "ready", "TABLE_ID_SERVER_INNER")}
-        />
+      <BrunoTableServer {...serverProps(outer.viewport, "ready", "TABLE_ID_SERVER_OUTER")}>
+        <BrunoTableServer {...serverProps(inner.viewport, "ready", "TABLE_ID_SERVER_INNER")} />
       </BrunoTableServer>,
     );
     const innerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER_INNER" });
@@ -886,7 +885,7 @@ describe("BrunoTableServer", () => {
   test("virtualizes both axes while retaining pinned start and end columns", async () => {
     const transport = makeViewport(1_000);
     const screen = await render(
-      <BrunoTableServer<Row, typeof wideServerColumns>
+      <BrunoTableServer
         tableId="TABLE_ID_SERVER_TWO_AXIS"
         columns={wideServerColumns}
         initialOrderBy={[{ columnId: "COL_ID_START", direction: "asc" }]}

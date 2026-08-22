@@ -52,19 +52,20 @@
   },
   "devDependencies": {
     "@bruno/shadcn": "workspace:*",
-    "@effect/atom-react": "4.0.0-beta.100",
+    "@effect/atom-react": "4.0.0-rc.111",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
     "@vitest/browser-playwright": "4.1.10",
-    "effect": "4.0.0-beta.100",
-    "effect-view-server": "2.4.0",
+    "effect": "4.0.0-rc.111",
+    "effect-view-server": "4.2.3",
     "oxc-transform-react": "^0.145.0",
     "playwright": "1.60.0",
     "react": "^19.2.8",
     "react-dom": "19.2.8",
+    "redis": "6.2.1",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
@@ -73,7 +74,7 @@
   },
   "peerDependencies": {
     "@bruno/shadcn": ">=0.0.0 <1.0.0",
-    "effect": "4.0.0-beta.100",
+    "effect": "4.0.0-rc.111",
     "react": "^19.2.8"
   },
   "peerDependenciesMeta": {
@@ -82,6 +83,6 @@
     }
   },
   "inlinedDependencies": {
-    "effect-view-server": "2.4.0"
+    "effect-view-server": "4.2.3"
   }
 }

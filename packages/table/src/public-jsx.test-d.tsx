@@ -1,3 +1,7 @@
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+
 import {
   BrunoTableClient,
   BrunoTableActiveFilterCount,
@@ -115,12 +119,22 @@ const validClient = (
 );
 void validClient;
 
-const serverSource = {
-  viewport: {},
-  totalRows: 1_000_000,
-  version: 1,
-  status: "loading" as const,
-};
+const serverTypeReact = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+          hiddenLabel: Schema.String,
+        }),
+      },
+    },
+  }),
+);
+const serverSource = serverTypeReact.useLiveQueryViewport("rows");
 
 const serverComponentProps = {
   tableId: "TABLE_ID_JSX_SERVER",
@@ -205,14 +219,13 @@ const spreadUndoRedo = {
 // @ts-expect-error Server Undo and Redo remain forbidden through composed props.
 void (<BrunoTableServer {...spreadUndoRedo} />);
 
-const invalidServerWithoutOrder = (
-  // @ts-expect-error Server Tables require a non-empty Initial Order By tuple.
-  <BrunoTableServer
-    tableId="TABLE_ID_JSX_SERVER_ORDER"
-    columns={columns}
-    viewportSource={serverSource}
-  />
-);
+const serverWithoutOrderProps = {
+  tableId: "TABLE_ID_JSX_SERVER_ORDER",
+  columns,
+  viewportSource: serverSource,
+};
+// @ts-expect-error Server Tables require a non-empty Initial Order By tuple.
+const invalidServerWithoutOrder = <BrunoTableServer {...serverWithoutOrderProps} />;
 void invalidServerWithoutOrder;
 
 const invalidQuickFilterFields = (

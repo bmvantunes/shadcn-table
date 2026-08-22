@@ -1,3 +1,4 @@
+import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
 type ColumnIdFirstCharacter =
@@ -1296,7 +1297,15 @@ export type BrunoTableServerProps<
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     /** Server row identity is supplied authoritatively by the Viewport Source. */
     readonly getRowId?: never;
-    readonly viewportSource: BrunoTableServerSource<TViewport>;
+    readonly viewportSource: BrunoTableServerSource<
+      [LiveQueryViewportBaseRow<TViewport>] extends [never]
+        ? never
+        : [TRow] extends [LiveQueryViewportBaseRow<TViewport>]
+          ? [LiveQueryViewportBaseRow<TViewport>] extends [TRow]
+            ? TViewport
+            : never
+          : never
+    >;
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly externalFilters?: never;

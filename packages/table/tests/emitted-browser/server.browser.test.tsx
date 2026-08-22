@@ -1,10 +1,38 @@
 import { afterEach, expect, test } from "vite-plus/test";
 import { cleanup, render } from "vitest-browser-react";
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
 
 import { BrunoTableServer } from "../../dist/index.mjs";
 import type { BrunoTableColumns } from "../../dist/index.mjs";
 
-type Row = Readonly<{ symbol: string }>;
+type Row = Readonly<{ id: string; symbol: string }>;
+
+const viewportConfig = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Schema.Struct({ id: ViewServerId, symbol: Schema.String }),
+    },
+  },
+});
+const viewportReact = createViewServerReact(viewportConfig);
+type EmittedSink = Readonly<{
+  readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+  readonly setRowData: (
+    rows: Readonly<Record<number, Partial<Row>>>,
+    keys: Readonly<Record<number, string>>,
+  ) => void;
+}>;
+type EmittedBrowserViewport = Omit<
+  ReturnType<typeof viewportReact.useLiveQueryViewport>["viewport"],
+  "destroy" | "replace"
+> &
+  Readonly<{
+    readonly replace: (
+      request: Readonly<{ readonly sink: EmittedSink }>,
+    ) => Readonly<{ readonly setWindow: () => void; readonly release: () => void }>;
+  }>;
 
 const columns = [
   {
@@ -18,16 +46,8 @@ const columns = [
 afterEach(async () => cleanup());
 
 test("renders authoritative sparse slots from the emitted Server package", async () => {
-  let sink:
-    | Readonly<{
-        readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
-        readonly setRowData: (
-          rows: Readonly<Record<number, Row>>,
-          keys: Readonly<Record<number, string>>,
-        ) => void;
-      }>
-    | undefined;
-  const viewport = {
+  let sink: EmittedSink | undefined;
+  const viewport: EmittedBrowserViewport = {
     replace(request: Readonly<{ readonly sink: NonNullable<typeof sink> }>) {
       sink = request.sink;
       sink.setRowCount(1_000, true);
@@ -35,7 +55,7 @@ test("renders authoritative sparse slots from the emitted Server package", async
     },
   };
   const screen = await render(
-    <BrunoTableServer<Row, typeof columns>
+    <BrunoTableServer
       tableId="TABLE_ID_EMITTED_SERVER"
       columns={columns}
       initialOrderBy={[{ columnId: "COL_ID_EMITTED_SERVER_SYMBOL", direction: "asc" }]}

@@ -103,7 +103,51 @@ async function readDeclarationClosure(entryUrl) {
   return Object.freeze({
     entry: sources.get(fileURLToPath(entryUrl)) ?? "",
     declarations: [...sources.values()].join("\n"),
+    sources: [...sources.values()],
   });
+}
+
+async function collectDeclarationModuleSpecifiers(sources) {
+  const specifiers = new Set();
+  for (const source of sources) {
+    const ast = await parseAstAsync(source, { lang: "dts" });
+    walkSyntaxTree(ast, (node) => {
+      if (
+        node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration"
+      ) {
+        if (typeof node.source?.value === "string") specifiers.add(node.source.value);
+        return;
+      }
+      if (node.type === "ImportExpression" && typeof node.source?.value === "string") {
+        specifiers.add(node.source.value);
+        return;
+      }
+      if (node.type === "TSImportType" && typeof node.argument?.value === "string") {
+        specifiers.add(node.argument.value);
+      }
+    });
+  }
+  return [...specifiers];
+}
+
+async function collectAmbientDeclarationKinds(sources) {
+  const kinds = new Set();
+  for (const source of sources) {
+    const ast = await parseAstAsync(source, { lang: "dts" });
+    walkSyntaxTree(ast, (node) => {
+      if (node.type !== "TSModuleDeclaration") return;
+      if (node.kind === "global" || node.id?.name === "global") {
+        kinds.add("global");
+        return;
+      }
+      if (node.id?.type === "StringLiteral" || node.id?.type === "Literal") {
+        kinds.add("module");
+      }
+    });
+  }
+  return [...kinds];
 }
 
 const [
@@ -126,6 +170,12 @@ const [
 
 const declarations = rootDeclarationSet.declarations;
 const effectDeclarations = effectDeclarationSet.declarations;
+const rootDeclarationModuleSpecifiers = await collectDeclarationModuleSpecifiers(
+  rootDeclarationSet.sources,
+);
+const rootAmbientDeclarationKinds = await collectAmbientDeclarationKinds(
+  rootDeclarationSet.sources,
+);
 const testDiagnosticSentinels = [
   "BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_V1",
   "BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_V1",
@@ -449,13 +499,27 @@ if (
 }
 
 if (
-  /\beffect(?:\/|["'])/u.test(declarations) ||
-  /\beffect(?:\/|["'])/u.test(rootRuntime) ||
-  /effect-view-server/u.test(declarations) ||
-  /effect-view-server/u.test(rootRuntime)
+  rootDeclarationModuleSpecifiers.some(
+    (specifier) =>
+      specifier === "effect" ||
+      specifier.startsWith("effect/") ||
+      specifier === "effect-view-server" ||
+      specifier.startsWith("effect-view-server/"),
+  ) ||
+  /(?:from\s+|import\s*)["'](?:effect|effect-view-server)(?:\/|["'])/u.test(rootRuntime)
 ) {
   throw new Error(
-    "The @bruno/table root entry imports or declares the optional Effect/View Server integration.",
+    "The @bruno/table root entry imports the optional Effect/View Server integration.",
+  );
+}
+
+if (!declarations.includes('"__effect-view-server/LiveQueryViewportBaseRow@v1"')) {
+  throw new Error("The @bruno/table declaration bundle omitted the source-owned viewport witness.");
+}
+
+if (rootAmbientDeclarationKinds.length > 0) {
+  throw new Error(
+    `The @bruno/table root declaration closure contains ambient ${rootAmbientDeclarationKinds.join("/")} declarations.`,
   );
 }
 
@@ -599,15 +663,15 @@ if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
   );
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "2.4.0") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.3") {
   throw new Error(
-    "The View Server integration is not pinned to the audited public 2.4.0 contract.",
+    "The View Server integration is not pinned to the audited public 4.2.3 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "2.4.0",
+    "effect-view-server": "4.2.3",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");
@@ -1451,7 +1515,7 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
               vite: "npm:@voidzero-dev/vite-plus-core@0.2.7",
               "vite-plus": "0.2.7",
             }),
-        ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
+        ...(includeEffect ? { effect: "4.0.0-rc.111" } : {}),
         react: "19.2.8",
         "react-dom": "19.2.8",
       },

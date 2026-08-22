@@ -1,3 +1,7 @@
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+
 import {
   BrunoTableClient,
   BrunoTableComputedColumn,
@@ -97,12 +101,20 @@ const validClient = (
 );
 void validClient;
 
-const emittedServerSource = {
-  viewport: {},
-  totalRows: 1_000_000,
-  version: 1,
-  status: "loading" as const,
-};
+const emittedServerSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+        }),
+      },
+    },
+  }),
+).useLiveQueryViewport("rows");
 
 const validEmittedServer = (
   <BrunoTableServer
@@ -190,14 +202,13 @@ const emittedSpreadUndoRedo = {
 // @ts-expect-error emitted Server Undo and Redo remain forbidden through composed props.
 void (<BrunoTableServer {...emittedSpreadUndoRedo} />);
 
-const invalidEmittedServerWithoutOrder = (
-  // @ts-expect-error emitted Server declarations require Initial Order By.
-  <BrunoTableServer
-    tableId="TABLE_ID_EMITTED_JSX_SERVER_ORDER"
-    columns={columns}
-    viewportSource={emittedServerSource}
-  />
-);
+const emittedServerWithoutOrderProps = {
+  tableId: "TABLE_ID_EMITTED_JSX_SERVER_ORDER",
+  columns,
+  viewportSource: emittedServerSource,
+};
+// @ts-expect-error emitted Server declarations require Initial Order By.
+const invalidEmittedServerWithoutOrder = <BrunoTableServer {...emittedServerWithoutOrderProps} />;
 void invalidEmittedServerWithoutOrder;
 
 const validQuickFilterClient = (

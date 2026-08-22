@@ -7,7 +7,7 @@
     "lib": ["esnext", "dom"],
     "noEmit": true,
     "skipLibCheck": false,
-    "types": [],
+    "types": ["node"],
     "paths": {
       "@bruno/table": ["../../dist/index.d.mts"],
       "@bruno/table/effect": ["../../dist/effect.d.mts"]

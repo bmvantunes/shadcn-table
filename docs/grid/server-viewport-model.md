@@ -110,10 +110,11 @@ Do not add `routeByFields` to BrunoTable. The source declaration is the only fie
 
 When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
 
-effect-view-server 2.4.0 does not yet expose that source-owned semantic identity at the Viewport
-boundary. The linked upstream issue tracks the smallest opaque semantic-key contract needed to ship
-leased Feed Routes without reference equality, generic serialization, duplicated schema logic, or
-Effect coupling in BrunoTable. BrunoTable must not substitute a local deduplication fallback.
+The compatible effect-view-server 4.2.3 release does not yet expose that source-owned semantic
+identity at the Viewport boundary. The linked upstream issue tracks the smallest opaque semantic-key
+contract needed to ship leased Feed Routes without reference equality, generic serialization,
+duplicated schema logic, or Effect coupling in BrunoTable. BrunoTable must not substitute a local
+deduplication fallback.
 
 `externalFilters` is a separate optional Server-only input containing field-keyed View Server conditions. It defaults to no conditions and may reference valid filter fields that have no visible column. The Adapter combines External Filters, Quick Filter, and compiled Grid Filters through `AND`; it never translates External Filter fields through Column Identity. A semantic External Filter change releases the old query generation, invalidates the sparse indexed cache, clears transient focus/selection/scroll state, and starts at row zero while preserving compatible grid preferences and the current Feed Route. Compare filters through exact query semantics rather than React object identity so an equivalent freshly allocated array does not restart the viewport.
 
@@ -139,13 +140,15 @@ Rules:
 
 The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Raw columns therefore declare Value Type explicitly, while typed Column Helpers such as `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
 
-effect-view-server 2.4.0 also encodes the base Topic Row only inside the generic
-`LiveQueryViewport.replace` query/sink constraint. It does not expose an invariant row witness that
-a structural consumer can use to prove that the Viewport Source and BrunoTable columns share the
-same base row. [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465)
-tracks the smallest source-owned, Effect-free witness. Shipping `BrunoTableServer` requires a
-compatible release containing that contract; BrunoTable does not substitute a public row generic,
-consumer wrapper, duplicated query schema, or `unknown` fallback.
+effect-view-server 4.2.3 exposes a source-owned, declaration-only invariant base-row witness through
+`LiveQueryViewportBaseRow`. The collision-resistant structural witness survives downstream
+declaration bundling without a root Effect or View Server import, while rejecting erased or
+unwitnessed viewports. [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465)
+introduced the row contract and [effect-view-server#469](https://github.com/bmvantunes/effect-view-server/issues/469)
+made it structurally stable for bundled downstream declarations, and
+[effect-view-server#471](https://github.com/bmvantunes/effect-view-server/issues/471) isolated it from
+the React/Effect declaration closure. BrunoTable does not substitute a public row
+generic, consumer wrapper, duplicated query schema, or `unknown` fallback.
 
 All Server row identity is source-owned. BrunoTable requires the additive key-delivery contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407): every changed sparse raw or grouped row map is accompanied atomically by an authoritative sparse row-key map over exactly the same absolute indexes. The Adapter stores each row and key together. `BrunoTableServer` rejects `getRowId`; the Adapter does not reconstruct a key from selected fields, group fields, or aggregate aliases and never treats an index as identity. The Server variant must fail its compatibility check clearly when the source cannot provide keys rather than silently installing weaker identity semantics.
 
@@ -180,7 +183,7 @@ generation.release();
 
 The Adapter, not the source callback flags, owns the Query Generation token. It allocates one token before `replace`, closes that token over the sink, and rejects every delivery after release or replacement. The optional `keepRenderedRows` argument passed to `setRowCount` is a delivery hint inside the current source controller; it never authorizes old-row retention across a semantic generation boundary.
 
-The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable's runtime/query minimum is `effect-view-server@2.4.0`, the first compatible release that also includes source-native Match None from #409. Publication additionally waits for the invariant base-row witness tracked by [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465). BrunoTable does not hide older-package behavior with deferred sink publication or warning suppression.
+The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable's compatible minimum is `effect-view-server@4.2.3`, which also includes source-native Match None from #409 and the isolated declaration-bundle-safe invariant base-row witness from #465/#469/#471. BrunoTable does not hide older-package behavior with deferred sink publication or warning suppression.
 
 ## Why a long-lived object
 

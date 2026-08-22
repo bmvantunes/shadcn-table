@@ -1,3 +1,4 @@
+import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
 import { useLayoutEffect, useMemo, useState } from "react";
 
 import type { ReactNode } from "react";
@@ -48,18 +49,21 @@ export type {
   BrunoTableGridFilterCommandCapability,
 } from "./internal/toolbar-capabilities";
 
-export function BrunoTableServer<TRow, const TColumns extends BrunoTableColumns<TRow>>(
-  props: BrunoTableServerProps<TRow, TColumns>,
+export function BrunoTableServer<
+  TViewport,
+  const TColumns extends BrunoTableColumns<LiveQueryViewportBaseRow<TViewport>>,
+>(
+  props: BrunoTableServerProps<LiveQueryViewportBaseRow<TViewport>, TColumns, TViewport>,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
   return <BrunoTableServerInstance key={tableId} props={props} tableId={tableId} />;
 }
 
-function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns<TRow>>({
+function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns<TRow>, TViewport>({
   props,
   tableId,
 }: Readonly<{
-  readonly props: BrunoTableServerProps<TRow, TColumns>;
+  readonly props: BrunoTableServerProps<TRow, TColumns, TViewport>;
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);

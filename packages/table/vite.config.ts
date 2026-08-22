@@ -28,6 +28,9 @@ const config: UserConfig = defineConfig({
     dts: {
       tsgo: true,
     },
+    deps: {
+      onlyBundle: ["effect-view-server"],
+    },
     exports: {
       exclude: ["internal/**"],
       customExports(packageExports) {
