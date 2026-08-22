@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
 import { compileColumns } from "./compile-columns";
+import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
 import { BrunoTableBigDecimalColumn } from "../effect";
 import type { BrunoTableColumns } from "../public-types";
@@ -34,7 +35,7 @@ const query = Object.freeze({
 
 const completeRawSelect = ["symbol", "price"] as const;
 
-function makeViewport() {
+function makeViewport<TRow = Row>() {
   let request:
     | Readonly<{
         readonly query: unknown;
@@ -42,7 +43,7 @@ function makeViewport() {
         readonly sink: Readonly<{
           readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
           readonly setRowData: (
-            rows: Readonly<Record<number, Row>>,
+            rows: Readonly<Record<number, TRow>>,
             keys: Readonly<Record<number, string>>,
           ) => void;
         }>;
@@ -497,6 +498,35 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(recovered.replace).toHaveBeenCalledTimes(1);
   });
 
+  it("best-effort releases a partially valid generation before rejecting it", () => {
+    const release = vi.fn(() => {
+      throw new Error("secondary release failure");
+    });
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    const viewport = {
+      replace: vi.fn(() => ({ release, setWindow: undefined })),
+    };
+    adapter.reconcileSource({
+      viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+
+    expect(() => adapter.replace(viewport, query)).toThrow(
+      "BrunoTable Server viewport generation must expose setWindow() and release().",
+    );
+    expect(release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
   it("publishes row invalidation before propagating a controller release failure", () => {
     const releaseFailure = new Error("release failed");
     const first = makeViewport();
@@ -736,6 +766,149 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     transport.getRequest()!.sink.setRowCount(50, true);
     expect(adapter.getStructureSnapshot().totalRows).toBe(50);
     expect(publishStructure).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies only subscribers for row identities affected by one sparse batch", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(),
+      "TABLE_ID_SERVER_AFFECTED_SLOTS",
+    );
+    const view = runtime.getView();
+    const reads: string[] = [];
+    adapter.subscribePublication(() => {
+      const publication = adapter.getPublication();
+      const rowSpace = publication.rowSpace;
+      runtime.publish(
+        rowSpace === undefined
+          ? publication
+          : {
+              ...publication,
+              rowSpace: {
+                ...rowSpace,
+                getCellValue(rowId, columnId) {
+                  reads.push(rowId);
+                  return rowSpace.getCellValue(rowId, columnId);
+                },
+              },
+            },
+      );
+    });
+    const initialRows = Object.fromEntries(
+      Array.from({ length: 18 }, (_, index) => [
+        index,
+        { symbol: `ROW-${String(index)}`, price: index },
+      ]),
+    );
+    const initialKeys = Object.fromEntries(
+      Array.from({ length: 18 }, (_, index) => [index, `row-${String(index)}`]),
+    );
+    transport.getRequest()!.sink.setRowData(initialRows, initialKeys);
+    const notifications = Array.from({ length: 18 }, () => vi.fn());
+    for (let index = 0; index < notifications.length; index += 1) {
+      view.subscribeCell(`row-${String(index)}`, "COL_ID_PRICE", notifications[index]!);
+    }
+    reads.length = 0;
+    for (const notification of notifications) notification.mockClear();
+
+    transport.getRequest()!.sink.setRowData({ 7: { symbol: "ROW-7", price: 700 } }, { 7: "row-7" });
+
+    expect(reads).toEqual(["row-7"]);
+    expect(notifications[7]).toHaveBeenCalledOnce();
+    expect(notifications.filter((notification) => notification.mock.calls.length > 0)).toEqual([
+      notifications[7],
+    ]);
+  });
+
+  it("does not retain semantically equivalent rows when display or raw-row evidence changes", () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    type TokenRow = Readonly<{ readonly token: Token }>;
+    const valueType = (formatDisplay: (value: Token) => string) => ({
+      codecId: "test/server-token",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) => left.id === right.id,
+      compare: (left: Token, right: Token) => left.id - right.id,
+      formatCanonicalText: (value: Token) => String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay,
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    });
+    const run = (rawRowAware: boolean) => {
+      const tokenColumns = compileColumns([
+        {
+          columnId: "COL_ID_TOKEN",
+          field: "token",
+          headerName: "Token",
+          valueType: valueType((value) => (rawRowAware ? String(value.id) : value.label)),
+          ...(rawRowAware
+            ? { valueFormatter: ({ row }: { readonly row: TokenRow }) => row.token.label }
+            : {}),
+        },
+      ] as never);
+      const transport = makeViewport<TokenRow>();
+      const adapter = new BrunoTableServerRowPipelineAdapter<TokenRow>(
+        tokenColumns,
+        undefined,
+        [],
+        [{ columnId: "COL_ID_TOKEN", direction: "asc" }],
+        ["token"],
+      );
+      adapter.reconcileSource({
+        viewport: transport.viewport,
+        completeRawSelect: ["token"],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      });
+      adapter.replace(transport.viewport, {
+        generation: 0,
+        navigationMode: "reset",
+        filters: [],
+        quickFilter: "",
+        orderBy: [{ columnId: "COL_ID_TOKEN", direction: "asc" }],
+      });
+      const previous = { token: { id: 1, label: "OLD" } } as const;
+      const next = { token: { id: 1, label: "NEW" } } as const;
+      transport.getRequest()!.sink.setRowData({ 0: previous }, { 0: "token-1" });
+      const previousReference = adapter.getPublication().rowSpace?.getRow("token-1");
+      transport.getRequest()!.sink.setRowData({ 0: next }, { 0: "token-1" });
+      expect(adapter.getPublication().rowSpace?.getRow("token-1")).toBe(next);
+      expect(adapter.getPublication().rowSpace?.getRow("token-1")).not.toBe(previousReference);
+    };
+
+    run(false);
+    run(true);
   });
 
   it("never publishes a new source envelope with old-generation rows", () => {

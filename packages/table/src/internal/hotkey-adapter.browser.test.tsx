@@ -240,6 +240,43 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(navigate.mock.calls[0]?.[1]).toEqual({ type: "column-edge", edge: "end" });
   });
 
+  test("routes Mod+C once to the nearest owner with conflict-safe registration", async () => {
+    const manager = getHotkeyManager();
+    const modifier = detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
+    const outerCopy = vi.fn();
+    const innerCopy = vi.fn();
+    const screen = await render(
+      <AdapterProbe commands={probeCommands({ copy: outerCopy })} label="Outer copy owner">
+        <AdapterProbe commands={probeCommands({ copy: innerCopy })} label="Inner copy owner" />
+      </AdapterProbe>,
+    );
+    const outer = screen.getByRole("region", { name: "Outer copy owner" }).element();
+    const inner = screen.getByRole("region", { name: "Inner copy owner" }).element();
+    await vi.waitFor(() =>
+      expect(
+        [...manager.registrations.state.values()].filter(
+          (registration) => registration.target === outer && registration.hotkey === "Mod+C",
+        ),
+      ).toHaveLength(1),
+    );
+    const outerRegistration = [...manager.registrations.state.values()].find(
+      (registration) => registration.target === outer && registration.hotkey === "Mod+C",
+    );
+    expect(outerRegistration?.options.conflictBehavior).toBe("error");
+
+    inner.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "c", ...modifier }),
+    );
+    expect(innerCopy).toHaveBeenCalledOnce();
+    expect(outerCopy).not.toHaveBeenCalled();
+
+    outer.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "c", ...modifier }),
+    );
+    expect(outerCopy).toHaveBeenCalledOnce();
+    expect(innerCopy).toHaveBeenCalledOnce();
+  });
+
   test("routes descendant commands to the innermost dynamically mounted table", async () => {
     const outerEscape = vi.fn();
     const innerEscape = vi.fn();

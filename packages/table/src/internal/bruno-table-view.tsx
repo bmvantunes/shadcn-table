@@ -114,6 +114,7 @@ import type {
   BrunoTableColumnCommandSnapshot,
   BrunoTableQueryNavigationMode,
   BrunoTableRowCellSnapshot,
+  BrunoTableRowSpaceSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
@@ -282,6 +283,22 @@ function activeDomId(
     : activeCell.rowId === undefined
       ? loadingCellDomId(instanceId, tableId, activeCell.rowIndex, activeCell.columnId)
       : cellDomId(instanceId, tableId, activeCell.rowId, activeCell.columnId);
+}
+
+function mountedActiveDomId(
+  instanceId: string,
+  tableId: string,
+  activeCell: BrunoTableActiveCell,
+  rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
+): string | undefined {
+  if (
+    activeCell.region === "body" &&
+    activeCell.rowId !== undefined &&
+    rowSpace?.getRowId(activeCell.rowIndex) === undefined
+  ) {
+    return loadingCellDomId(instanceId, tableId, activeCell.rowIndex, activeCell.columnId);
+  }
+  return activeDomId(instanceId, tableId, activeCell);
 }
 
 export function BrunoTableToolbar({ children }: { readonly children?: ReactNode }): ReactNode {
@@ -1999,6 +2016,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (snapshot.kind !== "available" || !snapshot.rowPresent || snapshot.column === undefined) {
       return;
     }
+    if (isBrunoTableInvalidCellValue(snapshot.value)) return;
     if (navigator.clipboard?.writeText === undefined) return;
     const text =
       snapshot.value === null || snapshot.value === undefined
@@ -2195,6 +2213,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           gridElement={gridElement}
           instanceId={instanceId}
           navigation={navigation}
+          runtime={runtime}
           tableId={tableId}
         />
         <span ref={announcement} aria-live="polite" style={VISUALLY_HIDDEN} />
@@ -2415,11 +2434,13 @@ const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescenda
   gridElement,
   instanceId,
   navigation,
+  runtime,
   tableId,
 }: {
   readonly gridElement: Readonly<{ current: HTMLDivElement | null }>;
   readonly instanceId: string;
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly runtime: BrunoTableRuntimeView;
   readonly tableId: string;
 }) {
   useLayoutEffect(() => {
@@ -2428,13 +2449,20 @@ const NavigationActiveDescendantAdapter = memo(function NavigationActiveDescenda
       if (element === null) return;
       const activeCell = navigation.getSnapshot();
       const id =
-        activeCell === undefined ? undefined : activeDomId(instanceId, tableId, activeCell);
+        activeCell === undefined
+          ? undefined
+          : mountedActiveDomId(instanceId, tableId, activeCell, runtime.getRowSpaceSnapshot());
       if (id === undefined) element.removeAttribute("aria-activedescendant");
       else element.setAttribute("aria-activedescendant", id);
     };
     synchronize();
-    return navigation.subscribe(synchronize);
-  }, [gridElement, instanceId, navigation, tableId]);
+    const unsubscribeNavigation = navigation.subscribe(synchronize);
+    const unsubscribeRows = runtime.subscribeRowSpace(synchronize);
+    return () => {
+      unsubscribeRows();
+      unsubscribeNavigation();
+    };
+  }, [gridElement, instanceId, navigation, runtime, tableId]);
   return null;
 });
 

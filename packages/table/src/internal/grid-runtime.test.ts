@@ -5094,6 +5094,67 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(view.getCellSnapshot("second", "COL_ID_NAME")).not.toBe(unavailableCellSnapshot);
   });
 
+  it("retries indexed unavailable cells alongside a different affected row", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const recoveredRows = initialRows.map((row) => ({
+      ...row,
+      name: row.id === "second" ? "Changed second" : row.name,
+    }));
+    const failedRows = initialRows.map((row) => ({
+      ...row,
+      name: row.id === "second" ? "Failed second" : row.name,
+    }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const listeners = new Map(initialRows.map((row) => [row.id, vi.fn()]));
+    for (const row of initialRows) {
+      view.subscribeCell(row.id, "COL_ID_NAME", listeners.get(row.id)!);
+    }
+    const failedPublication = adapter.publish(source(failedRows));
+    const failedRowSpace = failedPublication.rowSpace;
+    if (failedRowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...failedPublication,
+        rowSpace: {
+          ...failedRowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "first") throw new Error("transient first-row failure");
+            return failedRowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow("transient first-row failure");
+    for (const listener of listeners.values()) listener.mockClear();
+
+    const reads: string[] = [];
+    const recoveredPublication = adapter.publish(source(recoveredRows));
+    const recoveredRowSpace = recoveredPublication.rowSpace;
+    if (recoveredRowSpace === undefined) throw new Error("Expected a resident row space.");
+    runtime.publish({
+      ...recoveredPublication,
+      changedRowIds: new Set(["second"]),
+      rowSpace: {
+        ...recoveredRowSpace,
+        getCellValue(rowId, columnId) {
+          reads.push(rowId);
+          return recoveredRowSpace.getCellValue(rowId, columnId);
+        },
+      },
+    });
+
+    expect(reads).toHaveLength(2);
+    expect(new Set(reads)).toEqual(new Set(["first", "second"]));
+    expect(listeners.get("first")).toHaveBeenCalledOnce();
+    expect(listeners.get("second")).toHaveBeenCalledOnce();
+    expect(listeners.get("third")).not.toHaveBeenCalled();
+    expect(view.getCellSnapshot("first", "COL_ID_NAME").kind).toBe("available");
+  });
+
   it("retains a row-aware snapshot when a successful publication is presentation-equivalent", () => {
     const initial = { id: "first", name: "Initial" } satisfies Row;
     const next = { id: "first", name: "Next" } satisfies Row;

@@ -20,6 +20,7 @@ import {
 } from "./index";
 import type { BrunoTableColumns, BrunoTableQuickFilterFields } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import {
   installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientGridSurfaceRenderListenerForTable,
@@ -282,6 +283,12 @@ describe("BrunoTableServer", () => {
     });
     try {
       const transport = makeViewport();
+      const invalidPrice = createBrunoTableInvalidCellValue({
+        kind: "invalid-value",
+        rowIndex: 1,
+        columnId: "COL_ID_PRICE",
+        message: "Expected a finite number.",
+      });
       const screen = await render(
         <BrunoTableServer
           {...serverProps(transport.viewport, "ready")}
@@ -289,8 +296,11 @@ describe("BrunoTableServer", () => {
         />,
       );
       transport.requests[0]?.sink.setRowData(
-        { 0: { id: "actual-1", symbol: "AAPL", price: 240, desk: "LDN" } },
-        { 0: "row-aapl" },
+        {
+          0: { id: "actual-1", symbol: "AAPL", price: 240, desk: "LDN" },
+          1: { id: "invalid-1", symbol: "INVALID", price: invalidPrice as never, desk: "NYC" },
+        },
+        { 0: "row-aapl", 1: "row-invalid" },
       );
       const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
       grid.element().focus();
@@ -308,6 +318,27 @@ describe("BrunoTableServer", () => {
       grid.element().dispatchEvent(copyLoaded);
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("AAPL"));
       expect(copyLoaded.defaultPrevented).toBe(true);
+
+      grid
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+        );
+      grid
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" }),
+        );
+      const copyInvalid = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
+      });
+      grid.element().dispatchEvent(copyInvalid);
+      await settleBrunoTableBrowserFrames();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(copyInvalid.defaultPrevented).toBe(false);
 
       grid
         .element()
@@ -503,6 +534,11 @@ describe("BrunoTableServer", () => {
       );
     await settleBrunoTableBrowserFrames();
     expect(transport.windows.at(-1)?.firstRow).toBeLessThanOrEqual(1);
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeId).toContain("bruno-table-loading-cell-");
+      expect(grid.element().ownerDocument.getElementById(activeId ?? "missing")).not.toBeNull();
+    });
 
     transport.requests[0]?.sink.setRowData(
       {
@@ -863,6 +899,13 @@ describe("BrunoTableServer", () => {
       { 0: "retained" },
     );
     await expect.element(screen.getByRole("gridcell", { name: "RETAINED" })).toBeInTheDocument();
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "RETAINED" }).element().id,
+      ),
+    );
 
     await screen.rerender(
       <BrunoTableServer
@@ -881,6 +924,11 @@ describe("BrunoTableServer", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "RETAINED" }).query()).toBeNull();
     expect(screen.getByRole("row").nth(1).element().style.height).toBe("36px");
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeId).toContain("bruno-table-loading-cell-");
+      expect(grid.element().ownerDocument.getElementById(activeId ?? "missing")).not.toBeNull();
+    });
 
     for (const status of ["stale", "closed"] as const) {
       await screen.rerender(
@@ -897,6 +945,11 @@ describe("BrunoTableServer", () => {
         />,
       );
       await expect.element(screen.getByRole("gridcell", { name: "RETAINED" })).toBeInTheDocument();
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "RETAINED" }).element().id,
+        ),
+      );
     }
     await screen.rerender(
       <BrunoTableServer

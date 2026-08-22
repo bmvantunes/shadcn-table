@@ -11,6 +11,7 @@ export type BrunoTableServerViewportStoreSnapshot<TRow> = Readonly<{
   readonly authoritativeTotalRows: boolean;
   readonly requiredWindow: BrunoTableServerViewportWindow;
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow>;
+  readonly affectedRowIds?: ReadonlySet<string>;
 }>;
 
 type Listener = () => void;
@@ -22,6 +23,7 @@ const EMPTY_ROW_SPACE: BrunoTableRowSpaceSnapshot<never> = Object.freeze({
   getRow: () => undefined,
   getCellValue: () => undefined,
 });
+const EMPTY_AFFECTED_ROW_IDS: ReadonlySet<string> = new Set();
 
 export class BrunoTableServerViewportStore<TRow> {
   private generation = 0;
@@ -81,6 +83,7 @@ export class BrunoTableServerViewportStore<TRow> {
     }
     this.requiredWindow = requiredWindow;
     let prunedRows = false;
+    const affectedRowIds = new Set<string>();
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map<number, string>();
       const rowIndexById = new Map<string, number>();
@@ -94,13 +97,16 @@ export class BrunoTableServerViewportStore<TRow> {
         rowsById.set(rowId, row);
       }
       if (indexToRowId.size !== this.indexToRowId.size) {
+        for (const rowId of this.rowIndexById.keys()) {
+          if (!rowIndexById.has(rowId)) affectedRowIds.add(rowId);
+        }
         this.indexToRowId = indexToRowId;
         this.rowIndexById = rowIndexById;
         this.rowsById = rowsById;
         prunedRows = true;
       }
     }
-    if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows, true);
+    if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows, true, affectedRowIds);
     else this.publishRequiredWindow();
     return true;
   }
@@ -126,6 +132,7 @@ export class BrunoTableServerViewportStore<TRow> {
     this.authoritativeTotalRows = true;
     const previousTotalRows = this.snapshot.rowSpace.totalRows;
     let prunedRows = false;
+    const affectedRowIds = new Set<string>();
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map(this.indexToRowId);
       const rowIndexById = new Map(this.rowIndexById);
@@ -133,6 +140,7 @@ export class BrunoTableServerViewportStore<TRow> {
       for (const [index, rowId] of indexToRowId) {
         if (index < totalRows) continue;
         prunedRows = true;
+        affectedRowIds.add(rowId);
         indexToRowId.delete(index);
         if (rowIndexById.get(rowId) === index) {
           rowIndexById.delete(rowId);
@@ -143,7 +151,7 @@ export class BrunoTableServerViewportStore<TRow> {
       this.rowIndexById = rowIndexById;
       this.rowsById = rowsById;
     }
-    this.publish(totalRows, prunedRows || totalRows !== previousTotalRows);
+    this.publish(totalRows, prunedRows || totalRows !== previousTotalRows, affectedRowIds);
     return true;
   }
 
@@ -182,6 +190,7 @@ export class BrunoTableServerViewportStore<TRow> {
     if (admitted.length === 0) return true;
 
     const previousRowsById = this.rowsById;
+    const affectedRowIds = new Set<string>();
     const structureChanged = admitted.some(
       (entry) =>
         this.indexToRowId.get(entry.index) !== entry.rowId ||
@@ -191,7 +200,10 @@ export class BrunoTableServerViewportStore<TRow> {
     const rowIndexById = new Map(this.rowIndexById);
     for (const entry of admitted) {
       const replacedRowId = indexToRowId.get(entry.index);
-      if (replacedRowId !== undefined) rowIndexById.delete(replacedRowId);
+      if (replacedRowId !== undefined) {
+        rowIndexById.delete(replacedRowId);
+        if (replacedRowId !== entry.rowId) affectedRowIds.add(replacedRowId);
+      }
       indexToRowId.delete(entry.index);
       const previousIndex = rowIndexById.get(entry.rowId);
       if (previousIndex !== undefined) indexToRowId.delete(previousIndex);
@@ -212,6 +224,7 @@ export class BrunoTableServerViewportStore<TRow> {
           : previous !== undefined && this.rowsEquivalent(previous, delivered)
             ? previous
             : delivered;
+      if (delivered !== undefined && row !== previous) affectedRowIds.add(rowId);
       if (row !== undefined) rowsById.set(rowId, row);
     }
     this.indexToRowId = indexToRowId;
@@ -223,11 +236,26 @@ export class BrunoTableServerViewportStore<TRow> {
           (maximum, entry) => Math.max(maximum, entry.index + 1),
           this.snapshot.rowSpace.totalRows,
         );
-    this.publish(totalRows, structureChanged || totalRows !== this.snapshot.rowSpace.totalRows);
+    if (
+      affectedRowIds.size === 0 &&
+      !structureChanged &&
+      totalRows === this.snapshot.rowSpace.totalRows
+    ) {
+      return true;
+    }
+    this.publish(
+      totalRows,
+      structureChanged || totalRows !== this.snapshot.rowSpace.totalRows,
+      affectedRowIds,
+    );
     return true;
   }
 
-  private publish(totalRows: number, structureChanged = false): void {
+  private publish(
+    totalRows: number,
+    structureChanged = false,
+    affectedRowIds?: ReadonlySet<string>,
+  ): void {
     if (structureChanged) this.structureVersion += 1;
     const indexToRowId = this.indexToRowId;
     const rowsById = this.rowsById;
@@ -248,12 +276,17 @@ export class BrunoTableServerViewportStore<TRow> {
       authoritativeTotalRows: this.authoritativeTotalRows,
       requiredWindow: this.requiredWindow,
       rowSpace,
+      ...(affectedRowIds === undefined ? {} : { affectedRowIds }),
     });
     notify(this.listeners);
   }
 
   private publishRequiredWindow(): void {
-    this.snapshot = Object.freeze({ ...this.snapshot, requiredWindow: this.requiredWindow });
+    this.snapshot = Object.freeze({
+      ...this.snapshot,
+      requiredWindow: this.requiredWindow,
+      affectedRowIds: EMPTY_AFFECTED_ROW_IDS,
+    });
     notify(this.listeners);
   }
 }

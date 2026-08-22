@@ -2,6 +2,7 @@ import { afterAll, bench, describe } from "vite-plus/test";
 
 import { BrunoTableServerViewportStore } from "./server-viewport-store";
 import { compileColumns } from "./compile-columns";
+import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
 
 const referenceFrameBudgetMs = 8.33;
@@ -230,6 +231,39 @@ for (const rowId of Object.values(equivalenceKeys)) {
   }
 }
 const equivalenceDurationsMs: number[] = [];
+const affectedSlotDurationsMs: number[] = [];
+const affectedRuntime = new BrunoTableGridRuntime(
+  equivalenceAdapter.getPublication(),
+  equivalenceColumns,
+  equivalenceAdapter.getQueryConfiguration(),
+  "TABLE_ID_SERVER_AFFECTED_SLOT_BENCHMARK",
+);
+let affectedCellReads = 0;
+equivalenceAdapter.subscribePublication(() => {
+  const publication = equivalenceAdapter.getPublication();
+  const rowSpace = publication.rowSpace;
+  affectedRuntime.publish(
+    rowSpace === undefined
+      ? publication
+      : {
+          ...publication,
+          rowSpace: {
+            ...rowSpace,
+            getCellValue(rowId, columnId) {
+              affectedCellReads += 1;
+              return rowSpace.getCellValue(rowId, columnId);
+            },
+          },
+        },
+  );
+});
+const affectedView = affectedRuntime.getView();
+for (const rowId of Object.values(equivalenceKeys)) {
+  for (const column of equivalenceColumns) {
+    affectedView.subscribeCell(rowId, column.columnId, () => undefined);
+  }
+}
+let affectedIteration = 0;
 
 describe("BrunoTable Server repeated equivalent publication benchmark", () => {
   afterAll(() => {
@@ -251,6 +285,36 @@ describe("BrunoTable Server repeated equivalent publication benchmark", () => {
         if (rowSpace.getRow(rowId) !== retainedEquivalenceRows[rowId]) {
           throw new Error("Equivalent source delivery replaced a stable row reference.");
         }
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },
+  );
+});
+
+describe("BrunoTable Server affected-slot publication benchmark", () => {
+  afterAll(() => {
+    assertP99FrameBudget("Server affected-slot publication", affectedSlotDurationsMs);
+  });
+
+  bench(
+    "updates one of 60 mounted rows without scanning 2,400 cell subscriptions",
+    () => {
+      affectedIteration += 1;
+      const rowIndex = affectedIteration % windowSize;
+      const rowId = equivalenceKeys[rowIndex]!;
+      const previous = equivalenceAdapter.getPublication().rowSpace!.getRow(rowId)!;
+      const next = Object.freeze({
+        ...previous,
+        value0: previous["value0"]! + 1,
+      });
+      affectedCellReads = 0;
+      const startedAt = performance.now();
+      equivalenceSink!.setRowData({ [rowIndex]: next }, { [rowIndex]: rowId });
+      affectedSlotDurationsMs.push(performance.now() - startedAt);
+      if (affectedCellReads !== equivalenceColumnCount) {
+        throw new Error(
+          `Affected-slot publication read ${String(affectedCellReads)} cells instead of ${String(equivalenceColumnCount)}.`,
+        );
       }
     },
     { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },

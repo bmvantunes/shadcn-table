@@ -81,6 +81,7 @@ type ActiveGeneration = Readonly<{
 type RowEquivalencePlan = Readonly<{
   readonly fieldColumns: ReadonlyMap<string, readonly CompiledColumn[]>;
   readonly computedColumns: readonly CompiledColumn[];
+  readonly usesRawRowPresentation: boolean;
 }>;
 
 type BrunoTableServerRuntimeQuery = Readonly<{
@@ -128,6 +129,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private dispatchedWindow: BrunoTableServerViewportWindow | undefined;
   private generationReleased = true;
   private suppressStorePublication = false;
+  private forceFullStorePublication = false;
   private observedRowSpace: BrunoTableRowSpaceSnapshot<TRow>;
   private observedAuthoritativeTotalRows: boolean;
   private observedStructureVersion: number;
@@ -395,6 +397,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.forceNextNavigationReset = false;
     this.dispatchedWindow = INITIAL_WINDOW;
     this.suppressStorePublication = false;
+    this.forceFullStorePublication = true;
     this.reconcileStorePublication();
   }
 
@@ -444,7 +447,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     if (invalidationFailed) throw invalidationFailure;
   }
 
-  private createPublication(): BrunoTableRowPipelinePublication<TRow> {
+  private createPublication(
+    changedRowIds?: ReadonlySet<string>,
+  ): BrunoTableRowPipelinePublication<TRow> {
     const snapshot = this.store.getSnapshot();
     const retainedRowSpace =
       snapshot.generation === 0 || this.generationReleased ? undefined : snapshot.rowSpace;
@@ -466,6 +471,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         : hidesProvisionalRows
           ? undefined
           : retainedRowSpace;
+    const visibleChangedRowIds =
+      rowSpace === retainedRowSpace
+        ? changedRowIds
+        : rowSpace === undefined
+          ? undefined
+          : EMPTY_CHANGED_ROW_IDS;
     return Object.freeze({
       status,
       totalRows,
@@ -474,6 +485,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       ...(this.source.message === undefined ? {} : { message: this.source.message }),
       ...(this.source.retry === undefined ? {} : { retry: this.source.retry }),
       ...(rowSpace === undefined ? {} : { rowSpace }),
+      ...(visibleChangedRowIds === undefined ? {} : { changedRowIds: visibleChangedRowIds }),
       hasCoherentRows,
     });
   }
@@ -506,7 +518,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     }
     this.observedRowSpace = storeSnapshot.rowSpace;
     this.observedAuthoritativeTotalRows = storeSnapshot.authoritativeTotalRows;
-    this.publication = this.createPublication();
+    const changedRowIds = this.forceFullStorePublication ? undefined : storeSnapshot.affectedRowIds;
+    this.forceFullStorePublication = false;
+    this.publication = this.createPublication(changedRowIds);
     if (storeSnapshot.structureVersion !== this.observedStructureVersion) {
       this.observedStructureVersion = storeSnapshot.structureVersion;
       this.reconcileStructureSnapshot();
@@ -580,6 +594,7 @@ function createStructureSnapshot<TRow>(
 
 const EMPTY_SERVER_ROW_ID = (): undefined => undefined;
 const EMPTY_SERVER_ROW_INDEX = (): undefined => undefined;
+const EMPTY_CHANGED_ROW_IDS: ReadonlySet<string> = new Set();
 
 function requireViewportTransport<TRow>(
   viewport: unknown,
@@ -600,9 +615,18 @@ function requireViewportTransport<TRow>(
       const setWindow = Reflect.get(candidate, "setWindow");
       const release = Reflect.get(candidate, "release");
       if (typeof setWindow !== "function" || typeof release !== "function") {
-        throw new TypeError(
+        const compatibilityError = new TypeError(
           "BrunoTable Server viewport generation must expose setWindow() and release().",
         );
+        if (typeof release === "function") {
+          try {
+            Reflect.apply(release, candidate, []);
+          } catch {
+            // Compatibility is primary; a partially valid controller still receives best-effort
+            // cleanup without replacing the boundary error.
+          }
+        }
+        throw compatibilityError;
       }
       return Object.freeze({
         setWindow: (window) => Reflect.apply(setWindow, candidate, [window]),
@@ -834,6 +858,7 @@ function compileRowEquivalencePlan(columns: readonly CompiledColumn[]): RowEquiv
       [...fieldColumns].map(([field, matching]) => [field, Object.freeze(matching)] as const),
     ),
     computedColumns: Object.freeze(computedColumns),
+    usesRawRowPresentation: columns.some(columnUsesRawRowPresentation),
   });
 }
 
@@ -851,6 +876,7 @@ function rowsEquivalentBySelectedValues<TRow>(
   ) {
     return false;
   }
+  if (plan.usesRawRowPresentation) return false;
   const previousKeys = Reflect.ownKeys(previous);
   const nextKeys = Reflect.ownKeys(next);
   if (previousKeys.length !== nextKeys.length) return false;
@@ -865,7 +891,12 @@ function rowsEquivalentBySelectedValues<TRow>(
     }
     for (const column of matching) {
       try {
-        if (!column.semantics.equivalent(left, right)) return false;
+        if (
+          !column.semantics.equivalent(left, right) ||
+          column.semantics.formatDisplay(left) !== column.semantics.formatDisplay(right)
+        ) {
+          return false;
+        }
       } catch {
         return false;
       }
@@ -875,10 +906,23 @@ function rowsEquivalentBySelectedValues<TRow>(
     try {
       const left = readCompiledColumnValue(column, previous);
       const right = readCompiledColumnValue(column, next);
-      if (!column.semantics.equivalent(left, right)) return false;
+      if (
+        !column.semantics.equivalent(left, right) ||
+        column.semantics.formatDisplay(left) !== column.semantics.formatDisplay(right)
+      ) {
+        return false;
+      }
     } catch {
       return false;
     }
   }
   return true;
+}
+
+function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
+  return (
+    column.valueFormatter !== undefined ||
+    typeof column.cellClassName === "function" ||
+    column.cellRenderer !== undefined
+  );
 }
