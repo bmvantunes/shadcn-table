@@ -527,6 +527,13 @@ describe("BrunoTableServer", () => {
     grid.element().scrollTop = 100 * 36;
     grid.element().dispatchEvent(new Event("scroll"));
     await settleBrunoTableBrowserFrames();
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeId).toContain("bruno-table-loading-cell-");
+      const activeProxy = grid.element().ownerDocument.getElementById(activeId ?? "missing");
+      expect(activeProxy).not.toBeNull();
+      expect(activeProxy).toHaveAttribute("data-bruno-active-proxy", "");
+    });
     grid
       .element()
       .dispatchEvent(
@@ -552,6 +559,72 @@ describe("BrunoTableServer", () => {
         screen.getByRole("gridcell", { name: "2" }).element().id,
       ),
     );
+  });
+
+  test("keeps an offscreen Active Descendant proxy narrow and value-free while loading", async () => {
+    const transport = makeViewport(1_000);
+    const renderServer = (status: "ready" | "loading") => (
+      <BrunoTableServer
+        tableId="TABLE_ID_SERVER_PROXY_LOADING"
+        columns={wideServerColumns}
+        initialOrderBy={[{ columnId: "COL_ID_START", direction: "asc" }]}
+        viewportSource={{
+          viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
+          totalRows: 1_000,
+          version: 1,
+          status,
+        }}
+      />
+    );
+    const screen = await render(renderServer("ready"));
+    transport.requests[0]?.sink.setRowData(
+      { 0: { id: "first", symbol: "RETAINED", price: 1, desk: "LDN" } },
+      { 0: "first" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER_PROXY_LOADING" });
+    grid.element().focus();
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" }),
+      );
+    await settleBrunoTableBrowserFrames();
+    grid.element().scrollLeft = 2_000;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    let readyProxy: HTMLElement | null = null;
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      readyProxy = grid.element().ownerDocument.getElementById(activeId ?? "missing");
+      expect(readyProxy).not.toBeNull();
+      expect(readyProxy).toHaveAttribute("data-bruno-active-proxy", "");
+      expect(readyProxy).toHaveTextContent("RETAINED");
+    });
+
+    transport.requests[0]?.sink.setRowData(
+      { 1: { id: "second", symbol: "UNRELATED", price: 2, desk: "NYC" } },
+      { 1: "second" },
+    );
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid
+        .element()
+        .ownerDocument.getElementById(
+          grid.element().getAttribute("aria-activedescendant") ?? "missing",
+        ),
+    ).toBe(readyProxy);
+
+    await screen.rerender(renderServer("loading"));
+    await vi.waitFor(() => {
+      const activeId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeId).toContain("bruno-table-loading-cell-");
+      const loadingProxy = grid.element().ownerDocument.getElementById(activeId ?? "missing");
+      expect(loadingProxy).not.toBeNull();
+      expect(loadingProxy).toHaveAttribute("data-bruno-active-proxy", "");
+      expect(loadingProxy).toHaveTextContent("Loading row");
+      expect(loadingProxy).not.toHaveTextContent("RETAINED");
+    });
   });
 
   test("reconciles changed Server Quick Filter fields without a remount", async () => {

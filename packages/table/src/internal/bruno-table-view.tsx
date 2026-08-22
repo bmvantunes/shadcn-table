@@ -291,10 +291,24 @@ function mountedActiveDomId(
   activeCell: BrunoTableActiveCell,
   rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
 ): string | undefined {
+  return activeDomIdForRowIdentity(
+    instanceId,
+    tableId,
+    activeCell,
+    rowSpace?.getRowId(activeCell.rowIndex),
+  );
+}
+
+function activeDomIdForRowIdentity(
+  instanceId: string,
+  tableId: string,
+  activeCell: BrunoTableActiveCell,
+  currentRowId: string | undefined,
+): string | undefined {
   if (
     activeCell.region === "body" &&
     activeCell.rowId !== undefined &&
-    rowSpace?.getRowId(activeCell.rowIndex) === undefined
+    currentRowId === undefined
   ) {
     return loadingCellDomId(instanceId, tableId, activeCell.rowIndex, activeCell.columnId);
   }
@@ -3506,23 +3520,33 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
 }) {
   const rowId = activeCell.rowId;
   const rowAware = proxyPresentationUsesRawRow(column);
+  const getRowIdentitySnapshot = useMemo(
+    () => () => runtime.getRowSpaceSnapshot()?.getRowId(activeCell.rowIndex),
+    [activeCell.rowIndex, runtime],
+  );
+  const currentRowId = useSyncExternalStore(
+    runtime.subscribeRowSpace,
+    getRowIdentitySnapshot,
+    getRowIdentitySnapshot,
+  );
+  const loadingSlot = rowId !== undefined && currentRowId === undefined;
   const subscribe = useMemo(
     () => (listener: () => void) =>
-      rowId === undefined
+      rowId === undefined || loadingSlot
         ? () => undefined
         : rowAware
           ? runtime.subscribeRowCell(rowId, column.columnId, listener)
           : runtime.subscribeCell(rowId, column.columnId, listener),
-    [column.columnId, rowAware, rowId, runtime],
+    [column.columnId, loadingSlot, rowAware, rowId, runtime],
   );
   const getSnapshot = useMemo(
     () => () =>
-      rowId === undefined
+      rowId === undefined || loadingSlot
         ? undefined
         : rowAware
           ? runtime.getRowCellSnapshot(rowId, column.columnId)
           : runtime.getCellSnapshot(rowId, column.columnId),
-    [column.columnId, rowAware, rowId, runtime],
+    [column.columnId, loadingSlot, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot | undefined);
@@ -3536,17 +3560,19 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
     : cellSnapshot?.kind === "available" && cellSnapshot.rowPresent;
   const value = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const content = unavailable
-    ? null
-    : !rowPresent
-      ? "Loading row"
-      : invalid
-        ? invalidSourceDetails(invalid.invalid)
-        : resolveProxyCellContent(column, row, value);
+  const content = loadingSlot
+    ? "Loading row"
+    : unavailable
+      ? null
+      : !rowPresent
+        ? "Loading row"
+        : invalid
+          ? invalidSourceDetails(invalid.invalid)
+          : resolveProxyCellContent(column, row, value);
   return (
     <div aria-rowindex={activeCell.rowIndex + 2} role="row" style={VISUALLY_HIDDEN}>
       <div
-        id={activeDomId(instanceId, tableId, activeCell)}
+        id={activeDomIdForRowIdentity(instanceId, tableId, activeCell, currentRowId)}
         data-bruno-active-proxy=""
         aria-colindex={columnIndex + 1}
         role="gridcell"
