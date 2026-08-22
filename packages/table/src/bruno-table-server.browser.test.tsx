@@ -716,8 +716,8 @@ describe("BrunoTableServer", () => {
     expect(transport.requests).toHaveLength(1);
   });
 
-  test.each(["closed", "error"] as const)(
-    "renders initial %s lifecycle and source Retry instead of provisional slots",
+  test.each(["stale", "closed", "error"] as const)(
+    "renders initial %s lifecycle instead of provisional slots",
     async (status) => {
       const transport = makeViewport();
       const retry = vi.fn();
@@ -737,13 +737,21 @@ describe("BrunoTableServer", () => {
       );
 
       const announcement = screen.getByRole(status === "closed" ? "status" : "alert");
-      await expect
-        .element(announcement)
-        .toHaveTextContent(status === "closed" ? "Live updates stopped" : "Live data error");
+      const title =
+        status === "stale"
+          ? "Live data delayed"
+          : status === "closed"
+            ? "Live updates stopped"
+            : "Live data error";
+      await expect.element(announcement).toHaveTextContent(title);
       await expect.element(announcement).toHaveTextContent("Source unavailable");
       expect(screen.getByRole("grid", { name: "Loading table rows" }).query()).toBeNull();
-      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-      expect(retry).toHaveBeenCalledTimes(1);
+      if (status === "stale") {
+        expect(screen.getByRole("button", { name: "Retry" }).query()).toBeNull();
+      } else {
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(retry).toHaveBeenCalledTimes(1);
+      }
       expect(transport.requests).toHaveLength(1);
     },
   );

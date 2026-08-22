@@ -393,8 +393,21 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.store.invalidateGeneration(active.token);
     this.generationReleased = true;
     this.publication = this.createPublication();
-    this.reconcileStructureSnapshot();
+    let invalidationFailed = false;
+    let invalidationFailure: unknown;
+    const publishInvalidation = (operation: () => void): void => {
+      try {
+        operation();
+      } catch (error) {
+        if (!invalidationFailed) invalidationFailure = error;
+        invalidationFailed = true;
+      }
+    };
+    publishInvalidation(() => this.reconcileStructureSnapshot());
+    publishInvalidation(() => this.publishResultRowCount(this.source.totalRows));
+    publishInvalidation(() => notify(this.listeners));
     active.controller.release();
+    if (invalidationFailed) throw invalidationFailure;
   }
 
   private createPublication(): BrunoTableRowPipelinePublication<TRow> {
@@ -410,7 +423,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       !hasCoherentRows && this.source.status === "ready" ? "loading" : this.source.status;
     const hidesRetainedRows =
       this.source.status === "loading" ||
-      (!hasCoherentRows && (this.source.status === "closed" || this.source.status === "error"));
+      (!hasCoherentRows &&
+        (this.source.status === "stale" ||
+          this.source.status === "closed" ||
+          this.source.status === "error"));
     const rowSpace = hidesRetainedRows ? undefined : retainedRowSpace;
     return Object.freeze({
       status,

@@ -247,6 +247,32 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
   });
 
+  it("hides provisional rows when a new generation is already stale", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "stale",
+    });
+    adapter.replace(transport.viewport, query);
+
+    expect(adapter.getPublication()).toMatchObject({
+      status: "stale",
+      totalRows: 18,
+      hasCoherentRows: false,
+    });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
   it("invalidates a generation whose transport replacement throws", () => {
     let failedSink:
       | Readonly<{
@@ -586,7 +612,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       version: 2,
       status: "ready",
     });
-    expect(observed).toEqual([{ version: 2 }]);
+    expect(observed).toEqual([{ version: 1 }, { version: 2 }]);
     adapter.replace(secondTransport.viewport, query);
     expect(observed.some((snapshot) => snapshot.version === 2 && snapshot.rowId === "old")).toBe(
       false,
@@ -610,6 +636,44 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     sink.setRowCount(999, true);
     sink.setRowData({ 0: { symbol: "LATE", price: 0 } }, { 0: "late" });
     expect(adapter.getPublication().rowSpace?.getRowId(0)).toBeUndefined();
+  });
+
+  it("publishes direct-release invalidation before preserving a controller failure", () => {
+    const releaseFailure = new Error("release failed");
+    const transport = makeViewport();
+    transport.release.mockImplementationOnce(() => {
+      throw releaseFailure;
+    });
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    transport.getRequest()!.sink.setRowCount(250, true);
+    transport.getRequest()!.sink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    const publications: Array<Readonly<{ readonly totalRows: number; readonly hasRows: boolean }>> =
+      [];
+    adapter.subscribePublication(() => {
+      publications.push({
+        totalRows: adapter.getResultRowCountSnapshot(),
+        hasRows: adapter.getPublication().rowSpace !== undefined,
+      });
+    });
+
+    expect(() => adapter.release()).toThrow(releaseFailure);
+    expect(publications.at(-1)).toEqual({ totalRows: 100, hasRows: false });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    expect(adapter.getResultRowCountSnapshot()).toBe(100);
   });
 
   it("replaces only when the normalized source projection changes", () => {
