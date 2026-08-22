@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { BrunoTableServerViewportStore } from "./server-viewport-store";
+import {
+  BrunoTableServerViewportStore,
+  sanitizeBrunoTableServerViewportWindow,
+} from "./server-viewport-store";
 
 type Row = Readonly<{ readonly symbol: string; readonly price: number }>;
 
 describe("BrunoTableServerViewportStore", () => {
+  it("rejects an inclusive maximum index whose exclusive end cannot be represented safely", () => {
+    expect(
+      sanitizeBrunoTableServerViewportWindow({
+        firstRow: Number.MAX_SAFE_INTEGER - 1,
+        lastRow: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({ firstRow: 0, lastRow: 0 });
+  });
+
   it("publishes an accepted non-pruning required-window snapshot exactly once", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const generation = store.beginGeneration({ firstRow: 0, lastRow: 17 });

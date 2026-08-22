@@ -221,7 +221,9 @@ Do not derive raw-row-to-group correspondence from the previously active row, pr
 
 Live grouped publications with an unchanged Group By tuple use identity-first Active Cell reconciliation rather than the shape-reset rule. If the active Group Row Identity survives, update its logical row index and retain its valid Column Identity without auto-revealing the move. If that group disappears, target the row now occupying its previous display index; when removal was at the end, clamp to the new final row. Preserve the same grouped Column Identity when it remains visible and navigable, otherwise use the first visible navigable grouped column. Clear Active Cell only when the authoritative grouped result has no rows. The fallback creates no toast, persistence event, or row-zero jump, and a later keyboard command performs ordinary reveal if needed.
 
-The complete Client grouped model can resolve Group Row Identity directly. The sparse Server Adapter follows an identity when the authoritative viewport delivery resolves its new index; when the active identity is no longer resolvable in the current sparse projection, it applies the same clamped previous-index fallback, which may be a stable loading slot. It never scans loaded values or reconstructs identity from group fields.
+The complete Client grouped model can resolve Group Row Identity directly. For grouped results, the sparse Server Adapter follows an identity when the authoritative viewport delivery resolves its new index; when the active Group Row Identity is no longer resolvable in the current sparse projection, it applies the same clamped previous-index fallback, which may be a stable loading slot. It never scans loaded values or reconstructs identity from group fields.
+
+An ordinary raw sparse Server row uses the narrower source-evidence rule. A known move follows its authoritative key. Window eviction that merely unloads the key retains the existing logical identity and coordinate. A conflicting authoritative key at that coordinate, or an authoritative row-count boundary that removes it, clears Active Cell instead of silently retargeting the different row.
 
 ## Mandatory identity
 

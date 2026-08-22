@@ -7,6 +7,7 @@ export type BrunoTableServerViewportWindow = Readonly<{
 
 export type BrunoTableServerViewportStoreSnapshot<TRow> = Readonly<{
   readonly generation: number;
+  readonly structureVersion: number;
   readonly authoritativeTotalRows: boolean;
   readonly requiredWindow: BrunoTableServerViewportWindow;
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow>;
@@ -24,6 +25,7 @@ const EMPTY_ROW_SPACE: BrunoTableRowSpaceSnapshot<never> = Object.freeze({
 
 export class BrunoTableServerViewportStore<TRow> {
   private generation = 0;
+  private structureVersion = 0;
   private authoritativeTotalRows = false;
   private requiredWindow: BrunoTableServerViewportWindow = Object.freeze({
     firstRow: 0,
@@ -35,6 +37,7 @@ export class BrunoTableServerViewportStore<TRow> {
   private readonly listeners = new Set<Listener>();
   private snapshot: BrunoTableServerViewportStoreSnapshot<TRow> = Object.freeze({
     generation: 0,
+    structureVersion: 0,
     authoritativeTotalRows: false,
     requiredWindow: this.requiredWindow,
     rowSpace: EMPTY_ROW_SPACE,
@@ -63,7 +66,7 @@ export class BrunoTableServerViewportStore<TRow> {
     this.indexToRowId = new Map();
     this.rowIndexById = new Map();
     this.rowsById = new Map();
-    this.publish(Math.max(requiredWindow.lastRow + 1, 0));
+    this.publish(Math.max(requiredWindow.lastRow + 1, 0), true);
     return this.generation;
   }
 
@@ -97,7 +100,7 @@ export class BrunoTableServerViewportStore<TRow> {
         prunedRows = true;
       }
     }
-    if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows);
+    if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows, true);
     else this.publishRequiredWindow();
     return true;
   }
@@ -117,12 +120,15 @@ export class BrunoTableServerViewportStore<TRow> {
       return true;
     }
     this.authoritativeTotalRows = true;
+    const previousTotalRows = this.snapshot.rowSpace.totalRows;
+    let prunedRows = false;
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map(this.indexToRowId);
       const rowIndexById = new Map(this.rowIndexById);
       const rowsById = new Map(this.rowsById);
       for (const [index, rowId] of indexToRowId) {
         if (index < totalRows) continue;
+        prunedRows = true;
         indexToRowId.delete(index);
         if (rowIndexById.get(rowId) === index) {
           rowIndexById.delete(rowId);
@@ -133,7 +139,7 @@ export class BrunoTableServerViewportStore<TRow> {
       this.rowIndexById = rowIndexById;
       this.rowsById = rowsById;
     }
-    this.publish(totalRows);
+    this.publish(totalRows, prunedRows || totalRows !== previousTotalRows);
     return true;
   }
 
@@ -172,6 +178,11 @@ export class BrunoTableServerViewportStore<TRow> {
     if (admitted.length === 0) return true;
 
     const previousRowsById = this.rowsById;
+    const structureChanged = admitted.some(
+      (entry) =>
+        this.indexToRowId.get(entry.index) !== entry.rowId ||
+        this.rowIndexById.get(entry.rowId) !== entry.index,
+    );
     const indexToRowId = new Map(this.indexToRowId);
     const rowIndexById = new Map(this.rowIndexById);
     for (const entry of admitted) {
@@ -208,11 +219,12 @@ export class BrunoTableServerViewportStore<TRow> {
           (maximum, entry) => Math.max(maximum, entry.index + 1),
           this.snapshot.rowSpace.totalRows,
         );
-    this.publish(totalRows);
+    this.publish(totalRows, structureChanged || totalRows !== this.snapshot.rowSpace.totalRows);
     return true;
   }
 
-  private publish(totalRows: number): void {
+  private publish(totalRows: number, structureChanged = false): void {
+    if (structureChanged) this.structureVersion += 1;
     const indexToRowId = this.indexToRowId;
     const rowsById = this.rowsById;
     const readCell = this.readCell;
@@ -228,6 +240,7 @@ export class BrunoTableServerViewportStore<TRow> {
     });
     this.snapshot = Object.freeze({
       generation: this.generation,
+      structureVersion: this.structureVersion,
       authoritativeTotalRows: this.authoritativeTotalRows,
       requiredWindow: this.requiredWindow,
       rowSpace,
@@ -248,7 +261,8 @@ export function sanitizeBrunoTableServerViewportWindow(
     !Number.isSafeInteger(window.firstRow) ||
     !Number.isSafeInteger(window.lastRow) ||
     window.firstRow < 0 ||
-    window.lastRow < window.firstRow
+    window.lastRow < window.firstRow ||
+    window.lastRow === Number.MAX_SAFE_INTEGER
   ) {
     return Object.freeze({ firstRow: 0, lastRow: 0 });
   }

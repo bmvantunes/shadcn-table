@@ -9,6 +9,7 @@ import type {
 } from "./grid-runtime";
 import { compileClientFilterCollection, sanitizeClientInitialOrderBy } from "./grid-query";
 import {
+  compileBrunoTableServerProjectionFields,
   compileBrunoTableServerQueryPlan,
   type BrunoTableCompiledServerQueryPlan,
 } from "./server-query";
@@ -20,6 +21,11 @@ import {
 } from "./server-viewport-store";
 
 type Listener = () => void;
+
+type BrunoTableServerStructureSnapshot = Readonly<{
+  readonly totalRows: number;
+  readonly getRowId: (index: number) => string | undefined;
+}>;
 
 type BrunoTableServerViewportSink<TRow> = Readonly<{
   readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
@@ -79,7 +85,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private readonly store: BrunoTableServerViewportStore<TRow>;
   private readonly listeners = new Set<Listener>();
   private readonly resultRowCountListeners = new Set<Listener>();
+  private readonly structureListeners = new Set<Listener>();
   private quickFilterFields: readonly string[];
+  private projectionFields: readonly string[];
   private columns: readonly CompiledColumn[];
   private columnsById: ReadonlyMap<string, CompiledColumn>;
   private rowEquivalencePlan: RowEquivalencePlan;
@@ -92,6 +100,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private suppressStorePublication = false;
   private observedRowSpace: BrunoTableRowSpaceSnapshot<TRow>;
   private observedAuthoritativeTotalRows: boolean;
+  private observedStructureVersion: number;
   private source: BrunoTableServerSource<unknown> = Object.freeze({
     viewport: undefined,
     totalRows: 0,
@@ -99,6 +108,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     status: "loading",
   });
   private publication: BrunoTableRowPipelinePublication<TRow>;
+  private structureSnapshot: BrunoTableServerStructureSnapshot;
 
   public constructor(
     columns: readonly CompiledColumn[],
@@ -109,6 +119,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.columns = columns;
     this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
     this.quickFilterFields = snapshotBrunoTableQuickFilterFields(quickFilterFields);
+    this.projectionFields = compileBrunoTableServerProjectionFields(
+      columns,
+      this.quickFilterFields,
+    );
     this.columnsById = new Map<string, CompiledColumn>(
       columns.map((column) => [column.columnId, column]),
     );
@@ -134,6 +148,8 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const initialStoreSnapshot = this.store.getSnapshot();
     this.observedRowSpace = initialStoreSnapshot.rowSpace;
     this.observedAuthoritativeTotalRows = initialStoreSnapshot.authoritativeTotalRows;
+    this.observedStructureVersion = initialStoreSnapshot.structureVersion;
+    this.structureSnapshot = createStructureSnapshot(this.publication);
     this.store.subscribe(this.reconcileStorePublication);
   }
 
@@ -149,6 +165,14 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   public readonly subscribeResultRowCount = (listener: Listener): (() => void) => {
     this.resultRowCountListeners.add(listener);
     return () => this.resultRowCountListeners.delete(listener);
+  };
+
+  public readonly getStructureSnapshot = (): BrunoTableServerStructureSnapshot =>
+    this.structureSnapshot;
+
+  public readonly subscribeStructure = (listener: Listener): (() => void) => {
+    this.structureListeners.add(listener);
+    return () => this.structureListeners.delete(listener);
   };
 
   public readonly initializeResultRowCount = (
@@ -175,6 +199,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       quickFilterFields === this.quickFilterFields
         ? this.quickFilterFields
         : snapshotBrunoTableQuickFilterFields(quickFilterFields);
+    const nextProjectionFields = compileBrunoTableServerProjectionFields(
+      columns,
+      nextQuickFilterFields,
+    );
     if (
       columns === this.columns &&
       sameStringArray(nextQuickFilterFields, this.quickFilterFields)
@@ -182,7 +210,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       return this.queryConfiguration;
     }
     if (columns === this.columns) {
+      if (!sameProjectionFields(this.projectionFields, nextProjectionFields)) this.release();
       this.quickFilterFields = nextQuickFilterFields;
+      this.projectionFields = nextProjectionFields;
       this.queryConfiguration = Object.freeze({
         ...this.queryConfiguration,
         quickFilterFields: nextQuickFilterFields,
@@ -191,8 +221,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     }
     const filterCollection = compileClientFilterCollection(this.initialFilters, columns);
     const initialOrderBy = sanitizeClientInitialOrderBy(this.initialOrderBy, columns);
+    if (!sameProjectionFields(this.projectionFields, nextProjectionFields)) this.release();
     this.columns = columns;
     this.quickFilterFields = nextQuickFilterFields;
+    this.projectionFields = nextProjectionFields;
     this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
     this.columnsById = new Map(columns.map((column) => [column.columnId, column]));
     this.queryConfiguration = Object.freeze({
@@ -222,6 +254,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     );
     if (replacingActiveSource) return;
     this.publication = this.createPublication();
+    this.reconcileStructureSnapshot();
     notify(this.listeners);
   }
 
@@ -268,6 +301,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.suppressStorePublication = false;
       this.alignObservedStoreSnapshot();
       this.publication = this.createPublication();
+      this.reconcileStructureSnapshot();
       this.publishResultRowCount(this.source.totalRows);
       notify(this.listeners);
       throw error;
@@ -303,19 +337,25 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.store.invalidateGeneration(active.token);
     this.generationReleased = true;
     this.publication = this.createPublication();
+    this.reconcileStructureSnapshot();
     active.controller.release();
   }
 
   private createPublication(): BrunoTableRowPipelinePublication<TRow> {
     const snapshot = this.store.getSnapshot();
-    const rowSpace =
+    const retainedRowSpace =
       snapshot.generation === 0 || this.generationReleased ? undefined : snapshot.rowSpace;
-    const totalRows = rowSpace?.totalRows ?? this.source.totalRows;
+    const totalRows = retainedRowSpace?.totalRows ?? this.source.totalRows;
     const hasCoherentRows =
-      rowSpace !== undefined &&
-      (rowSpace.loadedRows > 0 || (snapshot.authoritativeTotalRows && rowSpace.totalRows === 0));
+      retainedRowSpace !== undefined &&
+      (retainedRowSpace.loadedRows > 0 ||
+        (snapshot.authoritativeTotalRows && retainedRowSpace.totalRows === 0));
     const status =
       !hasCoherentRows && this.source.status === "ready" ? "loading" : this.source.status;
+    const hidesRetainedRows =
+      this.source.status === "loading" ||
+      (!hasCoherentRows && (this.source.status === "closed" || this.source.status === "error"));
+    const rowSpace = hidesRetainedRows ? undefined : retainedRowSpace;
     return Object.freeze({
       status,
       totalRows,
@@ -346,6 +386,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.observedRowSpace = storeSnapshot.rowSpace;
     this.observedAuthoritativeTotalRows = storeSnapshot.authoritativeTotalRows;
     this.publication = this.createPublication();
+    if (storeSnapshot.structureVersion !== this.observedStructureVersion) {
+      this.observedStructureVersion = storeSnapshot.structureVersion;
+      this.reconcileStructureSnapshot();
+    }
     this.publishResultRowCount(
       storeSnapshot.authoritativeTotalRows
         ? storeSnapshot.rowSpace.totalRows
@@ -358,8 +402,33 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const storeSnapshot = this.store.getSnapshot();
     this.observedRowSpace = storeSnapshot.rowSpace;
     this.observedAuthoritativeTotalRows = storeSnapshot.authoritativeTotalRows;
+    this.observedStructureVersion = storeSnapshot.structureVersion;
+  }
+
+  private reconcileStructureSnapshot(): void {
+    const next = createStructureSnapshot(this.publication);
+    if (
+      next.totalRows === this.structureSnapshot.totalRows &&
+      next.getRowId === this.structureSnapshot.getRowId
+    ) {
+      return;
+    }
+    this.structureSnapshot = next;
+    notify(this.structureListeners);
   }
 }
+
+function createStructureSnapshot<TRow>(
+  publication: BrunoTableRowPipelinePublication<TRow>,
+): BrunoTableServerStructureSnapshot {
+  const rowSpace = publication.rowSpace;
+  return Object.freeze({
+    totalRows: rowSpace?.totalRows ?? 0,
+    getRowId: rowSpace?.getRowId ?? EMPTY_SERVER_ROW_ID,
+  });
+}
+
+const EMPTY_SERVER_ROW_ID = (): undefined => undefined;
 
 function requireViewportTransport<TRow>(
   viewport: unknown,
@@ -446,7 +515,7 @@ function sameCompiledQuery(
   const left = leftPlan.query;
   const right = rightPlan.query;
   return (
-    sameArray(left.select, right.select, Object.is) &&
+    sameProjectionFields(left.select, right.select) &&
     sameArray(
       left.orderBy,
       right.orderBy,
@@ -457,6 +526,10 @@ function sameCompiledQuery(
       sameQueryValue(leftWhere, rightWhere, leftPlan, rightPlan),
     )
   );
+}
+
+function sameProjectionFields(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((field) => right.includes(field));
 }
 
 function sameArray<TValue>(

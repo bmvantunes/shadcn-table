@@ -185,6 +185,7 @@ function sameFilterEditorColumn(previous: CompiledColumn, next: CompiledColumn):
 export type BrunoTableColumnFilterProps = {
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableRuntimeView;
+  readonly renderSetFilterFacet?: boolean;
   readonly activateHeaderCommand: (columnId: string) => void;
   readonly restoreColumnFocus: (columnId: string) => void;
   readonly registerColumnFilterOpener: (columnId: string, open: () => void) => () => void;
@@ -194,6 +195,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
   function BrunoTableColumnFilter({
     column,
     runtime,
+    renderSetFilterFacet = true,
     activateHeaderCommand,
     restoreColumnFocus,
     registerColumnFilterOpener,
@@ -299,6 +301,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
             <BrunoTableColumnFilterContent
               column={column}
               direction={direction}
+              renderSetFilterFacet={renderSetFilterFacet}
               onEscape={() => {
                 closeReasonRef.current = "escape-key";
               }}
@@ -324,11 +327,13 @@ function readBrunoTableFilterDirection(element?: Element | null): "ltr" | "rtl" 
 const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterContent({
   column,
   direction,
+  renderSetFilterFacet,
   onEscape,
   runtime,
 }: {
   readonly column: CompiledColumn;
   readonly direction: "ltr" | "rtl";
+  readonly renderSetFilterFacet: boolean;
   readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement {
@@ -352,6 +357,7 @@ const BrunoTableColumnFilterContent = memo(function BrunoTableColumnFilterConten
       direction={direction}
       facetRows={facetRows}
       facetRuntime={facetRuntime}
+      renderSetFilterFacet={renderSetFilterFacet}
       onEscape={onEscape}
       runtime={runtime}
       version={version}
@@ -398,6 +404,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   direction,
   facetRows,
   facetRuntime,
+  renderSetFilterFacet,
   onEscape,
   runtime,
   version,
@@ -407,6 +414,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   readonly direction: "ltr" | "rtl";
   readonly facetRows: import("./client-source-adapter").BrunoTableClientFacetRowsSource;
   readonly facetRuntime: import("./grid-runtime").BrunoTableRowPipelineRuntimeView;
+  readonly renderSetFilterFacet: boolean;
   readonly onEscape: () => void;
   readonly runtime: BrunoTableRuntimeView;
   readonly version: number;
@@ -500,7 +508,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
   }, [cancelPendingCandidate, column, editorIdentity, localState.column, localState.identity]);
 
   useLayoutEffect(() => {
-    if (!column.enableSetFilter) {
+    if (!column.enableSetFilter || !renderSetFilterFacet) {
       (inputRef.current ?? selectRef.current)?.focus({ preventScroll: true });
     }
     return () => {
@@ -508,7 +516,7 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
       // overlay-owned Pacer resource intentionally discards any candidate that has not committed.
       cancelPendingCandidate();
     };
-  }, [cancelPendingCandidate, column.enableSetFilter]);
+  }, [cancelPendingCandidate, column.enableSetFilter, renderSetFilterFacet]);
 
   const commitImmediately = useCallback(
     (candidate: FilterCandidate): void => {
@@ -630,10 +638,10 @@ const BrunoTableColumnFilterEditor = memo(function BrunoTableColumnFilterEditor(
         </PopoverDescription>
       </PopoverHeader>
       <div className="flex flex-col gap-3">
-        {column.enableSetFilter ? (
+        {column.enableSetFilter && renderSetFilterFacet ? (
           <BrunoTableSetFilter column={column} rows={facetRows} runtime={facetRuntime} />
         ) : null}
-        {column.enableSetFilter ? (
+        {column.enableSetFilter && renderSetFilterFacet ? (
           <div className="flex items-center gap-2" aria-hidden="true">
             <Separator className="flex-1" />
             <span className="text-xs text-muted-foreground">Conditions</span>

@@ -15,7 +15,7 @@ import {
   BrunoTableActiveFilters,
   BrunoTableClientFilterProvider,
   BrunoTableQuickFilter,
-  renderBrunoTableClientColumnFilter,
+  renderBrunoTableServerColumnFilter,
 } from "./internal/client-filter-controls";
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
@@ -164,7 +164,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
           toolbar={toolbar}
           rowPipeline={BrunoTableServerRowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
-          renderColumnFilter={renderBrunoTableClientColumnFilter}
+          renderColumnFilter={renderBrunoTableServerColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />
       </BrunoTableToolbarProvider>

@@ -92,6 +92,23 @@ export const renderBrunoTableClientColumnFilter = (
   );
 };
 
+export const renderBrunoTableServerColumnFilter = (
+  props: BrunoTableColumnFilterRendererProps,
+): ReactElement => {
+  const { column, runtime, activateHeaderCommand, restoreColumnFocus, registerColumnFilterOpener } =
+    props;
+  return (
+    <BrunoTableColumnFilter
+      column={column}
+      runtime={runtime}
+      renderSetFilterFacet={false}
+      activateHeaderCommand={activateHeaderCommand}
+      restoreColumnFocus={restoreColumnFocus}
+      registerColumnFilterOpener={registerColumnFilterOpener}
+    />
+  );
+};
+
 export function BrunoTableQuickFilter(): ReactElement | null {
   const { runtime } = useBrunoTableClientFilterContext();
   return <BrunoTableQuickFilterConnected runtime={runtime} />;

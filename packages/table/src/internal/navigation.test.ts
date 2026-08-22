@@ -53,6 +53,69 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("clears a Server active cell when its authoritative row identity disappears", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    const serverRows = (rowIds: readonly (string | undefined)[]) => ({
+      totalRows: rowIds.length,
+      getRowId: (index: number) => rowIds[index],
+      findRowIndex: (rowId: string) => {
+        const index = rowIds.indexOf(rowId);
+        return index < 0 ? undefined : index;
+      },
+      missingRowIdentityBehavior: "clear-conflicting-active-cell" as const,
+    });
+
+    navigation.setShape(serverRows(["first", "second"]), columns);
+    navigation.move("down");
+    navigation.setShape(serverRows(["first", "replacement"]), columns);
+
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
+  it("retains known moved Server identities and reconciles loading-slot arrivals", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    const serverRows = (rowIds: readonly (string | undefined)[]) => ({
+      totalRows: rowIds.length,
+      getRowId: (index: number) => rowIds[index],
+      findRowIndex: (rowId: string) => {
+        const index = rowIds.indexOf(rowId);
+        return index < 0 ? undefined : index;
+      },
+      missingRowIdentityBehavior: "clear-conflicting-active-cell" as const,
+    });
+
+    navigation.setShape(serverRows(["first", "second", undefined]), columns);
+    navigation.move("down");
+    navigation.setShape(serverRows(["second", "first", undefined]), columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
+
+    navigation.move("down");
+    navigation.move("down");
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 2 });
+    expect(navigation.getSnapshot()).not.toHaveProperty("rowId");
+    navigation.setShape(serverRows(["second", "first", "third"]), columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 2, rowId: "third" });
+
+    navigation.setShape(serverRows([undefined, undefined, undefined]), columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 2, rowId: "third" });
+  });
+
   it("reconciles a surviving active row across a query projection", () => {
     const columns = compileColumns([
       {

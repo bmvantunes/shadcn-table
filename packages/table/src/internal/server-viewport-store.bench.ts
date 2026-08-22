@@ -84,29 +84,28 @@ const adapter = new BrunoTableServerRowPipelineAdapter<Readonly<{ value: number 
   [],
   [{ columnId: "COL_ID_VALUE", direction: "asc" }],
 );
+const adapterViewport = {
+  replace(request: Readonly<{ readonly sink: NonNullable<typeof adapterSink> }>) {
+    replaceCalls += 1;
+    adapterSink = request.sink;
+    return {
+      setWindow: () => {
+        setWindowCalls += 1;
+      },
+      release: () => undefined,
+    };
+  },
+};
 adapter.subscribePublication(() => {
   publicationNotifications += 1;
 });
-adapter.replace(
-  {
-    replace(request: Readonly<{ readonly sink: NonNullable<typeof adapterSink> }>) {
-      replaceCalls += 1;
-      adapterSink = request.sink;
-      return {
-        setWindow: () => {
-          setWindowCalls += 1;
-        },
-        release: () => undefined,
-      };
-    },
-  },
-  {
-    generation: 0,
-    filters: [],
-    quickFilter: "",
-    orderBy: [{ columnId: "COL_ID_VALUE", direction: "asc" }],
-  },
-);
+adapter.reconcileSource({ viewport: adapterViewport, totalRows: 0, version: 0, status: "ready" });
+adapter.replace(adapterViewport, {
+  generation: 0,
+  filters: [],
+  quickFilter: "",
+  orderBy: [{ columnId: "COL_ID_VALUE", direction: "asc" }],
+});
 adapterSink!.setRowCount(virtualRowCount, true);
 let adapterIteration = 0;
 
@@ -169,20 +168,24 @@ const equivalenceAdapter = new BrunoTableServerRowPipelineAdapter<EquivalenceRow
   [],
   [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],
 );
-equivalenceAdapter.replace(
-  {
-    replace(request: Readonly<{ readonly sink: NonNullable<typeof equivalenceSink> }>) {
-      equivalenceSink = request.sink;
-      return { setWindow: () => undefined, release: () => undefined };
-    },
+const equivalenceViewport = {
+  replace(request: Readonly<{ readonly sink: NonNullable<typeof equivalenceSink> }>) {
+    equivalenceSink = request.sink;
+    return { setWindow: () => undefined, release: () => undefined };
   },
-  {
-    generation: 0,
-    filters: [],
-    quickFilter: "",
-    orderBy: [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],
-  },
-);
+};
+equivalenceAdapter.reconcileSource({
+  viewport: equivalenceViewport,
+  totalRows: 0,
+  version: 0,
+  status: "ready",
+});
+equivalenceAdapter.replace(equivalenceViewport, {
+  generation: 0,
+  filters: [],
+  quickFilter: "",
+  orderBy: [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],
+});
 const equivalenceKeys: Record<number, string> = {};
 const firstEquivalenceRows: Record<number, EquivalenceRow> = {};
 for (let rowIndex = 0; rowIndex < windowSize; rowIndex += 1) {

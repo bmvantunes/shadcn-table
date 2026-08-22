@@ -139,6 +139,14 @@ Rules:
 
 The public effect-view-server Viewport Source preserves TypeScript row/query types but exposes no runtime schema or field-semantics registry. Raw columns therefore declare Value Type explicitly, while typed Column Helpers such as `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position. A future effect-view-server contract may provide an opaque precompiled registry, but that is an optional concision improvement rather than a correctness fallback.
 
+effect-view-server 2.4.0 also encodes the base Topic Row only inside the generic
+`LiveQueryViewport.replace` query/sink constraint. It does not expose an invariant row witness that
+a structural consumer can use to prove that the Viewport Source and BrunoTable columns share the
+same base row. [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465)
+tracks the smallest source-owned, Effect-free witness. Shipping `BrunoTableServer` requires a
+compatible release containing that contract; BrunoTable does not substitute a public row generic,
+consumer wrapper, duplicated query schema, or `unknown` fallback.
+
 All Server row identity is source-owned. BrunoTable requires the additive key-delivery contract specified in [effect-view-server#405](https://github.com/bmvantunes/effect-view-server/issues/405) and landed in [effect-view-server#407](https://github.com/bmvantunes/effect-view-server/pull/407): every changed sparse raw or grouped row map is accompanied atomically by an authoritative sparse row-key map over exactly the same absolute indexes. The Adapter stores each row and key together. `BrunoTableServer` rejects `getRowId`; the Adapter does not reconstruct a key from selected fields, group fields, or aggregate aliases and never treats an index as identity. The Server variant must fail its compatibility check clearly when the source cannot provide keys rather than silently installing weaker identity semantics.
 
 effect-view-server is a first-party collaborating module at this seam. If BrunoTable needs another missing source-owned semantic, change the upstream contract and require the compatible release. Do not add a compensating consumer prop, duplicate schema semantics, reconstruct canonical source values or keys, or ship a weaker local fallback.
@@ -172,7 +180,7 @@ generation.release();
 
 The Adapter, not the source callback flags, owns the Query Generation token. It allocates one token before `replace`, closes that token over the sink, and rejects every delivery after release or replacement. The optional `keepRenderedRows` argument passed to `setRowCount` is a delivery hint inside the current source controller; it never authorizes old-row retention across a semantic generation boundary.
 
-The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable requires `effect-view-server@2.4.0`, the first compatible release that also includes source-native Match None from #409. BrunoTable does not hide older-package behavior with deferred sink publication or warning suppression.
+The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable's runtime/query minimum is `effect-view-server@2.4.0`, the first compatible release that also includes source-native Match None from #409. Publication additionally waits for the invariant base-row witness tracked by [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465). BrunoTable does not hide older-package behavior with deferred sink publication or warning suppression.
 
 ## Why a long-lived object
 
@@ -372,7 +380,7 @@ The cache may use blocks internally for retention and eviction, but effect-view-
 
 Keyboard reveal follows the same rule. Holding Arrow Down advances the logical Active Cell by absolute row index and causes the virtualizer to reveal it. The range planner should use source overscan to request upcoming rows before the Active Cell reaches the final visible row. When the user outruns delivery, the requested index remains active as a fixed-height loading slot and the latest required contiguous window is sent to the active generation. Do not issue a request per repeated key event, wait for each row before accepting the next event, or model the operation as fetching a next page.
 
-Live View Server publications may move a row when an active sort key changes. Such movement does not restart the generation or reset scroll. If the Active Cell's Row Identity remains in the known sparse window, reconcile its absolute index without automatically scrolling after it. If that identity leaves the known window and the source does not expose its new index, clear the Active Cell and retain browser focus on the grid root; never transfer activation to the different row now occupying the old index.
+Live View Server publications may move a row when an active sort key changes. Such movement does not restart the generation or reset scroll. If the Active Cell's Row Identity remains in the known sparse window, reconcile its absolute index without automatically scrolling after it. If ordinary window eviction merely unloads that identity, retain its logical identity and coordinate. Clear the Active Cell while retaining browser focus on the grid root only when the source publishes a conflicting authoritative key at that coordinate or an authoritative row-count boundary removes it; never transfer activation to the different row now occupying the old index.
 
 ## Sink responses
 

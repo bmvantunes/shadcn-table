@@ -367,6 +367,7 @@ export type BrunoTableLogicalRowSpace = Readonly<{
   readonly getRowId: (index: number) => string | undefined;
   readonly findRowIndex: (rowId: string) => number | undefined;
   readonly setRequiredRange: (start: number, end: number) => void;
+  readonly missingRowIdentityBehavior?: "clear-conflicting-active-cell";
 }>;
 
 function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TAdapter>({

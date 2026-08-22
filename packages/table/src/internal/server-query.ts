@@ -24,26 +24,36 @@ export type BrunoTableCompiledServerQueryPlan = Readonly<{
   readonly operandSemantics: ReadonlyMap<object, CompiledFieldColumn["semantics"]>;
 }>;
 
+export function compileBrunoTableServerProjectionFields(
+  columns: readonly CompiledColumn[],
+  quickFilterFields: readonly string[],
+): readonly [string, ...string[]] {
+  const fields = new Set<string>();
+  for (const column of columns) {
+    if (column.kind === "field") fields.add(column.field);
+    else for (const field of column.fields) fields.add(field);
+  }
+  for (const field of quickFilterFields) fields.add(field);
+  const select = [...fields];
+  const first = select[0];
+  if (first === undefined) {
+    throw new TypeError("BrunoTable Server projection must contain at least one Query Field.");
+  }
+  return Object.freeze([first, ...select.slice(1)]);
+}
+
 export function compileBrunoTableServerQueryPlan(
   columns: readonly CompiledColumn[],
   input: BrunoTableServerQueryInput,
 ): BrunoTableCompiledServerQueryPlan {
-  const fields = new Set<string>();
   const fieldColumns = new Map<string, CompiledFieldColumn>();
   const operandSemantics = new Map<object, CompiledFieldColumn["semantics"]>();
   for (const column of columns) {
     if (column.kind === "field") {
-      fields.add(column.field);
       fieldColumns.set(column.columnId, column);
-    } else {
-      for (const field of column.fields) fields.add(field);
     }
   }
-  for (const field of input.quickFilterFields) fields.add(field);
-  const select = [...fields];
-  if (select.length === 0) {
-    throw new TypeError("BrunoTable Server projection must contain at least one Query Field.");
-  }
+  const select = compileBrunoTableServerProjectionFields(columns, input.quickFilterFields);
 
   const where = input.filters.map((filter) =>
     compileFilter(filter, fieldColumns, operandSemantics),
@@ -72,11 +82,9 @@ export function compileBrunoTableServerQueryPlan(
     throw new TypeError("BrunoTable Server requires a non-empty orderBy query.");
   }
 
-  const first = select[0]!;
-  const projectedFields: [string, ...string[]] = [first, ...select.slice(1)];
   return Object.freeze({
     query: Object.freeze({
-      select: Object.freeze(projectedFields),
+      select,
       where: Object.freeze(where),
       orderBy: Object.freeze(orderBy),
     }),

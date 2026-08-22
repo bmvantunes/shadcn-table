@@ -371,7 +371,7 @@ Must include:
 - an active Client editor row that moves under live sorting remains at the same visual Y-coordinate through frame-coalesced fixed-height scroll anchoring while surrounding rows reorder normally
 - an active Client editor row filtered out by a live update remains as one anchored, accessible edit-owned exception until commit or Escape; its raw candidate is never discarded or auto-committed
 - deletion of the active Client editor row retains an anchored tombstone with recoverable text, blocks commit, and exits only through Escape or accessible cancellation unless the same Row Identity reappears and reconnects
-- a moved active Server row outside the known sparse window clears activation without dropping browser focus, while a reordered Client range survives only when its identity set remains contiguous
+- a known conflicting Server key or authoritative row-count boundary clears activation without dropping browser focus, while mere sparse eviction retains the logical identity and coordinate and a reordered Client range survives only when its identity set remains contiguous
 - Tab and Shift+Tab commit and move to the next or previous editable cell
 - Tab crosses pinned-start, centre, and pinned-end in Logical Column Order, wrapping to the next row without a multi-column reveal jump
 - Tab and Shift+Tab skip row-specific non-editable cells and reveal virtualized destinations

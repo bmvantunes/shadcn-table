@@ -25,6 +25,7 @@ export type BrunoTableNavigationRowSpace = Readonly<{
   readonly totalRows: number;
   readonly getRowId: (index: number) => string | undefined;
   readonly findRowIndex: (rowId: string) => number | undefined;
+  readonly missingRowIdentityBehavior?: "clear-conflicting-active-cell";
 }>;
 
 const EMPTY_ROW_SPACE: BrunoTableNavigationRowSpace = Object.freeze({
@@ -246,6 +247,20 @@ export class BrunoTableNavigationRuntime {
       this.activeCell?.rowId === undefined
         ? undefined
         : rowSpace.findRowIndex(this.activeCell.rowId);
+    const activeSlotRowId =
+      this.activeCell?.region === "body" ? rowSpace.getRowId(this.activeCell.rowIndex) : undefined;
+    if (
+      this.activeCell?.region === "body" &&
+      this.activeCell.rowId !== undefined &&
+      matchingRowIndex === undefined &&
+      rowSpace.missingRowIdentityBehavior === "clear-conflicting-active-cell" &&
+      (this.activeCell.rowIndex >= rowSpace.totalRows ||
+        (activeSlotRowId !== undefined && activeSlotRowId !== this.activeCell.rowId))
+    ) {
+      this.pendingQueryFallbackRowIndex = undefined;
+      this.setActive(undefined);
+      return;
+    }
     const preferredRowIndex = Math.max(
       0,
       Math.min(rowSpace.totalRows - 1, matchingRowIndex ?? this.activeCell?.rowIndex ?? 0),
@@ -275,10 +290,20 @@ export class BrunoTableNavigationRuntime {
       this.setActive(undefined);
       return;
     }
+    const retainedUnloadedRowId =
+      this.activeCell?.region === "body" &&
+      this.activeCell.rowId !== undefined &&
+      matchingRowIndex === undefined &&
+      activeSlotRowId === undefined &&
+      rowSpace.missingRowIdentityBehavior === "clear-conflicting-active-cell"
+        ? this.activeCell.rowId
+        : undefined;
     this.setActive({
       region: "body",
       rowIndex: preferredRowIndex,
-      ...rowIdentity(rowSpace, preferredRowIndex),
+      ...(retainedUnloadedRowId === undefined
+        ? rowIdentity(rowSpace, preferredRowIndex)
+        : { rowId: retainedUnloadedRowId }),
       columnId: column.columnId,
     });
   };
