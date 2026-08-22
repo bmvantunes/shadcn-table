@@ -103,7 +103,104 @@ async function readDeclarationClosure(entryUrl) {
   return Object.freeze({
     entry: sources.get(fileURLToPath(entryUrl)) ?? "",
     declarations: [...sources.values()].join("\n"),
+    sources: [...sources.values()],
   });
+}
+
+async function collectDeclarationModuleSpecifiers(sources) {
+  const specifiers = new Set();
+  for (const source of sources) {
+    const ast = await parseAstAsync(source, { lang: "dts" });
+    walkSyntaxTree(ast, (node) => {
+      if (
+        node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration"
+      ) {
+        if (typeof node.source?.value === "string") specifiers.add(node.source.value);
+        return;
+      }
+      if (node.type === "ImportExpression" && typeof node.source?.value === "string") {
+        specifiers.add(node.source.value);
+        return;
+      }
+      if (node.type === "TSImportType" && typeof node.source?.value === "string") {
+        specifiers.add(node.source.value);
+      }
+    });
+  }
+  return [...specifiers];
+}
+
+async function collectAmbientDeclarationKinds(sources) {
+  const kinds = new Set();
+  for (const source of sources) {
+    const ast = await parseAstAsync(source, { lang: "dts" });
+    walkSyntaxTree(ast, (node) => {
+      if (node.type !== "TSModuleDeclaration") return;
+      if (node.kind === "global" || node.id?.name === "global") {
+        kinds.add("global");
+        return;
+      }
+      if (node.id?.type === "StringLiteral" || node.id?.type === "Literal") {
+        kinds.add("module");
+      }
+    });
+  }
+  return [...kinds];
+}
+
+const declarationBoundaryFixture = `
+  import type { Imported } from "fixture/import";
+  export type { Imported as Reexported } from "fixture/export";
+  type ImportType = import("fixture/import-type").Imported;
+  type TypeofImport = typeof import("fixture/typeof-import");
+  declare module "fixture/ambient" { export type Marker = string; }
+  declare global { interface BrunoTableFixtureGlobal {} }
+`;
+const declarationBoundaryFixtureSpecifiers = await collectDeclarationModuleSpecifiers([
+  declarationBoundaryFixture,
+]);
+for (const expected of [
+  "fixture/import",
+  "fixture/export",
+  "fixture/import-type",
+  "fixture/typeof-import",
+]) {
+  if (!declarationBoundaryFixtureSpecifiers.includes(expected)) {
+    throw new Error(`Declaration boundary fixture did not detect ${expected}.`);
+  }
+}
+const declarationBoundaryFixtureAmbientKinds = await collectAmbientDeclarationKinds([
+  declarationBoundaryFixture,
+]);
+for (const expected of ["module", "global"]) {
+  if (!declarationBoundaryFixtureAmbientKinds.includes(expected)) {
+    throw new Error(`Declaration boundary fixture did not detect ${expected} augmentation.`);
+  }
+}
+
+for (const [specifier, expected] of [
+  ["react", false],
+  ["effect", true],
+  ["effect/BigDecimal", true],
+  ["@effect/atom-react", true],
+  ["effect-view-server/react", true],
+]) {
+  if (isEffectModuleSpecifier(specifier) !== expected) {
+    throw new Error(`The declaration dependency fixture misclassified ${specifier}.`);
+  }
+}
+
+for (const [nodeModulesEntries, virtualStoreEntries, expected] of [
+  [["@bruno", "react"], [], false],
+  [["@effect"], [], true],
+  [[], ["@effect+schema@4.0.0-rc.111"], true],
+  [["effect-view-server"], [], true],
+]) {
+  if (installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries) !== expected) {
+    throw new Error("The clean-consumer dependency-graph fixture misclassified Effect.");
+  }
 }
 
 const [
@@ -126,6 +223,12 @@ const [
 
 const declarations = rootDeclarationSet.declarations;
 const effectDeclarations = effectDeclarationSet.declarations;
+const rootDeclarationModuleSpecifiers = await collectDeclarationModuleSpecifiers(
+  rootDeclarationSet.sources,
+);
+const rootAmbientDeclarationKinds = await collectAmbientDeclarationKinds(
+  rootDeclarationSet.sources,
+);
 const testDiagnosticSentinels = [
   "BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_V1",
   "BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_V1",
@@ -449,13 +552,26 @@ if (
 }
 
 if (
-  /\beffect(?:\/|["'])/u.test(declarations) ||
-  /\beffect(?:\/|["'])/u.test(rootRuntime) ||
-  /effect-view-server/u.test(declarations) ||
-  /effect-view-server/u.test(rootRuntime)
+  rootDeclarationModuleSpecifiers.some((specifier) => isEffectModuleSpecifier(specifier)) ||
+  /(?:from\s+|import\s*)["'](?:effect|effect-view-server)(?:\/|["'])/u.test(rootRuntime)
 ) {
   throw new Error(
-    "The @bruno/table root entry imports or declares the optional Effect/View Server integration.",
+    "The @bruno/table root entry imports the optional Effect/View Server integration.",
+  );
+}
+
+if (!declarations.includes('"__effect-view-server/LiveQueryViewportBaseRow@v1"')) {
+  throw new Error("The @bruno/table declaration bundle omitted the source-owned viewport witness.");
+}
+if (!declarations.includes('"__effect-view-server/LiveQueryViewportCompleteRawSelect@v1"')) {
+  throw new Error(
+    "The @bruno/table declaration bundle omitted the source-owned complete raw projection.",
+  );
+}
+
+if (rootAmbientDeclarationKinds.length > 0) {
+  throw new Error(
+    `The @bruno/table root declaration closure contains ambient ${rootAmbientDeclarationKinds.join("/")} declarations.`,
   );
 }
 
@@ -599,15 +715,15 @@ if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
   );
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "2.3.0") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.4") {
   throw new Error(
-    "The optional Effect build is not pinned to the audited public value-semantics contract.",
+    "The View Server integration is not pinned to the audited public 4.2.4 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "2.3.0",
+    "effect-view-server": "4.2.4",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");
@@ -630,6 +746,7 @@ const expectedRuntimeExports = [
   "BrunoTableQuickFilter",
   "BrunoTableResultRowCount",
   "BrunoTableSelectColumn",
+  "BrunoTableServer",
   "BrunoTableTextColumn",
   "BrunoTableToolbar",
   "BrunoTableToolbarSpacer",
@@ -1447,10 +1564,10 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
           : {
               "@tailwindcss/vite": "4.3.3",
               tailwindcss: "4.3.3",
-              vite: "npm:@voidzero-dev/vite-plus-core@0.2.7",
-              "vite-plus": "0.2.7",
+              vite: "npm:@voidzero-dev/vite-plus-core@0.2.8",
+              "vite-plus": "0.2.8",
             }),
-        ...(includeEffect ? { effect: "4.0.0-beta.100" } : {}),
+        ...(includeEffect ? { effect: "4.0.0-rc.111" } : {}),
         react: "19.2.8",
         "react-dom": "19.2.8",
       },
@@ -1482,18 +1599,30 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
 }
 
 async function assertInstalledGraphExcludesEffect(consumerRoot) {
-  if (
-    existsSync(join(consumerRoot, "node_modules", "effect")) ||
-    existsSync(join(consumerRoot, "node_modules", "effect-view-server"))
-  ) {
-    throw new Error("The clean root consumer unexpectedly installed Effect or View Server.");
-  }
-
+  const nodeModules = join(consumerRoot, "node_modules");
+  const nodeModulesEntries = existsSync(nodeModules) ? await readdir(nodeModules) : [];
   const virtualStore = join(consumerRoot, "node_modules", ".pnpm");
-  const entries = existsSync(virtualStore) ? await readdir(virtualStore) : [];
-  if (entries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))) {
+  const virtualStoreEntries = existsSync(virtualStore) ? await readdir(virtualStore) : [];
+  if (installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries)) {
     throw new Error("The clean root consumer dependency graph contains Effect or View Server.");
   }
+}
+
+function installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries) {
+  return (
+    nodeModulesEntries.some((entry) => /^(?:@effect|effect|effect-view-server)$/u.test(entry)) ||
+    virtualStoreEntries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))
+  );
+}
+
+function isEffectModuleSpecifier(specifier) {
+  return (
+    specifier === "effect" ||
+    specifier.startsWith("effect/") ||
+    specifier.startsWith("@effect/") ||
+    specifier === "effect-view-server" ||
+    specifier.startsWith("effect-view-server/")
+  );
 }
 
 function runTypeScriptConsumer(consumerRoot, label) {

@@ -1,3 +1,7 @@
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+
 import {
   BrunoTableClient,
   BrunoTableActiveFilterCount,
@@ -7,6 +11,7 @@ import {
   BrunoTableLoadedRowCount,
   BrunoTableQuickFilter,
   BrunoTableResultRowCount,
+  BrunoTableServer,
   BrunoTableToolbar,
 } from "./index";
 
@@ -113,6 +118,115 @@ const validClient = (
   </BrunoTableClient>
 );
 void validClient;
+
+const serverTypeReact = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+          hiddenLabel: Schema.String,
+        }),
+      },
+    },
+  }),
+);
+const serverSource = serverTypeReact.useLiveQueryViewport("rows");
+
+const serverComponentProps = {
+  tableId: "TABLE_ID_JSX_SERVER",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }] as const,
+  quickFilterFields: ["name"] as const,
+  viewportSource: serverSource,
+};
+
+const validServer = <BrunoTableServer {...serverComponentProps} />;
+void validServer;
+
+const invalidServerClientSource = { ...serverComponentProps, clientSource };
+// @ts-expect-error Server Tables reject Client Sources through composed props.
+void (<BrunoTableServer {...invalidServerClientSource} />);
+const invalidServerExternalFilters = { ...serverComponentProps, externalFilters: [] };
+// @ts-expect-error Issue #17 owns the future Server External Filter contract.
+void (<BrunoTableServer {...invalidServerExternalFilters} />);
+const invalidServerQuickFilterFields = { ...serverComponentProps, quickFilterFields: [42] };
+// @ts-expect-error Server Quick Filter fields must be string Row fields.
+void (<BrunoTableServer {...invalidServerQuickFilterFields} />);
+
+const invalidServerIdentity = (
+  <BrunoTableServer
+    tableId="TABLE_ID_JSX_SERVER_IDENTITY"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={serverSource}
+    // @ts-expect-error Server row identity is authoritative source evidence.
+    getRowId={(row: Row) => row.id}
+  />
+);
+void invalidServerIdentity;
+
+const invalidServerSelection = (
+  <BrunoTableServer
+    tableId="TABLE_ID_JSX_SERVER_SELECTION"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={serverSource}
+    // @ts-expect-error Server Tables expose no row-selection capability.
+    rowSelection
+  />
+);
+void invalidServerSelection;
+
+for (const forbiddenCapability of [
+  // @ts-expect-error Server Tables have no editing capability.
+  <BrunoTableServer key="editing" {...serverComponentProps} editable />,
+  // @ts-expect-error Server Tables have no Cell Range Selection capability.
+  <BrunoTableServer key="range" {...serverComponentProps} rangeSelection />,
+  // @ts-expect-error Server Tables have no Paste or Fill capability.
+  <BrunoTableServer key="paste" {...serverComponentProps} onPaste={() => undefined} />,
+  // @ts-expect-error Server Tables have no Paste or Fill capability.
+  <BrunoTableServer key="fill" {...serverComponentProps} onFill={() => undefined} />,
+  // @ts-expect-error Server Tables have no Undo or Redo capability.
+  <BrunoTableServer key="undo" {...serverComponentProps} onUndo={() => undefined} />,
+  // @ts-expect-error Server Tables have no Undo or Redo capability.
+  <BrunoTableServer key="redo" {...serverComponentProps} onRedo={() => undefined} />,
+]) {
+  void forbiddenCapability;
+}
+
+const spreadRowSelection = { ...serverComponentProps, rowSelection: true };
+// @ts-expect-error Server row selection remains forbidden through composed props.
+void (<BrunoTableServer {...spreadRowSelection} />);
+const spreadRangeSelection = { ...serverComponentProps, rangeSelection: true };
+// @ts-expect-error Server Cell Range Selection remains forbidden through composed props.
+void (<BrunoTableServer {...spreadRangeSelection} />);
+const spreadPasteFill = {
+  ...serverComponentProps,
+  onPaste: () => undefined,
+  onFill: () => undefined,
+};
+// @ts-expect-error Server Paste and Fill remain forbidden through composed props.
+void (<BrunoTableServer {...spreadPasteFill} />);
+const spreadUndoRedo = {
+  ...serverComponentProps,
+  onUndo: () => undefined,
+  onRedo: () => undefined,
+};
+// @ts-expect-error Server Undo and Redo remain forbidden through composed props.
+void (<BrunoTableServer {...spreadUndoRedo} />);
+
+const serverWithoutOrderProps = {
+  tableId: "TABLE_ID_JSX_SERVER_ORDER",
+  columns,
+  viewportSource: serverSource,
+};
+// @ts-expect-error Server Tables require a non-empty Initial Order By tuple.
+const invalidServerWithoutOrder = <BrunoTableServer {...serverWithoutOrderProps} />;
+void invalidServerWithoutOrder;
 
 const invalidQuickFilterFields = (
   <BrunoTableClient

@@ -92,6 +92,23 @@ export const renderBrunoTableClientColumnFilter = (
   );
 };
 
+export const renderBrunoTableServerColumnFilter = (
+  props: BrunoTableColumnFilterRendererProps,
+): ReactElement => {
+  const { column, runtime, activateHeaderCommand, restoreColumnFocus, registerColumnFilterOpener } =
+    props;
+  return (
+    <BrunoTableColumnFilter
+      column={column}
+      runtime={runtime}
+      renderSetFilterFacet={false}
+      activateHeaderCommand={activateHeaderCommand}
+      restoreColumnFocus={restoreColumnFocus}
+      registerColumnFilterOpener={registerColumnFilterOpener}
+    />
+  );
+};
+
 export function BrunoTableQuickFilter(): ReactElement | null {
   const { runtime } = useBrunoTableClientFilterContext();
   return <BrunoTableQuickFilterConnected runtime={runtime} />;
@@ -108,9 +125,11 @@ const BrunoTableQuickFilterConnected = memo(function BrunoTableQuickFilterConnec
   readonly runtime: BrunoTableRuntimeView;
 }): ReactElement | null {
   if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) recordBrunoTableClientQuickFilterRender();
-  // quickFilterFields is snapshotted by the Client adapter for this Table Instance;
-  // it is configuration, not a reactive row/query publication.
-  const fields = runtime.getQuickFilterFieldsSnapshot();
+  const fields = useSyncExternalStore(
+    runtime.subscribeQuickFilter,
+    runtime.getQuickFilterFieldsSnapshot,
+    runtime.getQuickFilterFieldsSnapshot,
+  );
   const committed = useSyncExternalStore(
     runtime.subscribeQuickFilter,
     runtime.getQuickFilterSnapshot,

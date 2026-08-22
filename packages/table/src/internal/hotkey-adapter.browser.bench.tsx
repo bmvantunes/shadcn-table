@@ -41,6 +41,7 @@ function AdapterBenchmarkProbe() {
     escape: () => undefined,
     shiftTab: () => undefined,
     headerMenu: () => undefined,
+    copy: () => undefined,
     resize: () => undefined,
     activate: () => undefined,
     navigate: (_event, command) => {
@@ -73,7 +74,7 @@ beforeAll(async () => {
   ) {
     throw new Error("The Browser benchmark did not mount the complete table registration set.");
   }
-  if (BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT !== 74) {
+  if (BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT !== 75) {
     throw new Error("The Browser benchmark registration-definition bound changed unexpectedly.");
   }
 });

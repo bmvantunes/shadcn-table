@@ -22,7 +22,12 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       "@bruno/shadcn/direction",
+      "@effect/atom-react",
       "@tanstack/react-hotkeys",
+      "effect",
+      "effect-view-server/config",
+      "effect-view-server/react",
+      "effect-view-server/react/testing",
       "react",
       "react-dom/client",
       "react-dom/server",

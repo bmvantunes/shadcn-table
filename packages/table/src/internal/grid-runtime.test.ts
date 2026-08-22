@@ -1506,6 +1506,49 @@ describe("BrunoTable filter runtime primitives", () => {
     const configuration = adapter.getQueryConfiguration(runtimeColumns);
     expect(view.getQuickFilterFieldsSnapshot()).toBe(configuration.quickFilterFields);
     expect(adapter.getQueryConfiguration(runtimeColumns)).toBe(configuration);
+
+    const quickFilterPublication = vi.fn();
+    const queryPublication = vi.fn();
+    const filterPublication = vi.fn();
+    const bodyPublication = vi.fn();
+    const columnLayoutPublication = vi.fn();
+    const columnStructurePublication = vi.fn();
+    view.subscribeQuickFilter(quickFilterPublication);
+    view.subscribeQuery(queryPublication);
+    view.subscribeFilter(filterPublication);
+    view.subscribeBody(bodyPublication);
+    view.subscribeColumnLayout(columnLayoutPublication);
+    view.subscribeColumnStructure(columnStructurePublication);
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze(["name", "desk"]),
+    });
+    expect(view.getQuickFilterFieldsSnapshot()).toEqual(["name", "desk"]);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(1);
+    expect(queryPublication).toHaveBeenCalledTimes(1);
+    expect(filterPublication).not.toHaveBeenCalled();
+    expect(bodyPublication).not.toHaveBeenCalled();
+    expect(columnLayoutPublication).not.toHaveBeenCalled();
+    expect(columnStructurePublication).not.toHaveBeenCalled();
+    expect(view.dispatchGridCommand({ type: "quick-filter.replace", text: "ada" })).toBe(true);
+    expect(view.getActiveFilterCountSnapshot()).toBe(1);
+
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze([]),
+    });
+    expect(view.getQuickFilterFieldsSnapshot()).toEqual([]);
+    expect(view.getQuickFilterSnapshot()).toBe("");
+    expect(view.getActiveFilterCountSnapshot()).toBe(0);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(3);
+
+    runtime.configure(runtimeColumns, {
+      ...configuration,
+      quickFilterFields: Object.freeze(["name"]),
+    });
+    expect(view.getQuickFilterSnapshot()).toBe("");
+    expect(view.getActiveFilterCountSnapshot()).toBe(0);
+    expect(quickFilterPublication).toHaveBeenCalledTimes(4);
   });
 
   it("rejects sparse Quick Filter field tuples", () => {
@@ -5049,6 +5092,67 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(cellListener).toHaveBeenCalledTimes(2);
     expect(view.getRowCellSnapshot("first", "COL_ID_NAME")).not.toBe(unavailableRowCellSnapshot);
     expect(view.getCellSnapshot("second", "COL_ID_NAME")).not.toBe(unavailableCellSnapshot);
+  });
+
+  it("retries indexed unavailable cells alongside a different affected row", () => {
+    const initialRows = [
+      { id: "first", name: "Initial first" },
+      { id: "second", name: "Initial second" },
+      { id: "third", name: "Initial third" },
+    ] satisfies readonly Row[];
+    const recoveredRows = initialRows.map((row) => ({
+      ...row,
+      name: row.id === "second" ? "Changed second" : row.name,
+    }));
+    const failedRows = initialRows.map((row) => ({
+      ...row,
+      name: row.id === "second" ? "Failed second" : row.name,
+    }));
+    const { adapter, runtime, view } = createSubject(initialRows);
+    const listeners = new Map(initialRows.map((row) => [row.id, vi.fn()]));
+    for (const row of initialRows) {
+      view.subscribeCell(row.id, "COL_ID_NAME", listeners.get(row.id)!);
+    }
+    const failedPublication = adapter.publish(source(failedRows));
+    const failedRowSpace = failedPublication.rowSpace;
+    if (failedRowSpace === undefined) throw new Error("Expected a resident row space.");
+
+    expect(() =>
+      runtime.publish({
+        ...failedPublication,
+        rowSpace: {
+          ...failedRowSpace,
+          getCellValue(rowId, columnId) {
+            if (rowId === "first") throw new Error("transient first-row failure");
+            return failedRowSpace.getCellValue(rowId, columnId);
+          },
+        },
+      }),
+    ).toThrow("transient first-row failure");
+    for (const listener of listeners.values()) listener.mockClear();
+
+    const reads: string[] = [];
+    const recoveredPublication = adapter.publish(source(recoveredRows));
+    const recoveredRowSpace = recoveredPublication.rowSpace;
+    if (recoveredRowSpace === undefined) throw new Error("Expected a resident row space.");
+    runtime.publish({
+      ...recoveredPublication,
+      changedRowIds: new Set(["second"]),
+      rowSpace: {
+        ...recoveredRowSpace,
+        getCellValue(rowId, columnId) {
+          reads.push(rowId);
+          return recoveredRowSpace.getCellValue(rowId, columnId);
+        },
+      },
+    });
+
+    expect(reads).toHaveLength(2);
+    expect(new Set(reads)).toEqual(new Set(["first", "second"]));
+    expect(listeners.get("first")).toHaveBeenCalledOnce();
+    expect(listeners.get("second")).toHaveBeenCalledOnce();
+    expect(listeners.get("third")).not.toHaveBeenCalled();
+    expect(view.getCellSnapshot("first", "COL_ID_NAME").kind).toBe("available");
   });
 
   it("retains a row-aware snapshot when a successful publication is presentation-equivalent", () => {

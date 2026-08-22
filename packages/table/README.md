@@ -6,8 +6,7 @@ The public interface is intentionally small and BrunoTable-owned. TanStack Table
 stores, and server-query translation are private implementation details.
 
 The package establishes strict TypeScript contracts for columns, client sources, server viewport
-sources, filters, sorts, and the `BrunoTableClient` composition root. `BrunoTableClient` is the
-first live read-only Client renderer; the Server composition root remains future work.
+sources, filters, sorts, and the `BrunoTableClient` and `BrunoTableServer` composition roots.
 
 Use one plain column array with `satisfies`. Optional helpers supply coherent exact value semantics
 and presentation defaults without generating identity or hiding the resulting column definition:
@@ -90,9 +89,9 @@ void BrunoTableBigDecimalValueType;
 The BigDecimal Value Type keeps canonical text, persisted operands, equality, and ordering exact. It
 accepts only effect-view-server-compatible wire-safe values, treats differently scaled
 representations as equal, and never compares by aligning scales through a power of ten. Importing
-`@bruno/table` does not import or require Effect; `effect@4.0.0-beta.100` is an optional peer used
+`@bruno/table` does not import or require Effect; `effect@4.0.0-rc.111` is an optional peer used
 only by `@bruno/table/effect`. The integration is built against the public, versioned
-`effect-view-server@2.3.0/value-semantics` contract. Admitted cross-bundle wire values are copied
+`effect-view-server@4.2.4/value-semantics` contract. Admitted cross-bundle wire values are copied
 into owned local BigDecimals and receive opaque source-owned comparison metadata before BrunoTable
 exposes the full Effect value type. That focused runtime is inlined into `@bruno/table/effect`;
 applications do not install effect-view-server merely to use BigDecimal columns. BigDecimal columns
@@ -115,8 +114,20 @@ Field-or-Computed representation and rejects malformed widened input. The first 
 owned by issue #7 and must install that compiler once when constructing or replacing its definition
 set; issue #3 deliberately exposes no consumer-side grid-definition or compilation API.
 
-The Client renderer uses one continuous virtual row space, one native scroll owner, and no pagination
-state or controls. Server-side runtime virtualization remains planned backlog work.
+Both renderers use one continuous virtual row space, one native scroll owner, and no pagination
+state or controls. `BrunoTableServer` writes authoritative View Server row keys and payloads into
+sparse absolute slots, keeps window movement inside a semantic query generation, and replaces that
+generation only for projection, filter, or sort changes. Consumers pass the typed result of a
+compatible Viewport Source directly; they never provide `getRowId` or observe Effect, TanStack, or
+viewport-controller types through BrunoTable's public declarations.
+
+The Server integration requires `effect-view-server@4.2.4` or newer at the application's source
+boundary. It contains the insertion-cleanup guarantee from issue #408, source-native Match None
+from issue #409, and the declaration-bundle-safe invariant base-row witness completed by issue 465,
+issue 469, and issue 471. Issue 473 adds the source-owned complete raw projection used whenever a
+formatter, functional class, or renderer lawfully reads the complete row. BrunoTable maps empty Set
+inclusion intent to the source's `{ type: "FALSE" }` expression and does not emulate it by enumerating
+current facet values.
 
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.

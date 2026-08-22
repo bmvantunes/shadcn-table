@@ -181,6 +181,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
           ...orderSnapshot,
           columns: rowModel.columns,
           queryNavigationMode,
+          loading: false,
         }),
   );
 });

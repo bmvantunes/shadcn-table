@@ -409,6 +409,8 @@ export type BrunoTableRowPipelinePublication<TRow> = Readonly<{
   readonly message?: string;
   readonly retry?: BrunoTableSourceRetry;
   readonly rowSpace?: BrunoTableRowSpaceSnapshot<TRow>;
+  /** Private same-generation value hint; absence requires a complete reconciliation. */
+  readonly changedRowIds?: ReadonlySet<BrunoTableRowId>;
   readonly hasCoherentRows: boolean;
   readonly invalid?: BrunoTableInvalidSourceSnapshot;
 }>;
@@ -483,6 +485,7 @@ type ColumnConfiguration = Readonly<{
   readonly baselineFilters: readonly unknown[];
   readonly baselineFilterCollection: BrunoTableClientFilterCollection;
   readonly baselineOrderBy: BrunoTableOrderBy;
+  readonly quickFilterFields: readonly string[];
   readonly query: BrunoTableQuerySnapshot;
   readonly columnCommands: Map<string, BrunoTableColumnCommandSnapshot>;
   readonly columnLayout: BrunoTableColumnLayoutState;
@@ -531,6 +534,10 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly cellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
   private readonly cellSnapshots = new Map<BrunoTableRowId, Map<string, BrunoTableCellSnapshot>>();
   private readonly unavailableRows = new Set<BrunoTableRowId>();
+  private readonly unavailableRowCellRows = new Set<BrunoTableRowId>();
+  private readonly unavailableRowCellCounts = new Map<BrunoTableRowId, number>();
+  private readonly unavailableCellRows = new Set<BrunoTableRowId>();
+  private readonly unavailableCellCounts = new Map<BrunoTableRowId, number>();
   private readonly pendingCellTokensByRow = new Map<BrunoTableRowId, Map<string, object>>();
   private readonly pendingCellLru = new Map<
     object,
@@ -564,7 +571,7 @@ export class BrunoTableGridRuntime<TRow> {
   private baselineFilters: readonly unknown[];
   private baselineFilterCollection: BrunoTableClientFilterCollection;
   private baselineOrderBy: BrunoTableOrderBy;
-  private readonly quickFilterFields: readonly string[];
+  private quickFilterFields: readonly string[];
   private query: BrunoTableQuerySnapshot;
   private filterCollection: BrunoTableClientFilterCollection;
   private filterSnapshot: BrunoTableFilterSnapshot;
@@ -796,7 +803,11 @@ export class BrunoTableGridRuntime<TRow> {
     const configuration =
       this.columns === columns &&
       this.baselineFilterCollection === queryConfiguration.baselineFilterCollection &&
-      this.baselineOrderBy === queryConfiguration.baselineOrderBy
+      this.baselineOrderBy === queryConfiguration.baselineOrderBy &&
+      sameStringArray(
+        this.quickFilterFields,
+        queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS,
+      )
         ? undefined
         : this.stageColumns(columns, queryConfiguration);
     const next = this.createState(publication);
@@ -807,6 +818,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.baselineFilters = configuration.baselineFilters;
       this.baselineFilterCollection = configuration.baselineFilterCollection;
       this.baselineOrderBy = configuration.baselineOrderBy;
+      this.quickFilterFields = configuration.quickFilterFields;
       this.query = configuration.query;
       this.filterCollection = this.query.filterCollection;
       this.updateColumnFilterSnapshots();
@@ -842,7 +854,11 @@ export class BrunoTableGridRuntime<TRow> {
             ),
             this.notifyColumnStructureTransition(previousLayoutSnapshot),
           );
-    const commitError = this.commitState(previous, installed);
+    const commitError = this.commitState(
+      previous,
+      installed,
+      configuration === undefined ? publication.changedRowIds : undefined,
+    );
     const firstError = firstNotificationFailure(
       firstNotificationFailure(configurationError, transitionError),
       commitError,
@@ -853,6 +869,7 @@ export class BrunoTableGridRuntime<TRow> {
   private commitState(
     previous: RuntimeState<TRow>,
     next: RuntimeState<TRow>,
+    changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
   ): NotificationFailure | undefined {
     const chromeChanged = previous.chrome !== next.chrome;
     const sourceChanged = previous.source !== next.source;
@@ -878,7 +895,7 @@ export class BrunoTableGridRuntime<TRow> {
     }
     return firstNotificationFailure(
       firstError,
-      this.notifyChangedRows(previous.rowSpace, next.rowSpace),
+      this.notifyChangedRows(previous.rowSpace, next.rowSpace, changedRowIds),
     );
   }
 
@@ -1044,7 +1061,7 @@ export class BrunoTableGridRuntime<TRow> {
       listeners.delete(listener);
       if (listeners.size > 0) return;
       rowListeners?.delete(columnId);
-      this.rowCellSnapshots.get(rowId)?.delete(columnId);
+      this.deleteRowCellSnapshot(rowId, columnId);
       this.clearPendingRowCellSnapshot(rowId, columnId);
       if (rowListeners?.size === 0) this.rowCellListeners.delete(rowId);
       if (this.rowCellSnapshots.get(rowId)?.size === 0) this.rowCellSnapshots.delete(rowId);
@@ -1078,7 +1095,7 @@ export class BrunoTableGridRuntime<TRow> {
       listeners.delete(listener);
       if (listeners.size > 0) return;
       rowListeners?.delete(columnId);
-      this.cellSnapshots.get(rowId)?.delete(columnId);
+      this.deleteCellSnapshot(rowId, columnId);
       this.clearPendingCellSnapshot(rowId, columnId);
       if (rowListeners?.size === 0) this.cellListeners.delete(rowId);
       if (this.cellSnapshots.get(rowId)?.size === 0) this.cellSnapshots.delete(rowId);
@@ -1436,6 +1453,8 @@ export class BrunoTableGridRuntime<TRow> {
       });
     const baselineFilters = baselineFilterCollection.filters;
     const baselineOrderBy = queryConfiguration.baselineOrderBy;
+    const quickFilterFields = queryConfiguration.quickFilterFields ?? EMPTY_QUICK_FILTER_FIELDS;
+    const quickFilterFieldsChanged = !sameStringArray(this.quickFilterFields, quickFilterFields);
     const nextColumnsById = indexColumns(columns);
     const invalidatedColumnIds = new Set<string>();
     for (const column of this.columns) {
@@ -1458,11 +1477,12 @@ export class BrunoTableGridRuntime<TRow> {
     }
     const nextFilterCollection = compileClientFilterCollection(this.query.filters, columns);
     const nextOrderBy = reconcileBrunoTableOrderBy(this.query.orderBy, baselineOrderBy, columns);
-    const nextQuickFilter = this.query.quickFilter;
+    const nextQuickFilter = quickFilterFields.length === 0 ? "" : this.query.quickFilter;
     const semanticsChanged =
       !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
       !sameOrderBy(this.query.orderBy, nextOrderBy) ||
       this.query.quickFilter !== nextQuickFilter ||
+      quickFilterFieldsChanged ||
       activeQuerySemanticsChanged(this.columns, columns, this.query);
     const query = createQuerySnapshot(
       columns,
@@ -1476,11 +1496,14 @@ export class BrunoTableGridRuntime<TRow> {
           : "reconcile"
         : this.query.navigationMode,
     );
-    const columnLayout = reconcileBrunoTableColumnLayout(
-      this.columnLayout,
-      columns,
-      this.columnLayout.version + 1,
-    );
+    const columnLayout =
+      this.columns === columns
+        ? this.columnLayout
+        : reconcileBrunoTableColumnLayout(
+            this.columnLayout,
+            columns,
+            this.columnLayout.version + 1,
+          );
     const columnCommands = createColumnCommandSnapshots(
       columns,
       query,
@@ -1493,6 +1516,7 @@ export class BrunoTableGridRuntime<TRow> {
       baselineFilters,
       baselineFilterCollection,
       baselineOrderBy,
+      quickFilterFields,
       query,
       columnCommands,
       columnLayout,
@@ -1503,7 +1527,7 @@ export class BrunoTableGridRuntime<TRow> {
           !sameBrunoTableFilterCollections(this.query.filterCollection, nextFilterCollection) ||
           this.query.quickFilter !== nextQuickFilter,
         queryChanged: true,
-        quickFilterChanged: this.query.quickFilter !== nextQuickFilter,
+        quickFilterChanged: this.query.quickFilter !== nextQuickFilter || quickFilterFieldsChanged,
         sortingChanged: !sameOrderBy(this.query.orderBy, nextOrderBy),
         activeFilterCountChanged:
           activeFilterCount(this.filterCollection, this.query.quickFilter) !==
@@ -1742,18 +1766,32 @@ export class BrunoTableGridRuntime<TRow> {
   private notifyChangedRows(
     previous: BrunoTableRowSpaceSnapshot<TRow> | undefined,
     next: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+    changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
   ): NotificationFailure | undefined {
     if (
       previous === next &&
       this.unavailableRows.size === 0 &&
-      !this.hasUnavailableRowCellSnapshot() &&
-      !this.hasUnavailableCellSnapshot() &&
+      this.unavailableRowCellRows.size === 0 &&
+      this.unavailableCellRows.size === 0 &&
       !this.hasStaleSubscribedColumnSnapshot()
     ) {
       return undefined;
     }
+    if (
+      changedRowIds !== undefined &&
+      changedRowIds.size === 0 &&
+      this.unavailableRows.size === 0 &&
+      this.unavailableRowCellRows.size === 0 &&
+      this.unavailableCellRows.size === 0
+    ) {
+      return undefined;
+    }
     let firstError: NotificationFailure | undefined;
-    for (const [rowId, listeners] of this.rowListeners) {
+    const rowListenerEntries = selectChangedRowEntries(
+      this.rowListeners,
+      unionChangedRowIds(changedRowIds, this.unavailableRows),
+    );
+    for (const [rowId, listeners] of rowListenerEntries) {
       if (previous === next && !this.unavailableRows.has(rowId)) continue;
       const recovering = this.unavailableRows.delete(rowId);
       let previousSnapshot = this.rowSnapshots.get(rowId);
@@ -1789,7 +1827,11 @@ export class BrunoTableGridRuntime<TRow> {
         firstError = firstNotificationFailure(firstError, notify(listeners));
       }
     }
-    for (const [rowId, columns] of this.rowCellListeners) {
+    const rowCellListenerEntries = selectChangedRowEntries(
+      this.rowCellListeners,
+      unionChangedRowIds(changedRowIds, this.unavailableRowCellRows),
+    );
+    for (const [rowId, columns] of rowCellListenerEntries) {
       for (const [columnId, listeners] of columns) {
         const previousSnapshot = this.rowCellSnapshots.get(rowId)?.get(columnId);
         if (
@@ -1826,7 +1868,11 @@ export class BrunoTableGridRuntime<TRow> {
         }
       }
     }
-    for (const [rowId, columns] of this.cellListeners) {
+    const cellListenerEntries = selectChangedRowEntries(
+      this.cellListeners,
+      unionChangedRowIds(changedRowIds, this.unavailableCellRows),
+    );
+    for (const [rowId, columns] of cellListenerEntries) {
       for (const [columnId, listeners] of columns) {
         const previousSnapshot = this.cellSnapshots.get(rowId)?.get(columnId);
         if (
@@ -1909,7 +1955,15 @@ export class BrunoTableGridRuntime<TRow> {
       rowSnapshots = new Map();
       this.rowCellSnapshots.set(rowId, rowSnapshots);
     }
+    const previous = rowSnapshots.get(columnId);
     rowSnapshots.set(columnId, snapshot);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous?.kind === "unavailable",
+      snapshot.kind === "unavailable",
+      this.unavailableRowCellCounts,
+      this.unavailableRowCellRows,
+    );
   }
 
   private trackPendingRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
@@ -1930,7 +1984,7 @@ export class BrunoTableGridRuntime<TRow> {
     if (oldest === undefined) return;
     this.clearPendingRowCellSnapshot(oldest.rowId, oldest.columnId);
     if (!this.rowCellListeners.get(oldest.rowId)?.has(oldest.columnId)) {
-      this.rowCellSnapshots.get(oldest.rowId)?.delete(oldest.columnId);
+      this.deleteRowCellSnapshot(oldest.rowId, oldest.columnId);
       if (this.rowCellSnapshots.get(oldest.rowId)?.size === 0) {
         this.rowCellSnapshots.delete(oldest.rowId);
       }
@@ -1946,22 +2000,50 @@ export class BrunoTableGridRuntime<TRow> {
     if (rowTokens?.size === 0) this.pendingRowCellTokensByRow.delete(rowId);
   }
 
-  private hasUnavailableRowCellSnapshot(): boolean {
-    for (const rowSnapshots of this.rowCellSnapshots.values()) {
-      for (const snapshot of rowSnapshots.values()) {
-        if (snapshot.kind === "unavailable") return true;
-      }
-    }
-    return false;
+  private deleteRowCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    const rowSnapshots = this.rowCellSnapshots.get(rowId);
+    const previous = rowSnapshots?.get(columnId);
+    if (previous === undefined) return;
+    rowSnapshots?.delete(columnId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous.kind === "unavailable",
+      false,
+      this.unavailableRowCellCounts,
+      this.unavailableRowCellRows,
+    );
   }
 
-  private hasUnavailableCellSnapshot(): boolean {
-    for (const rowSnapshots of this.cellSnapshots.values()) {
-      for (const snapshot of rowSnapshots.values()) {
-        if (snapshot.kind === "unavailable") return true;
-      }
+  private deleteCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
+    const rowSnapshots = this.cellSnapshots.get(rowId);
+    const previous = rowSnapshots?.get(columnId);
+    if (previous === undefined) return;
+    rowSnapshots?.delete(columnId);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous.kind === "unavailable",
+      false,
+      this.unavailableCellCounts,
+      this.unavailableCellRows,
+    );
+  }
+
+  private updateUnavailableSnapshotCount(
+    rowId: BrunoTableRowId,
+    previousUnavailable: boolean,
+    nextUnavailable: boolean,
+    counts: Map<BrunoTableRowId, number>,
+    rows: Set<BrunoTableRowId>,
+  ): void {
+    if (previousUnavailable === nextUnavailable) return;
+    const nextCount = (counts.get(rowId) ?? 0) + (nextUnavailable ? 1 : -1);
+    if (nextCount > 0) {
+      counts.set(rowId, nextCount);
+      rows.add(rowId);
+      return;
     }
-    return false;
+    counts.delete(rowId);
+    rows.delete(rowId);
   }
 
   private hasStaleSubscribedColumnSnapshot(): boolean {
@@ -2018,7 +2100,15 @@ export class BrunoTableGridRuntime<TRow> {
       rowSnapshots = new Map();
       this.cellSnapshots.set(rowId, rowSnapshots);
     }
+    const previous = rowSnapshots.get(columnId);
     rowSnapshots.set(columnId, snapshot);
+    this.updateUnavailableSnapshotCount(
+      rowId,
+      previous?.kind === "unavailable",
+      snapshot.kind === "unavailable",
+      this.unavailableCellCounts,
+      this.unavailableCellRows,
+    );
   }
 
   private trackPendingCellSnapshot(rowId: BrunoTableRowId, columnId: string): void {
@@ -2039,7 +2129,7 @@ export class BrunoTableGridRuntime<TRow> {
     if (oldest === undefined) return;
     this.clearPendingCellSnapshot(oldest.rowId, oldest.columnId);
     if (!this.cellListeners.get(oldest.rowId)?.has(oldest.columnId)) {
-      this.cellSnapshots.get(oldest.rowId)?.delete(oldest.columnId);
+      this.deleteCellSnapshot(oldest.rowId, oldest.columnId);
       if (this.cellSnapshots.get(oldest.rowId)?.size === 0) {
         this.cellSnapshots.delete(oldest.rowId);
       }
@@ -2376,6 +2466,29 @@ function sameColumnIdentityAndPinning(
 
 function sameStringArray(previous: readonly string[], next: readonly string[]): boolean {
   return previous.length === next.length && previous.every((value, index) => value === next[index]);
+}
+
+function selectChangedRowEntries<TValue>(
+  entries: ReadonlyMap<BrunoTableRowId, TValue>,
+  changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
+): Iterable<readonly [BrunoTableRowId, TValue]> {
+  if (changedRowIds === undefined) return entries;
+  const selected: Array<readonly [BrunoTableRowId, TValue]> = [];
+  for (const rowId of changedRowIds) {
+    if (!entries.has(rowId)) continue;
+    selected.push([rowId, entries.get(rowId)!]);
+  }
+  return selected;
+}
+
+function unionChangedRowIds(
+  changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
+  recoveryRowIds: ReadonlySet<BrunoTableRowId>,
+): ReadonlySet<BrunoTableRowId> | undefined {
+  if (changedRowIds === undefined || recoveryRowIds.size === 0) return changedRowIds;
+  const combined = new Set(changedRowIds);
+  for (const rowId of recoveryRowIds) combined.add(rowId);
+  return combined;
 }
 
 function activeQuerySemanticsChanged(

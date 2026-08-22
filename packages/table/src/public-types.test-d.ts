@@ -1,5 +1,12 @@
 import { describe, expectTypeOf, it } from "vitest";
 
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
 
@@ -16,6 +23,7 @@ import {
   BrunoTableResultRowCount,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
+  BrunoTableServer,
   BrunoTableTextColumn,
   BrunoTableToolbar,
 } from "./index";
@@ -85,6 +93,131 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const serverWitnessConfig = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Schema.Struct({
+        id: ViewServerId,
+        symbol: Schema.String,
+        price: Schema.Number,
+        quantity: Schema.BigInt,
+        status: Schema.Literals(["open", "closed"]),
+        revision: Schema.BigInt,
+        hiddenLabel: Schema.String,
+      }),
+    },
+    positions: {
+      schema: Schema.Struct({
+        id: ViewServerId,
+        symbol: Schema.String,
+        price: Schema.Number,
+        quantity: Schema.BigInt,
+        status: Schema.Literals(["open", "closed"]),
+        revision: Schema.BigInt,
+        hiddenLabel: Schema.String,
+        account: Schema.String,
+      }),
+    },
+  },
+});
+const serverWitnessReact = createViewServerReact(serverWitnessConfig);
+const orderViewportSource = serverWitnessReact.useLiveQueryViewport("orders");
+const positionViewportSource = serverWitnessReact.useLiveQueryViewport("positions");
+declare const unsafeAnyViewport: any;
+declare const unsafeUnknownViewport: unknown;
+declare const unsafeUnwitnessedViewport: Readonly<{ readonly destroy: () => void }>;
+declare const unsafeBroadViewport: Readonly<Record<string, (_row: Order) => Order>>;
+
+describe("BrunoTableServer viewport row witness", () => {
+  it("derives the exact base row and rejects mismatched or erased sources", () => {
+    expectTypeOf<
+      LiveQueryViewportBaseRow<typeof orderViewportSource.viewport>
+    >().toEqualTypeOf<Order>();
+    expectTypeOf(orderViewportSource.completeRawSelect).toEqualTypeOf<
+      LiveQueryViewportCompleteRawSelect<typeof orderViewportSource.viewport>
+    >();
+
+    const matchingProps = {
+      tableId: "TABLE_ID_WITNESSED_SERVER",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      viewportSource: orderViewportSource,
+    } as const satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
+    void BrunoTableServer(matchingProps);
+
+    const mismatchedProps: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof positionViewportSource.viewport
+    > = {
+      ...matchingProps,
+      // @ts-expect-error the Props row must exactly match the viewport base row for extensions.
+      viewportSource: positionViewportSource,
+    };
+    void mismatchedProps;
+
+    const anySource = { ...orderViewportSource, viewport: unsafeAnyViewport };
+    // @ts-expect-error any erases the authoritative viewport base-row witness.
+    void BrunoTableServer({ ...matchingProps, viewportSource: anySource });
+
+    const unknownSource = { ...orderViewportSource, viewport: unsafeUnknownViewport };
+    // @ts-expect-error unknown erases the authoritative viewport base-row witness.
+    void BrunoTableServer({ ...matchingProps, viewportSource: unknownSource });
+
+    const unwitnessedSource = { ...orderViewportSource, viewport: unsafeUnwitnessedViewport };
+    // @ts-expect-error an unwitnessed viewport cannot establish the Server base row.
+    void BrunoTableServer({ ...matchingProps, viewportSource: unwitnessedSource });
+
+    const broadSource = { ...orderViewportSource, viewport: unsafeBroadViewport };
+    // @ts-expect-error broad dictionaries cannot impersonate the source-owned viewport witness.
+    void BrunoTableServer({ ...matchingProps, viewportSource: broadSource });
+
+    const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } =
+      orderViewportSource;
+    void omittedCompleteRawSelect;
+    // @ts-expect-error Server Sources must carry their source-owned complete raw projection.
+    void BrunoTableServer({ ...matchingProps, viewportSource: sourceWithoutCompleteRawSelect });
+
+    void orderViewportSource.viewport.replace({
+      window: { firstRow: 0, lastRow: 9 },
+      query: {
+        select: orderViewportSource.completeRawSelect,
+        where: [],
+        orderBy: [{ field: "symbol", direction: "asc" }],
+      },
+      sink: {
+        setRowCount: () => undefined,
+        setRowData: (rows) => {
+          expectTypeOf(rows[0]).toEqualTypeOf<Order | undefined>();
+        },
+      },
+    });
+
+    void orderViewportSource.viewport.replace({
+      window: { firstRow: 0, lastRow: 9 },
+      query: {
+        select: ["symbol"],
+        where: [],
+        orderBy: [{ field: "symbol", direction: "asc" }],
+      },
+      sink: { setRowCount: () => undefined, setRowData: () => undefined },
+    });
+    void orderViewportSource.viewport.replace({
+      window: { firstRow: 0, lastRow: 9 },
+      query: {
+        groupBy: ["status"],
+        aggregates: { rowCount: { aggFunc: "count" } },
+        where: [],
+        orderBy: [{ aggregate: "rowCount", direction: "desc" }],
+      },
+      sink: { setRowCount: () => undefined, setRowData: () => undefined },
+    });
+    expectTypeOf<
+      LiveQueryViewportBaseRow<typeof orderViewportSource.viewport>
+    >().toEqualTypeOf<Order>();
+  });
+});
 
 const persistedPreferences = {
   version: 1,
@@ -403,12 +536,7 @@ void BrunoTableClient({
   clientSource: directViewServerResult,
 });
 
-const sortingTypeTestViewportSource = {
-  viewport: {},
-  totalRows: 0,
-  version: 1,
-  status: "ready",
-} as const;
+const sortingTypeTestViewportSource = orderViewportSource;
 
 const invalidServerUnknownSort = {
   tableId: "invalid-server-unknown-sort",
@@ -418,7 +546,7 @@ const invalidServerUnknownSort = {
     { columnId: "COL_ID_UNKNOWN", direction: "asc" },
   ],
   viewportSource: sortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 void invalidServerUnknownSort;
 
 const invalidServerMisspelledSort = {
@@ -429,7 +557,7 @@ const invalidServerMisspelledSort = {
     { columnId: "COL_ID_SYMBOOL", direction: "asc" },
   ],
   viewportSource: sortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 void invalidServerMisspelledSort;
 
 const invalidServerComputedSort = {
@@ -440,7 +568,7 @@ const invalidServerComputedSort = {
     { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
   ],
   viewportSource: sortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 void invalidServerComputedSort;
 
 const invalidServerNonsortableSort = {
@@ -451,7 +579,7 @@ const invalidServerNonsortableSort = {
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ],
   viewportSource: sortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, CapabilityColumns>;
+} satisfies BrunoTableServerProps<Order, CapabilityColumns, typeof orderViewportSource.viewport>;
 void invalidServerNonsortableSort;
 
 const noSortingColumns = [
@@ -846,7 +974,7 @@ describe("BrunoTable public types", () => {
     void emptyCompound;
   });
 
-  it("accepts direct client and opaque server viewport source envelopes", () => {
+  it("accepts direct client and witnessed server viewport source envelopes", () => {
     const common = {
       tableId: "orders",
       columns,
@@ -870,28 +998,21 @@ describe("BrunoTable public types", () => {
       },
     } satisfies BrunoTableClientProps<Order, Columns>;
 
-    const viewport = {
-      replace: () => ({ setWindow: () => undefined, release: () => undefined }),
-      destroy: () => undefined,
-    };
     const serverProps = {
       ...common,
       children: BrunoTableFilterControl({
         ownership: "external",
         children: "Application-controlled working set",
       }),
-      viewportSource: {
-        viewport,
-        totalRows: 0,
-        version: 1,
-        status: "loading",
-      },
-    } satisfies BrunoTableServerProps<Order, Columns, typeof viewport>;
+      viewportSource: { ...orderViewportSource, status: "loading" },
+    } satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 
     expectTypeOf(clientProps.clientSource.rows).toEqualTypeOf<readonly Order[]>();
     expectTypeOf(clientProps.initialFilters[0]!.columnId).toEqualTypeOf<"COL_ID_SYMBOL">();
     expectTypeOf(clientProps.children).toEqualTypeOf<string>();
-    expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<typeof viewport>();
+    expectTypeOf(serverProps.viewportSource.viewport).toEqualTypeOf<
+      typeof orderViewportSource.viewport
+    >();
     expectTypeOf(serverProps.children).toEqualTypeOf<ReactNode>();
 
     const serverWithExternalFilters = {
@@ -899,8 +1020,11 @@ describe("BrunoTable public types", () => {
       externalFilters: [{ field: "status", type: "equals", filter: "open" }],
     };
     // @ts-expect-error Server External Filter transport is deferred and structurally rejected.
-    const invalidServerExternalFilters: BrunoTableServerProps<Order, Columns, typeof viewport> =
-      serverWithExternalFilters;
+    const invalidServerExternalFilters: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof orderViewportSource.viewport
+    > = serverWithExternalFilters;
     void invalidServerExternalFilters;
 
     void BrunoTableClient({
@@ -1481,15 +1605,10 @@ const invalidPaginatedServer = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  viewportSource: {
-    viewport: {},
-    totalRows: 0,
-    version: 1,
-    status: "ready",
-  },
+  viewportSource: orderViewportSource,
   // @ts-expect-error Server Tables expose one continuous row space, not page index.
   pageIndex: 0,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 
 const clientWithoutRowId = {
   tableId: "orders",
@@ -1512,27 +1631,17 @@ const invalidServerWithRowId = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   // @ts-expect-error Server identity is supplied by the Viewport Source, not the consumer.
   getRowId: (row: Order) => row.id,
-  viewportSource: {
-    viewport: {},
-    totalRows: 0,
-    version: 1,
-    status: "ready",
-  },
-} satisfies BrunoTableServerProps<Order, Columns>;
+  viewportSource: orderViewportSource,
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 
 const invalidServerEditing = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
-  viewportSource: {
-    viewport: {},
-    totalRows: 0,
-    version: 1,
-    status: "ready",
-  },
+  viewportSource: orderViewportSource,
   // @ts-expect-error Server Tables cannot enable editing.
   editable: true,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
 
 const editableClientWithoutSave = {
   tableId: "orders",
@@ -1678,17 +1787,15 @@ const invalidClientWithoutInitialOrderBy: BrunoTableClientProps<Order, Columns> 
 const serverWithoutInitialOrderBy = {
   tableId: "orders",
   columns,
-  viewportSource: {
-    viewport: {},
-    totalRows: 0,
-    version: 1,
-    status: "ready",
-  },
+  viewportSource: orderViewportSource,
 } as const;
 
 // @ts-expect-error every Server Table requires a non-empty Initial Order By baseline.
-const invalidServerWithoutInitialOrderBy: BrunoTableServerProps<Order, Columns> =
-  serverWithoutInitialOrderBy;
+const invalidServerWithoutInitialOrderBy: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof orderViewportSource.viewport
+> = serverWithoutInitialOrderBy;
 void invalidServerWithoutInitialOrderBy;
 
 // @ts-expect-error exported Common props also require a non-empty Initial Order By baseline.
@@ -1719,13 +1826,8 @@ const invalidServerWithoutSortingCapability = {
     // @ts-expect-error every Server Table requires a sortable Column Identity.
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ],
-  viewportSource: {
-    viewport: {},
-    totalRows: 0,
-    version: 1,
-    status: "ready",
-  },
-} satisfies BrunoTableServerProps<Order, NoSortingColumns>;
+  viewportSource: orderViewportSource,
+} satisfies BrunoTableServerProps<Order, NoSortingColumns, typeof orderViewportSource.viewport>;
 void invalidServerWithoutSortingCapability;
 
 const invalidCommonWithoutSortingCapability = {

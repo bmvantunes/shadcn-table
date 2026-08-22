@@ -230,12 +230,18 @@ type BrunoTableServerProps<
   BrunoTableSortingCapability<TColumns> &
   BrunoTableGroupingCapability<TColumns> & {
     getRowId?: never;
+    // The source-owned base-row witness must be exactly TRow, and the source envelope carries its
+    // authoritative completeRawSelect tuple for truthful raw-row presentation callbacks.
     viewportSource: BrunoTableServerSource<TViewport>;
     externalFilters?: never;
     editable?: never;
     getRowVersion?: never;
     onSaveEdits?: never;
   };
+
+// The abbreviated shape above omits the conditional only for readability. The real Props type
+// requires LiveQueryViewportBaseRow<TViewport> to be exactly TRow in both directions; the source
+// cannot be erased, widened, or paired with a different row domain.
 
 type BrunoTableSourceStatus = "loading" | "ready" | "stale" | "closed" | "error";
 
@@ -259,6 +265,7 @@ type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
 
 type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 ```
 

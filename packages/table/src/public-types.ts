@@ -1,3 +1,7 @@
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
 type ColumnIdFirstCharacter =
@@ -191,6 +195,7 @@ export type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
  */
 export type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 
 type FieldKey<TRow> = Extract<keyof TRow, string>;
@@ -1291,14 +1296,28 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> & {
-  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
-  /** Server row identity is supplied authoritatively by the Viewport Source. */
-  readonly getRowId?: never;
-  readonly viewportSource: BrunoTableServerSource<TViewport>;
-  readonly clientSource?: never;
-  readonly externalFilters?: never;
-  readonly editable?: never;
-  readonly getRowVersion?: never;
-  readonly onSaveEdits?: never;
-};
+> = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> &
+  BrunoTableReadOnlyCapability & {
+    readonly initialOrderBy: BrunoTableSortBy<TColumns>;
+    /** Server row identity is supplied authoritatively by the Viewport Source. */
+    readonly getRowId?: never;
+    readonly viewportSource: BrunoTableServerSource<
+      [LiveQueryViewportBaseRow<TViewport>] extends [never]
+        ? never
+        : [TRow] extends [LiveQueryViewportBaseRow<TViewport>]
+          ? [LiveQueryViewportBaseRow<TViewport>] extends [TRow]
+            ? TViewport
+            : never
+          : never
+    >;
+    readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+    readonly clientSource?: never;
+    readonly externalFilters?: never;
+    readonly editable?: never;
+    readonly rowSelection?: never;
+    readonly rangeSelection?: never;
+    readonly onPaste?: never;
+    readonly onFill?: never;
+    readonly onUndo?: never;
+    readonly onRedo?: never;
+  };

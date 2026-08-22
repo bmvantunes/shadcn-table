@@ -1,7 +1,12 @@
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+
 import {
   BrunoTableClient,
   BrunoTableComputedColumn,
   BrunoTableQuickFilter,
+  BrunoTableServer,
   BrunoTableToolbar,
 } from "@bruno/table";
 
@@ -95,6 +100,116 @@ const validClient = (
   />
 );
 void validClient;
+
+const emittedServerSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+        }),
+      },
+    },
+  }),
+).useLiveQueryViewport("rows");
+
+const validEmittedServer = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+  />
+);
+void validEmittedServer;
+
+const invalidEmittedServerIdentity = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_IDENTITY"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations forbid consumer row identity.
+    getRowId={(row: Row) => row.id}
+  />
+);
+void invalidEmittedServerIdentity;
+
+const invalidEmittedServerEditing = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_EDITING"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations expose no editing capability.
+    editable
+  />
+);
+void invalidEmittedServerEditing;
+
+const invalidEmittedServerRange = (
+  <BrunoTableServer
+    tableId="TABLE_ID_EMITTED_JSX_SERVER_RANGE"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    viewportSource={emittedServerSource}
+    // @ts-expect-error emitted Server declarations expose no range capability.
+    rangeSelection
+  />
+);
+void invalidEmittedServerRange;
+
+const emittedServerProps = {
+  tableId: "TABLE_ID_EMITTED_SERVER_SPREAD",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }] as const,
+  quickFilterFields: ["name"] as const,
+  viewportSource: emittedServerSource,
+};
+const emittedServerClientSource = { ...emittedServerProps, clientSource };
+// @ts-expect-error emitted Server declarations reject Client Sources.
+void (<BrunoTableServer {...emittedServerClientSource} />);
+const emittedServerExternalFilters = { ...emittedServerProps, externalFilters: [] };
+// @ts-expect-error emitted issue #16 declarations expose no External Filter surface.
+void (<BrunoTableServer {...emittedServerExternalFilters} />);
+const emittedServerNumericQuickFilterFields = {
+  ...emittedServerProps,
+  quickFilterFields: [42],
+};
+// @ts-expect-error emitted Server Quick Filter fields must be string Row fields.
+void (<BrunoTableServer {...emittedServerNumericQuickFilterFields} />);
+const emittedSpreadRowSelection = { ...emittedServerProps, rowSelection: true };
+// @ts-expect-error emitted Server row selection remains forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadRowSelection} />);
+const emittedSpreadRangeSelection = { ...emittedServerProps, rangeSelection: true };
+// @ts-expect-error emitted Server range selection remains forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadRangeSelection} />);
+const emittedSpreadPasteFill = {
+  ...emittedServerProps,
+  onPaste: () => undefined,
+  onFill: () => undefined,
+};
+// @ts-expect-error emitted Server Paste and Fill remain forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadPasteFill} />);
+const emittedSpreadUndoRedo = {
+  ...emittedServerProps,
+  onUndo: () => undefined,
+  onRedo: () => undefined,
+};
+// @ts-expect-error emitted Server Undo and Redo remain forbidden through composed props.
+void (<BrunoTableServer {...emittedSpreadUndoRedo} />);
+
+const emittedServerWithoutOrderProps = {
+  tableId: "TABLE_ID_EMITTED_JSX_SERVER_ORDER",
+  columns,
+  viewportSource: emittedServerSource,
+};
+// @ts-expect-error emitted Server declarations require Initial Order By.
+const invalidEmittedServerWithoutOrder = <BrunoTableServer {...emittedServerWithoutOrderProps} />;
+void invalidEmittedServerWithoutOrder;
 
 const validQuickFilterClient = (
   <BrunoTableClient

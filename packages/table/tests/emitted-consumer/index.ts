@@ -1,3 +1,10 @@
+import { Schema } from "effect";
+import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
+import { createViewServerReact } from "effect-view-server/react";
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
@@ -11,6 +18,7 @@ import {
   BrunoTableResultRowCount,
   BrunoTableNumberColumn,
   BrunoTableSelectColumn,
+  BrunoTableServer,
   BrunoTableTextColumn,
   BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
@@ -65,6 +73,45 @@ type Order = {
   readonly hiddenLabel: string;
 };
 
+const emittedServerConfig = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Schema.Struct({
+        id: ViewServerId,
+        symbol: Schema.String,
+        price: Schema.Number,
+        quantity: Schema.BigInt,
+        revision: Schema.BigInt,
+        active: Schema.Boolean,
+        status: Schema.Literals(["open", "closed"]),
+        multiplier: Schema.Number,
+        hiddenLabel: Schema.String,
+      }),
+    },
+    positions: {
+      schema: Schema.Struct({
+        id: ViewServerId,
+        symbol: Schema.String,
+        price: Schema.Number,
+        quantity: Schema.BigInt,
+        revision: Schema.BigInt,
+        active: Schema.Boolean,
+        status: Schema.Literals(["open", "closed"]),
+        multiplier: Schema.Number,
+        hiddenLabel: Schema.String,
+        account: Schema.String,
+      }),
+    },
+  },
+});
+const emittedServerReact = createViewServerReact(emittedServerConfig);
+const source = emittedServerReact.useLiveQueryViewport("orders");
+const mismatchedSource = emittedServerReact.useLiveQueryViewport("positions");
+declare const emittedUnsafeAnyViewport: any;
+declare const emittedUnsafeUnknownViewport: unknown;
+declare const emittedUnsafeUnwitnessedViewport: Readonly<{ readonly destroy: () => void }>;
+declare const emittedUnsafeBroadViewport: Readonly<Record<string, (_row: Order) => Order>>;
+
 const emittedInvalidWhitespaceHelperOptions = {
   columnId: "COL_ID_UNIT PRICE",
   field: "price",
@@ -112,6 +159,93 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+type EmittedViewportBaseRow = Expect<
+  Equal<LiveQueryViewportBaseRow<typeof source.viewport>, Order>
+>;
+const emittedViewportBaseRow: EmittedViewportBaseRow = true;
+void emittedViewportBaseRow;
+type EmittedCompleteRawSelect = Expect<
+  Equal<typeof source.completeRawSelect, LiveQueryViewportCompleteRawSelect<typeof source.viewport>>
+>;
+const emittedCompleteRawSelect: EmittedCompleteRawSelect = true;
+void emittedCompleteRawSelect;
+
+const emittedWitnessedServerProps = {
+  tableId: "TABLE_ID_EMITTED_WITNESSED_SERVER",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  viewportSource: source,
+} as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+BrunoTableServer(emittedWitnessedServerProps);
+
+const emittedMismatchedServerProps: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof mismatchedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted Props reject a different invariant base row, including extensions.
+  viewportSource: mismatchedSource,
+};
+void emittedMismatchedServerProps;
+
+const emittedAnySource = { ...source, viewport: emittedUnsafeAnyViewport };
+// @ts-expect-error any erases the emitted authoritative viewport base-row witness.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedAnySource });
+
+const emittedUnknownSource = { ...source, viewport: emittedUnsafeUnknownViewport };
+// @ts-expect-error unknown erases the emitted authoritative viewport base-row witness.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedUnknownSource });
+
+const emittedUnwitnessedSource = { ...source, viewport: emittedUnsafeUnwitnessedViewport };
+// @ts-expect-error unwitnessed shapes cannot establish the emitted Server base row.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedUnwitnessedSource });
+
+const emittedBroadSource = { ...source, viewport: emittedUnsafeBroadViewport };
+// @ts-expect-error broad dictionaries cannot impersonate the bundled source-owned witness.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedBroadSource });
+
+const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } = source;
+void omittedCompleteRawSelect;
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted Server Sources require the source-owned complete raw projection.
+  viewportSource: sourceWithoutCompleteRawSelect,
+});
+
+source.viewport.replace({
+  window: { firstRow: 0, lastRow: 9 },
+  query: {
+    select: source.completeRawSelect,
+    where: [],
+    orderBy: [{ field: "symbol", direction: "asc" }],
+  },
+  sink: {
+    setRowCount: () => undefined,
+    setRowData: (rows) => {
+      type EmittedCompleteRow = Expect<Equal<(typeof rows)[number], Order>>;
+      const emittedCompleteRow: EmittedCompleteRow = true;
+      void emittedCompleteRow;
+    },
+  },
+});
+
+source.viewport.replace({
+  window: { firstRow: 0, lastRow: 9 },
+  query: {
+    groupBy: ["status"],
+    aggregates: { rowCount: { aggFunc: "count" } },
+    where: [],
+    orderBy: [{ aggregate: "rowCount", direction: "desc" }],
+  },
+  sink: { setRowCount: () => undefined, setRowData: () => undefined },
+});
+type EmittedGroupedViewportBaseRow = Expect<
+  Equal<LiveQueryViewportBaseRow<typeof source.viewport>, Order>
+>;
+const emittedGroupedViewportBaseRow: EmittedGroupedViewportBaseRow = true;
+void emittedGroupedViewportBaseRow;
 
 const emittedClientProps = {
   tableId: "orders",
@@ -559,12 +693,7 @@ void BrunoTableClient({
   clientSource: emittedViewServerResult,
 });
 
-const emittedSortingTypeTestViewportSource = {
-  viewport: {},
-  totalRows: 0,
-  version: 1,
-  status: "ready",
-} as const;
+const emittedSortingTypeTestViewportSource = source;
 
 const invalidEmittedServerUnknownSort = {
   tableId: "invalid-server-unknown-sort",
@@ -574,7 +703,7 @@ const invalidEmittedServerUnknownSort = {
     { columnId: "COL_ID_UNKNOWN", direction: "asc" },
   ],
   viewportSource: emittedSortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 void invalidEmittedServerUnknownSort;
 
 const invalidEmittedServerMisspelledSort = {
@@ -585,7 +714,7 @@ const invalidEmittedServerMisspelledSort = {
     { columnId: "COL_ID_SYMBOOL", direction: "asc" },
   ],
   viewportSource: emittedSortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 void invalidEmittedServerMisspelledSort;
 
 const invalidEmittedServerComputedSort = {
@@ -596,7 +725,7 @@ const invalidEmittedServerComputedSort = {
     { columnId: "COL_ID_DOUBLE_QUANTITY", direction: "asc" },
   ],
   viewportSource: emittedSortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, Columns>;
+} satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 void invalidEmittedServerComputedSort;
 
 const invalidEmittedServerNonsortableSort = {
@@ -607,7 +736,7 @@ const invalidEmittedServerNonsortableSort = {
     { columnId: "COL_ID_SYMBOL", direction: "asc" },
   ],
   viewportSource: emittedSortingTypeTestViewportSource,
-} satisfies BrunoTableServerProps<Order, CapabilityColumns>;
+} satisfies BrunoTableServerProps<Order, CapabilityColumns, typeof source.viewport>;
 void invalidEmittedServerNonsortableSort;
 
 const noSortingColumns = [
@@ -664,13 +793,6 @@ const filters = [
     caseSensitive: true,
   },
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
-
-const source = {
-  viewport: { replace: () => undefined },
-  totalRows: 0,
-  version: 0,
-  status: "loading",
-} as const;
 
 const props = {
   tableId: "orders",

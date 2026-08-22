@@ -7,26 +7,15 @@ allowBuilds:
   msgpackr-extract: false
 
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.7
-  vite-plus: 0.2.7
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
+  vite-plus: 0.2.8
 minimumReleaseAgeExclude:
-  - effect-view-server@2.2.0 || 2.3.0
+  - effect-view-server@4.2.4
   - "@vitejs/plugin-react@6.1.0"
 overrides:
   vite: "catalog:"
 peerDependencyRules:
   allowAny:
     - vite
-  ignoreMissing:
-    # @bruno/table inlines only effect-view-server/value-semantics and does not consume the
-    # package-wide Redis integration from @effect/platform-node.
-    - ioredis
   allowedVersions:
-    # @bruno/table inlines only effect-view-server/value-semantics. That focused entrypoint does
-    # not consume these package-wide peers, and its TS 7/React 19.2.8 compatibility is validated
-    # by the table package's source, bundle, and emitted-consumer gates.
-    "@effect/platform-node-shared@4.0.0-beta.105>effect": "4.0.0-beta.100"
-    "effect-view-server@2.2.0>react": "19.2.8"
-    "effect-view-server@2.2.0>react-dom": "19.2.8"
-    "effect-view-server@2.2.0>typescript": "7.0.2"
     vite: "*"
