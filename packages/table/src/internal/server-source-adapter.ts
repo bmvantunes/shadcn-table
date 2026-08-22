@@ -540,10 +540,22 @@ function snapshotCompleteRawSelect(candidate: unknown): readonly [string, ...str
     );
   }
   const first = candidate[0];
+  let hasInvalidField = false;
+  for (let index = 0; index < candidate.length; index += 1) {
+    const field = candidate[index];
+    if (
+      !Object.hasOwn(candidate, index) ||
+      typeof field !== "string" ||
+      field.trim().length === 0
+    ) {
+      hasInvalidField = true;
+      break;
+    }
+  }
   if (
     typeof first !== "string" ||
     first.trim().length === 0 ||
-    candidate.some((field) => typeof field !== "string" || field.trim().length === 0) ||
+    hasInvalidField ||
     new Set(candidate).size !== candidate.length
   ) {
     throw new TypeError(

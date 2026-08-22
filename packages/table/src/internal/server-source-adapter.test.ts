@@ -114,6 +114,8 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.replace(first.viewport, query);
     first.getRequest()!.sink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
     const coherentPublication = adapter.getPublication();
+    const sparseCompleteRawSelect: unknown[] = ["symbol", "price"];
+    sparseCompleteRawSelect.length = 3;
 
     for (const invalidSource of [
       {
@@ -125,6 +127,13 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       {
         viewport: second.viewport,
         completeRawSelect: ["symbol", "symbol"],
+        totalRows: 200,
+        version: 2,
+        status: "ready",
+      },
+      {
+        viewport: second.viewport,
+        completeRawSelect: sparseCompleteRawSelect,
         totalRows: 200,
         version: 2,
         status: "ready",

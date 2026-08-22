@@ -261,6 +261,7 @@ type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
 
 type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 ```
 
