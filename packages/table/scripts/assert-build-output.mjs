@@ -180,6 +180,18 @@ for (const expected of ["module", "global"]) {
   }
 }
 
+for (const [specifier, expected] of [
+  ["react", false],
+  ["effect", true],
+  ["effect/BigDecimal", true],
+  ["@effect/atom-react", true],
+  ["effect-view-server/react", true],
+]) {
+  if (isEffectModuleSpecifier(specifier) !== expected) {
+    throw new Error(`The declaration dependency fixture misclassified ${specifier}.`);
+  }
+}
+
 for (const [nodeModulesEntries, virtualStoreEntries, expected] of [
   [["@bruno", "react"], [], false],
   [["@effect"], [], true],
@@ -540,13 +552,7 @@ if (
 }
 
 if (
-  rootDeclarationModuleSpecifiers.some(
-    (specifier) =>
-      specifier === "effect" ||
-      specifier.startsWith("effect/") ||
-      specifier === "effect-view-server" ||
-      specifier.startsWith("effect-view-server/"),
-  ) ||
+  rootDeclarationModuleSpecifiers.some((specifier) => isEffectModuleSpecifier(specifier)) ||
   /(?:from\s+|import\s*)["'](?:effect|effect-view-server)(?:\/|["'])/u.test(rootRuntime)
 ) {
   throw new Error(
@@ -1606,6 +1612,16 @@ function installedGraphContainsEffect(nodeModulesEntries, virtualStoreEntries) {
   return (
     nodeModulesEntries.some((entry) => /^(?:@effect|effect|effect-view-server)$/u.test(entry)) ||
     virtualStoreEntries.some((entry) => /^(?:@effect\+|effect@|effect-view-server@)/u.test(entry))
+  );
+}
+
+function isEffectModuleSpecifier(specifier) {
+  return (
+    specifier === "effect" ||
+    specifier.startsWith("effect/") ||
+    specifier.startsWith("@effect/") ||
+    specifier === "effect-view-server" ||
+    specifier.startsWith("effect-view-server/")
   );
 }
 
