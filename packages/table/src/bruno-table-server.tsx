@@ -74,6 +74,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         props.quickFilterFields,
         props.initialFilters,
         props.initialOrderBy,
+        props.viewportSource.completeRawSelect,
       ),
   );
   const [runtime] = useState(() => {
@@ -115,6 +116,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   }, [
     compiledColumns,
     props.quickFilterFields,
+    props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
     rowPipelineAdapter,
     runtime,
@@ -126,7 +128,6 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       const query = runtimeView.getQuerySnapshot();
       rowPipelineAdapter.replace(props.viewportSource.viewport, query);
     };
-    replace();
     const unsubscribe = runtimeView.subscribeQuery(replace);
     return () => {
       unsubscribe();

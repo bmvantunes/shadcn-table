@@ -1,7 +1,10 @@
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
-import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
@@ -162,6 +165,11 @@ type EmittedViewportBaseRow = Expect<
 >;
 const emittedViewportBaseRow: EmittedViewportBaseRow = true;
 void emittedViewportBaseRow;
+type EmittedCompleteRawSelect = Expect<
+  Equal<typeof source.completeRawSelect, LiveQueryViewportCompleteRawSelect<typeof source.viewport>>
+>;
+const emittedCompleteRawSelect: EmittedCompleteRawSelect = true;
+void emittedCompleteRawSelect;
 
 const emittedWitnessedServerProps = {
   tableId: "TABLE_ID_EMITTED_WITNESSED_SERVER",
@@ -197,6 +205,31 @@ BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedUnwitn
 const emittedBroadSource = { ...source, viewport: emittedUnsafeBroadViewport };
 // @ts-expect-error broad dictionaries cannot impersonate the bundled source-owned witness.
 BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedBroadSource });
+
+const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } = source;
+void omittedCompleteRawSelect;
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted Server Sources require the source-owned complete raw projection.
+  viewportSource: sourceWithoutCompleteRawSelect,
+});
+
+source.viewport.replace({
+  window: { firstRow: 0, lastRow: 9 },
+  query: {
+    select: source.completeRawSelect,
+    where: [],
+    orderBy: [{ field: "symbol", direction: "asc" }],
+  },
+  sink: {
+    setRowCount: () => undefined,
+    setRowData: (rows) => {
+      type EmittedCompleteRow = Expect<Equal<(typeof rows)[number], Order>>;
+      const emittedCompleteRow: EmittedCompleteRow = true;
+      void emittedCompleteRow;
+    },
+  },
+});
 
 source.viewport.replace({
   window: { firstRow: 0, lastRow: 9 },

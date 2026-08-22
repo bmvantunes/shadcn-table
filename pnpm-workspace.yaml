@@ -10,7 +10,7 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.8
   vite-plus: 0.2.8
 minimumReleaseAgeExclude:
-  - effect-view-server@4.2.3
+  - effect-view-server@4.2.4
   - "@vitejs/plugin-react@6.1.0"
 overrides:
   vite: "catalog:"

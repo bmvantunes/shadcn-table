@@ -381,8 +381,8 @@ importers:
         specifier: 4.0.0-rc.111
         version: 4.0.0-rc.111
       effect-view-server:
-        specifier: 4.2.3
-        version: 4.2.3(@effect/atom-react@4.0.0-rc.111(effect@4.0.0-rc.111)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.8(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-rc.111)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(redis@6.2.1)(typescript@7.0.2)
+        specifier: 4.2.4
+        version: 4.2.4(@effect/atom-react@4.0.0-rc.111(effect@4.0.0-rc.111)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.8(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-rc.111)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(redis@6.2.1)(typescript@7.0.2)
       oxc-transform-react:
         specifier: ^0.145.0
         version: 0.145.0
@@ -2480,8 +2480,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect-view-server@4.2.3:
-    resolution: {integrity: sha512-gO/nsQGrIIO+PVmR6MhiPIJToJHdsrH+OlpCaPyAFPtuS4nshYzfKRyEiYxdgNrnE7Hv4hSX9aE6jDLvp/TV6Q==}
+  effect-view-server@4.2.4:
+    resolution: {integrity: sha512-D/3KR8zYv+oEpVzN5yNNSnYgLZ42xDg8M6nHztFgqLNE5mp5W/8VlsD1e64WOmfxsPJtdH/PB0HBxqB4FfByIQ==}
     engines: {node: '>=26.0.0'}
     peerDependencies:
       '@effect/atom-react': 4.0.0-rc.111
@@ -5590,7 +5590,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect-view-server@4.2.3(@effect/atom-react@4.0.0-rc.111(effect@4.0.0-rc.111)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.8(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-rc.111)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(redis@6.2.1)(typescript@7.0.2):
+  effect-view-server@4.2.4(@effect/atom-react@4.0.0-rc.111(effect@4.0.0-rc.111)(react@19.2.8)(scheduler@0.27.0))(@voidzero-dev/vite-plus-core@0.2.8(@types/node@26.1.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(effect@4.0.0-rc.111)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(redis@6.2.1)(typescript@7.0.2):
     dependencies:
       '@bufbuild/protobuf': 2.13.0
       '@connectrpc/connect': 2.1.2(@bufbuild/protobuf@2.13.0)

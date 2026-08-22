@@ -17,6 +17,11 @@ const viewportConfig = defineViewServerConfig({
   },
 });
 const viewportReact = createViewServerReact(viewportConfig);
+type EmittedViewportSource = ReturnType<typeof viewportReact.useLiveQueryViewport>;
+const completeRawSelect = Object.freeze([
+  "id",
+  "symbol",
+]) as unknown as EmittedViewportSource["completeRawSelect"];
 type EmittedSink = Readonly<{
   readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
   readonly setRowData: (
@@ -59,7 +64,13 @@ test("renders authoritative sparse slots from the emitted Server package", async
       tableId="TABLE_ID_EMITTED_SERVER"
       columns={columns}
       initialOrderBy={[{ columnId: "COL_ID_EMITTED_SERVER_SYMBOL", direction: "asc" }]}
-      viewportSource={{ viewport, totalRows: 1_000, version: 1, status: "ready" }}
+      viewportSource={{
+        viewport,
+        completeRawSelect,
+        totalRows: 1_000,
+        version: 1,
+        status: "ready",
+      }}
     />,
   );
   sink?.setRowData({ 0: { symbol: "EMITTED" } }, { 0: "emitted-row" });

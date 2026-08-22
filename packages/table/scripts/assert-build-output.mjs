@@ -124,8 +124,8 @@ async function collectDeclarationModuleSpecifiers(sources) {
         specifiers.add(node.source.value);
         return;
       }
-      if (node.type === "TSImportType" && typeof node.argument?.value === "string") {
-        specifiers.add(node.argument.value);
+      if (node.type === "TSImportType" && typeof node.source?.value === "string") {
+        specifiers.add(node.source.value);
       }
     });
   }
@@ -148,6 +148,36 @@ async function collectAmbientDeclarationKinds(sources) {
     });
   }
   return [...kinds];
+}
+
+const declarationBoundaryFixture = `
+  import type { Imported } from "fixture/import";
+  export type { Imported as Reexported } from "fixture/export";
+  type ImportType = import("fixture/import-type").Imported;
+  type TypeofImport = typeof import("fixture/typeof-import");
+  declare module "fixture/ambient" { export type Marker = string; }
+  declare global { interface BrunoTableFixtureGlobal {} }
+`;
+const declarationBoundaryFixtureSpecifiers = await collectDeclarationModuleSpecifiers([
+  declarationBoundaryFixture,
+]);
+for (const expected of [
+  "fixture/import",
+  "fixture/export",
+  "fixture/import-type",
+  "fixture/typeof-import",
+]) {
+  if (!declarationBoundaryFixtureSpecifiers.includes(expected)) {
+    throw new Error(`Declaration boundary fixture did not detect ${expected}.`);
+  }
+}
+const declarationBoundaryFixtureAmbientKinds = await collectAmbientDeclarationKinds([
+  declarationBoundaryFixture,
+]);
+for (const expected of ["module", "global"]) {
+  if (!declarationBoundaryFixtureAmbientKinds.includes(expected)) {
+    throw new Error(`Declaration boundary fixture did not detect ${expected} augmentation.`);
+  }
 }
 
 const [
@@ -516,6 +546,11 @@ if (
 if (!declarations.includes('"__effect-view-server/LiveQueryViewportBaseRow@v1"')) {
   throw new Error("The @bruno/table declaration bundle omitted the source-owned viewport witness.");
 }
+if (!declarations.includes('"__effect-view-server/LiveQueryViewportCompleteRawSelect@v1"')) {
+  throw new Error(
+    "The @bruno/table declaration bundle omitted the source-owned complete raw projection.",
+  );
+}
 
 if (rootAmbientDeclarationKinds.length > 0) {
   throw new Error(
@@ -663,15 +698,15 @@ if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
   );
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.3") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.4") {
   throw new Error(
-    "The View Server integration is not pinned to the audited public 4.2.3 contract.",
+    "The View Server integration is not pinned to the audited public 4.2.4 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "4.2.3",
+    "effect-view-server": "4.2.4",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");
@@ -1512,8 +1547,8 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
           : {
               "@tailwindcss/vite": "4.3.3",
               tailwindcss: "4.3.3",
-              vite: "npm:@voidzero-dev/vite-plus-core@0.2.7",
-              "vite-plus": "0.2.7",
+              vite: "npm:@voidzero-dev/vite-plus-core@0.2.8",
+              "vite-plus": "0.2.8",
             }),
         ...(includeEffect ? { effect: "4.0.0-rc.111" } : {}),
         react: "19.2.8",

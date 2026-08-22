@@ -52,6 +52,19 @@ const columns = [
     pinned: "end",
   },
 ] as const satisfies BrunoTableColumns<Row>;
+const rawRowPresentationColumns = [
+  {
+    ...columns[0],
+    valueFormatter: ({ row, value }: { readonly row: Row; readonly value: string }) =>
+      `${value} (${row.desk})`,
+    cellClassName: ({ row }: { readonly row: Row }) => `source-${row.id}`,
+  },
+  {
+    ...columns[1],
+    cellRenderer: ({ row, value }: { readonly row: Row; readonly value: number }) =>
+      `${String(value)} · ${row.id} · ${row.desk}`,
+  },
+] as const satisfies BrunoTableColumns<Row>;
 const remappedColumns = [
   columns[0],
   {
@@ -99,6 +112,13 @@ const actualViewportConfig = defineViewServerConfig({
   },
 });
 const actualViewportReact = createViewServerReact(actualViewportConfig);
+type ActualViewportSource = ReturnType<typeof actualViewportReact.useLiveQueryViewport>;
+const browserCompleteRawSelect = Object.freeze([
+  "id",
+  "symbol",
+  "price",
+  "desk",
+]) as unknown as ActualViewportSource["completeRawSelect"];
 type BrowserViewport = Omit<
   ReturnType<typeof actualViewportReact.useLiveQueryViewport>["viewport"],
   "destroy" | "replace"
@@ -153,7 +173,13 @@ function serverProps(
     tableId,
     columns,
     initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" as const }] as const,
-    viewportSource: { viewport, totalRows: 100, version: 1, status },
+    viewportSource: {
+      viewport,
+      completeRawSelect: browserCompleteRawSelect,
+      totalRows: 100,
+      version: 1,
+      status,
+    },
   } as const;
 }
 
@@ -169,6 +195,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 1,
           status: "ready",
@@ -341,6 +368,54 @@ describe("BrunoTableServer", () => {
     );
   });
 
+  test("retains an evicted Server identity through horizontal movement and later arrival", async () => {
+    const transport = makeViewport(1_000);
+    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
+    transport.requests[0]?.sink.setRowData(
+      {
+        0: { symbol: "FIRST", price: 1 },
+        1: { symbol: "SECOND", price: 2 },
+      },
+      { 0: "first", 1: "second" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    grid.element().focus();
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+      );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "SECOND" }).element().id,
+      ),
+    );
+
+    grid.element().scrollTop = 100 * 36;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" }),
+      );
+    await settleBrunoTableBrowserFrames();
+    expect(transport.windows.at(-1)?.firstRow).toBeLessThanOrEqual(1);
+
+    transport.requests[0]?.sink.setRowData(
+      {
+        1: { symbol: "REPLACEMENT", price: 3 },
+        2: { symbol: "SECOND", price: 2 },
+      },
+      { 1: "replacement", 2: "second" },
+    );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "2" }).element().id,
+      ),
+    );
+  });
+
   test("reconciles changed Server Quick Filter fields without a remount", async () => {
     const transport = makeViewport();
     const renderServer = (
@@ -485,6 +560,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
           totalRows: 1_000,
           version: 1,
           status: "ready",
@@ -524,6 +600,7 @@ describe("BrunoTableServer", () => {
     ] as const satisfies BrunoTableColumns<ProjectionRow>;
     const source = {
       viewport: transport.viewport,
+      completeRawSelect: browserCompleteRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready" as const,
@@ -589,6 +666,7 @@ describe("BrunoTableServer", () => {
         {...serverProps(transport.viewport, "loading")}
         viewportSource={{
           viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 2,
           status: "loading",
@@ -607,6 +685,7 @@ describe("BrunoTableServer", () => {
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
+            completeRawSelect: browserCompleteRawSelect,
             totalRows: 100,
             version: 2,
             status,
@@ -621,6 +700,7 @@ describe("BrunoTableServer", () => {
         {...serverProps(transport.viewport, "error")}
         viewportSource={{
           viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 3,
           status: "error",
@@ -646,6 +726,7 @@ describe("BrunoTableServer", () => {
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
+            completeRawSelect: browserCompleteRawSelect,
             totalRows: 100,
             version: 1,
             status,
@@ -790,7 +871,7 @@ describe("BrunoTableServer", () => {
       return (
         <BrunoTableServer
           tableId="TABLE_ID_ACTUAL_VIEWPORT"
-          columns={columns}
+          columns={rawRowPresentationColumns}
           initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
           viewportSource={viewportSource}
         />
@@ -813,7 +894,12 @@ describe("BrunoTableServer", () => {
           desk: "LDN",
         }),
       );
-      await expect.element(screen.getByRole("gridcell", { name: "ACTUAL" })).toBeInTheDocument();
+      const actualSymbol = screen.getByRole("gridcell", { name: "ACTUAL (LDN)" });
+      await expect.element(actualSymbol).toBeInTheDocument();
+      expect(actualSymbol.element().classList.contains("source-actual-1")).toBe(true);
+      await expect
+        .element(screen.getByRole("gridcell", { name: "42 · actual-1 · LDN" }))
+        .toBeInTheDocument();
       await screen.unmount();
       await Effect.runPromise(firstInMemory.close);
 
@@ -832,7 +918,10 @@ describe("BrunoTableServer", () => {
         }),
       );
       await expect
-        .element(remounted.getByRole("gridcell", { name: "REMOUNTED" }))
+        .element(remounted.getByRole("gridcell", { name: "REMOUNTED (NYC)" }))
+        .toBeInTheDocument();
+      await expect
+        .element(remounted.getByRole("gridcell", { name: "43 · actual-2 · NYC" }))
         .toBeInTheDocument();
       await remounted.unmount();
       await Effect.runPromise(remountedInMemory.close);
@@ -891,6 +980,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_START", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          completeRawSelect: browserCompleteRawSelect,
           totalRows: 1_000,
           version: 1,
           status: "ready",

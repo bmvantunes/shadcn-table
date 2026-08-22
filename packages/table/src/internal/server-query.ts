@@ -27,7 +27,16 @@ export type BrunoTableCompiledServerQueryPlan = Readonly<{
 export function compileBrunoTableServerProjectionFields(
   columns: readonly CompiledColumn[],
   quickFilterFields: readonly string[],
+  completeRawSelect: readonly [string, ...string[]] | undefined,
 ): readonly [string, ...string[]] {
+  if (columns.some(columnUsesRawRowPresentation)) {
+    if (completeRawSelect === undefined) {
+      throw new TypeError(
+        "BrunoTable Server raw-row presentation requires source-owned completeRawSelect.",
+      );
+    }
+    return completeRawSelect;
+  }
   const fields = new Set<string>();
   for (const column of columns) {
     if (column.kind === "field") fields.add(column.field);
@@ -45,6 +54,7 @@ export function compileBrunoTableServerProjectionFields(
 export function compileBrunoTableServerQueryPlan(
   columns: readonly CompiledColumn[],
   input: BrunoTableServerQueryInput,
+  completeRawSelect: readonly [string, ...string[]] | undefined,
 ): BrunoTableCompiledServerQueryPlan {
   const fieldColumns = new Map<string, CompiledFieldColumn>();
   const operandSemantics = new Map<object, CompiledFieldColumn["semantics"]>();
@@ -53,7 +63,11 @@ export function compileBrunoTableServerQueryPlan(
       fieldColumns.set(column.columnId, column);
     }
   }
-  const select = compileBrunoTableServerProjectionFields(columns, input.quickFilterFields);
+  const select = compileBrunoTableServerProjectionFields(
+    columns,
+    input.quickFilterFields,
+    completeRawSelect,
+  );
 
   const where = input.filters.map((filter) =>
     compileFilter(filter, fieldColumns, operandSemantics),
@@ -91,6 +105,14 @@ export function compileBrunoTableServerQueryPlan(
     }),
     operandSemantics,
   });
+}
+
+function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
+  return (
+    column.valueFormatter !== undefined ||
+    typeof column.cellClassName === "function" ||
+    column.cellRenderer !== undefined
+  );
 }
 
 function compileFilter(

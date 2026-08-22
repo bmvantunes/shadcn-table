@@ -1,4 +1,7 @@
-import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
 type ColumnIdFirstCharacter =
@@ -192,6 +195,7 @@ export type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
  */
 export type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 
 type FieldKey<TRow> = Extract<keyof TRow, string>;

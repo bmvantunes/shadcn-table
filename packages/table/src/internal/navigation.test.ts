@@ -116,6 +116,47 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 2, rowId: "third" });
   });
 
+  it("preserves an unloaded Server identity while moving horizontally", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    const serverRows = (rowIds: readonly (string | undefined)[]) => ({
+      totalRows: rowIds.length,
+      getRowId: (index: number) => rowIds[index],
+      findRowIndex: (rowId: string) => {
+        const index = rowIds.indexOf(rowId);
+        return index < 0 ? undefined : index;
+      },
+      missingRowIdentityBehavior: "clear-conflicting-active-cell" as const,
+    });
+
+    navigation.setShape(serverRows(["first", "second"]), columns);
+    navigation.move("down");
+    navigation.setShape(serverRows(["first", undefined]), columns);
+    navigation.move("right");
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      rowIndex: 1,
+      rowId: "second",
+      columnId: "COL_ID_DESK",
+    });
+
+    navigation.setShape(serverRows(["first", "second"]), columns);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 1, rowId: "second" });
+  });
+
   it("reconciles a surviving active row across a query projection", () => {
     const columns = compileColumns([
       {

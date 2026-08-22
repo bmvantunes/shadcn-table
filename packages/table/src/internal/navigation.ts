@@ -373,10 +373,18 @@ export class BrunoTableNavigationRuntime {
       });
     }
     const rowIndex = Math.max(0, Math.min(this.rowSpace.totalRows - 1, nextBodyRow));
+    const retainedUnloadedRowId =
+      rowDelta === 0 &&
+      this.activeCell.rowId !== undefined &&
+      this.rowSpace.getRowId(rowIndex) === undefined
+        ? this.activeCell.rowId
+        : undefined;
     return this.setActive({
       region: "body",
       rowIndex,
-      ...rowIdentity(this.rowSpace, rowIndex),
+      ...(retainedUnloadedRowId === undefined
+        ? rowIdentity(this.rowSpace, rowIndex)
+        : { rowId: retainedUnloadedRowId }),
       columnId: this.columns[nextColumn]!.columnId,
     });
   };

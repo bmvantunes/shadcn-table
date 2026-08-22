@@ -31,6 +31,8 @@ const query = Object.freeze({
   orderBy: Object.freeze([{ columnId: "COL_ID_SYMBOL", direction: "asc" as const }]),
 });
 
+const completeRawSelect = ["symbol", "price"] as const;
+
 function makeViewport() {
   let request:
     | Readonly<{
@@ -67,6 +69,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.subscribePublication(publish);
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -89,6 +92,70 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.setWindow).toHaveBeenLastCalledWith({ firstRow: 10, lastRow: 29 });
     expect(transport.replace).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing or malformed complete projection authority without mutating the active source", () => {
+    const first = makeViewport();
+    const second = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: first.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(first.viewport, query);
+    first.getRequest()!.sink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    const coherentPublication = adapter.getPublication();
+
+    for (const invalidSource of [
+      {
+        viewport: second.viewport,
+        totalRows: 200,
+        version: 2,
+        status: "ready",
+      },
+      {
+        viewport: second.viewport,
+        completeRawSelect: ["symbol", "symbol"],
+        totalRows: 200,
+        version: 2,
+        status: "ready",
+      },
+    ]) {
+      expect(() =>
+        adapter.reconcileSource(
+          invalidSource as unknown as Parameters<typeof adapter.reconcileSource>[0],
+        ),
+      ).toThrowError(
+        "BrunoTable Server viewportSource.completeRawSelect must be a non-empty unique source field tuple.",
+      );
+      expect(adapter.getPublication()).toBe(coherentPublication);
+      expect(adapter.getPublication().rowSpace?.getRow("old")).toEqual({
+        symbol: "OLD",
+        price: 1,
+      });
+      expect(first.release).not.toHaveBeenCalled();
+      expect(second.replace).not.toHaveBeenCalled();
+    }
+
+    adapter.reconcileSource({
+      viewport: second.viewport,
+      completeRawSelect,
+      totalRows: 200,
+      version: 2,
+      status: "ready",
+    });
+    adapter.replace(second.viewport, { ...query, generation: 1 });
+    expect(first.release).toHaveBeenCalledTimes(1);
+    expect(second.replace).toHaveBeenCalledTimes(1);
   });
 
   it("reconciles Quick Filter projection fields and replaces only their semantic change", () => {
@@ -149,6 +216,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     );
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "loading",
@@ -162,6 +230,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 2,
       status: "stale",
@@ -189,6 +258,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     const initial = makeViewport();
     adapter.reconcileSource({
       viewport: initial.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -244,6 +314,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     );
     adapter.reconcileSource({
       viewport: first.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -354,6 +425,48 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(boundedTransport.setWindow).toHaveBeenLastCalledWith({ firstRow: 2, lastRow: 2 });
   });
 
+  it("retries an unchanged required window after controller dispatch fails", () => {
+    const transport = makeViewport();
+    transport.setWindow.mockImplementationOnce(() => {
+      throw new Error("window failed");
+    });
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.replace(transport.viewport, query);
+
+    expect(() => adapter.setRequiredRange(10, 30)).toThrow("window failed");
+    expect(() => adapter.setRequiredRange(10, 30)).not.toThrow();
+    expect(transport.setWindow).toHaveBeenNthCalledWith(1, { firstRow: 10, lastRow: 29 });
+    expect(transport.setWindow).toHaveBeenNthCalledWith(2, { firstRow: 10, lastRow: 29 });
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a current sortable identity when columns replace the baseline", () => {
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    const priceOnly = compileColumns([
+      {
+        columnId: "COL_ID_PRICE_NEXT",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+      },
+    ]);
+
+    expect(() => adapter.reconcileColumns(priceOnly, undefined)).not.toThrow();
+    expect(adapter.getQueryConfiguration().baselineOrderBy).toEqual([
+      { columnId: "COL_ID_PRICE_NEXT", direction: "asc" },
+    ]);
+  });
+
   it("publishes one coherent sparse delivery and ignores released sinks", () => {
     const firstTransport = makeViewport();
     const secondTransport = makeViewport();
@@ -367,6 +480,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.subscribePublication(publish);
     adapter.reconcileSource({
       viewport: firstTransport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -398,6 +512,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     const publishStructure = vi.fn();
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -436,6 +551,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     );
     adapter.reconcileSource({
       viewport: firstTransport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -456,6 +572,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.release();
     adapter.reconcileSource({
       viewport: secondTransport.viewport,
+      completeRawSelect,
       totalRows: 200,
       version: 2,
       status: "ready",
@@ -496,6 +613,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     );
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect,
       totalRows: 100,
       version: 1,
       status: "ready",
@@ -577,6 +695,67 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.replace(transport.viewport, query);
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces exactly once when raw-row presentation changes projection mode", () => {
+    const transport = makeViewport();
+    const completeRawSelect = ["symbol", "price", "desk"] as const;
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    expect(transport.getRequest()?.query).toMatchObject({ select: ["symbol", "price"] });
+
+    const presentedColumns = compileColumns([
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        valueFormatter: () => "formatted",
+      },
+      columns[1]!,
+    ]);
+    adapter.reconcileColumns(presentedColumns, undefined);
+    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    adapter.replace(transport.viewport, { ...query, generation: 1 });
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.getRequest()?.query).toMatchObject({ select: completeRawSelect });
+
+    adapter.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_SYMBOL",
+          field: "symbol",
+          headerName: "Symbol again",
+          valueType: "text",
+          cellRenderer: () => "rendered",
+        },
+        columns[1]!,
+      ]),
+      undefined,
+    );
+    adapter.replace(transport.viewport, { ...query, generation: 2 });
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledTimes(1);
+
+    adapter.reconcileColumns(columns, undefined);
+    expect(transport.release).toHaveBeenCalledTimes(2);
+    adapter.replace(transport.viewport, { ...query, generation: 3 });
+    expect(transport.replace).toHaveBeenCalledTimes(3);
+    expect(transport.getRequest()?.query).toMatchObject({ select: ["symbol", "price"] });
   });
 
   it("keeps one filtered source generation across unrelated same-field columns", () => {
@@ -726,6 +905,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     );
     adapter.reconcileSource({
       viewport: transport.viewport,
+      completeRawSelect: ["symbol", "amount"],
       totalRows: 100,
       version: 1,
       status: "ready",

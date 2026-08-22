@@ -230,7 +230,8 @@ type BrunoTableServerProps<
   BrunoTableSortingCapability<TColumns> &
   BrunoTableGroupingCapability<TColumns> & {
     getRowId?: never;
-    // The source-owned LiveQueryViewportBaseRow<TViewport> witness must be exactly TRow.
+    // The source-owned base-row witness must be exactly TRow, and the source envelope carries its
+    // authoritative completeRawSelect tuple for truthful raw-row presentation callbacks.
     viewportSource: BrunoTableServerSource<TViewport>;
     externalFilters?: never;
     editable?: never;

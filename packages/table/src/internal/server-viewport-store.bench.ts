@@ -99,7 +99,13 @@ const adapterViewport = {
 adapter.subscribePublication(() => {
   publicationNotifications += 1;
 });
-adapter.reconcileSource({ viewport: adapterViewport, totalRows: 0, version: 0, status: "ready" });
+adapter.reconcileSource({
+  viewport: adapterViewport,
+  completeRawSelect: ["value"],
+  totalRows: 0,
+  version: 0,
+  status: "ready",
+});
 adapter.replace(adapterViewport, {
   generation: 0,
   filters: [],
@@ -176,6 +182,13 @@ const equivalenceViewport = {
 };
 equivalenceAdapter.reconcileSource({
   viewport: equivalenceViewport,
+  completeRawSelect: [
+    "value0",
+    ...Array.from(
+      { length: equivalenceColumnCount - 1 },
+      (_, index) => `value${String(index + 1)}`,
+    ),
+  ],
   totalRows: 0,
   version: 0,
   status: "ready",

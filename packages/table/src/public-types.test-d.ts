@@ -3,7 +3,10 @@ import { describe, expectTypeOf, it } from "vitest";
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
-import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
+import type {
+  LiveQueryViewportBaseRow,
+  LiveQueryViewportCompleteRawSelect,
+} from "effect-view-server/react/viewport-base-row";
 import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
 
@@ -131,6 +134,9 @@ describe("BrunoTableServer viewport row witness", () => {
     expectTypeOf<
       LiveQueryViewportBaseRow<typeof orderViewportSource.viewport>
     >().toEqualTypeOf<Order>();
+    expectTypeOf(orderViewportSource.completeRawSelect).toEqualTypeOf<
+      LiveQueryViewportCompleteRawSelect<typeof orderViewportSource.viewport>
+    >();
 
     const matchingProps = {
       tableId: "TABLE_ID_WITNESSED_SERVER",
@@ -166,6 +172,27 @@ describe("BrunoTableServer viewport row witness", () => {
     const broadSource = { ...orderViewportSource, viewport: unsafeBroadViewport };
     // @ts-expect-error broad dictionaries cannot impersonate the source-owned viewport witness.
     void BrunoTableServer({ ...matchingProps, viewportSource: broadSource });
+
+    const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } =
+      orderViewportSource;
+    void omittedCompleteRawSelect;
+    // @ts-expect-error Server Sources must carry their source-owned complete raw projection.
+    void BrunoTableServer({ ...matchingProps, viewportSource: sourceWithoutCompleteRawSelect });
+
+    void orderViewportSource.viewport.replace({
+      window: { firstRow: 0, lastRow: 9 },
+      query: {
+        select: orderViewportSource.completeRawSelect,
+        where: [],
+        orderBy: [{ field: "symbol", direction: "asc" }],
+      },
+      sink: {
+        setRowCount: () => undefined,
+        setRowData: (rows) => {
+          expectTypeOf(rows[0]).toEqualTypeOf<Order | undefined>();
+        },
+      },
+    });
 
     void orderViewportSource.viewport.replace({
       window: { firstRow: 0, lastRow: 9 },
