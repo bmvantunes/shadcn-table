@@ -112,13 +112,31 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
         {
           type: "OR",
           conditions: [
-            { field: "symbol", type: "contains", filter: "desk" },
             { field: "desk", type: "contains", filter: "desk" },
+            { field: "symbol", type: "contains", filter: "desk" },
           ],
         },
       ],
       orderBy: [{ field: "symbol", direction: "asc" }],
     });
+  });
+
+  it("keeps one generation when Quick Filter fields are only reordered", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      ["symbol", "desk"],
+      [],
+      query.orderBy,
+    );
+    const quickQuery = { ...query, quickFilter: "desk" };
+    adapter.replace(transport.viewport, quickQuery);
+
+    adapter.reconcileColumns(columns, ["desk", "symbol"]);
+    adapter.replace(transport.viewport, { ...quickQuery, generation: 1 });
+
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.release).not.toHaveBeenCalled();
   });
 
   it("never publishes provisional loading geometry as the result row count", () => {
@@ -209,6 +227,94 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     const recovered = makeViewport();
     expect(() => adapter.replace(recovered.viewport, query)).not.toThrow();
     expect(recovered.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes row invalidation before propagating a controller release failure", () => {
+    const releaseFailure = new Error("release failed");
+    const first = makeViewport();
+    first.release.mockImplementation(() => {
+      throw releaseFailure;
+    });
+    const second = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.reconcileSource({
+      viewport: first.viewport,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(first.viewport, query);
+    const firstSink = first.getRequest()!.sink;
+    firstSink.setRowCount(250, true);
+    firstSink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    expect(adapter.getResultRowCountSnapshot()).toBe(250);
+    const structureFailure = vi.fn(() => {
+      throw new Error("structure subscriber failed");
+    });
+    const countFailure = vi.fn(() => {
+      throw new Error("count subscriber failed");
+    });
+    const publish = vi.fn(() => {
+      throw new Error("publication subscriber failed");
+    });
+    adapter.subscribeStructure(structureFailure);
+    adapter.subscribeResultRowCount(countFailure);
+    adapter.subscribePublication(publish);
+
+    let observedFailure: unknown;
+    try {
+      adapter.replace(second.viewport, { ...query, generation: 1 });
+    } catch (error) {
+      observedFailure = error;
+    }
+    expect(observedFailure).toBe(releaseFailure);
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(structureFailure).toHaveBeenCalledTimes(1);
+    expect(countFailure).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(second.replace).not.toHaveBeenCalled();
+    firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
+  it("surfaces malformed active deliveries while ignoring released-generation writes", () => {
+    const first = makeViewport();
+    const second = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.replace(first.viewport, query);
+    const firstSink = first.getRequest()!.sink;
+    const initialPublication = adapter.getPublication();
+    const publish = vi.fn();
+    adapter.subscribePublication(publish);
+
+    for (const count of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => firstSink.setRowCount(count, true)).toThrow(
+        "BrunoTable Server viewport delivered an invalid row count.",
+      );
+    }
+    expect(adapter.getPublication()).toBe(initialPublication);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    expect(publish).not.toHaveBeenCalled();
+
+    expect(() => firstSink.setRowData({ 0: { symbol: "BROKEN", price: 1 } }, {})).toThrow(
+      "BrunoTable Server viewport delivered invalid row/key maps.",
+    );
+    expect(adapter.getPublication().rowSpace?.getRowId(0)).toBeUndefined();
+
+    adapter.replace(second.viewport, { ...query, generation: 1 });
+    expect(() => firstSink.setRowCount(-1, true)).not.toThrow();
+    expect(() => firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, {})).not.toThrow();
   });
 
   it("forwards one sanitized required window including authoritative empty space", () => {

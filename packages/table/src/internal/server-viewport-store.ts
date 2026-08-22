@@ -111,6 +111,10 @@ export class BrunoTableServerViewportStore<TRow> {
     return true;
   }
 
+  public isActiveGeneration(generation: number): boolean {
+    return generation === this.generation;
+  }
+
   public setRowCount(generation: number, totalRows: number, keepRenderedRows?: boolean): boolean {
     if (generation !== this.generation || !isValidRowCount(totalRows)) return false;
     // effect-view-server uses this activation/deactivation callback as lifecycle chrome. It is not

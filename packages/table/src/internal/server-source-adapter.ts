@@ -276,7 +276,15 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     if (previous !== undefined) {
       this.store.invalidateGeneration(previous.token);
       this.generationReleased = true;
-      previous.controller.release();
+      try {
+        previous.controller.release();
+      } catch (error) {
+        this.publication = this.createPublication();
+        preservePrimaryFailure(() => this.reconcileStructureSnapshot());
+        preservePrimaryFailure(() => this.publishResultRowCount(this.source.totalRows));
+        preservePrimaryFailure(() => notify(this.listeners));
+        throw error;
+      }
     }
     this.generationReleased = false;
     this.suppressStorePublication = true;
@@ -288,10 +296,16 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         query: queryPlan.query,
         sink: Object.freeze({
           setRowCount: (count, keepRenderedRows) => {
-            this.store.setRowCount(activeToken, count, keepRenderedRows);
+            const accepted = this.store.setRowCount(activeToken, count, keepRenderedRows);
+            if (!accepted && this.store.isActiveGeneration(activeToken)) {
+              throw new TypeError("BrunoTable Server viewport delivered an invalid row count.");
+            }
           },
           setRowData: (rowsByIndex, rowKeysByIndex) => {
-            this.store.setRowData(activeToken, rowsByIndex, rowKeysByIndex);
+            const accepted = this.store.setRowData(activeToken, rowsByIndex, rowKeysByIndex);
+            if (!accepted && this.store.isActiveGeneration(activeToken)) {
+              throw new TypeError("BrunoTable Server viewport delivered invalid row/key maps.");
+            }
           },
         }),
       });
@@ -487,6 +501,15 @@ function notify(listeners: ReadonlySet<Listener>): void {
     }
   }
   if (firstError !== undefined) throw firstError;
+}
+
+function preservePrimaryFailure(operation: () => void): void {
+  try {
+    operation();
+  } catch {
+    // The controller release failure is primary. Reconciliation is still attempted, but a
+    // subscriber failure must not replace the source transport error.
+  }
 }
 
 const SOURCE_STATUSES = new Set<BrunoTableSourceStatus>([

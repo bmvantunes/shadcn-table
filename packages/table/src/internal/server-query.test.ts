@@ -67,8 +67,8 @@ describe("compileBrunoTableServerQuery", () => {
         {
           type: "OR",
           conditions: [
-            { field: "symbol", type: "contains", filter: "desk" },
             { field: "desk", type: "contains", filter: "desk" },
+            { field: "symbol", type: "contains", filter: "desk" },
           ],
         },
       ],

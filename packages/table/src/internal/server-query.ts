@@ -59,11 +59,12 @@ export function compileBrunoTableServerQueryPlan(
     compileFilter(filter, fieldColumns, operandSemantics),
   );
   if (input.quickFilter.length > 0 && input.quickFilterFields.length > 0) {
+    const quickFilterFields = [...input.quickFilterFields].sort();
     where.push(
       Object.freeze({
         type: "OR",
         conditions: Object.freeze(
-          input.quickFilterFields.map((field) =>
+          quickFilterFields.map((field) =>
             Object.freeze({ field, type: "contains", filter: input.quickFilter }),
           ),
         ),
