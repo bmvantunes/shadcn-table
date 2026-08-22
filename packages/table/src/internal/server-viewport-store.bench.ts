@@ -108,6 +108,7 @@ adapter.reconcileSource({
 });
 adapter.replace(adapterViewport, {
   generation: 0,
+  navigationMode: "reconcile",
   filters: [],
   quickFilter: "",
   orderBy: [{ columnId: "COL_ID_VALUE", direction: "asc" }],
@@ -195,6 +196,7 @@ equivalenceAdapter.reconcileSource({
 });
 equivalenceAdapter.replace(equivalenceViewport, {
   generation: 0,
+  navigationMode: "reconcile",
   filters: [],
   quickFilter: "",
   orderBy: [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],

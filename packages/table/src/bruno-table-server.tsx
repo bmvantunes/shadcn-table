@@ -170,6 +170,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
           rowPipeline={BrunoTableServerRowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
           renderColumnFilter={renderBrunoTableServerColumnFilter}
+          enableActiveCellCopy
           gridOwnedControls={gridOwnedControls}
         />
       </BrunoTableToolbarProvider>

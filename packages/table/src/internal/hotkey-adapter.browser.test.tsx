@@ -42,6 +42,7 @@ function probeCommands(
     escape: () => undefined,
     shiftTab: () => undefined,
     headerMenu: () => undefined,
+    copy: () => undefined,
     resize: () => undefined,
     activate: () => undefined,
     navigate: () => undefined,

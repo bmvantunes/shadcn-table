@@ -308,6 +308,8 @@ export type BrunoTableViewProps<
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
   readonly rowPipelineAdapter: TAdapter;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  /** Private read-only capability: copy one loaded Active Cell through canonical semantics. */
+  readonly enableActiveCellCopy?: boolean;
   /** Private capability seam for controls that belong to every variant's grid-owned rail. */
   readonly gridOwnedControls?: ReactNode;
 };
@@ -352,6 +354,7 @@ export type BrunoTableRowPipelineSnapshot =
       readonly rowSpace: BrunoTableLogicalRowSpace;
       readonly queryGeneration: number;
       readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+      readonly loading: boolean;
     }>
   | Readonly<{
       readonly kind: "invalid";
@@ -378,6 +381,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   rowPipeline,
   rowPipelineAdapter,
   renderColumnFilter,
+  enableActiveCellCopy = false,
   gridOwnedControls,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const tableElement = useRef<HTMLElement | null>(null);
@@ -417,6 +421,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowPipeline={rowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
           renderColumnFilter={renderColumnFilter}
+          enableActiveCellCopy={enableActiveCellCopy}
         />
       </div>
     </section>
@@ -835,6 +840,7 @@ type BrunoTableGridBodyProps<TRuntime extends BrunoTableRuntimeView, TAdapter> =
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
   readonly rowPipelineAdapter: TAdapter;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  readonly enableActiveCellCopy: boolean;
 };
 
 function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
@@ -845,6 +851,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   rowPipeline: RowPipeline,
   rowPipelineAdapter,
   renderColumnFilter,
+  enableActiveCellCopy,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
@@ -898,7 +905,9 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             navigation={navigation}
             queryGeneration={snapshot.queryGeneration}
             queryNavigationMode={snapshot.queryNavigationMode}
+            loading={snapshot.loading}
             renderColumnFilter={renderColumnFilter}
+            enableActiveCellCopy={enableActiveCellCopy}
           />
         )
       }
@@ -1035,7 +1044,9 @@ type BrunoTableViewportAdapterProps = {
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+  readonly loading: boolean;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  readonly enableActiveCellCopy: boolean;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1049,7 +1060,9 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     navigation,
     queryGeneration,
     queryNavigationMode,
+    loading,
     renderColumnFilter,
+    enableActiveCellCopy,
   }: BrunoTableViewportAdapterProps): ReactElement {
     return (
       <BrunoTableViewportAdapterBoundary
@@ -1071,6 +1084,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             visibleColumnIds={adapter.columnLayout.visibleColumnIds}
             columnLayout={adapter.columnLayout}
             queryGeneration={queryGeneration}
+            loading={loading}
             viewportSnapshot={adapter.viewportSnapshot}
             attach={adapter.attach}
             attachBodyLayer={adapter.attachBodyLayer}
@@ -1085,6 +1099,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             navigation={navigation}
             revealCell={adapter.revealCell}
             renderColumnFilter={renderColumnFilter}
+            enableActiveCellCopy={enableActiveCellCopy}
           />
         )}
       </BrunoTableViewportAdapterBoundary>
@@ -1102,6 +1117,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   visibleColumnIds,
   columnLayout,
   queryGeneration,
+  loading,
   viewportSnapshot,
   attach,
   attachBodyLayer,
@@ -1116,6 +1132,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   navigation,
   revealCell,
   renderColumnFilter,
+  enableActiveCellCopy,
 }: {
   readonly instanceId: string;
   readonly tableId: string;
@@ -1127,6 +1144,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly visibleColumnIds: readonly string[];
   readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly queryGeneration: number;
+  readonly loading: boolean;
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly attachBodyLayer: RefCallback<HTMLElement>;
@@ -1146,6 +1164,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     rowId?: string,
   ) => void;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
+  readonly enableActiveCellCopy: boolean;
 }) {
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
@@ -1972,6 +1991,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (grid === null || event.target !== grid) return;
     runNavigation(event, { type: "page", rowDelta: direction * viewportPageSize(grid) });
   };
+  const runCopy = (event: BrunoTableHotkeyGesture): void => {
+    if (!enableActiveCellCopy || !ownsGridSurface(event)) return;
+    const active = navigation.getSnapshot();
+    if (active?.region !== "body" || active.rowId === undefined) return;
+    const snapshot = runtime.getCellSnapshot(active.rowId, active.columnId);
+    if (snapshot.kind !== "available" || !snapshot.rowPresent || snapshot.column === undefined) {
+      return;
+    }
+    if (navigator.clipboard?.writeText === undefined) return;
+    const text =
+      snapshot.value === null || snapshot.value === undefined
+        ? ""
+        : snapshot.column.semantics.formatCanonicalText(snapshot.value);
+    event.preventDefault();
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  };
   const runColumnResize = (
     event: BrunoTableHotkeyGesture,
     adjustment: "minimum" | "maximum" | number,
@@ -2110,6 +2145,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       }
     },
     headerMenu: runHeaderMenu,
+    copy: runCopy,
     resize: runColumnResize,
     activate: runActivation,
     navigate: runNavigation,
@@ -2135,12 +2171,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         data-bruno-column-layout-version={columnLayout.version}
         role="grid"
         aria-label={`Data for ${tableId}`}
+        aria-busy={loading || undefined}
         tabIndex={0}
         aria-rowcount={rowSpace.totalRows + 1}
         aria-colcount={
           columnWindow.pinnedStart.length + columnWindow.centerCount + columnWindow.pinnedEnd.length
         }
-        aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
+        aria-keyshortcuts={
+          enableActiveCellCopy
+            ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C"
+            : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
+        }
         onFocus={(event) => {
           if (event.target === event.currentTarget) navigation.activateForFocus();
         }}

@@ -50,6 +50,7 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
   escape: (event: BrunoTableHotkeyGesture) => void;
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
+  copy: (event: BrunoTableHotkeyGesture) => void;
   resize: (
     event: BrunoTableHotkeyGesture,
     adjustment: "minimum" | "maximum" | -1 | 1,
@@ -78,6 +79,7 @@ function createBrunoTableGridHotkeyBindings(
     { hotkey: "Shift+Tab", allowInTextInput: true, onTrigger: commands.shiftTab },
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
+    { hotkey: "Mod+C", onTrigger: commands.copy },
     {
       hotkey: "Alt+ArrowLeft",
       onTrigger: (event) => commands.resize(event, -1, 10, true),
@@ -274,6 +276,7 @@ const NOOP_GRID_COMMANDS: BrunoTableGridHotkeyCommands = Object.freeze({
   escape: () => undefined,
   shiftTab: () => undefined,
   headerMenu: () => undefined,
+  copy: () => undefined,
   resize: () => undefined,
   activate: () => undefined,
   navigate: () => undefined,

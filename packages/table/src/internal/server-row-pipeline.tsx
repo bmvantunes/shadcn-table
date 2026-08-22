@@ -2,16 +2,21 @@ import { memo, useSyncExternalStore } from "react";
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { BrunoTableRowPipelineProps } from "./bruno-table-view";
-import type { BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
+import type {
+  BrunoTableQueryNavigationMode,
+  BrunoTableRowPipelineRuntimeView,
+} from "./grid-runtime";
 
 export type BrunoTableServerRowPipelineAdapterView = Readonly<{
-  readonly getGeneration: () => number;
   readonly getStructureSnapshot: () => Readonly<{
     readonly totalRows: number;
     readonly getRowId: (index: number) => string | undefined;
+    readonly findRowIndex: (rowId: string) => number | undefined;
+    readonly generation: number;
+    readonly navigationMode: BrunoTableQueryNavigationMode;
+    readonly loading: boolean;
   }>;
   readonly subscribeStructure: (listener: () => void) => () => void;
-  readonly findRowIndex: (rowId: string) => number | undefined;
   readonly setRequiredRange: (start: number, end: number) => void;
 }>;
 
@@ -21,7 +26,6 @@ export const BrunoTableServerRowPipeline: NamedExoticComponent<
     BrunoTableServerRowPipelineAdapterView
   >
 > = memo(function BrunoTableServerRowPipeline({
-  runtime,
   columns,
   rowPipelineAdapter,
   children,
@@ -29,11 +33,6 @@ export const BrunoTableServerRowPipeline: NamedExoticComponent<
   BrunoTableRowPipelineRuntimeView,
   BrunoTableServerRowPipelineAdapterView
 >): ReactElement {
-  const query = useSyncExternalStore(
-    runtime.subscribeQuery,
-    runtime.getQuerySnapshot,
-    runtime.getQuerySnapshot,
-  );
   const structure = useSyncExternalStore(
     rowPipelineAdapter.subscribeStructure,
     rowPipelineAdapter.getStructureSnapshot,
@@ -46,12 +45,13 @@ export const BrunoTableServerRowPipeline: NamedExoticComponent<
       rowSpace: Object.freeze({
         totalRows: structure.totalRows,
         getRowId: structure.getRowId,
-        findRowIndex: rowPipelineAdapter.findRowIndex,
+        findRowIndex: structure.findRowIndex,
         setRequiredRange: rowPipelineAdapter.setRequiredRange,
         missingRowIdentityBehavior: "clear-conflicting-active-cell" as const,
       }),
-      queryGeneration: rowPipelineAdapter.getGeneration(),
-      queryNavigationMode: query.navigationMode,
+      queryGeneration: structure.generation,
+      queryNavigationMode: structure.navigationMode,
+      loading: structure.loading,
     }),
   );
 });

@@ -432,6 +432,7 @@ function SparseRowPipeline({
     rowSpace: rowPipelineAdapter.rowSpace,
     queryGeneration: rowPipelineAdapter.queryGeneration,
     queryNavigationMode: "reset",
+    loading: false,
   });
 }
 

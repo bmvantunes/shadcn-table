@@ -6,6 +6,7 @@ import { Effect, Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
 import { createInMemoryViewServerReact } from "effect-view-server/react/testing";
+import { detectPlatform } from "@tanstack/react-hotkeys";
 
 import {
   BrunoTableActiveFilterCount,
@@ -218,15 +219,116 @@ describe("BrunoTableServer", () => {
     const screen = await render(<BrunoTableServer {...serverProps(transport.viewport)} />);
     transport.requests[0]?.sink.setRowCount(0, false);
 
-    const grid = screen.getByRole("grid", { name: "Loading table rows" });
-    await expect.element(grid).toHaveAttribute("aria-rowcount", "18");
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "19");
+    await expect.element(grid).toHaveAttribute("aria-busy", "true");
     const bodyRows = grid.element().querySelectorAll<HTMLElement>('[role="row"][aria-rowindex]');
     expect(bodyRows.length).toBeGreaterThan(1);
     expect([...bodyRows].some((row) => row.style.height === "36px")).toBe(true);
 
     transport.requests[0]?.sink.setRowCount(0, true);
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "19");
+    await expect.element(grid).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("region", { name: "No rows" }).query()).toBeNull();
+    const authoritativeZeroRows = grid
+      .element()
+      .querySelectorAll<HTMLElement>('[role="row"][aria-rowindex]');
+    expect(authoritativeZeroRows.length).toBeGreaterThan(1);
+    expect([...authoritativeZeroRows].some((row) => row.style.height === "36px")).toBe(true);
     await screen.rerender(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
     await expect.element(screen.getByRole("region", { name: "No rows" })).toBeInTheDocument();
+  });
+
+  test("keeps loading slots connected to sparse window movement and preserves logical scroll", async () => {
+    const transport = makeViewport(1_000);
+    const source = {
+      ...serverProps(transport.viewport).viewportSource,
+      totalRows: 1_000,
+    };
+    const screen = await render(
+      <BrunoTableServer {...serverProps(transport.viewport)} viewportSource={source} />,
+    );
+    const grid = screen.getByRole("grid");
+    await expect.element(grid).toHaveAttribute("aria-rowcount", "1001");
+    await expect.element(grid).toHaveAttribute("aria-busy", "true");
+
+    const windowCountBeforeScroll = transport.windows.length;
+    grid.element().scrollTop = 50 * 36;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(transport.windows).toHaveLength(windowCountBeforeScroll + 1);
+    expect(transport.windows.at(-1)?.firstRow).toBeLessThanOrEqual(50);
+    expect(transport.windows.at(-1)?.lastRow).toBeGreaterThanOrEqual(50);
+    const loadingScrollTop = grid.element().scrollTop;
+
+    await screen.rerender(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        viewportSource={{ ...source, status: "ready", version: 2 }}
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+    expect(screen.getByRole("grid").element()).toBe(grid.element());
+    expect(grid.element().scrollTop).toBe(loadingScrollTop);
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  test("copies only a loaded Server Active Cell through canonical value semantics", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const transport = makeViewport();
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready")}
+          columns={rawRowPresentationColumns}
+        />,
+      );
+      transport.requests[0]?.sink.setRowData(
+        { 0: { id: "actual-1", symbol: "AAPL", price: 240, desk: "LDN" } },
+        { 0: "row-aapl" },
+      );
+      const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+      grid.element().focus();
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "AAPL (LDN)" }).element().id,
+        ),
+      );
+      const copyLoaded = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
+      });
+      grid.element().dispatchEvent(copyLoaded);
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("AAPL"));
+      expect(copyLoaded.defaultPrevented).toBe(true);
+
+      grid
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+        );
+      const copyLoading = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
+      });
+      grid.element().dispatchEvent(copyLoading);
+      await settleBrunoTableBrowserFrames();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(copyLoading.defaultPrevented).toBe(false);
+    } finally {
+      if (clipboardDescriptor === undefined)
+        delete (navigator as { clipboard?: Clipboard }).clipboard;
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
   });
 
   test("renders fixed-height sparse slots and writes authoritative rows into absolute indexes", async () => {
@@ -516,6 +618,107 @@ describe("BrunoTableServer", () => {
     expect(screen.getByRole("gridcell", { name: "LATE" }).query()).toBeNull();
   });
 
+  test("resets Active Cell instead of reconciling its display index across sources", async () => {
+    const first = makeViewport(2);
+    const second = makeViewport(2);
+    const screen = await render(<BrunoTableServer {...serverProps(first.viewport, "ready")} />);
+    first.requests[0]?.sink.setRowData(
+      { 0: { symbol: "OLD ZERO", price: 0 }, 1: { symbol: "OLD ONE", price: 1 } },
+      { 0: "old-zero", 1: "old-one" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    grid.element().focus();
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+      );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "OLD ONE" }).element().id,
+      ),
+    );
+
+    await screen.rerender(<BrunoTableServer {...serverProps(second.viewport, "ready")} />);
+    second.requests[0]?.sink.setRowData(
+      { 0: { symbol: "NEW ZERO", price: 2 }, 1: { symbol: "NEW ONE", price: 3 } },
+      { 0: "new-zero", 1: "new-one" },
+    );
+
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "NEW ZERO" }).element().id,
+      ),
+    );
+  });
+
+  test("resets Active Cell when source-owned complete projection changes on one viewport", async () => {
+    const transport = makeViewport(2);
+    const source = {
+      viewport: transport.viewport,
+      completeRawSelect: browserCompleteRawSelect,
+      totalRows: 2,
+      version: 1,
+      status: "ready" as const,
+    };
+    const screen = await render(
+      <BrunoTableServer
+        tableId="TABLE_ID_SERVER_SOURCE_PROJECTION"
+        columns={rawRowPresentationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+        viewportSource={source}
+      />,
+    );
+    transport.requests[0]?.sink.setRowData(
+      {
+        0: { id: "old-zero", symbol: "OLD ZERO", price: 0, desk: "LDN" },
+        1: { id: "old-one", symbol: "OLD ONE", price: 1, desk: "LDN" },
+      },
+      { 0: "old-zero", 1: "old-one" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER_SOURCE_PROJECTION" });
+    grid.element().focus();
+    grid
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+      );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "OLD ONE (LDN)" }).element().id,
+      ),
+    );
+
+    const extendedCompleteRawSelect = Object.freeze([
+      "id",
+      "symbol",
+      "price",
+      "desk",
+      "region",
+    ]) as unknown as ActualViewportSource["completeRawSelect"];
+    await screen.rerender(
+      <BrunoTableServer
+        tableId="TABLE_ID_SERVER_SOURCE_PROJECTION"
+        columns={rawRowPresentationColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+        viewportSource={{ ...source, completeRawSelect: extendedCompleteRawSelect, version: 2 }}
+      />,
+    );
+    expect(transport.requests).toHaveLength(2);
+    transport.requests[1]?.sink.setRowData(
+      {
+        0: { id: "new-zero", symbol: "NEW ZERO", price: 2, desk: "NYC" },
+        1: { id: "new-one", symbol: "NEW ONE", price: 3, desk: "NYC" },
+      },
+      { 0: "new-zero", 1: "new-one" },
+    );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "NEW ZERO (NYC)" }).element().id,
+      ),
+    );
+  });
+
   test("uses one replacement for a semantic sort and resets vertical position", async () => {
     const transport = makeViewport(1_000);
     const screen = await render(
@@ -674,7 +877,7 @@ describe("BrunoTableServer", () => {
       />,
     );
     await expect
-      .element(screen.getByRole("grid", { name: "Loading table rows" }))
+      .element(screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" }))
       .toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "RETAINED" }).query()).toBeNull();
     expect(screen.getByRole("row").nth(1).element().style.height).toBe("36px");
