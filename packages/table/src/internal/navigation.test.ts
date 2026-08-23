@@ -107,6 +107,13 @@ describe("BrunoTableNavigationRuntime", () => {
     ).toBe(false);
     expect(
       isBrunoTableCellRangeNavigationCommandAdmitted(
+        undefined,
+        { type: "step", direction: "up" },
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellRangeNavigationCommandAdmitted(
         "vertical",
         { type: "column-edge", edge: "start" },
         2,

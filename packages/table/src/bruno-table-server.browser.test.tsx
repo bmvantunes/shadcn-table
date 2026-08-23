@@ -1147,6 +1147,63 @@ describe("BrunoTableServer", () => {
     }
   });
 
+  test("keeps Shift navigation on Server Active Cell semantics", async () => {
+    const transport = makeViewport(2);
+    const props = serverProps(transport.viewport, "ready");
+    const screen = await render(
+      <BrunoTableServer {...props} viewportSource={{ ...props.viewportSource, totalRows: 2 }} />,
+    );
+    transport.requests[0]?.sink.setRowData(
+      {
+        0: { symbol: "FIRST", price: 1 },
+        1: { symbol: "SECOND", price: 2 },
+      },
+      { 0: "first", 1: "second" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "FIRST" }).element().id,
+      ),
+    );
+
+    await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("columnheader", { name: /Symbol, sorted ascending/ }).element().id,
+      ),
+    );
+
+    const modifier = detectPlatform() === "mac" ? "Meta" : "Control";
+    const assertShiftedMatches = async (
+      start: ReturnType<typeof screen.getByRole>,
+      key: "ArrowUp" | "ArrowDown" | "Home" | "End",
+    ) => {
+      await userEvent.click(start);
+      await userEvent.keyboard(`{${modifier}>}{${key}}{/${modifier}}`);
+      await settleBrunoTableBrowserFrames();
+      const expected = grid.element().getAttribute("aria-activedescendant");
+      await userEvent.click(start);
+      await userEvent.keyboard(`{${modifier}>}{Shift>}{${key}}{/Shift}{/${modifier}}`);
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(expected),
+      );
+    };
+
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "2", exact: true }), "ArrowUp");
+    await assertShiftedMatches(
+      screen.getByRole("gridcell", { name: "1", exact: true }),
+      "ArrowDown",
+    );
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "2", exact: true }), "Home");
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "FIRST" }), "End");
+    await expect.element(grid).not.toHaveAttribute("aria-multiselectable");
+    for (const cell of screen.getByRole("gridcell").all()) {
+      await expect.element(cell).not.toHaveAttribute("aria-selected");
+    }
+  });
+
   test("renders fixed-height sparse slots and writes authoritative rows into absolute indexes", async () => {
     const transport = makeViewport();
     const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);

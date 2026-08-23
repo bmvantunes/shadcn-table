@@ -298,6 +298,50 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     });
   });
 
+  it("lazily creates a fresh idle gesture actor after disposal", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
+    const view = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Window;
+    const grid = {
+      ownerDocument: { defaultView: view },
+      focus: vi.fn(),
+      setPointerCapture: vi.fn(),
+    } as unknown as HTMLElement;
+    const start = (pointerId: number) =>
+      range.startPointerGesture(
+        {
+          button: 0,
+          clientX: 0,
+          clientY: 0,
+          pointerId,
+          shiftKey: false,
+          target: null,
+          preventDefault: vi.fn(),
+        } as unknown as PointerEvent,
+        { rowId: "ROW_A", columnId: "COL_ID_A", rowIndex: 0 },
+        grid,
+        vi.fn(),
+        vi.fn(),
+        () => false,
+      );
+
+    expect(start(44)).toBe(true);
+    expect(range.getPointerGestureSnapshot()).toMatchObject({ value: "armed", pointerId: 44 });
+    range.dispose();
+    expect(range.getPointerGestureSnapshot()).toEqual({
+      value: "idle",
+      pointerId: undefined,
+      before: {},
+      axis: undefined,
+    });
+    expect(start(45)).toBe(true);
+    expect(range.getPointerGestureSnapshot()).toMatchObject({ value: "armed", pointerId: 45 });
+    range.dispose();
+  });
+
   it("does not poison Active Cell Copy when only a single anchor disappears", () => {
     const range = new BrunoTableCellRangeRuntime();
     range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);

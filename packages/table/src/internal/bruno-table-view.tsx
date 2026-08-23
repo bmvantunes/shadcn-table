@@ -2164,21 +2164,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     navigation.activateForFocus();
     const current = navigation.getSnapshot();
     const currentRange = cellRange?.getSnapshot().range;
+    const extendingRange = extendCellRange && cellRange !== undefined;
     if (
-      extendCellRange &&
+      extendingRange &&
       current?.region === "body" &&
       !isBrunoTableCellRangeNavigationCommandAdmitted(currentRange?.axis, command, current.rowIndex)
     ) {
       return;
     }
     const axisProjectedCommand =
-      extendCellRange && currentRange !== undefined && command.type === "grid-edge"
+      extendingRange && currentRange !== undefined && command.type === "grid-edge"
         ? currentRange.axis === "horizontal"
           ? ({ type: "row-edge", edge: command.edge } as const)
           : ({ type: "column-edge", edge: command.edge } as const)
         : command;
     const effectiveCommand =
-      extendCellRange && axisProjectedCommand.type === "column-edge"
+      extendingRange && axisProjectedCommand.type === "column-edge"
         ? ({
             type: "page",
             rowDelta:
@@ -2189,7 +2190,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     let next = navigation.getSnapshot();
     if (cellRange !== undefined) {
       if (next?.region === "body" && next.rowId !== undefined && cellRangeStructure !== undefined) {
-        if (extendCellRange && current?.region === "body" && current.rowId !== undefined) {
+        if (extendingRange && current?.region === "body" && current.rowId !== undefined) {
           const currentCoordinate = { rowId: current.rowId, columnId: current.columnId };
           const nextCoordinate = { rowId: next.rowId, columnId: next.columnId };
           if (cellRange.getSnapshot().anchor === undefined) {
@@ -2249,7 +2250,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       columnId: active.columnId,
     });
     if (target === undefined) return;
-    let snapshot;
+    let snapshot: ReturnType<typeof captureBrunoTableClipboardSnapshot>;
     try {
       snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
         const cell = runtime.getCellSnapshot(rowId, columnId);

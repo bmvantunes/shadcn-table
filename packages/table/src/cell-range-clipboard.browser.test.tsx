@@ -1,5 +1,5 @@
 import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
-import { useCallback, useState } from "react";
+import { StrictMode, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
@@ -630,6 +630,229 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     await expect.element(curieScore).toHaveAttribute("aria-selected", "true");
   });
 
+  test("keeps pointer range gestures active after Strict Mode effect replay", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_STRICT_MODE_POINTER";
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    const writes: string[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    try {
+      await render(<StrictMode>{table(tableId)}</StrictMode>);
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      const anchor = page.getByRole("gridcell", { name: "4", exact: true });
+      const target = page.getByRole("gridcell", { name: "3", exact: true });
+      const anchorBounds = anchor.element().getBoundingClientRect();
+      const targetBounds = target.element().getBoundingClientRect();
+      anchor.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: anchorBounds.left + anchorBounds.width / 2,
+          clientY: anchorBounds.top + anchorBounds.height / 2,
+          pointerId: 40,
+        }),
+      );
+      target.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: targetBounds.left + targetBounds.width / 2,
+          clientY: targetBounds.top + targetBounds.height / 2,
+          pointerId: 40,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      target.element().dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          clientX: targetBounds.left + targetBounds.width / 2,
+          clientY: targetBounds.top + targetBounds.height / 2,
+          pointerId: 40,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      await expect.element(anchor).toHaveAttribute("aria-selected", "true");
+      await expect.element(target).toHaveAttribute("aria-selected", "true");
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["4\n2\n3"]));
+
+      const workAfterCommit = events.filter(
+        (event) => event.kind === "pointer-frame" || event.kind === "publication",
+      ).length;
+      target
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, cancelable: true, pointerId: 40 }),
+        );
+      target
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 40 }),
+        );
+      await settleBrunoTableBrowserFrames();
+      expect(
+        events.filter((event) => event.kind === "pointer-frame" || event.kind === "publication"),
+      ).toHaveLength(workAfterCommit);
+
+      const secondAnchor = page.getByRole("gridcell", { name: "Ada", exact: true });
+      const secondTarget = page.getByRole("gridcell", { name: "Curie", exact: true });
+      const secondAnchorBounds = secondAnchor.element().getBoundingClientRect();
+      const secondTargetBounds = secondTarget.element().getBoundingClientRect();
+      secondAnchor.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: secondAnchorBounds.left + secondAnchorBounds.width / 2,
+          clientY: secondAnchorBounds.top + secondAnchorBounds.height / 2,
+          pointerId: 44,
+        }),
+      );
+      secondTarget.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: secondTargetBounds.left + secondTargetBounds.width / 2,
+          clientY: secondTargetBounds.top + secondTargetBounds.height / 2,
+          pointerId: 44,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      secondTarget
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 44 }),
+        );
+      await settleBrunoTableBrowserFrames();
+      await expect.element(secondAnchor).toHaveAttribute("aria-selected", "true");
+      await expect.element(secondTarget).toHaveAttribute("aria-selected", "true");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(secondTarget.element().id);
+    } finally {
+      restoreClipboard();
+      removeInstrumentation();
+    }
+  });
+
+  test("cancels an armed drag before replacing its grid owner", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_GRID_REPLACEMENT";
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    const renderTable = (rowSelection: true | undefined) => (
+      <BrunoTableClient
+        tableId={tableId}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={source()}
+        getRowId={(row) => row.id}
+        {...(rowSelection === true ? { rowSelection } : {})}
+      />
+    );
+    try {
+      const screen = await render(renderTable(undefined));
+      const originalGrid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      const originalGridElement = originalGrid.element();
+      originalGrid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+      expect(originalGrid.element().getAttribute("aria-activedescendant")).toBe(
+        page.getByRole("gridcell", { name: "4", exact: true }).element().id,
+      );
+      const originalAnchor = page.getByRole("gridcell", { name: "Babbage", exact: true });
+      const originalBounds = originalAnchor.element().getBoundingClientRect();
+      originalAnchor.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: originalBounds.left + originalBounds.width / 2,
+          clientY: originalBounds.top + originalBounds.height / 2,
+          pointerId: 41,
+        }),
+      );
+
+      await screen.rerender(renderTable(true));
+      await settleBrunoTableBrowserFrames();
+      const replacementGrid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      expect(replacementGrid.element()).not.toBe(originalGridElement);
+      expect(replacementGrid.element().getAttribute("aria-activedescendant")).toBe(
+        page.getByRole("gridcell", { name: "4", exact: true }).element().id,
+      );
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada", exact: true }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "4", exact: true }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "Babbage", exact: true }))
+        .not.toHaveAttribute("aria-selected");
+      events.length = 0;
+      replacementGrid
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, cancelable: true, pointerId: 41 }),
+        );
+      replacementGrid
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 41 }),
+        );
+      await settleBrunoTableBrowserFrames();
+      expect(
+        events.filter((event) => event.kind === "pointer-frame" || event.kind === "publication"),
+      ).toHaveLength(0);
+      const anchor = page.getByRole("gridcell", { name: "4", exact: true });
+      const target = page.getByRole("gridcell", { name: "3", exact: true });
+      const anchorBounds = anchor.element().getBoundingClientRect();
+      const targetBounds = target.element().getBoundingClientRect();
+      anchor.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: anchorBounds.left + anchorBounds.width / 2,
+          clientY: anchorBounds.top + anchorBounds.height / 2,
+          pointerId: 43,
+        }),
+      );
+      target.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: targetBounds.left + targetBounds.width / 2,
+          clientY: targetBounds.top + targetBounds.height / 2,
+          pointerId: 43,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      target.element().dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          clientX: targetBounds.left + targetBounds.width / 2,
+          clientY: targetBounds.top + targetBounds.height / 2,
+          pointerId: 43,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+
+      await expect.element(anchor).toHaveAttribute("aria-selected", "true");
+      await expect.element(target).toHaveAttribute("aria-selected", "true");
+    } finally {
+      removeInstrumentation();
+    }
+  });
+
   test("keeps same-origin portal interactions native without publishing a range", async () => {
     const tableId = "TABLE_ID_CELL_RANGE_PORTAL_INTERACTIVE";
     const events: BrunoTableCellRangeInstrumentationEvent[] = [];
@@ -1153,9 +1376,14 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
-  test.each(["resolves", "rejects"] as const)(
-    "announces only the latest overlapping Copy completion when it %s",
-    async (latestOutcome) => {
+  test.each([
+    ["resolves", "latest-first"],
+    ["rejects", "latest-first"],
+    ["resolves", "stale-first"],
+    ["rejects", "stale-first"],
+  ] as const)(
+    "announces only the latest overlapping Copy completion when it %s and settles %s",
+    async (latestOutcome, settlementOrder) => {
       const operations: Array<{
         readonly text: string;
         readonly resolve: () => void;
@@ -1190,18 +1418,22 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           latestOutcome === "resolves"
             ? "1 cell copied"
             : "Copy failed: the browser rejected the clipboard write";
+        const status = page.getByRole("log", { name: "Table interaction status" });
+        if (settlementOrder === "stale-first") {
+          if (latestOutcome === "resolves") operations[0]?.reject();
+          else operations[0]?.resolve();
+          await settleBrunoTableBrowserFrames();
+          expect(status.element().textContent).toBe("");
+        }
         if (latestOutcome === "resolves") operations[1]?.resolve();
         else operations[1]?.reject();
-        await expect
-          .element(page.getByRole("log", { name: "Table interaction status" }))
-          .toHaveTextContent(expectedAnnouncement);
-
-        if (latestOutcome === "resolves") operations[0]?.reject();
-        else operations[0]?.resolve();
+        await expect.element(status).toHaveTextContent(expectedAnnouncement);
+        if (settlementOrder === "latest-first") {
+          if (latestOutcome === "resolves") operations[0]?.reject();
+          else operations[0]?.resolve();
+        }
         await settleBrunoTableBrowserFrames();
-        await expect
-          .element(page.getByRole("log", { name: "Table interaction status" }))
-          .toHaveTextContent(expectedAnnouncement);
+        await expect.element(status).toHaveTextContent(expectedAnnouncement);
       } finally {
         restoreClipboard();
       }
