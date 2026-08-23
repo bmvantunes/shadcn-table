@@ -376,6 +376,11 @@ describe("BrunoTableServer", () => {
         message: "Connection failed.",
         label: "Live filter values unavailable. Connection failed.",
       },
+      {
+        status: "error",
+        message: "X".repeat(600),
+        label: `Live filter values unavailable. ${"X".repeat(512)}`,
+      },
       { status: "closed", label: "Live filter values stopped." },
     ] as const;
 
@@ -426,6 +431,7 @@ describe("BrunoTableServer", () => {
         await expect.element(dialog.getByRole("status").nth(1)).toHaveTextContent("All selected");
       } else {
         await expect.element(facetStatus).toHaveTextContent(lifecycle.label);
+        expect(facetStatus.element().textContent).toBe(lifecycle.label);
       }
       if (
         lifecycle.status === "loading" ||

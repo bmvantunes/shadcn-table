@@ -26,6 +26,10 @@ import {
   readClientQuickFilterField,
   snapshotBrunoTableQuickFilterFields,
 } from "./quick-filter";
+import {
+  snapshotBrunoTableSourceMessage,
+  snapshotBrunoTableSourceStatusCode,
+} from "./source-lifecycle";
 import { recordBrunoTableToolbarLifetime } from "./toolbar-instrumentation";
 
 // Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
@@ -1544,14 +1548,10 @@ function snapshotSource<TRow>(
   }
   const { sourceStatus, totalRows, version } = required;
   const status = snapshotSourceStatus(sourceStatus);
-  const statusCode = boundedOptionalText(
+  const statusCode = snapshotBrunoTableSourceStatusCode(
     readOptionalSourceField(() => source.statusCode),
-    128,
   );
-  const message = boundedOptionalText(
-    readOptionalSourceField(() => source.message),
-    512,
-  );
+  const message = snapshotBrunoTableSourceMessage(readOptionalSourceField(() => source.message));
   const retry = snapshotRetry(readOptionalSourceField(() => source.retry));
   const rowInput =
     status === undefined || status === "loading" ? undefined : snapshotSourceRows(source);
@@ -1776,10 +1776,6 @@ function nextCoherent<TRow>(
 
 function boundedText(value: string, limit: number): string {
   return value.length <= limit ? value : value.slice(0, limit);
-}
-
-function boundedOptionalText(value: unknown, limit: number): string | undefined {
-  return typeof value === "string" ? boundedText(value, limit) : undefined;
 }
 
 function isCompleteSource<TRow>(source: ClientSourceSnapshot<TRow>): boolean {

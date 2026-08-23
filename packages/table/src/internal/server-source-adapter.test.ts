@@ -505,6 +505,29 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
   });
 
+  it("bounds Server lifecycle status and message text at source admission", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "error",
+      statusCode: "S".repeat(256),
+      message: "M".repeat(1_024),
+    });
+
+    expect(adapter.getPublication().statusCode).toHaveLength(128);
+    expect(adapter.getPublication().message).toHaveLength(512);
+  });
+
   it("clears the old authoritative result count until the replacement generation publishes", () => {
     const transport = makeViewport();
     const adapter = new BrunoTableServerRowPipelineAdapter<Row>(

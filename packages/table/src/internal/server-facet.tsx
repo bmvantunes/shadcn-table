@@ -19,6 +19,7 @@ import {
   type BrunoTableCompiledServerFacetQuery,
   type BrunoTableCompiledServerFacetQueryPlan,
 } from "./server-query";
+import { snapshotBrunoTableSourceMessage } from "./source-lifecycle";
 
 type BrunoTableServerWholeResult = Readonly<{
   readonly rows: readonly unknown[];
@@ -300,7 +301,7 @@ function requireWholeResult(candidate: unknown): BrunoTableServerWholeResult {
   return Object.freeze({
     rows,
     status,
-    ...(message === undefined ? {} : { message }),
+    ...(message === undefined ? {} : { message: snapshotBrunoTableSourceMessage(message) }),
   });
 }
 

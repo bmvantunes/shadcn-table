@@ -24,6 +24,10 @@ import {
   sanitizeBrunoTableServerViewportWindow,
   type BrunoTableServerViewportWindow,
 } from "./server-viewport-store";
+import {
+  snapshotBrunoTableSourceMessage,
+  snapshotBrunoTableSourceStatusCode,
+} from "./source-lifecycle";
 
 type Listener = () => void;
 
@@ -741,14 +745,16 @@ function snapshotSource(source: BrunoTableServerSourceInput): BrunoTableServerSo
   const status: BrunoTableSourceStatus = SOURCE_STATUSES.has(source.status)
     ? source.status
     : "error";
+  const statusCode = snapshotBrunoTableSourceStatusCode(source.statusCode);
+  const message = snapshotBrunoTableSourceMessage(source.message);
   return Object.freeze({
     viewport: source.viewport,
     totalRows:
       Number.isSafeInteger(source.totalRows) && source.totalRows >= 0 ? source.totalRows : 0,
     version: Number.isSafeInteger(source.version) && source.version >= 0 ? source.version : 0,
     status,
-    ...(typeof source.statusCode === "string" ? { statusCode: source.statusCode } : {}),
-    ...(typeof source.message === "string" ? { message: source.message } : {}),
+    ...(statusCode === undefined ? {} : { statusCode }),
+    ...(message === undefined ? {} : { message }),
     ...(source.retry === undefined ? {} : { retry: source.retry }),
   });
 }
