@@ -492,7 +492,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
     expect(adapter.getPublication().rowSpace?.getRowId(0)).toBeUndefined();
     expect(adapter.getPublication().totalRows).toBe(18);
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     transport.getRequest()!.sink.setRowCount(250, true);
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
     adapter.reconcileSource({
@@ -503,6 +503,48 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       status: "stale",
     });
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
+  });
+
+  it("clears the old authoritative result count until the replacement generation publishes", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const oldSink = transport.getRequest()!.sink;
+    oldSink.setRowCount(250, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(250);
+
+    adapter.replace(transport.viewport, query, {
+      externalFilters: [{ field: "price", type: "greaterThan", filter: 10 }],
+      routeBy: undefined,
+      visibleColumnIds: undefined,
+    });
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 250,
+      version: 2,
+      status: "loading",
+    });
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    oldSink.setRowCount(999, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+
+    transport.getRequest()!.sink.setRowCount(3, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(3);
   });
 
   it("projects loading geometry without retained or newly delivered row identity", () => {
@@ -628,7 +670,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(publishedRows).toEqual([]);
     expect(adapter.getPublication().rowSpace).toBeUndefined();
     expect(adapter.getPublication().totalRows).toBe(100);
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     failedSink!.setRowData({ 0: { symbol: "LATE", price: 0 } }, { 0: "late" });
     expect(adapter.getPublication().rowSpace).toBeUndefined();
 
@@ -794,7 +836,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     }
     expect(observedFailure).toBe(releaseFailure);
     expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     expect(structureFailure).toHaveBeenCalledTimes(1);
     expect(countFailure).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(1);
@@ -1228,9 +1270,9 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     });
 
     expect(() => adapter.release()).toThrow(releaseFailure);
-    expect(publications.at(-1)).toEqual({ totalRows: 100, hasRows: false });
+    expect(publications.at(-1)).toEqual({ totalRows: 0, hasRows: false });
     expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
   });
 
   it("replaces only when the normalized source projection changes", () => {

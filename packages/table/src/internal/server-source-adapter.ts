@@ -234,10 +234,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     _query: BrunoTableQuerySnapshot,
     _rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
   ): boolean => {
-    const snapshot = this.store.getSnapshot();
-    const count = snapshot.authoritativeTotalRows
-      ? snapshot.rowSpace.totalRows
-      : this.source.totalRows;
+    const count = this.resolveResultRowCount();
     if (this.resultRowCount === count) return false;
     this.publishResultRowCount(count);
     return true;
@@ -326,12 +323,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.completeRawSelect = nextCompleteRawSelect;
     this.projectionFields = nextProjectionFields;
     if (replacingActiveSource) this.forceNextNavigationReset = true;
-    const storeSnapshot = this.store.getSnapshot();
-    this.publishResultRowCount(
-      this.active?.semanticKey.viewport === next.viewport && storeSnapshot.authoritativeTotalRows
-        ? storeSnapshot.rowSpace.totalRows
-        : next.totalRows,
-    );
+    this.publishResultRowCount(this.resolveResultRowCount());
     if (replacingActiveSource) return;
     this.publication = this.createPublication();
     this.reconcileStructureSnapshot();
@@ -427,7 +419,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       } catch (error) {
         this.publication = this.createPublication();
         preservePrimaryFailure(() => this.reconcileStructureSnapshot());
-        preservePrimaryFailure(() => this.publishResultRowCount(this.source.totalRows));
+        preservePrimaryFailure(() => this.publishResultRowCount(this.resolveResultRowCount()));
         preservePrimaryFailure(() => notify(this.listeners));
         throw error;
       }
@@ -462,7 +454,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.alignObservedStoreSnapshot();
       this.publication = this.createPublication();
       this.reconcileStructureSnapshot();
-      this.publishResultRowCount(this.source.totalRows);
+      this.publishResultRowCount(this.resolveResultRowCount());
       notify(this.listeners);
       throw error;
     }
@@ -500,7 +492,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.alignObservedStoreSnapshot();
     this.publication = this.createPublication();
     preservePrimaryFailure(() => this.reconcileStructureSnapshot());
-    preservePrimaryFailure(() => this.publishResultRowCount(this.source.totalRows));
+    preservePrimaryFailure(() => this.publishResultRowCount(this.resolveResultRowCount()));
     preservePrimaryFailure(() => notify(this.listeners));
     throw error;
   }
@@ -545,7 +537,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       }
     };
     publishInvalidation(() => this.reconcileStructureSnapshot());
-    publishInvalidation(() => this.publishResultRowCount(this.source.totalRows));
+    publishInvalidation(() => this.publishResultRowCount(this.resolveResultRowCount()));
     publishInvalidation(() => notify(this.listeners));
     active.controller.release();
     if (invalidationFailed) throw invalidationFailure;
@@ -600,6 +592,14 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     notify(this.resultRowCountListeners);
   }
 
+  private resolveResultRowCount(): number {
+    const snapshot = this.store.getSnapshot();
+    if (!this.generationReleased && snapshot.authoritativeTotalRows) {
+      return snapshot.rowSpace.totalRows;
+    }
+    return snapshot.generation === 0 ? this.source.totalRows : 0;
+  }
+
   private getMaskedRowSpace(
     rowSpace: BrunoTableRowSpaceSnapshot<TRow>,
   ): BrunoTableRowSpaceSnapshot<TRow> {
@@ -629,11 +629,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.observedStructureVersion = storeSnapshot.structureVersion;
       this.reconcileStructureSnapshot();
     }
-    this.publishResultRowCount(
-      storeSnapshot.authoritativeTotalRows
-        ? storeSnapshot.rowSpace.totalRows
-        : this.source.totalRows,
-    );
+    this.publishResultRowCount(this.resolveResultRowCount());
     notify(this.listeners);
   };
 

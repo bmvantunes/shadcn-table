@@ -776,6 +776,12 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
     const selectedOptions = snapshot.options.filter((option) =>
       isBrunoTableFacetOptionSelected(column, snapshot.intent, intentValueIndex, option.value),
     );
+    const selectionSummary =
+      snapshot.intent.kind === "all"
+        ? "All selected"
+        : snapshot.intent.kind === "include"
+          ? `${String(snapshot.intent.values.length)} selected`
+          : `All except ${String(snapshot.intent.values.length)} selected`;
     const accessibleOptionEvidence = useMemo(() => {
       const displayCounts = new Map<string, number>();
       const indexesByKey = new Map<string, number>();
@@ -815,8 +821,8 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
           <h3 id={headingId} className="text-sm font-medium">
             Values
           </h3>
-          <Badge aria-live="polite" variant="secondary">
-            {`${String(selectedOptions.length)} selected`}
+          <Badge aria-label={selectionSummary} aria-live="polite" role="status" variant="secondary">
+            {selectionSummary}
           </Badge>
         </div>
         {selectedOptions.length === 0 ? null : (
@@ -861,7 +867,7 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
           }}
         />
         {matchingOptions.length === 0 && hasCoherentEmptyResult ? (
-          <Empty className="min-h-24 p-3" role="status">
+          <Empty aria-label="No values found" className="min-h-24 p-3" role="status">
             <EmptyHeader>
               <EmptyTitle>No values found</EmptyTitle>
               <EmptyDescription>Try a different search.</EmptyDescription>
@@ -1552,7 +1558,11 @@ function FilterOperand({
         <label htmlFor={`${errorId}-${path}-value`}>Value</label>
         {optionCount > FILTER_SELECT_VISIBLE_OPTIONS ? (
           <div className="flex items-center justify-between gap-2 text-sm">
-            <span aria-live="polite" role="status">
+            <span
+              aria-label={`Showing options ${String(optionWindowStart + 1)}–${String(optionWindowEnd)} of ${optionCount.toLocaleString("en-US")}`}
+              aria-live="polite"
+              role="status"
+            >
               {`Showing options ${String(optionWindowStart + 1)}–${String(optionWindowEnd)} of ${optionCount.toLocaleString("en-US")}`}
             </span>
             <div className="flex gap-1">

@@ -423,6 +423,7 @@ describe("BrunoTableServer", () => {
       const facetStatus = dialog.getByRole("status").nth(0);
       if (lifecycle.status === "ready") {
         await expect.element(facetStatus).toBeEmptyDOMElement();
+        await expect.element(dialog.getByRole("status", { name: "All selected" })).toBeVisible();
       } else {
         await expect.element(facetStatus).toHaveTextContent(lifecycle.label);
       }
@@ -443,6 +444,30 @@ describe("BrunoTableServer", () => {
       }
       await cleanup();
     }
+  });
+
+  test("keeps unresolved Server Set Filter selection intent accessible while loading", async () => {
+    const transport = makeViewport();
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        columns={serverFilterColumns}
+        viewportSource={{
+          ...serverProps(transport.viewport, "ready").viewportSource,
+          useWholeResult: () => ({
+            rows: [{ symbol: "UNACCEPTED", __bruno_table_facet_count: 1n }],
+            totalRows: 1,
+            version: 1,
+            status: "loading",
+          }),
+        }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
+    const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+    await expect.element(dialog.getByRole("status", { name: "All selected" })).toBeVisible();
+    expect(dialog.getByRole("status", { name: "0 selected" }).query()).toBeNull();
+    expect(dialog.getByRole("checkbox", { name: /UNACCEPTED/ }).query()).toBeNull();
   });
 
   test("reconciles an open Server facet from one atomic column and query snapshot", async () => {
@@ -1541,6 +1566,33 @@ describe("BrunoTableServer", () => {
     });
     expect(transport.releases).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(grid.element().scrollTop).toBe(0));
+  });
+
+  test("clears the previous result count until a replacement generation publishes", async () => {
+    const transport = makeViewport(100, false);
+    const screen = await render(
+      <BrunoTableServer {...serverProps(transport.viewport, "ready")}>
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      </BrunoTableServer>,
+    );
+    const resultRows = screen.getByRole("status", { name: "Result rows" });
+    transport.requests[0]?.sink.setRowCount(250, true);
+    await expect.element(resultRows).toHaveTextContent("250 result rows");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Sort by Symbol, currently ascending, priority 1",
+      }),
+    );
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    await expect.element(resultRows).toHaveTextContent("0 result rows");
+    expect(transport.releases).toHaveBeenCalledTimes(1);
+    transport.requests[0]?.sink.setRowCount(999, true);
+    await expect.element(resultRows).toHaveTextContent("0 result rows");
+    transport.requests[1]?.sink.setRowCount(3, true);
+    await expect.element(resultRows).toHaveTextContent("3 result rows");
   });
 
   test("resets navigation once for semantic Route and External Filter changes", async () => {

@@ -296,25 +296,30 @@ export function createBrunoTableServerFacetSnapshot(
   if (options.column.kind !== "field") {
     throw new TypeError("BrunoTable Server facets require a Field Column.");
   }
-  const liveOptions: BrunoTableClientFacetOption[] = [];
+  const buckets = new Map<string, { value: unknown; count: bigint }[]>();
+  const liveOptions: { value: unknown; count: bigint }[] = [];
   for (const candidate of options.rows) {
-    if (typeof candidate !== "object" || candidate === null) continue;
+    if (typeof candidate !== "object" || candidate === null) {
+      throw new TypeError("BrunoTable Server facet delivered an invalid grouped row.");
+    }
     const rawValue = Reflect.get(candidate, options.column.field);
     const rawCount = Reflect.get(candidate, options.countAlias);
-    if (typeof rawCount !== "bigint" || rawCount < 0n) continue;
+    if (typeof rawCount !== "bigint" || rawCount < 0n) {
+      throw new TypeError("BrunoTable Server facet delivered an invalid aggregate count.");
+    }
     const decoded = options.column.semantics.decodeRuntime(rawValue);
     if (decoded._tag !== "Success") continue;
-    liveOptions.push(
-      Object.freeze({
-        value: decoded.value,
-        count: rawCount,
-        display: safeFormatDisplay(options.column, decoded.value),
-      }),
-    );
+    addServerFacetValue(options.column, buckets, liveOptions, decoded.value, rawCount);
   }
   return completeFacetSnapshot(
     options.column,
-    liveOptions,
+    liveOptions.map(({ value, count }) =>
+      Object.freeze({
+        value,
+        count,
+        display: safeFormatDisplay(options.column, value),
+      }),
+    ),
     readBrunoTableSetFilterIntent(options.column, options.expression),
     undefined,
     0n,
@@ -449,6 +454,28 @@ function addFacetValue(
   ordered: { value: unknown; count: number }[],
   value: unknown,
   increment: number,
+): void {
+  const key = facetValueKey(column, value);
+  const bucket = buckets.get(key) ?? [];
+  const existing = bucket.find((candidate) =>
+    areBrunoTableSetValuesEquivalent(column, candidate.value, value),
+  );
+  if (existing !== undefined) {
+    existing.count += increment;
+    return;
+  }
+  const entry = { value, count: increment };
+  bucket.push(entry);
+  buckets.set(key, bucket);
+  ordered.push(entry);
+}
+
+function addServerFacetValue(
+  column: CompiledColumn,
+  buckets: Map<string, { value: unknown; count: bigint }[]>,
+  ordered: { value: unknown; count: bigint }[],
+  value: unknown,
+  increment: bigint,
 ): void {
   const key = facetValueKey(column, value);
   const bucket = buckets.get(key) ?? [];
