@@ -1018,6 +1018,10 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
 
   test("bounds edge autoscroll publications and mounted decoration work by animation frame", async () => {
     const tableId = "TABLE_ID_CELL_RANGE_AUTOSCROLL";
+    const writes: string[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
     const events: BrunoTableCellRangeInstrumentationEvent[] = [];
     const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
       tableId,
@@ -1030,12 +1034,11 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       quantity: BigInt(index),
     }));
     try {
-      await render(table(tableId, manyRows));
+      await render(<div style={{ width: 480 }}>{table(tableId, manyRows)}</div>);
       await settleBrunoTableBrowserFrames();
       events.length = 0;
       const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
       const anchor = page.getByRole("gridcell", { name: "Row 000", exact: true }).first();
-      const target = page.getByRole("gridcell", { name: "Row 010", exact: true }).first();
       const bounds = grid.element().getBoundingClientRect();
       const start = anchor.element().getBoundingClientRect();
       const startX = start.left + start.width / 2;
@@ -1053,12 +1056,20 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           pointerId: 22,
         }),
       );
-      target.element().dispatchEvent(
+      const scrollbarY = bounds.bottom - 1;
+      const ownerDocument = grid.element().ownerDocument;
+      const originalElementFromPoint = ownerDocument.elementFromPoint.bind(ownerDocument);
+      const elementFromPoint = vi
+        .spyOn(ownerDocument, "elementFromPoint")
+        .mockImplementation((x, y) =>
+          y === scrollbarY ? grid.element() : originalElementFromPoint(x, y),
+        );
+      grid.element().dispatchEvent(
         new PointerEvent("pointermove", {
           bubbles: true,
           cancelable: true,
           clientX: startX + 5,
-          clientY: bounds.bottom - 1,
+          clientY: scrollbarY,
           pointerId: 22,
         }),
       );
@@ -1066,6 +1077,22 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
 
       expect(grid.element().scrollTop).toBeGreaterThan(initialScrollTop);
       expect(grid.element().scrollLeft).toBe(initialScrollLeft);
+      const activeCellId = grid.element().getAttribute("aria-activedescendant");
+      expect(activeCellId).not.toBe(anchor.element().id);
+      const newlyRevealedName =
+        page
+          .getByRole("gridcell")
+          .all()
+          .find((cell) => cell.element().id === activeCellId)
+          ?.element().textContent ?? "";
+      expect(newlyRevealedName).toMatch(/^Row 0\d\d$/);
+      expect(
+        page
+          .getByRole("gridcell")
+          .all()
+          .filter((cell) => cell.element().getAttribute("aria-selected") === "true").length,
+      ).toBeGreaterThan(1);
+      elementFromPoint.mockRestore();
       const pointerFrames = events.filter((event) => event.kind === "pointer-frame");
       const publications = events.filter((event) => event.kind === "publication");
       const decorations = events.filter(
@@ -1097,7 +1124,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           bubbles: true,
           cancelable: true,
           clientX: startX + 5,
-          clientY: bounds.bottom - 1,
+          clientY: scrollbarY,
           pointerId: 22,
         }),
       );
@@ -1106,7 +1133,11 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       expect(events.filter((event) => event.kind === "pointer-frame")).toHaveLength(
         framesAfterRelease,
       );
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toHaveLength(1));
+      expect(writes[0]?.split("\n")).toContain(newlyRevealedName);
     } finally {
+      restoreClipboard();
       removeInstrumentation();
     }
   });

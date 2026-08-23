@@ -83,6 +83,7 @@ const EMPTY_RANGE_SNAPSHOT: BrunoTableCellRangeSnapshot = Object.freeze({});
 type BrunoTableCellRangePointerGesture = {
   readonly grid: HTMLElement;
   readonly view: Window;
+  readonly bodyViewportTopInset: number;
   readonly startX: number;
   readonly startY: number;
   readonly activate: (hit: BrunoTableCellRangeHit) => void;
@@ -384,6 +385,7 @@ export class BrunoTableCellRangeRuntime {
     this.pointerGesture = {
       grid,
       view,
+      bodyViewportTopInset: captureBodyViewportTopInset(grid),
       startX: event.clientX,
       startY: event.clientY,
       activate,
@@ -618,7 +620,8 @@ export class BrunoTableCellRangeRuntime {
       axis = horizontal > vertical ? "horizontal" : "vertical";
       gestureActor.send({ type: "ACQUIRE_AXIS", axis });
     }
-    const hit = resolvePointerHit(gesture);
+    const bounds = gesture.grid.getBoundingClientRect();
+    const hit = resolvePointerHit(gesture, bounds);
     if (hit !== undefined) {
       const next = this.extend(hit, structure, axis);
       const focus = next.range?.focus ?? next.anchor;
@@ -627,7 +630,6 @@ export class BrunoTableCellRangeRuntime {
         if (rowIndex !== undefined) gesture.activate({ ...focus, rowIndex });
       }
     }
-    const bounds = gesture.grid.getBoundingClientRect();
     if (axis === "horizontal") {
       const delta =
         gesture.clientX < bounds.left + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
@@ -949,12 +951,31 @@ function escapeTsvCell(value: string): string {
 
 function resolvePointerHit(
   gesture: BrunoTableCellRangePointerGesture,
+  bounds: DOMRect,
 ): BrunoTableCellRangeHit | undefined {
   const direct = closestCellHit(gesture.target, gesture.grid);
   if (direct !== undefined) return direct;
+  const contentLeft = bounds.left + gesture.grid.clientLeft;
+  const contentTop = bounds.top + gesture.grid.clientTop;
+  const bodyRight = contentLeft + gesture.grid.clientWidth;
+  const bodyTop = contentTop + gesture.bodyViewportTopInset;
+  const bodyBottom = contentTop + gesture.grid.clientHeight;
+  if (bodyRight - contentLeft <= 2 || bodyBottom - bodyTop <= 2) return undefined;
+  const projectedX = Math.min(Math.max(gesture.clientX, contentLeft + 1), bodyRight - 2);
+  const projectedY = Math.min(Math.max(gesture.clientY, bodyTop + 1), bodyBottom - 2);
   return closestCellHit(
-    gesture.grid.ownerDocument.elementFromPoint(gesture.clientX, gesture.clientY),
+    gesture.grid.ownerDocument.elementFromPoint(projectedX, projectedY),
     gesture.grid,
+  );
+}
+
+function captureBodyViewportTopInset(grid: HTMLElement): number {
+  const contentTop = grid.getBoundingClientRect().top + grid.clientTop;
+  const header = grid.querySelector<HTMLElement>("thead");
+  if (header === null || header.closest('[role="grid"]') !== grid) return 0;
+  return Math.min(
+    grid.clientHeight,
+    Math.max(0, header.getBoundingClientRect().bottom - contentTop),
   );
 }
 

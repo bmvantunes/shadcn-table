@@ -16,6 +16,18 @@ const structure = createBrunoTableCellRangeStructure(
   ["COL_ID_A", "COL_ID_B", "COL_ID_C", "COL_ID_D"],
 );
 
+function gestureGrid(view: Window): HTMLElement {
+  return {
+    ownerDocument: { defaultView: view },
+    focus: vi.fn(),
+    setPointerCapture: vi.fn(),
+    getBoundingClientRect: vi.fn(() => ({ top: 0 }) as DOMRect),
+    querySelector: vi.fn(() => null),
+    clientTop: 0,
+    clientHeight: 100,
+  } as unknown as HTMLElement;
+}
+
 describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
   it("reuses a source-owned exact Row Identity snapshot", () => {
     const rowIds = Object.freeze(["ROW_A", "ROW_B"]);
@@ -150,11 +162,7 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
     } as unknown as Window;
-    const grid = {
-      ownerDocument: { defaultView: view },
-      focus: vi.fn(),
-      setPointerCapture: vi.fn(),
-    } as unknown as HTMLElement;
+    const grid = gestureGrid(view);
     const event = {
       button: 0,
       clientX: 0,
@@ -215,11 +223,7 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     } as unknown as Window;
-    const grid = {
-      ownerDocument: { defaultView: view },
-      focus: vi.fn(),
-      setPointerCapture: vi.fn(),
-    } as unknown as HTMLElement;
+    const grid = gestureGrid(view);
 
     range.startPointerGesture(
       {
@@ -263,11 +267,7 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       }),
       removeEventListener: vi.fn(),
     } as unknown as Window;
-    const grid = {
-      ownerDocument: { defaultView: view },
-      focus: vi.fn(),
-      setPointerCapture: vi.fn(),
-    } as unknown as HTMLElement;
+    const grid = gestureGrid(view);
     range.startPointerGesture(
       {
         button: 0,
@@ -305,11 +305,7 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     } as unknown as Window;
-    const grid = {
-      ownerDocument: { defaultView: view },
-      focus: vi.fn(),
-      setPointerCapture: vi.fn(),
-    } as unknown as HTMLElement;
+    const grid = gestureGrid(view);
     const start = (pointerId: number) =>
       range.startPointerGesture(
         {
