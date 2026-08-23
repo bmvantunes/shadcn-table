@@ -48,6 +48,7 @@ export class BrunoTableRowSelectionRuntime {
   private sourceRowIdSet: ReadonlySet<string>;
   private projectedRowIndex: ReadonlyMap<string, number>;
   private readonly selectedRowIds = new Set<string>();
+  private selectedProjectedCount = 0;
   private anchorRowId: string | undefined;
   private grouped = false;
   private headerSnapshot: BrunoTableRowSelectionHeaderSnapshot;
@@ -57,7 +58,7 @@ export class BrunoTableRowSelectionRuntime {
     this.projectedRowIds = this.sourceRowIds;
     this.sourceRowIdSet = new Set(this.sourceRowIds);
     this.projectedRowIndex = indexRowIds(this.projectedRowIds);
-    this.headerSnapshot = createHeaderSnapshot(this.projectedRowIds, this.selectedRowIds, false);
+    this.headerSnapshot = createHeaderSnapshot(this.projectedRowIds.length, 0, false);
   }
 
   public readonly getSelectedRowIds = (): readonly string[] =>
@@ -137,6 +138,7 @@ export class BrunoTableRowSelectionRuntime {
     this.projectedRowIds = nextProjection;
     this.sourceRowIdSet = nextSourceSet;
     this.projectedRowIndex = indexRowIds(nextProjection);
+    this.selectedProjectedCount = countSelected(nextProjection, this.selectedRowIds);
     if (this.anchorRowId !== undefined && !nextSourceSet.has(this.anchorRowId)) {
       this.anchorRowId = undefined;
     }
@@ -147,6 +149,7 @@ export class BrunoTableRowSelectionRuntime {
     if (this.grouped) return;
     const changed = new Set(this.selectedRowIds);
     this.selectedRowIds.clear();
+    this.selectedProjectedCount = 0;
     this.anchorRowId = undefined;
     this.grouped = true;
     this.publishSelectionChange(changed);
@@ -159,6 +162,7 @@ export class BrunoTableRowSelectionRuntime {
     this.projectedRowIds = this.sourceRowIds;
     this.sourceRowIdSet = new Set(this.sourceRowIds);
     this.projectedRowIndex = indexRowIds(this.projectedRowIds);
+    this.selectedProjectedCount = 0;
     this.anchorRowId = undefined;
     this.publishSelectionChange(new Set());
   };
@@ -168,13 +172,16 @@ export class BrunoTableRowSelectionRuntime {
     if (selected === checked) return;
     if (checked) this.selectedRowIds.add(rowId);
     else this.selectedRowIds.delete(rowId);
+    if (this.projectedRowIndex.has(rowId)) {
+      this.selectedProjectedCount += checked ? 1 : -1;
+    }
     changed.add(rowId);
   }
 
   private publishSelectionChange(changed: ReadonlySet<string>): void {
     const nextHeader = createHeaderSnapshot(
-      this.projectedRowIds,
-      this.selectedRowIds,
+      this.projectedRowIds.length,
+      this.selectedProjectedCount,
       this.grouped,
     );
     const headerChanged = !sameHeaderSnapshot(this.headerSnapshot, nextHeader);
@@ -209,15 +216,12 @@ function indexRowIds(rowIds: readonly string[]): ReadonlyMap<string, number> {
 }
 
 function createHeaderSnapshot(
-  rowIds: readonly string[],
-  selected: ReadonlySet<string>,
+  rowCountCandidate: number,
+  selectedCountCandidate: number,
   grouped: boolean,
 ): BrunoTableRowSelectionHeaderSnapshot {
-  let selectedCount = 0;
-  if (!grouped) {
-    for (const rowId of rowIds) if (selected.has(rowId)) selectedCount += 1;
-  }
-  const rowCount = grouped ? 0 : rowIds.length;
+  const selectedCount = grouped ? 0 : selectedCountCandidate;
+  const rowCount = grouped ? 0 : rowCountCandidate;
   return Object.freeze({
     checked: rowCount > 0 && selectedCount === rowCount,
     mixed: selectedCount > 0 && selectedCount < rowCount,
@@ -225,6 +229,12 @@ function createHeaderSnapshot(
     selectedCount,
     rowCount,
   });
+}
+
+function countSelected(rowIds: readonly string[], selected: ReadonlySet<string>): number {
+  let count = 0;
+  for (const rowId of rowIds) if (selected.has(rowId)) count += 1;
+  return count;
 }
 
 function sameHeaderSnapshot(

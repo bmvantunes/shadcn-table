@@ -81,5 +81,22 @@ describe("BrunoTable virtual reorder geometry", () => {
         ltrUtility,
       ),
     ).toEqual({ left: 260, right: 480 });
+    expect(resolveBrunoTableReorderCenterBounds("ltr", grid, [], [])).toEqual({
+      left: 100,
+      right: 600,
+    });
+    expect(resolveBrunoTableReorderCenterBounds("rtl", grid, [], [])).toEqual({
+      left: 100,
+      right: 600,
+    });
+    expect(
+      resolveBrunoTableReorderCenterBounds(
+        "rtl",
+        grid,
+        [{ left: 140, right: 260 }],
+        [{ left: 480, right: 600 }],
+        rtlUtility,
+      ),
+    ).toEqual({ left: 260, right: 480 });
   });
 });

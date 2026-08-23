@@ -240,6 +240,24 @@ const persistedPreferences = {
   columnPinning: { start: ["COL_ID_SYMBOL"], end: [] },
 } as const satisfies BrunoTablePersistedState<Order, Columns>;
 
+const invalidPersistedSelectionWidth = {
+  ...persistedPreferences,
+  columnWidths: {
+    // @ts-expect-error The private Row Selection width is implementation-owned.
+    COL_ID_BRUNO_TABLE_ROW_SELECTION: 40,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSelectionWidth;
+
+const invalidPersistedSelectionGroupOrder = {
+  ...persistedPreferences,
+  groupOrderBy: [
+    // @ts-expect-error The private Row Selection identity is never grouped-sortable.
+    { columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSelectionGroupOrder;
+
 expectTypeOf(persistedPreferences.filters[0]!.columnId).toEqualTypeOf<"COL_ID_PRICE">();
 
 const persistedTextSearch = {
@@ -676,6 +694,14 @@ void BrunoTableClient({
   tableId: "invalid-raw-selection-reserved-identity",
   // @ts-expect-error Consumers cannot claim the private Row Selection identity.
   columns: rawSelectionReservedIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-selection-reserved-initial-order",
+  columns,
+  // @ts-expect-error The private Row Selection identity is never sortable.
   initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
   getRowId: (row) => row.id,
   clientSource: directViewServerResult,

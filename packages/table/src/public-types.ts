@@ -70,7 +70,8 @@ type ColumnIdWhitespace =
   | "\u3000"
   | "\ufeff";
 type ColumnIdPattern = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
-type BrunoTableReservedColumnId = "COL_ID_BRUNO_TABLE_ROWS" | "COL_ID_BRUNO_TABLE_ROW_SELECTION";
+type BrunoTableRowsSystemColumnId = "COL_ID_BRUNO_TABLE_ROWS";
+type BrunoTableReservedColumnId = BrunoTableRowsSystemColumnId | "COL_ID_BRUNO_TABLE_ROW_SELECTION";
 
 export type BrunoTableColumnId<TColumnId extends ColumnIdPattern = ColumnIdPattern> =
   TColumnId extends BrunoTableReservedColumnId
@@ -1019,7 +1020,7 @@ export type BrunoTableSortBy<
   }[BrunoTableSortableColumnId<TColumns>][],
 ];
 
-export type BrunoTableRowsColumnId = BrunoTableReservedColumnId;
+export type BrunoTableRowsColumnId = BrunoTableRowsSystemColumnId;
 
 export type BrunoTableGroupableColumnId<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],

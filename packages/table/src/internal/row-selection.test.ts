@@ -108,6 +108,13 @@ describe("BrunoTableRowSelectionRuntime", () => {
     expect(selection.getAnchorRowId()).toBeUndefined();
     expect(selection.getCapabilitySnapshot()).toEqual({ enabled: false });
 
+    selection.toggleRow("a", true, false);
+    selection.toggleAll(true);
+    selection.reconcile(["a", "b", "c"], ["a", "b", "c"]);
+    expect(selection.getSelectedRowIds()).toEqual([]);
+    expect(selection.getAnchorRowId()).toBeUndefined();
+    expect(selection.getHeaderSnapshot()).toMatchObject({ disabled: true, rowCount: 0 });
+
     selection.leaveGroupedProjection(["a", "b"]);
     expect(selection.getCapabilitySnapshot()).toEqual({ enabled: true });
     expect(selection.getSelectedRowIds()).toEqual([]);

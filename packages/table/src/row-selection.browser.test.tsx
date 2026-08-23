@@ -666,7 +666,7 @@ describe("ordinary Client Row Selection", () => {
     }
   });
 
-  test("keeps Server and non-opted-in Client tables free of Row Selection UI", async () => {
+  test("keeps a non-opted-in Client table free of Row Selection UI", async () => {
     await render(
       <BrunoTableClient
         tableId="TABLE_ID_NO_ROW_SELECTION"
