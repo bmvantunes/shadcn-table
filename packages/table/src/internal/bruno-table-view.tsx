@@ -2175,20 +2175,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (!ownsGridSurface(event)) return;
     navigation.activateForFocus();
     const active = navigation.getSnapshot();
-    if (intent === "space" && rowSelection !== undefined && active !== undefined) {
+    if (
+      intent === "space" &&
+      rowSelection !== undefined &&
+      active !== undefined &&
+      active.region === "body"
+    ) {
       event.preventDefault();
-      if (active.region === "header") {
-        const header = rowSelection.getHeaderSnapshot();
-        if (header.disabled) return;
-        rowSelection.toggleAll(!header.checked);
-        const selectedCount = rowSelection.getHeaderSnapshot().selectedCount;
-        setAnnouncement(
-          selectedCount === 0
-            ? "All matching rows deselected"
-            : `${String(selectedCount)} matching ${selectedCount === 1 ? "row" : "rows"} selected`,
-        );
-        return;
-      }
       const rowId = active.rowId ?? rowSpace.getRowId(active.rowIndex);
       if (rowId === undefined) return;
       const checked = rowSelection.getRowSnapshot(rowId);
@@ -2231,6 +2224,19 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       openHeaderFilter(column.columnId);
     }
   };
+  const runSelectAll = (event: BrunoTableHotkeyGesture): void => {
+    if (!ownsGridSurface(event) || rowSelection === undefined) return;
+    const header = rowSelection.getHeaderSnapshot();
+    if (header.disabled) return;
+    event.preventDefault();
+    rowSelection.toggleAll(!header.checked);
+    const selectedCount = rowSelection.getHeaderSnapshot().selectedCount;
+    setAnnouncement(
+      selectedCount === 0
+        ? "All matching rows deselected"
+        : `${String(selectedCount)} matching ${selectedCount === 1 ? "row" : "rows"} selected`,
+    );
+  };
   useBrunoTableGridHotkeys(gridElement, {
     escape: (event) => {
       if (columnGesture.current !== undefined) {
@@ -2264,6 +2270,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     },
     headerMenu: runHeaderMenu,
     copy: runCopy,
+    ...(rowSelection === undefined ? {} : { selectAll: runSelectAll }),
     resize: runColumnResize,
     activate: runActivation,
     navigate: runNavigation,
@@ -2305,8 +2312,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C"
               : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
             : enableActiveCellCopy
-              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C Space Shift+Space"
-              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space"
+              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C Space Shift+Space Control+A Meta+A"
+              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space Control+A Meta+A"
         }
         onFocus={(event) => {
           if (event.target === event.currentTarget) navigation.activateForFocus();
@@ -2843,6 +2850,7 @@ const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHea
       ) : null}
       <Checkbox
         aria-label="Select all rows"
+        aria-keyshortcuts="Control+A Meta+A"
         checked={snapshot.checked}
         disabled={snapshot.disabled}
         indeterminate={snapshot.mixed}

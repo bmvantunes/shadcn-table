@@ -321,6 +321,36 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(innerCopy).toHaveBeenCalledOnce();
   });
 
+  test("registers Mod+A only for an installed Row Selection command", async () => {
+    const manager = getHotkeyManager();
+    const selectAll = vi.fn();
+    const screen = await render(
+      <>
+        <AdapterProbe commands={probeCommands()} label="Plain table hotkeys" />
+        <AdapterProbe commands={probeCommands({ selectAll })} label="Row Selection table hotkeys" />
+      </>,
+    );
+    const plain = screen.getByRole("region", { name: "Plain table hotkeys" }).element();
+    const enabled = screen.getByRole("region", { name: "Row Selection table hotkeys" }).element();
+    const registrationsFor = (owner: HTMLElement | SVGElement) =>
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === owner && registration.hotkey === "Mod+A",
+      );
+
+    await vi.waitFor(() => expect(registrationsFor(enabled)).toHaveLength(1));
+    expect(registrationsFor(plain)).toHaveLength(0);
+
+    enabled.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "a",
+        ...(detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+      }),
+    );
+    expect(selectAll).toHaveBeenCalledOnce();
+  });
+
   test("routes descendant commands to the innermost dynamically mounted table", async () => {
     const outerEscape = vi.fn();
     const innerEscape = vi.fn();

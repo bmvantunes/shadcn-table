@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createPortal } from "react-dom";
+import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -80,7 +81,7 @@ describe("ordinary Client Row Selection", () => {
       .element(grid)
       .toHaveAttribute(
         "aria-keyshortcuts",
-        "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space",
+        "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space Control+A Meta+A",
       );
     grid.element().focus();
     await userEvent.keyboard(" ");
@@ -97,9 +98,27 @@ describe("ordinary Client Row Selection", () => {
     await expect
       .element(page.getByRole("checkbox", { name: "Select all rows" }))
       .toHaveAttribute("aria-checked", "mixed");
+
+    await userEvent.keyboard("{ArrowUp}{ArrowUp} ");
+    await expect
+      .element(page.getByRole("columnheader", { name: /Name, sorted descending/ }))
+      .toHaveAttribute("aria-sort", "descending");
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select all rows" }))
+      .toHaveAttribute("aria-checked", "mixed");
+
+    await userEvent.keyboard(
+      detectPlatform() === "mac" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+    );
+    await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).toBeChecked();
   });
 
   test("preserves table state when the optional capability changes", async () => {
+    const manager = getHotkeyManager();
+    const selectAllRegistrationsFor = (grid: HTMLElement | SVGElement) =>
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === grid && registration.hotkey === "Mod+A",
+      );
     const renderTable = (rowSelection: true | undefined) => (
       <BrunoTableClient
         tableId="TABLE_ID_ROW_SELECTION_DYNAMIC"
@@ -112,11 +131,19 @@ describe("ordinary Client Row Selection", () => {
     );
     const screen = await render(renderTable(undefined));
     await settleBrunoTableBrowserFrames();
+    const disabledGrid = page
+      .getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_DYNAMIC" })
+      .element();
+    expect(selectAllRegistrationsFor(disabledGrid)).toHaveLength(0);
     await page.getByRole("button", { name: /Sort by Name/ }).click();
     await expect.element(page.getByRole("gridcell", { name: "Curie" })).toBeInTheDocument();
 
     await screen.rerender(renderTable(true));
     await settleBrunoTableBrowserFrames();
+    const enabledGrid = page
+      .getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_DYNAMIC" })
+      .element();
+    expect(selectAllRegistrationsFor(enabledGrid)).toHaveLength(1);
     const names = page
       .getByRole("gridcell")
       .all()
@@ -127,6 +154,11 @@ describe("ordinary Client Row Selection", () => {
 
     await screen.rerender(renderTable(undefined));
     await settleBrunoTableBrowserFrames();
+    const restoredGrid = page
+      .getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_DYNAMIC" })
+      .element();
+    expect(selectAllRegistrationsFor(restoredGrid)).toHaveLength(0);
+    expect(selectAllRegistrationsFor(enabledGrid)).toHaveLength(0);
     expect(
       page
         .getByRole("gridcell")
@@ -459,15 +491,16 @@ describe("ordinary Client Row Selection", () => {
     await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).not.toBeChecked();
 
     const grid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_FILTERED" });
+    const selectAllShortcut =
+      detectPlatform() === "mac" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}";
     grid.element().focus();
-    await userEvent.keyboard("{ArrowUp}");
-    await userEvent.keyboard(" ");
+    await userEvent.keyboard(selectAllShortcut);
     await vi.waitFor(() =>
       expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
         "1 matching row selected",
       ),
     );
-    await userEvent.keyboard(" ");
+    await userEvent.keyboard(selectAllShortcut);
     await vi.waitFor(() =>
       expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
         "All matching rows deselected",
@@ -525,6 +558,7 @@ describe("ordinary Client Row Selection", () => {
   });
 
   test("keeps simultaneous and Strict Mode table lifetimes isolated", async () => {
+    const manager = getHotkeyManager();
     await render(
       <StrictMode>
         <BrunoTableClient
@@ -548,6 +582,14 @@ describe("ordinary Client Row Selection", () => {
     await settleBrunoTableBrowserFrames();
     const firstGrid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_FIRST" });
     const secondGrid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_SECOND" });
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) =>
+          (registration.target === firstGrid.element() ||
+            registration.target === secondGrid.element()) &&
+          registration.hotkey === "Mod+A",
+      ),
+    ).toHaveLength(2);
     await firstGrid.getByRole("checkbox", { name: "Select row 1" }).click();
     await expect.element(firstGrid.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
     await expect
@@ -588,6 +630,13 @@ describe("ordinary Client Row Selection", () => {
     await settleBrunoTableBrowserFrames();
     const outer = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_OUTER" });
     const inner = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_INNER" });
+    expect(
+      [...getHotkeyManager().registrations.state.values()].filter(
+        (registration) =>
+          (registration.target === outer.element() || registration.target === inner.element()) &&
+          registration.hotkey === "Mod+A",
+      ),
+    ).toHaveLength(2);
     await inner.getByRole("checkbox", { name: "Select row 1" }).click();
     await expect.element(inner.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
     const outerAndNestedCheckboxes = outer.getByRole("checkbox", { name: "Select row 1" }).all();

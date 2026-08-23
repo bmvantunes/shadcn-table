@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
 import { createInMemoryViewServerReact } from "effect-view-server/react/testing";
-import { detectPlatform } from "@tanstack/react-hotkeys";
+import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 
 import {
   BrunoTableActiveFilterCount,
@@ -229,6 +229,14 @@ describe("BrunoTableServer", () => {
     );
     await settleBrunoTableBrowserFrames();
     expect(screen.getByRole("checkbox", { name: /Select (all )?rows?/ }).query()).toBeNull();
+    const grid = screen
+      .getByRole("grid", { name: "Data for TABLE_ID_SERVER_NO_SELECTION" })
+      .element();
+    expect(
+      [...getHotkeyManager().registrations.state.values()].filter(
+        (registration) => registration.target === grid && registration.hotkey === "Mod+A",
+      ),
+    ).toHaveLength(0);
   });
 
   test("keeps Server condition editing without synthesizing Set Filter facet choices", async () => {
