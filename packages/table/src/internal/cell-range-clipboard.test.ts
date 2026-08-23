@@ -140,6 +140,29 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     }
   });
 
+  it("keeps a replacement instrumentation listener after an older disposer repeats", () => {
+    const removeFirst = installBrunoTableCellRangeInstrumentationListener(
+      "TABLE_ID_RANGE_DISPOSER",
+      () => undefined,
+    );
+    removeFirst();
+    let publications = 0;
+    const removeReplacement = installBrunoTableCellRangeInstrumentationListener(
+      "TABLE_ID_RANGE_DISPOSER",
+      () => {
+        publications += 1;
+      },
+    );
+    try {
+      removeFirst();
+      const range = new BrunoTableCellRangeRuntime("TABLE_ID_RANGE_DISPOSER");
+      range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
+      expect(publications).toBe(1);
+    } finally {
+      removeReplacement();
+    }
+  });
+
   it("captures every exact value before serialization so live changes cannot mix versions", () => {
     const values = new Map([
       ["ROW_A:COL_ID_A", 9_007_199_254_740_993n],

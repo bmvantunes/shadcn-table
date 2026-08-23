@@ -119,9 +119,14 @@ export function installBrunoTableCellRangeInstrumentationListener(
     new Set<BrunoTableCellRangeInstrumentationListener>();
   listeners.add(listener);
   instrumentationListenersByTable.set(tableId, listeners);
+  let active = true;
   return () => {
+    if (!active) return;
+    active = false;
     listeners.delete(listener);
-    if (listeners.size === 0) instrumentationListenersByTable.delete(tableId);
+    if (listeners.size === 0 && instrumentationListenersByTable.get(tableId) === listeners) {
+      instrumentationListenersByTable.delete(tableId);
+    }
   };
 }
 
@@ -453,8 +458,9 @@ export class BrunoTableCellRangeRuntime {
           ? BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
           : 0;
     if (delta === 0) return false;
+    const before = gesture.grid.scrollTop;
     gesture.grid.scrollTop += delta;
-    return true;
+    return gesture.grid.scrollTop !== before;
   };
 
   private readonly detachPointerGesture = (gesture: BrunoTableCellRangePointerGesture): void => {
@@ -641,11 +647,7 @@ function identitySpan(
   if (first === undefined || second === undefined || first === second) return [];
   const start = Math.min(first, second);
   const end = Math.max(first, second);
-  const span = identities.slice(start, end + 1);
-  const firstValue = span[0];
-  const secondValue = span[1];
-  if (firstValue === undefined || secondValue === undefined) return [];
-  return [firstValue, secondValue, ...span.slice(2)];
+  return identities.slice(start, end + 1);
 }
 
 function hasIdentitySpan(

@@ -209,6 +209,9 @@ type BrunoTableColumnPointerDownHandler = (
 ) => void;
 const INTERACTIVE_DESCENDANT_SELECTOR =
   'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
+const INTERACTIVE_ROLE_SELECTOR =
+  '[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"]';
+const CELL_RANGE_POINTER_EXCLUSION_SELECTOR = `${INTERACTIVE_DESCENDANT_SELECTOR},${INTERACTIVE_ROLE_SELECTOR}`;
 const EMBEDDED_BROWSING_CONTEXT_SELECTOR = "iframe,object,embed";
 const VISUALLY_HIDDEN: CSSProperties = {
   clip: "rect(0 0 0 0)",
@@ -2193,7 +2196,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         } else {
           cellRange.replace({ rowId: next.rowId, columnId: next.columnId }, cellRangeStructure);
         }
-      } else if (!extendCellRange) {
+      } else {
         cellRange.clear();
       }
     }
@@ -2277,15 +2280,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (cellRange === undefined || cellRangeStructure === undefined) return;
     const grid = event.currentTarget;
     const target = event.target instanceof Element ? event.target : null;
+    const hit = closestBrunoTableCellRangeHit(event.target, grid);
+    if (hit === undefined) return;
+    const hitCell = target?.closest<HTMLElement>(
+      '[role="gridcell"][data-bruno-row-id][data-bruno-row-index][data-bruno-column-id]',
+    );
+    const excludedDescendant = target?.closest<HTMLElement>(CELL_RANGE_POINTER_EXCLUSION_SELECTOR);
     if (
-      target?.closest(
-        "button,a[href],input,select,textarea,[contenteditable='true'],[role='button'],[role='link'],[role='checkbox'],[role='textbox'],[role='combobox'],[role='slider'],[role='switch']",
-      ) !== null
+      hitCell !== null &&
+      hitCell !== undefined &&
+      excludedDescendant !== null &&
+      excludedDescendant !== undefined &&
+      excludedDescendant !== hitCell &&
+      hitCell.contains(excludedDescendant)
     ) {
       return;
     }
-    const hit = closestBrunoTableCellRangeHit(event.target, grid);
-    if (hit === undefined) return;
     const horizontalLogicalSign = getComputedStyle(grid).direction === "rtl" ? -1 : 1;
     const activeBefore = navigation.getSnapshot();
     cellRange.startPointerGesture(

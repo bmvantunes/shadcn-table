@@ -163,6 +163,21 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await expect
         .element(page.getByRole("gridcell", { name: "2", exact: true }))
         .not.toHaveAttribute("aria-selected");
+
+      await userEvent.click(page.getByRole("gridcell", { name: "Babbage" }));
+      await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .toHaveAttribute("aria-selected", "true");
+      await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .not.toHaveAttribute("aria-selected");
+      await expect
+        .element(page.getByRole("gridcell", { name: "Babbage" }))
+        .not.toHaveAttribute("aria-selected");
     } finally {
       restoreClipboard();
     }
@@ -349,6 +364,111 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("does not start a range gesture from focusable custom cell content", async () => {
+    const interactiveColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        width: 180,
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <article aria-label={`Focusable ${row.name}`} tabIndex={0}>
+            {row.name}
+          </article>
+        ),
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        width: 180,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        width: 240,
+      },
+    ] satisfies BrunoTableColumns<Row>;
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_CELL_RANGE_INTERACTIVE"
+        columns={interactiveColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={source()}
+        getRowId={(row) => row.id}
+      />,
+    );
+    const score = page.getByRole("gridcell", { name: "4", exact: true });
+    await userEvent.click(score);
+    await settleBrunoTableBrowserFrames();
+    const focusable = page.getByRole("article", { name: "Focusable Babbage" });
+    focusable.element().dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        pointerId: 25,
+      }),
+    );
+    page
+      .getByRole("gridcell", { name: "3", exact: true })
+      .element()
+      .dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 30,
+          clientY: 10,
+          pointerId: 25,
+        }),
+      );
+    await settleBrunoTableBrowserFrames();
+    await expect.element(score).toHaveAttribute("aria-selected", "true");
+    await expect
+      .element(page.getByRole("gridcell", { name: "3", exact: true }))
+      .not.toHaveAttribute("aria-selected");
+
+    score.element().dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        pointerId: 26,
+      }),
+    );
+    const curieScore = page.getByRole("gridcell", { name: "3", exact: true });
+    curieScore.element().dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 17,
+        clientY: 30,
+        pointerId: 26,
+      }),
+    );
+    await settleBrunoTableBrowserFrames();
+    curieScore.element().dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 17,
+        clientY: 30,
+        pointerId: 26,
+      }),
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect.element(score).toHaveAttribute("aria-selected", "true");
+    await expect.element(curieScore).toHaveAttribute("aria-selected", "true");
+  });
+
   test("bounds edge autoscroll publications and mounted decoration work by animation frame", async () => {
     const tableId = "TABLE_ID_CELL_RANGE_AUTOSCROLL";
     const events: BrunoTableCellRangeInstrumentationEvent[] = [];
@@ -417,7 +537,15 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         60,
       );
 
-      target.element().dispatchEvent(
+      grid.element().scrollTop = grid.element().scrollHeight;
+      await settleBrunoTableBrowserFrames(3);
+      const framesAtVerticalClamp = events.filter((event) => event.kind === "pointer-frame").length;
+      await settleBrunoTableBrowserFrames(3);
+      expect(events.filter((event) => event.kind === "pointer-frame")).toHaveLength(
+        framesAtVerticalClamp,
+      );
+
+      grid.element().dispatchEvent(
         new PointerEvent("pointerup", {
           bubbles: true,
           cancelable: true,
@@ -436,24 +564,25 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
-  test("routes LTR and RTL horizontal edge autoscroll through the pinned logical viewport", async () => {
-    const wideNameColumn = {
-      field: "name",
-      valueType: "text",
-      width: 320,
-    } as const;
-    const wideColumns = [
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_1", headerName: "Wide 1", pinned: "start" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_2", headerName: "Wide 2" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_3", headerName: "Wide 3" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_4", headerName: "Wide 4" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_5", headerName: "Wide 5" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_6", headerName: "Wide 6" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_7", headerName: "Wide 7" },
-      { ...wideNameColumn, columnId: "COL_ID_WIDE_8", headerName: "Wide 8", pinned: "end" },
-    ] satisfies BrunoTableColumns<Row>;
+  test.each(["ltr", "rtl"] as const)(
+    "routes %s horizontal edge autoscroll through the pinned logical viewport",
+    async (direction) => {
+      const wideNameColumn = {
+        field: "name",
+        valueType: "text",
+        width: 320,
+      } as const;
+      const wideColumns = [
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_1", headerName: "Wide 1", pinned: "start" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_2", headerName: "Wide 2" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_3", headerName: "Wide 3" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_4", headerName: "Wide 4" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_5", headerName: "Wide 5" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_6", headerName: "Wide 6" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_7", headerName: "Wide 7" },
+        { ...wideNameColumn, columnId: "COL_ID_WIDE_8", headerName: "Wide 8", pinned: "end" },
+      ] satisfies BrunoTableColumns<Row>;
 
-    for (const direction of ["ltr", "rtl"] as const) {
       const tableId = `TABLE_ID_CELL_RANGE_HORIZONTAL_${direction.toUpperCase()}`;
       const events: BrunoTableCellRangeInstrumentationEvent[] = [];
       const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
@@ -552,8 +681,8 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         removeInstrumentation();
         await screen.unmount();
       }
-    }
-  });
+    },
+  );
 
   test("preserves an exact identity span across value publications and rejects changed interiors", async () => {
     const writes: string[] = [];
@@ -651,9 +780,9 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}");
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes).toEqual(["Ada\t4\t9007199254740993"]));
-      await expect
-        .element(page.getByRole("log", { name: "Table interaction status" }))
-        .toHaveTextContent("");
+      expect(
+        page.getByRole("log", { name: "Table interaction status" }).element().textContent,
+      ).toBe("");
 
       await screen.rerender(
         table(

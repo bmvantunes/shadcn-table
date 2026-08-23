@@ -132,6 +132,6 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
 });
 
 function percentile99(samples: readonly number[]): number {
-  const sorted = samples.toSorted((left, right) => left - right);
+  const sorted = [...samples].sort((left, right) => left - right);
   return sorted[Math.max(0, Math.ceil(sorted.length * 0.99) - 1)] ?? 0;
 }
