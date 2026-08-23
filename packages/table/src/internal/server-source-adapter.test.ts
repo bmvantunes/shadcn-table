@@ -1239,9 +1239,11 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       ]),
       undefined,
     );
-    expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(adapter.getPublication().rowSpace?.getRow("old")).toMatchObject({ symbol: "OLD" });
+    expect(transport.release).not.toHaveBeenCalled();
     adapter.replace(transport.viewport, query);
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(adapter.getPublication().rowSpace?.getRow("old")).toBeUndefined();
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.release).toHaveBeenCalledTimes(1);
   });
@@ -1277,9 +1279,10 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       columns[1]!,
     ]);
     adapter.reconcileColumns(presentedColumns, undefined);
-    expect(transport.release).toHaveBeenCalledTimes(1);
-    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    expect(transport.release).not.toHaveBeenCalled();
     adapter.replace(transport.viewport, { ...query, generation: 1 });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(transport.release).toHaveBeenCalledTimes(1);
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.getRequest()?.query).toMatchObject({ select: completeRawSelect });
 
@@ -1301,8 +1304,9 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.release).toHaveBeenCalledTimes(1);
 
     adapter.reconcileColumns(columns, undefined);
-    expect(transport.release).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledTimes(1);
     adapter.replace(transport.viewport, { ...query, generation: 3 });
+    expect(transport.release).toHaveBeenCalledTimes(2);
     expect(transport.replace).toHaveBeenCalledTimes(3);
     expect(transport.getRequest()?.query).toMatchObject({ select: ["symbol", "price"] });
   });
@@ -1511,7 +1515,18 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       undefined,
     );
 
+    expect(transport.release).not.toHaveBeenCalled();
+    adapter.replace(
+      transport.viewport,
+      { ...query, generation: 2 },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_DERIVED"],
+      },
+    );
     expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
   });
 
   it("defers projection until replacement visibility exists for new Column Identities", () => {
@@ -1555,6 +1570,61 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.release).toHaveBeenCalledTimes(1);
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.getRequest()?.query).toMatchObject({ select: ["price"] });
+  });
+
+  it("defers partial Column Identity projection until final reconciled visibility", () => {
+    const transport = makeViewport();
+    const first = compileColumns([
+      {
+        columnId: "COL_ID_A",
+        field: "symbol",
+        headerName: "A",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_B",
+        field: "price",
+        headerName: "B",
+        valueType: "number",
+      },
+    ]);
+    const second = compileColumns([
+      first[1]!,
+      {
+        columnId: "COL_ID_C",
+        field: "symbol",
+        headerName: "C",
+        valueType: "text",
+      },
+    ]);
+    const stableQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_B", direction: "asc" as const }],
+    };
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      first,
+      undefined,
+      [],
+      stableQuery.orderBy,
+    );
+    adapter.replace(transport.viewport, stableQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_A", "COL_ID_B"],
+    });
+    transport.getRequest()?.sink.setRowData({ 0: { symbol: "AAA", price: 10 } }, { 0: "row-1" });
+    const retained = adapter.getPublication().rowSpace?.getRow("row-1");
+
+    adapter.reconcileColumns(second, undefined);
+    adapter.replace(transport.viewport, stableQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_B", "COL_ID_C"],
+    });
+
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.release).not.toHaveBeenCalled();
+    expect(adapter.getPublication().rowSpace?.getRow("row-1")).toBe(retained);
   });
 
   it("keeps hidden computed and raw-row presentation dormant during equivalent deliveries", () => {

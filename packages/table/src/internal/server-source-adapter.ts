@@ -257,14 +257,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       quickFilterFields === this.quickFilterFields
         ? this.quickFilterFields
         : snapshotBrunoTableQuickFilterFields(quickFilterFields);
-    const previousVisibleColumnIds = this.active?.inputs.visibleColumnIds;
-    const visibleColumnIds =
-      previousVisibleColumnIds === undefined ||
-      previousVisibleColumnIds.some((columnId) =>
-        columns.some((column) => column.columnId === columnId),
-      )
-        ? previousVisibleColumnIds
-        : undefined;
+    const visibleColumnIds = retainSurvivingVisibleColumnIds(
+      columns,
+      this.active?.inputs.visibleColumnIds,
+    );
     const nextProjectionFields = compileBrunoTableServerProjectionFields(
       columns,
       nextQuickFilterFields,
@@ -280,7 +276,6 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     if (columns === this.columns) {
       if (!sameProjectionFields(this.projectionFields, nextProjectionFields)) {
         this.forceNextNavigationReset = true;
-        this.release();
       }
       this.quickFilterFields = nextQuickFilterFields;
       this.projectionFields = nextProjectionFields;
@@ -298,7 +293,6 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     );
     if (!sameProjectionFields(this.projectionFields, nextProjectionFields)) {
       this.forceNextNavigationReset = true;
-      this.release();
     }
     this.columns = columns;
     this.quickFilterFields = nextQuickFilterFields;
@@ -350,19 +344,31 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
     resetWhenInputsChange = false,
   ): void {
-    const nextInputs = snapshotServerQueryInputs(inputs);
+    const snappedInputs = snapshotServerQueryInputs(inputs);
+    const visibleColumnIds = retainSurvivingVisibleColumnIds(
+      this.columns,
+      snappedInputs.visibleColumnIds,
+    );
+    const nextInputs =
+      visibleColumnIds === snappedInputs.visibleColumnIds
+        ? snappedInputs
+        : Object.freeze({ ...snappedInputs, visibleColumnIds });
     this.rowEquivalencePlan = compileRowEquivalencePlan(this.columns, nextInputs.visibleColumnIds);
-    const compilePlan = (candidate: BrunoTableServerQueryInputs) =>
-      compileBrunoTableServerQueryPlan(
+    const compilePlan = (candidate: BrunoTableServerQueryInputs) => {
+      const candidateVisibleColumnIds = retainSurvivingVisibleColumnIds(
+        this.columns,
+        candidate.visibleColumnIds,
+      );
+      return compileBrunoTableServerQueryPlan(
         this.columns,
         {
           ...(candidate.routeBy === undefined ? {} : { routeBy: candidate.routeBy }),
           ...(candidate.externalFilters === undefined
             ? {}
             : { externalFilters: candidate.externalFilters }),
-          ...(candidate.visibleColumnIds === undefined
+          ...(candidateVisibleColumnIds === undefined
             ? {}
-            : { visibleColumnIds: candidate.visibleColumnIds }),
+            : { visibleColumnIds: candidateVisibleColumnIds }),
           filters: query.filters,
           quickFilter: query.quickFilter,
           quickFilterFields: this.quickFilterFields,
@@ -370,6 +376,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         },
         this.completeRawSelect,
       );
+    };
     const queryPlan = compilePlan(nextInputs);
     this.projectionFields = queryPlan.query.select;
     const transport = requireViewportTransport<TRow>(viewport);
@@ -385,6 +392,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
           inputs: nextInputs,
         });
       }
+      this.forceNextNavigationReset = false;
       return;
     }
     const semanticInputsChanged =
@@ -815,6 +823,16 @@ function snapshotServerQueryInputs(
         ? undefined
         : Object.freeze([...inputs.visibleColumnIds]),
   });
+}
+
+function retainSurvivingVisibleColumnIds(
+  columns: readonly CompiledColumn[],
+  visibleColumnIds: readonly string[] | undefined,
+): readonly string[] | undefined {
+  return visibleColumnIds === undefined ||
+    visibleColumnIds.some((columnId) => columns.some((column) => column.columnId === columnId))
+    ? visibleColumnIds
+    : undefined;
 }
 
 function sameProjectionFields(left: readonly string[], right: readonly string[]): boolean {
