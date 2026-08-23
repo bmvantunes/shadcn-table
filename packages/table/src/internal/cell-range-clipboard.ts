@@ -1,3 +1,6 @@
+import { Store } from "@tanstack/store";
+import { assign, createActor, createMachine } from "xstate";
+
 export type BrunoTableCellRangeAxis = "horizontal" | "vertical";
 
 export type BrunoTableCellCoordinate = Readonly<{
@@ -75,22 +78,133 @@ export type BrunoTableClipboardSnapshot =
 export type BrunoTableCellRangeHit = BrunoTableCellCoordinate &
   Readonly<{ readonly rowIndex: number }>;
 
+const EMPTY_RANGE_SNAPSHOT: BrunoTableCellRangeSnapshot = Object.freeze({});
+
 type BrunoTableCellRangePointerGesture = {
-  readonly pointerId: number;
   readonly grid: HTMLElement;
   readonly view: Window;
   readonly startX: number;
   readonly startY: number;
-  readonly before: BrunoTableCellRangeSnapshot;
   readonly activate: (hit: BrunoTableCellRangeHit) => void;
   readonly restoreActive: () => void;
   readonly scrollHorizontalByPhysical: (delta: number) => boolean;
-  axis: BrunoTableCellRangeAxis | undefined;
   clientX: number;
   clientY: number;
   target: EventTarget | null;
   frame: number | null;
 };
+
+type BrunoTableCellRangeGestureEvent =
+  | Readonly<{
+      readonly type: "START";
+      readonly pointerId: number;
+      readonly before: BrunoTableCellRangeSnapshot;
+    }>
+  | Readonly<{ readonly type: "ACQUIRE_AXIS"; readonly axis: BrunoTableCellRangeAxis }>
+  | Readonly<{ readonly type: "COMMIT" | "CANCEL" | "INVALIDATE" }>;
+
+type BrunoTableCellRangeGestureContext = Readonly<{
+  readonly pointerId: number | undefined;
+  readonly before: BrunoTableCellRangeSnapshot;
+  readonly axis: BrunoTableCellRangeAxis | undefined;
+}>;
+
+const EMPTY_GESTURE_CONTEXT: BrunoTableCellRangeGestureContext = Object.freeze({
+  pointerId: undefined,
+  before: EMPTY_RANGE_SNAPSHOT,
+  axis: undefined,
+});
+
+const brunoTableCellRangeGestureMachine = createMachine(
+  {
+    id: "brunoTableCellRangeGesture",
+    initial: "idle",
+    types: {} as {
+      context: BrunoTableCellRangeGestureContext;
+      events: BrunoTableCellRangeGestureEvent;
+    },
+    context: EMPTY_GESTURE_CONTEXT,
+    states: {
+      idle: {
+        on: {
+          START: {
+            target: "armed",
+            actions: assign({
+              pointerId: ({ event }) => event.pointerId,
+              before: ({ event }) => event.before,
+              axis: undefined,
+            }),
+          },
+        },
+      },
+      armed: {
+        on: {
+          ACQUIRE_AXIS: {
+            target: "axisLocked",
+            actions: assign({ axis: ({ event }) => event.axis }),
+          },
+          COMMIT: { target: "idle", actions: "clearGestureContext" },
+          CANCEL: { target: "idle", actions: "clearGestureContext" },
+          INVALIDATE: { target: "idle", actions: "clearGestureContext" },
+        },
+      },
+      axisLocked: {
+        on: {
+          COMMIT: { target: "idle", actions: "clearGestureContext" },
+          CANCEL: { target: "idle", actions: "clearGestureContext" },
+          INVALIDATE: { target: "idle", actions: "clearGestureContext" },
+        },
+      },
+    },
+  },
+  {
+    actions: {
+      clearGestureContext: assign({
+        pointerId: () => undefined,
+        before: () => EMPTY_RANGE_SNAPSHOT,
+        axis: () => undefined,
+      }),
+    },
+  },
+);
+
+type BrunoTableCellRangeGestureProjection = BrunoTableCellRangeGestureContext &
+  Readonly<{ readonly value: "idle" | "armed" | "axisLocked" }>;
+
+function createBrunoTableCellRangeGestureActor(): Readonly<{
+  readonly stop: () => void;
+  readonly send: (event: BrunoTableCellRangeGestureEvent) => void;
+  readonly getSnapshot: () => BrunoTableCellRangeGestureProjection;
+}> {
+  const actor = createActor(brunoTableCellRangeGestureMachine);
+  const projection = new Store<BrunoTableCellRangeGestureProjection>({
+    value: "idle",
+    ...EMPTY_GESTURE_CONTEXT,
+  });
+  const subscription = actor.subscribe((snapshot) => {
+    const value =
+      snapshot.value === "armed" || snapshot.value === "axisLocked" ? snapshot.value : "idle";
+    const next = Object.freeze({ value, ...snapshot.context });
+    const previous = projection.get();
+    if (
+      previous.value !== next.value ||
+      previous.pointerId !== next.pointerId ||
+      previous.before !== next.before ||
+      previous.axis !== next.axis
+    ) {
+      projection.setState(() => next);
+    }
+  });
+  actor.start();
+  return Object.freeze({
+    stop: () => {
+      subscription.unsubscribe();
+      actor.stop();
+    },
+    send: (event) => actor.send(event),
+    getSnapshot: () => projection.get(),
+  });
+}
 
 export type BrunoTableCellRangeInstrumentationEvent =
   | Readonly<{ readonly kind: "publication"; readonly tableId: string }>
@@ -134,8 +248,6 @@ const BRUNO_TABLE_CELL_RANGE_DRAG_SLOP = 4;
 const BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE = 24;
 const BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP = 12;
 
-const EMPTY_RANGE_SNAPSHOT: BrunoTableCellRangeSnapshot = Object.freeze({});
-
 export function createBrunoTableCellRangeStructure(
   rowIds: readonly string[],
   columnIds: readonly string[],
@@ -156,6 +268,7 @@ export class BrunoTableCellRangeRuntime {
   private observer: MutationObserver | undefined;
   private decorationFrame: number | null = null;
   private pointerGesture: BrunoTableCellRangePointerGesture | undefined;
+  private readonly gestureActor = createBrunoTableCellRangeGestureActor();
   private structuralInvalidationPendingCopy = false;
 
   public constructor(private readonly tableId = "TABLE_ID_UNBOUND_CELL_RANGE") {}
@@ -182,6 +295,7 @@ export class BrunoTableCellRangeRuntime {
 
   public readonly dispose = (): void => {
     this.cancelPointerGesture();
+    this.gestureActor.stop();
     this.observer?.disconnect();
     this.observer = undefined;
     this.grid = null;
@@ -190,7 +304,11 @@ export class BrunoTableCellRangeRuntime {
     this.listeners.clear();
   };
 
-  public readonly isPointerGestureActive = (): boolean => this.pointerGesture !== undefined;
+  public readonly isPointerGestureActive = (): boolean =>
+    this.gestureActor.getSnapshot().value !== "idle";
+
+  public readonly getPointerGestureSnapshot = (): BrunoTableCellRangeGestureProjection =>
+    this.gestureActor.getSnapshot();
 
   public readonly startPointerGesture = (
     event: PointerEvent,
@@ -204,16 +322,22 @@ export class BrunoTableCellRangeRuntime {
     if (
       structure === undefined ||
       event.button !== 0 ||
-      this.pointerGesture !== undefined ||
+      this.gestureActor.getSnapshot().value !== "idle" ||
       !containsCoordinate(structure, hit)
     ) {
       return false;
     }
     event.preventDefault();
     const before = this.snapshot;
-    if (event.shiftKey && this.snapshot.anchor !== undefined) this.extend(hit, structure);
-    else this.replace(hit, structure);
-    activate(hit);
+    const next =
+      event.shiftKey && this.snapshot.anchor !== undefined
+        ? this.extend(hit, structure)
+        : this.replace(hit, structure);
+    const focus = next.range?.focus ?? next.anchor;
+    if (focus !== undefined) {
+      const rowIndex = structure.rowIndexById.get(focus.rowId);
+      if (rowIndex !== undefined) activate({ ...focus, rowIndex });
+    }
     grid.focus({ preventScroll: true });
     try {
       grid.setPointerCapture(event.pointerId);
@@ -223,21 +347,23 @@ export class BrunoTableCellRangeRuntime {
     const view = grid.ownerDocument.defaultView;
     if (view === null) return true;
     this.pointerGesture = {
-      pointerId: event.pointerId,
       grid,
       view,
       startX: event.clientX,
       startY: event.clientY,
-      before,
       activate,
       restoreActive,
       scrollHorizontalByPhysical,
-      axis: this.snapshot.range?.axis,
       clientX: event.clientX,
       clientY: event.clientY,
       target: event.target,
       frame: null,
     };
+    this.gestureActor.send({ type: "START", pointerId: event.pointerId, before });
+    const initialAxis = this.snapshot.range?.axis;
+    if (initialAxis !== undefined) {
+      this.gestureActor.send({ type: "ACQUIRE_AXIS", axis: initialAxis });
+    }
     view.addEventListener("pointermove", this.onPointerMove, true);
     view.addEventListener("pointerup", this.onPointerUp, true);
     view.addEventListener("pointercancel", this.onPointerCancel, true);
@@ -247,8 +373,10 @@ export class BrunoTableCellRangeRuntime {
   public readonly cancelPointerGesture = (): boolean => {
     const gesture = this.pointerGesture;
     if (gesture === undefined) return false;
+    const before = this.gestureActor.getSnapshot().before;
     this.detachPointerGesture(gesture);
-    this.publish(gesture.before);
+    this.gestureActor.send({ type: "CANCEL" });
+    this.publish(before);
     gesture.restoreActive();
     return true;
   };
@@ -286,11 +414,19 @@ export class BrunoTableCellRangeRuntime {
     structure: BrunoTableCellRangeStructure,
   ): BrunoTableCellRangeSnapshot => {
     if (this.structure === structure) return this.snapshot;
-    this.cancelPointerGesture();
+    const gesture = this.pointerGesture;
+    if (
+      gesture !== undefined &&
+      (!snapshotMatchesStructure(this.gestureActor.getSnapshot().before, structure) ||
+        !snapshotMatchesStructure(this.snapshot, structure))
+    ) {
+      this.detachPointerGesture(gesture);
+      this.gestureActor.send({ type: "INVALIDATE" });
+    }
     this.structure = structure;
     const anchor = this.snapshot.anchor;
     if (anchor === undefined || !containsCoordinate(structure, anchor)) {
-      if (anchor !== undefined) this.structuralInvalidationPendingCopy = true;
+      if (this.snapshot.range !== undefined) this.structuralInvalidationPendingCopy = true;
       return this.publish(EMPTY_RANGE_SNAPSHOT);
     }
     const range = this.snapshot.range;
@@ -359,7 +495,10 @@ export class BrunoTableCellRangeRuntime {
     const mountedCells = grid.querySelectorAll<HTMLElement>(
       '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
     );
+    let ownedMountedCellCount = 0;
     for (const cell of mountedCells) {
+      if (cell.closest('[role="grid"]') !== grid) continue;
+      ownedMountedCellCount += 1;
       const rowId = cell.dataset["brunoRowId"];
       const columnId = cell.dataset["brunoColumnId"];
       const selected =
@@ -377,13 +516,14 @@ export class BrunoTableCellRangeRuntime {
     recordInstrumentation({
       kind: "mounted-decoration",
       tableId: this.tableId,
-      mountedCellCount: mountedCells.length,
+      mountedCellCount: ownedMountedCellCount,
     });
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     const gesture = this.pointerGesture;
-    if (gesture === undefined || event.pointerId !== gesture.pointerId) return;
+    if (gesture === undefined || event.pointerId !== this.gestureActor.getSnapshot().pointerId)
+      return;
     event.preventDefault();
     gesture.clientX = event.clientX;
     gesture.clientY = event.clientY;
@@ -393,16 +533,18 @@ export class BrunoTableCellRangeRuntime {
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     const gesture = this.pointerGesture;
-    if (gesture === undefined || event.pointerId !== gesture.pointerId) return;
+    if (gesture === undefined || event.pointerId !== this.gestureActor.getSnapshot().pointerId)
+      return;
     gesture.clientX = event.clientX;
     gesture.clientY = event.clientY;
     gesture.target = event.target;
     this.applyPointerFrame(gesture);
     this.detachPointerGesture(gesture);
+    this.gestureActor.send({ type: "COMMIT" });
   };
 
   private readonly onPointerCancel = (event: PointerEvent): void => {
-    if (event.pointerId !== this.pointerGesture?.pointerId) return;
+    if (event.pointerId !== this.gestureActor.getSnapshot().pointerId) return;
     this.cancelPointerGesture();
   };
 
@@ -420,7 +562,8 @@ export class BrunoTableCellRangeRuntime {
     recordInstrumentation({ kind: "pointer-frame", tableId: this.tableId });
     const structure = this.structure;
     if (structure === undefined) return false;
-    if (gesture.axis === undefined) {
+    let axis = this.gestureActor.getSnapshot().axis;
+    if (axis === undefined) {
       const horizontal = Math.abs(gesture.clientX - gesture.startX);
       const vertical = Math.abs(gesture.clientY - gesture.startY);
       if (
@@ -429,11 +572,12 @@ export class BrunoTableCellRangeRuntime {
       ) {
         return false;
       }
-      gesture.axis = horizontal > vertical ? "horizontal" : "vertical";
+      axis = horizontal > vertical ? "horizontal" : "vertical";
+      this.gestureActor.send({ type: "ACQUIRE_AXIS", axis });
     }
     const hit = resolvePointerHit(gesture);
     if (hit !== undefined) {
-      const next = this.extend(hit, structure, gesture.axis);
+      const next = this.extend(hit, structure, axis);
       const focus = next.range?.focus ?? next.anchor;
       if (focus !== undefined) {
         const rowIndex = structure.rowIndexById.get(focus.rowId);
@@ -441,7 +585,7 @@ export class BrunoTableCellRangeRuntime {
       }
     }
     const bounds = gesture.grid.getBoundingClientRect();
-    if (gesture.axis === "horizontal") {
+    if (axis === "horizontal") {
       const delta =
         gesture.clientX < bounds.left + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
           ? -BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
@@ -464,13 +608,14 @@ export class BrunoTableCellRangeRuntime {
   };
 
   private readonly detachPointerGesture = (gesture: BrunoTableCellRangePointerGesture): void => {
+    const pointerId = this.gestureActor.getSnapshot().pointerId;
     if (gesture.frame !== null) gesture.view.cancelAnimationFrame(gesture.frame);
     gesture.view.removeEventListener("pointermove", this.onPointerMove, true);
     gesture.view.removeEventListener("pointerup", this.onPointerUp, true);
     gesture.view.removeEventListener("pointercancel", this.onPointerCancel, true);
     try {
-      if (gesture.grid.hasPointerCapture(gesture.pointerId)) {
-        gesture.grid.releasePointerCapture(gesture.pointerId);
+      if (pointerId !== undefined && gesture.grid.hasPointerCapture(pointerId)) {
+        gesture.grid.releasePointerCapture(pointerId);
       }
     } catch {
       // Synthetic browser events may not have a native active pointer.
@@ -687,6 +832,15 @@ function rangeMatchesStructure(
     identitySpan(structure.rowIds, structure.rowIndexById, range.rowIds[0], lastRowId),
     range.rowIds,
   );
+}
+
+function snapshotMatchesStructure(
+  snapshot: BrunoTableCellRangeSnapshot,
+  structure: BrunoTableCellRangeStructure,
+): boolean {
+  if (snapshot.anchor === undefined) return snapshot.range === undefined;
+  if (!containsCoordinate(structure, snapshot.anchor)) return false;
+  return snapshot.range === undefined || rangeMatchesStructure(snapshot.range, structure);
 }
 
 function indexIdentities(identities: readonly string[]): ReadonlyMap<string, number> {

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { compileColumns } from "./compile-columns";
-import { BrunoTableNavigationRuntime, type BrunoTableNavigationCommand } from "./navigation";
+import {
+  BrunoTableNavigationRuntime,
+  isBrunoTableCellRangeNavigationCommandAdmitted,
+  type BrunoTableNavigationCommand,
+} from "./navigation";
 
 describe("BrunoTableNavigationRuntime", () => {
   it("publishes frozen active-cell snapshots and supports projection reset", () => {
@@ -51,6 +55,63 @@ describe("BrunoTableNavigationRuntime", () => {
       rowId: "replacement",
       columnId: "COL_ID_NAME",
     });
+  });
+
+  it("restores a cancelled gesture by current Row Identity or clears it", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["first", "second", "third"], columns);
+    navigation.move("down");
+    const before = navigation.getSnapshot();
+    navigation.setShape(["second", "first", "third"], columns);
+    navigation.move("down");
+    navigation.restoreActiveCell(before);
+    expect(navigation.getSnapshot()).toMatchObject({ rowIndex: 0, rowId: "second" });
+
+    navigation.setShape(["replacement", "first"], columns);
+    navigation.restoreActiveCell(before);
+    expect(navigation.getSnapshot()).toBeUndefined();
+
+    navigation.restoreActiveCell(undefined);
+    expect(navigation.getSnapshot()).toBeUndefined();
+  });
+
+  it("rejects perpendicular and unanchored grid-edge range commands before navigation", () => {
+    expect(
+      isBrunoTableCellRangeNavigationCommandAdmitted(
+        "horizontal",
+        { type: "page", rowDelta: 10 },
+        2,
+      ),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellRangeNavigationCommandAdmitted(
+        "vertical",
+        { type: "row-edge", edge: "end" },
+        2,
+      ),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellRangeNavigationCommandAdmitted(
+        undefined,
+        { type: "grid-edge", edge: "start" },
+        2,
+      ),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellRangeNavigationCommandAdmitted(
+        "vertical",
+        { type: "column-edge", edge: "start" },
+        2,
+      ),
+    ).toBe(true);
   });
 
   it("clears a Server active cell when its authoritative row identity disappears", () => {

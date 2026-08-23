@@ -104,10 +104,40 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     try {
       await render(table("TABLE_ID_CELL_RANGE_KEYBOARD"));
       const grid = page.getByRole("grid", { name: "Data for TABLE_ID_CELL_RANGE_KEYBOARD" });
+      await expect.element(grid).toHaveAttribute("aria-multiselectable", "true");
       grid.element().focus();
+
+      const activeBeforeUnanchoredGridEdge = grid.element().getAttribute("aria-activedescendant");
+      await userEvent.keyboard(
+        detectPlatform() === "mac"
+          ? "{Meta>}{Shift>}{Home}{/Shift}{/Meta}"
+          : "{Control>}{Shift>}{Home}{/Shift}{/Control}",
+      );
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        activeBeforeUnanchoredGridEdge,
+      );
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .not.toHaveAttribute("aria-selected");
 
       await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}");
       await settleBrunoTableBrowserFrames();
+      const activeBeforePerpendicularPage = grid.element().getAttribute("aria-activedescendant");
+      const perpendicularPagePublications: MutationRecord[] = [];
+      const perpendicularPageObserver = new MutationObserver((records) =>
+        perpendicularPagePublications.push(...records),
+      );
+      perpendicularPageObserver.observe(grid.element(), {
+        attributes: true,
+        attributeFilter: ["aria-activedescendant"],
+      });
+      await userEvent.keyboard("{Shift>}{PageDown}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+      perpendicularPageObserver.disconnect();
+      expect(perpendicularPagePublications).toHaveLength(0);
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        activeBeforePerpendicularPage,
+      );
       await expect
         .element(page.getByRole("gridcell", { name: "Ada" }))
         .toHaveAttribute("aria-selected", "true");
@@ -160,6 +190,22 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await settleBrunoTableBrowserFrames();
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes.at(-1)).toBe("Babbage\nCurie"));
+      const activeBeforePerpendicularEdge = grid.element().getAttribute("aria-activedescendant");
+      const perpendicularEdgePublications: MutationRecord[] = [];
+      const perpendicularEdgeObserver = new MutationObserver((records) =>
+        perpendicularEdgePublications.push(...records),
+      );
+      perpendicularEdgeObserver.observe(grid.element(), {
+        attributes: true,
+        attributeFilter: ["aria-activedescendant"],
+      });
+      await userEvent.keyboard("{Shift>}{End}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+      perpendicularEdgeObserver.disconnect();
+      expect(perpendicularEdgePublications).toHaveLength(0);
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        activeBeforePerpendicularEdge,
+      );
       await expect
         .element(page.getByRole("gridcell", { name: "2", exact: true }))
         .not.toHaveAttribute("aria-selected");
@@ -174,10 +220,27 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await settleBrunoTableBrowserFrames();
       await expect
         .element(page.getByRole("gridcell", { name: "Ada" }))
-        .not.toHaveAttribute("aria-selected");
+        .toHaveAttribute("aria-selected", "true");
       await expect
         .element(page.getByRole("gridcell", { name: "Babbage" }))
-        .not.toHaveAttribute("aria-selected");
+        .toHaveAttribute("aria-selected", "true");
+
+      await userEvent.click(page.getByRole("gridcell", { name: "Curie" }));
+      await userEvent.keyboard(
+        detectPlatform() === "mac"
+          ? "{Meta>}{Shift>}{ArrowUp}{/Shift}{/Meta}"
+          : "{Control>}{Shift>}{ArrowUp}{/Shift}{/Control}",
+      );
+      await settleBrunoTableBrowserFrames();
+      const ada = page.getByRole("gridcell", { name: "Ada" });
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(ada.element().id);
+      await expect.element(ada).toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "Babbage" }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "Curie" }))
+        .toHaveAttribute("aria-selected", "true");
     } finally {
       restoreClipboard();
     }
@@ -364,6 +427,102 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("retains a valid drag across unrelated structure movement and restores by Row Identity", async () => {
+    const screen = await render(table("TABLE_ID_CELL_RANGE_GESTURE_RECONCILE"));
+    const grid = page.getByRole("grid", { name: "Data for TABLE_ID_CELL_RANGE_GESTURE_RECONCILE" });
+    const adaScore = page.getByRole("gridcell", { name: "4", exact: true });
+    await userEvent.click(adaScore);
+    const initialAdaCellId = adaScore.element().id;
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(initialAdaCellId);
+
+    adaScore.element().dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        pointerId: 27,
+      }),
+    );
+    page
+      .getByRole("gridcell", { name: "2", exact: true })
+      .element()
+      .dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 17,
+          clientY: 30,
+          pointerId: 27,
+        }),
+      );
+    await settleBrunoTableBrowserFrames();
+    await screen.rerender(
+      table(
+        "TABLE_ID_CELL_RANGE_GESTURE_RECONCILE",
+        rows.map((row) => (row.id === "curie" ? { ...row, name: "Aaron" } : row)),
+        2,
+      ),
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect
+      .element(page.getByRole("gridcell", { name: "4", exact: true }))
+      .toHaveAttribute("aria-selected", "true");
+    await expect
+      .element(page.getByRole("gridcell", { name: "2", exact: true }))
+      .toHaveAttribute("aria-selected", "true");
+
+    grid.element().dispatchEvent(
+      new PointerEvent("pointercancel", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 27,
+      }),
+    );
+    await settleBrunoTableBrowserFrames();
+    const movedAdaScore = page.getByRole("gridcell", { name: "4", exact: true });
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(movedAdaScore.element().id);
+    await expect.element(movedAdaScore).toHaveAttribute("aria-selected", "true");
+    await expect
+      .element(page.getByRole("gridcell", { name: "2", exact: true }))
+      .not.toHaveAttribute("aria-selected");
+  });
+
+  test("keeps a tied diagonal Shift-click on its visible one-cell anchor", async () => {
+    await render(table("TABLE_ID_CELL_RANGE_TIED_SHIFT_POINTER"));
+    const grid = page.getByRole("grid", {
+      name: "Data for TABLE_ID_CELL_RANGE_TIED_SHIFT_POINTER",
+    });
+    const babbageScore = page.getByRole("gridcell", { name: "2", exact: true });
+    await userEvent.click(babbageScore);
+    const curieQuantity = page.getByRole("gridcell", {
+      name: "9007199254740997 displayed",
+      exact: true,
+    });
+    curieQuantity.element().dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 28,
+        shiftKey: true,
+      }),
+    );
+    curieQuantity.element().dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 28,
+        shiftKey: true,
+      }),
+    );
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(babbageScore.element().id);
+    await expect.element(babbageScore).toHaveAttribute("aria-selected", "true");
+    await expect.element(curieQuantity).not.toHaveAttribute("aria-selected");
+  });
+
   test("does not start a range gesture from focusable custom cell content", async () => {
     const interactiveColumns = [
       {
@@ -467,6 +626,55 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     await settleBrunoTableBrowserFrames();
     await expect.element(score).toHaveAttribute("aria-selected", "true");
     await expect.element(curieScore).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("keeps nested grid range decoration owned by the nearest grid", async () => {
+    const innerRows = [
+      { id: "inner", name: "Inner", score: 1, quantity: 9_007_199_254_740_999n },
+    ] satisfies readonly Row[];
+    const innerColumns = [columns[0]!] satisfies BrunoTableColumns<Row>;
+    const outerColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        width: 260,
+        cellRenderer: ({ row }: { readonly row: Row }) =>
+          row.id === "ada" ? (
+            <BrunoTableClient
+              tableId="TABLE_ID_NESTED_RANGE_INNER"
+              columns={innerColumns}
+              initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+              clientSource={source(innerRows)}
+              getRowId={(innerRow) => innerRow.id}
+            />
+          ) : (
+            row.name
+          ),
+      },
+      columns[1]!,
+    ] satisfies BrunoTableColumns<Row>;
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_NESTED_RANGE_OUTER"
+        columns={outerColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={source()}
+        getRowId={(row) => row.id}
+      />,
+    );
+    const innerGrid = page.getByRole("grid", { name: "Data for TABLE_ID_NESTED_RANGE_INNER" });
+    const innerCell = innerGrid.getByRole("gridcell", { name: "Inner", exact: true });
+    await userEvent.click(innerCell);
+    await settleBrunoTableBrowserFrames();
+    await expect.element(innerCell).toHaveAttribute("aria-selected", "true");
+
+    const outerScore = page.getByRole("gridcell", { name: "4", exact: true });
+    await userEvent.click(outerScore);
+    await settleBrunoTableBrowserFrames();
+    await expect.element(outerScore).toHaveAttribute("aria-selected", "true");
+    await expect.element(innerCell).toHaveAttribute("aria-selected", "true");
   });
 
   test("bounds edge autoscroll publications and mounted decoration work by animation frame", async () => {
@@ -763,6 +971,31 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("copies the reconciled Active Cell after a vanished single anchor", async () => {
+    const writes: string[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    try {
+      const screen = await render(table("TABLE_ID_CELL_RANGE_ANCHOR_FALLBACK"));
+      await userEvent.click(page.getByRole("gridcell", { name: "Babbage" }));
+      await screen.rerender(
+        table(
+          "TABLE_ID_CELL_RANGE_ANCHOR_FALLBACK",
+          rows.filter((row) => row.id !== "babbage"),
+          2,
+        ),
+      );
+      await settleBrunoTableBrowserFrames();
+      const grid = page.getByRole("grid", { name: "Data for TABLE_ID_CELL_RANGE_ANCHOR_FALLBACK" });
+      grid.element().focus();
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["Curie"]));
+    } finally {
+      restoreClipboard();
+    }
+  });
+
   test("uses one immutable payload while a live publication races the asynchronous write", async () => {
     let resolveWrite: (() => void) | undefined;
     const writes: string[] = [];
@@ -813,7 +1046,15 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       const grid = page.getByRole("grid", { name: "Data for TABLE_ID_CELL_RANGE_FAILURE" });
       grid.element().focus();
       await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
-      await userEvent.keyboard(copyGesture());
+      const copyEvent = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        code: "KeyC",
+        ctrlKey: detectPlatform() !== "mac",
+        metaKey: detectPlatform() === "mac",
+      });
+      expect(grid.element().dispatchEvent(copyEvent)).toBe(false);
       await expect
         .element(page.getByRole("log", { name: "Table interaction status" }))
         .toHaveTextContent("Copy failed: the browser rejected the clipboard write");
@@ -825,6 +1066,35 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         .toHaveAttribute("aria-selected", "true");
     } finally {
       restoreClipboard();
+    }
+  });
+
+  test("owns Client range Copy before an unavailable clipboard can fall back natively", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    try {
+      await render(table("TABLE_ID_CELL_RANGE_UNAVAILABLE_CLIPBOARD"));
+      const grid = page.getByRole("grid", {
+        name: "Data for TABLE_ID_CELL_RANGE_UNAVAILABLE_CLIPBOARD",
+      });
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+      const copyEvent = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        code: "KeyC",
+        ctrlKey: detectPlatform() !== "mac",
+        metaKey: detectPlatform() === "mac",
+      });
+      expect(grid.element().dispatchEvent(copyEvent)).toBe(false);
+      expect(copyEvent.defaultPrevented).toBe(true);
+      await expect
+        .element(page.getByRole("log", { name: "Table interaction status" }))
+        .toHaveTextContent("Copy failed: clipboard access is unavailable");
+    } finally {
+      if (descriptor === undefined) delete (navigator as { clipboard?: Clipboard }).clipboard;
+      else Object.defineProperty(navigator, "clipboard", descriptor);
     }
   });
 

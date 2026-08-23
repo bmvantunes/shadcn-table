@@ -110,6 +110,7 @@ import {
 } from "./column-management";
 import {
   BrunoTableNavigationRuntime,
+  isBrunoTableCellRangeNavigationCommandAdmitted,
   type BrunoTableActiveCell,
   type BrunoTableNavigationCommand,
 } from "./navigation";
@@ -156,6 +157,7 @@ import {
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
+
 type BrunoTableColumnWindow = Readonly<
   Pick<
     BrunoTableViewportSnapshot["virtualWindow"],
@@ -2159,21 +2161,24 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (
       extendCellRange &&
       current?.region === "body" &&
-      currentRange !== undefined &&
-      command.type === "step" &&
-      ((currentRange.axis === "horizontal" &&
-        (command.direction === "up" || command.direction === "down")) ||
-        (currentRange.axis === "vertical" &&
-          (command.direction === "left" || command.direction === "right")))
+      !isBrunoTableCellRangeNavigationCommandAdmitted(currentRange?.axis, command, current.rowIndex)
     ) {
       return;
     }
-    const effectiveCommand =
+    const axisProjectedCommand =
       extendCellRange && currentRange !== undefined && command.type === "grid-edge"
         ? currentRange.axis === "horizontal"
           ? ({ type: "row-edge", edge: command.edge } as const)
           : ({ type: "column-edge", edge: command.edge } as const)
         : command;
+    const effectiveCommand =
+      extendCellRange && axisProjectedCommand.type === "column-edge"
+        ? ({
+            type: "page",
+            rowDelta:
+              axisProjectedCommand.edge === "start" ? -rowSpace.totalRows : rowSpace.totalRows,
+          } as const)
+        : axisProjectedCommand;
     navigation.navigate(effectiveCommand);
     let next = navigation.getSnapshot();
     if (cellRange !== undefined) {
@@ -2217,6 +2222,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
   const runCopy = (event: BrunoTableHotkeyGesture): void => {
     if ((!enableActiveCellCopy && cellRange === undefined) || !ownsGridSurface(event)) return;
+    if (cellRange !== undefined) event.preventDefault();
     const active = navigation.getSnapshot();
     if (active?.region !== "body" || active.rowId === undefined) return;
     if (navigator.clipboard?.writeText === undefined) {
@@ -2306,11 +2312,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         navigation.activateBody(next.rowIndex, next.rowId, next.columnId);
       },
       () => {
-        if (activeBefore?.region === "header") {
-          navigation.activateHeader(activeBefore.columnId);
-        } else if (activeBefore?.rowId !== undefined) {
-          navigation.activateBody(activeBefore.rowIndex, activeBefore.rowId, activeBefore.columnId);
-        }
+        navigation.restoreActiveCell(activeBefore);
       },
       (physicalDelta) => scrollByLogical(horizontalLogicalSign * physicalDelta),
     );
@@ -2531,6 +2533,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         role="grid"
         aria-label={`Data for ${tableId}`}
         aria-busy={loading || undefined}
+        aria-multiselectable={cellRange === undefined ? undefined : true}
         tabIndex={0}
         aria-rowcount={rowSpace.totalRows + 1}
         aria-colcount={

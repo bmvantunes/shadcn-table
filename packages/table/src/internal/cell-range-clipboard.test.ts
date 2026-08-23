@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   BrunoTableCellRangeRuntime,
@@ -108,6 +108,175 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     expect(range.reconcile(changedStructure)).toEqual({});
     expect(range.consumeStructuralInvalidation()).toBe(true);
     expect(range.extend({ rowId: "ROW_C", columnId: "COL_ID_B" }, changedStructure)).toEqual({});
+  });
+
+  it("keeps valid active gestures across unrelated structure changes and invalidates changed spans", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
+    const activated: Array<Readonly<{ rowId: string; columnId: string }>> = [];
+    let restored = 0;
+    const view = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+    } as unknown as Window;
+    const grid = {
+      ownerDocument: { defaultView: view },
+      focus: vi.fn(),
+      setPointerCapture: vi.fn(),
+    } as unknown as HTMLElement;
+    const event = {
+      button: 0,
+      clientX: 0,
+      clientY: 0,
+      pointerId: 42,
+      shiftKey: true,
+      target: null,
+      preventDefault: vi.fn(),
+    } as unknown as PointerEvent;
+
+    range.startPointerGesture(
+      event,
+      { rowId: "ROW_B", columnId: "COL_ID_D", rowIndex: 1 },
+      grid,
+      (hit) => activated.push(hit),
+      () => {
+        restored += 1;
+      },
+      () => false,
+    );
+    expect(range.isPointerGestureActive()).toBe(true);
+    expect(activated.at(-1)).toMatchObject({ rowId: "ROW_B", columnId: "COL_ID_D" });
+
+    const unrelated = createBrunoTableCellRangeStructure(
+      ["ROW_X", ...structure.rowIds],
+      [...structure.columnIds, "COL_ID_X"],
+    );
+    range.reconcile(unrelated);
+    expect(range.isPointerGestureActive()).toBe(true);
+    expect(restored).toBe(0);
+
+    const changedInterior = createBrunoTableCellRangeStructure(unrelated.rowIds, [
+      "COL_ID_A",
+      "COL_ID_B",
+      "COL_ID_INSERTED",
+      "COL_ID_C",
+      "COL_ID_D",
+      "COL_ID_X",
+    ]);
+    range.reconcile(changedInterior);
+    expect(range.isPointerGestureActive()).toBe(false);
+    expect(range.getPointerGestureSnapshot()).toEqual({
+      value: "idle",
+      pointerId: undefined,
+      before: {},
+      axis: undefined,
+    });
+    expect(range.getSnapshot()).toEqual({});
+    expect(range.consumeStructuralInvalidation()).toBe(true);
+    expect(restored).toBe(0);
+  });
+
+  it("projects a tied diagonal Shift pointer start back to the visible anchor", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
+    const activated = vi.fn();
+    const view = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Window;
+    const grid = {
+      ownerDocument: { defaultView: view },
+      focus: vi.fn(),
+      setPointerCapture: vi.fn(),
+    } as unknown as HTMLElement;
+
+    range.startPointerGesture(
+      {
+        button: 0,
+        clientX: 0,
+        clientY: 0,
+        pointerId: 43,
+        shiftKey: true,
+        target: null,
+        preventDefault: vi.fn(),
+      } as unknown as PointerEvent,
+      { rowId: "ROW_D", columnId: "COL_ID_D", rowIndex: 3 },
+      grid,
+      activated,
+      vi.fn(),
+      () => false,
+    );
+
+    expect(range.getSnapshot()).toEqual({ anchor: { rowId: "ROW_B", columnId: "COL_ID_B" } });
+    expect(activated).toHaveBeenCalledWith({
+      rowId: "ROW_B",
+      columnId: "COL_ID_B",
+      rowIndex: 1,
+    });
+    range.cancelPointerGesture();
+    expect(range.getPointerGestureSnapshot()).toEqual({
+      value: "idle",
+      pointerId: undefined,
+      before: {},
+      axis: undefined,
+    });
+  });
+
+  it("clears XState gesture evidence after commit", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
+    let pointerUp: ((event: PointerEvent) => void) | undefined;
+    const view = {
+      addEventListener: vi.fn((type: string, listener: (event: PointerEvent) => void) => {
+        if (type === "pointerup") pointerUp = listener;
+      }),
+      removeEventListener: vi.fn(),
+    } as unknown as Window;
+    const grid = {
+      ownerDocument: { defaultView: view },
+      focus: vi.fn(),
+      setPointerCapture: vi.fn(),
+    } as unknown as HTMLElement;
+    range.startPointerGesture(
+      {
+        button: 0,
+        clientX: 0,
+        clientY: 0,
+        pointerId: 44,
+        shiftKey: false,
+        target: null,
+        preventDefault: vi.fn(),
+      } as unknown as PointerEvent,
+      { rowId: "ROW_A", columnId: "COL_ID_A", rowIndex: 0 },
+      grid,
+      vi.fn(),
+      vi.fn(),
+      () => false,
+    );
+    pointerUp?.({
+      clientX: 0,
+      clientY: 0,
+      pointerId: 44,
+      target: null,
+    } as unknown as PointerEvent);
+    expect(range.getPointerGestureSnapshot()).toEqual({
+      value: "idle",
+      pointerId: undefined,
+      before: {},
+      axis: undefined,
+    });
+  });
+
+  it("does not poison Active Cell Copy when only a single anchor disappears", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
+    range.reconcile(
+      createBrunoTableCellRangeStructure(["ROW_A", "ROW_C", "ROW_D"], structure.columnIds),
+    );
+    expect(range.getSnapshot()).toEqual({});
+    expect(range.consumeStructuralInvalidation()).toBe(false);
   });
 
   it("isolates optional diagnostics by table and ignores listener failures", () => {

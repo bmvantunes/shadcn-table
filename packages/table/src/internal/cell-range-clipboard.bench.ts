@@ -9,6 +9,7 @@ import {
 } from "./cell-range-clipboard";
 
 const referenceFrameBudgetMs = 8.33;
+const copyResponsivenessBudgetMs = 50;
 const residentRows = 10_000;
 const logicalColumns = 240;
 const rowIds = Object.freeze(
@@ -57,6 +58,7 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
         snapshotP99Ms,
         largeSpanMembershipP99Ms,
         referenceFrameBudgetMs,
+        copyResponsivenessBudgetMs,
       })}\n`,
     );
     if (publications !== extensionDurationsMs.length) {
@@ -68,6 +70,9 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
       largeSpanMembershipP99Ms > referenceFrameBudgetMs
     ) {
       throw new Error("Cell Range hot-path work exceeded the 120 Hz reference frame budget.");
+    }
+    if (snapshotP99Ms > copyResponsivenessBudgetMs) {
+      throw new Error("Cell Range immutable Copy exceeded its responsiveness budget.");
     }
   });
 
@@ -111,16 +116,16 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
   );
 
   const copyTarget: BrunoTableClipboardTarget = {
-    axis: "horizontal",
-    rowIds: [rowIds[0]!],
-    columnIds: [columnIds[0]!, ...columnIds.slice(1)],
+    axis: "vertical",
+    rowIds: [rowIds[0]!, ...rowIds.slice(1)],
+    columnIds: [columnIds[0]!],
   };
   bench(
-    "captures and serializes one immutable 240-cell Clipboard Snapshot",
+    "captures and serializes one immutable 10,000-cell vertical Clipboard Snapshot",
     () => {
       const startedAt = performance.now();
-      const snapshot = captureBrunoTableClipboardSnapshot(copyTarget, ({ columnId }) => ({
-        value: BigInt(columnId.slice("COL_ID_".length)) + 9_007_199_254_740_993n,
+      const snapshot = captureBrunoTableClipboardSnapshot(copyTarget, ({ rowId }) => ({
+        value: BigInt(rowId.slice("ROW_".length)) + 9_007_199_254_740_993n,
         formatCanonicalText: String,
       }));
       if (snapshot === undefined) throw new Error("Expected a complete Clipboard Snapshot.");
