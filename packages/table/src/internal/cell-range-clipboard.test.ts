@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   BrunoTableCellRangeRuntime,
   captureBrunoTableClipboardSnapshot,
+  createBrunoTableCellRangeGestureActor,
   createBrunoTableCellRangeStructure,
   createBrunoTableCellRangeStructureFromRowSpace,
   installBrunoTableCellRangeInstrumentationListener,
@@ -308,11 +309,13 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     const range = new BrunoTableCellRangeRuntime();
     range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
     let pointerUp: ((event: PointerEvent) => void) | undefined;
+    const addEventListener = vi.fn((type: string, listener: (event: PointerEvent) => void) => {
+      if (type === "pointerup") pointerUp = listener;
+    });
+    const removeEventListener = vi.fn();
     const view = {
-      addEventListener: vi.fn((type: string, listener: (event: PointerEvent) => void) => {
-        if (type === "pointerup") pointerUp = listener;
-      }),
-      removeEventListener: vi.fn(),
+      addEventListener,
+      removeEventListener,
     } as unknown as Window;
     const releasePointerCapture = vi.fn();
     const grid = gestureGrid(view, releasePointerCapture);
@@ -332,14 +335,132 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       vi.fn(),
       () => false,
     );
+    expect(addEventListener.mock.calls.map(([type]) => type)).toEqual([
+      "pointermove",
+      "pointerup",
+      "pointercancel",
+    ]);
     pointerUp?.({
       clientX: 0,
       clientY: 0,
       pointerId: 44,
       target: null,
     } as unknown as PointerEvent);
+    expect(removeEventListener.mock.calls.map(([type]) => type)).toEqual([
+      "pointermove",
+      "pointerup",
+      "pointercancel",
+    ]);
     expect(releasePointerCapture).toHaveBeenCalledWith(44);
     expect(range.getPointerGestureSnapshot()).toEqual({
+      value: "idle",
+      pointerId: undefined,
+      before: {},
+      axis: undefined,
+    });
+  });
+
+  it.each([
+    ["armed", "COMMIT"],
+    ["armed", "CANCEL"],
+    ["armed", "INVALIDATE"],
+    ["axisLocked", "COMMIT"],
+    ["axisLocked", "CANCEL"],
+    ["axisLocked", "INVALIDATE"],
+  ] as const)(
+    "lets the gesture actor own resource acquisition and %s %s release",
+    (state, terminal) => {
+      const actor = createBrunoTableCellRangeGestureActor();
+      const acquire = vi.fn();
+      const release = vi.fn();
+      const ignoredAcquire = vi.fn();
+
+      actor.send({
+        type: "START",
+        pointerId: 44,
+        before: {},
+        resources: { acquire, release },
+      });
+      expect(acquire).toHaveBeenCalledOnce();
+      expect(actor.getSnapshot()).toMatchObject({ value: "armed", pointerId: 44 });
+      if (state === "axisLocked") actor.send({ type: "ACQUIRE_AXIS", axis: "vertical" });
+      expect(actor.getSnapshot().value).toBe(state);
+
+      actor.send({
+        type: "START",
+        pointerId: 45,
+        before: {},
+        resources: { acquire: ignoredAcquire, release: vi.fn() },
+      });
+      expect(ignoredAcquire).not.toHaveBeenCalled();
+
+      actor.send({ type: terminal });
+      expect(release).toHaveBeenCalledOnce();
+      expect(actor.getSnapshot()).toEqual({
+        value: "idle",
+        pointerId: undefined,
+        before: {},
+        axis: undefined,
+      });
+      actor.send({ type: terminal });
+      actor.stop();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["armed", "axisLocked"] as const)(
+    "releases actor-owned %s gesture resources when an active actor stops",
+    (state) => {
+      const actor = createBrunoTableCellRangeGestureActor();
+      const release = vi.fn();
+      actor.send({
+        type: "START",
+        pointerId: 44,
+        before: {},
+        resources: { acquire: vi.fn(), release },
+      });
+      if (state === "axisLocked") actor.send({ type: "ACQUIRE_AXIS", axis: "vertical" });
+
+      actor.stop();
+      actor.stop();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects pointer gesture entry before mutation when the grid has no Window", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
+    const preventDefault = vi.fn();
+    const setPointerCapture = vi.fn();
+    const idleProjection = range.getPointerGestureSnapshot();
+    const grid = {
+      ownerDocument: { defaultView: null },
+      setPointerCapture,
+    } as unknown as HTMLElement;
+
+    expect(
+      range.startPointerGesture(
+        {
+          button: 0,
+          clientX: 0,
+          clientY: 0,
+          pointerId: 44,
+          shiftKey: false,
+          target: null,
+          preventDefault,
+        } as unknown as PointerEvent,
+        { rowId: "ROW_B", columnId: "COL_ID_A", rowIndex: 1 },
+        grid,
+        vi.fn(),
+        vi.fn(),
+        () => false,
+      ),
+    ).toBe(false);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    expect(range.getSnapshot()).toEqual({ anchor: { rowId: "ROW_A", columnId: "COL_ID_A" } });
+    expect(range.getPointerGestureSnapshot()).toBe(idleProjection);
+    expect(idleProjection).toEqual({
       value: "idle",
       pointerId: undefined,
       before: {},
