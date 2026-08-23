@@ -151,6 +151,7 @@ import {
   clipboardTargetFromSelection,
   closestBrunoTableCellRangeHit,
   createBrunoTableCellRangeStructure,
+  createBrunoTableCellRangeStructureFromRowSpace,
   serializeBrunoTableClipboardSnapshot,
   type BrunoTableCellRangeRuntime,
 } from "./cell-range-clipboard";
@@ -430,6 +431,12 @@ export type BrunoTableLogicalRowSpace = Readonly<{
   readonly getRowId: (index: number) => string | undefined;
   readonly findRowIndex: (rowId: string) => number | undefined;
   readonly setRequiredRange: (start: number, end: number) => void;
+  readonly identitySnapshot?:
+    | Readonly<{
+        readonly rowIds: readonly string[];
+        readonly rowIndexById: ReadonlyMap<string, number>;
+      }>
+    | undefined;
   readonly missingRowIdentityBehavior?: "clear-conflicting-active-cell";
 }>;
 
@@ -1324,10 +1331,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     () =>
       cellRange === undefined
         ? undefined
-        : createBrunoTableCellRangeStructure(
-            Array.from({ length: rowSpace.totalRows }, (_, index) =>
-              rowSpace.getRowId(index),
-            ).filter((rowId): rowId is string => rowId !== undefined),
+        : createBrunoTableCellRangeStructureFromRowSpace(
+            rowSpace,
             logicalColumns.map((column) => column.columnId),
           ),
     [cellRange, logicalColumns, rowSpace],
@@ -1338,6 +1343,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const focusRestoreFrame = useRef<number | null>(null);
   const filterOpenFrame = useRef<number | null>(null);
   const filterOpenToken = useRef(0);
+  const copyCommandToken = useRef(0);
   const filterOpenRetry = useRef<() => void>(() => undefined);
   const columnFilterOpeners = useRef(new Map<string, () => void>());
   const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
@@ -2225,13 +2231,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (cellRange !== undefined) event.preventDefault();
     const active = navigation.getSnapshot();
     if (active?.region !== "body" || active.rowId === undefined) return;
+    const copyToken = ++copyCommandToken.current;
+    const announceCopy = (message: string): void => {
+      if (copyCommandToken.current === copyToken) setAnnouncement(message);
+    };
     if (navigator.clipboard?.writeText === undefined) {
-      setAnnouncement("Copy failed: clipboard access is unavailable");
+      announceCopy("Copy failed: clipboard access is unavailable");
       return;
     }
     if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
     if (cellRange?.consumeStructuralInvalidation() === true) {
-      setAnnouncement("Copy failed: the selected cells are no longer available");
+      announceCopy("Copy failed: the selected cells are no longer available");
       return;
     }
     const target = clipboardTargetFromSelection(cellRange?.getSnapshot() ?? {}, {
@@ -2257,11 +2267,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         };
       });
     } catch {
-      setAnnouncement("Copy failed: a selected value could not be serialized");
+      announceCopy("Copy failed: a selected value could not be serialized");
       return;
     }
     if (snapshot === undefined) {
-      setAnnouncement("Copy failed: the selected cells are no longer available");
+      announceCopy("Copy failed: the selected cells are no longer available");
       return;
     }
     const text = serializeBrunoTableClipboardSnapshot(snapshot);
@@ -2270,22 +2280,26 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     try {
       write = navigator.clipboard.writeText(text);
     } catch {
-      setAnnouncement("Copy failed: the browser rejected the clipboard write");
+      announceCopy("Copy failed: the browser rejected the clipboard write");
       return;
     }
     void write.then(
       () =>
-        setAnnouncement(
+        announceCopy(
           `${String(snapshot.canonicalTexts.length)} ${snapshot.canonicalTexts.length === 1 ? "cell" : "cells"} copied`,
         ),
-      () => setAnnouncement("Copy failed: the browser rejected the clipboard write"),
+      () => announceCopy("Copy failed: the browser rejected the clipboard write"),
     );
   };
 
   const runCellRangePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (cellRange === undefined || cellRangeStructure === undefined) return;
     const grid = event.currentTarget;
-    const target = event.target instanceof Element ? event.target : null;
+    const ElementConstructor = grid.ownerDocument.defaultView?.Element;
+    const target =
+      ElementConstructor !== undefined && event.target instanceof ElementConstructor
+        ? event.target
+        : null;
     const hit = closestBrunoTableCellRangeHit(event.target, grid);
     if (hit === undefined) return;
     const hitCell = target?.closest<HTMLElement>(

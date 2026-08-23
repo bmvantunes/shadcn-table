@@ -251,13 +251,45 @@ const BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP = 12;
 export function createBrunoTableCellRangeStructure(
   rowIds: readonly string[],
   columnIds: readonly string[],
+  rowIndexById?: ReadonlyMap<string, number>,
 ): BrunoTableCellRangeStructure {
   return Object.freeze({
-    rowIds: Object.freeze(Array.from(rowIds)),
+    rowIds: rowIndexById === undefined ? Object.freeze(Array.from(rowIds)) : rowIds,
     columnIds: Object.freeze(Array.from(columnIds)),
-    rowIndexById: indexIdentities(rowIds),
+    rowIndexById: rowIndexById ?? indexIdentities(rowIds),
     columnIndexById: indexIdentities(columnIds),
   });
+}
+
+type BrunoTableCellRangeRowIdentitySpace = Readonly<{
+  readonly totalRows: number;
+  readonly getRowId: (index: number) => string | undefined;
+  readonly identitySnapshot?:
+    | Readonly<{
+        readonly rowIds: readonly string[];
+        readonly rowIndexById: ReadonlyMap<string, number>;
+      }>
+    | undefined;
+}>;
+
+export function createBrunoTableCellRangeStructureFromRowSpace(
+  rowSpace: BrunoTableCellRangeRowIdentitySpace,
+  columnIds: readonly string[],
+): BrunoTableCellRangeStructure {
+  const identitySnapshot = rowSpace.identitySnapshot;
+  if (identitySnapshot !== undefined) {
+    return createBrunoTableCellRangeStructure(
+      identitySnapshot.rowIds,
+      columnIds,
+      identitySnapshot.rowIndexById,
+    );
+  }
+  return createBrunoTableCellRangeStructure(
+    Array.from({ length: rowSpace.totalRows }, (_, index) => rowSpace.getRowId(index)).filter(
+      (rowId): rowId is string => rowId !== undefined,
+    ),
+    columnIds,
+  );
 }
 
 export class BrunoTableCellRangeRuntime {

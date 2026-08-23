@@ -1,4 +1,6 @@
 import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
+import { useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -628,6 +630,120 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     await expect.element(curieScore).toHaveAttribute("aria-selected", "true");
   });
 
+  test("keeps same-origin portal interactions native without publishing a range", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_PORTAL_INTERACTIVE";
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    const action = vi.fn();
+    const actionButton: { current: HTMLButtonElement | null } = { current: null };
+    const portalColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        width: 180,
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <button
+            ref={(element) => {
+              actionButton.current = element;
+            }}
+            type="button"
+            onClick={action}
+          >
+            Open {row.name}
+          </button>
+        ),
+      },
+      columns[1]!,
+    ] satisfies BrunoTableColumns<Row>;
+
+    function SameOriginPortalTable() {
+      const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+      const attachFrame = useCallback((frame: HTMLIFrameElement | null) => {
+        const body = frame?.contentDocument?.body;
+        if (body !== undefined && body !== null) {
+          setPortalRoot((current) => (current === body ? current : body));
+        }
+      }, []);
+      return (
+        <>
+          <iframe ref={attachFrame} title="Portal table realm" />
+          {portalRoot === null
+            ? null
+            : createPortal(
+                <BrunoTableClient
+                  tableId={tableId}
+                  columns={portalColumns}
+                  initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+                  clientSource={source()}
+                  getRowId={(row) => row.id}
+                />,
+                portalRoot,
+              )}
+        </>
+      );
+    }
+
+    try {
+      await render(<SameOriginPortalTable />);
+      await vi.waitFor(() => expect(actionButton.current).not.toBeNull());
+      await settleBrunoTableBrowserFrames();
+      events.length = 0;
+      const button = actionButton.current;
+      if (button === null) throw new Error("expected the portal action button");
+      const realm = button.ownerDocument.defaultView;
+      if (realm === null) throw new Error("expected the portal document realm");
+      const ariaMutations: MutationRecord[] = [];
+      const observer = new realm.MutationObserver((records: MutationRecord[]) =>
+        ariaMutations.push(...records),
+      );
+      observer.observe(button.ownerDocument.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-selected"],
+      });
+
+      button.focus();
+      const pointerDown = new realm.PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 42,
+      });
+      const pointerUp = new realm.PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 42,
+      });
+      const click = new realm.MouseEvent("click", { bubbles: true, cancelable: true });
+      expect(button.dispatchEvent(pointerDown)).toBe(true);
+      expect(pointerDown.defaultPrevented).toBe(false);
+      expect(button.dispatchEvent(pointerUp)).toBe(true);
+      expect(pointerUp.defaultPrevented).toBe(false);
+      expect(button.dispatchEvent(click)).toBe(true);
+      expect(click.defaultPrevented).toBe(false);
+      await settleBrunoTableBrowserFrames();
+
+      expect(action).toHaveBeenCalledOnce();
+      expect(button.ownerDocument.activeElement).toBe(button);
+      expect(events.filter((event) => event.kind === "publication")).toHaveLength(0);
+      expect(ariaMutations).toHaveLength(0);
+      let owner: HTMLElement | null = button.parentElement;
+      while (owner !== null && owner.getAttribute("role") !== "gridcell") {
+        owner = owner.parentElement;
+      }
+      expect(owner?.getAttribute("aria-selected")).toBeNull();
+      observer.disconnect();
+    } finally {
+      removeInstrumentation();
+    }
+  });
+
   test("keeps nested grid range decoration owned by the nearest grid", async () => {
     const innerRows = [
       { id: "inner", name: "Inner", score: 1, quantity: 9_007_199_254_740_999n },
@@ -1036,6 +1152,61 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       restoreClipboard();
     }
   });
+
+  test.each(["resolves", "rejects"] as const)(
+    "announces only the latest overlapping Copy completion when it %s",
+    async (latestOutcome) => {
+      const operations: Array<{
+        readonly text: string;
+        readonly resolve: () => void;
+        readonly reject: () => void;
+      }> = [];
+      const restoreClipboard = installClipboard(
+        (text) =>
+          new Promise<void>((resolve, reject) => {
+            operations.push({
+              text,
+              resolve,
+              reject: () => reject(new Error("copy rejected")),
+            });
+          }),
+      );
+      try {
+        await render(table("TABLE_ID_CELL_RANGE_OVERLAPPING_COPY"));
+        const grid = page.getByRole("grid", {
+          name: "Data for TABLE_ID_CELL_RANGE_OVERLAPPING_COPY",
+        });
+        grid.element().focus();
+        await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}");
+        await userEvent.keyboard(copyGesture());
+        await vi.waitFor(() => expect(operations).toHaveLength(1));
+        expect(operations[0]?.text).toBe("Ada\t4\t9007199254740993");
+
+        await userEvent.click(page.getByRole("gridcell", { name: "Babbage" }));
+        await userEvent.keyboard(copyGesture());
+        await vi.waitFor(() => expect(operations).toHaveLength(2));
+        expect(operations[1]?.text).toBe("Babbage");
+        const expectedAnnouncement =
+          latestOutcome === "resolves"
+            ? "1 cell copied"
+            : "Copy failed: the browser rejected the clipboard write";
+        if (latestOutcome === "resolves") operations[1]?.resolve();
+        else operations[1]?.reject();
+        await expect
+          .element(page.getByRole("log", { name: "Table interaction status" }))
+          .toHaveTextContent(expectedAnnouncement);
+
+        if (latestOutcome === "resolves") operations[0]?.reject();
+        else operations[0]?.resolve();
+        await settleBrunoTableBrowserFrames();
+        await expect
+          .element(page.getByRole("log", { name: "Table interaction status" }))
+          .toHaveTextContent(expectedAnnouncement);
+      } finally {
+        restoreClipboard();
+      }
+    },
+  );
 
   test("reports clipboard rejection only after failure and preserves the valid range", async () => {
     const restoreClipboard = installClipboard(async () => {

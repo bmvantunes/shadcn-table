@@ -4,6 +4,7 @@ import {
   BrunoTableCellRangeRuntime,
   captureBrunoTableClipboardSnapshot,
   createBrunoTableCellRangeStructure,
+  createBrunoTableCellRangeStructureFromRowSpace,
   installBrunoTableCellRangeInstrumentationListener,
   serializeBrunoTableClipboardSnapshot,
   type BrunoTableClipboardSnapshot,
@@ -16,6 +17,34 @@ const structure = createBrunoTableCellRangeStructure(
 );
 
 describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
+  it("reuses a source-owned exact Row Identity snapshot", () => {
+    const rowIds = Object.freeze(["ROW_A", "ROW_B"]);
+    const rowIndexById = new Map(rowIds.map((rowId, index) => [rowId, index]));
+    const reused = createBrunoTableCellRangeStructure(rowIds, ["COL_ID_A"], rowIndexById);
+    expect(reused.rowIds).toBe(rowIds);
+    expect(reused.rowIndexById).toBe(rowIndexById);
+  });
+
+  it("derives a range structure from source-owned identities without traversing rows", () => {
+    const rowIds = Object.freeze(["ROW_A", "ROW_B"]);
+    const rowIndexById = new Map(rowIds.map((rowId, index) => [rowId, index]));
+    const getRowId = vi.fn(() => {
+      throw new Error("range derivation must not traverse the logical row space");
+    });
+    const derived = createBrunoTableCellRangeStructureFromRowSpace(
+      {
+        totalRows: 100_000,
+        getRowId,
+        identitySnapshot: { rowIds, rowIndexById },
+      },
+      ["COL_ID_A"],
+    );
+
+    expect(getRowId).not.toHaveBeenCalled();
+    expect(derived.rowIds).toBe(rowIds);
+    expect(derived.rowIndexById).toBe(rowIndexById);
+  });
+
   it("makes rectangular targets and snapshots unrepresentable", () => {
     type RectangularTarget = Readonly<{
       readonly axis: "horizontal";
