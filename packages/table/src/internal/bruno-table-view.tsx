@@ -211,10 +211,10 @@ type BrunoTableColumnPointerDownHandler = (
   kind: "resize" | "reorder",
 ) => void;
 const INTERACTIVE_DESCENDANT_SELECTOR =
-  'a[href],area[href],button,input,label,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
+  'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
 const INTERACTIVE_ROLE_SELECTOR =
   '[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"],[role="radio"],[role="spinbutton"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="tab"],[role="treeitem"]';
-const CELL_RANGE_POINTER_EXCLUSION_SELECTOR = `${INTERACTIVE_DESCENDANT_SELECTOR},${INTERACTIVE_ROLE_SELECTOR}`;
+const CELL_RANGE_POINTER_EXCLUSION_SELECTOR = `label,${INTERACTIVE_DESCENDANT_SELECTOR},${INTERACTIVE_ROLE_SELECTOR}`;
 const EMBEDDED_BROWSING_CONTEXT_SELECTOR = "iframe,object,embed";
 const VISUALLY_HIDDEN: CSSProperties = {
   clip: "rect(0 0 0 0)",

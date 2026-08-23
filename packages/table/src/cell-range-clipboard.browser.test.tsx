@@ -827,6 +827,11 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     expect(document.activeElement).toBe(checkbox.element());
     const selectedCells = page.getByRole("gridcell", { selected: true }).all();
     expect(selectedCells).toHaveLength(0);
+
+    const grid = page.getByRole("grid", { name: "Data for TABLE_ID_CELL_RANGE_NATIVE_LABEL" });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => expect(document.activeElement).toBe(checkbox.element()));
   });
 
   test("does not start a range gesture from focusable custom cell content", async () => {
