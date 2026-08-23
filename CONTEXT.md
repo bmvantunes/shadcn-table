@@ -131,7 +131,7 @@ The row-specific token extracted by an Editable Table's mandatory `getRowVersion
 _Avoid_: Query Version, viewport version, hard-coded string revision
 
 **External Filter**:
-An application-controlled, field-keyed condition that a future Server Adapter capability will pass through source-owned query transport and apply before user Grid Filter Expressions. The current public props reject `externalFilters` until that authoritative transport ships. External Filters are reactive, never persisted, never included in BrunoTable's active-filter count, and cannot be changed or cleared by BrunoTable controls.
+An application-controlled, field-keyed View Server condition passed through the source-owned query transport before user Grid Filter Expressions. `BrunoTableServer` accepts exact source-field conditions; Client Tables reject them. External Filters are reactive, never persisted, never included in BrunoTable's active-filter count, and cannot be changed or cleared by BrunoTable controls.
 _Avoid_: Grid Filter Expression, Quick Filter, security rule, `externalWhere`
 
 **Route Field**:

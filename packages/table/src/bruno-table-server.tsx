@@ -1,5 +1,5 @@
 import type { LiveQueryViewportBaseRow } from "effect-view-server/react/viewport-base-row";
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { ReactNode } from "react";
 import type {
@@ -21,7 +21,11 @@ import {
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { BrunoTableServerRowPipeline } from "./internal/server-row-pipeline";
-import { BrunoTableServerRowPipelineAdapter } from "./internal/server-source-adapter";
+import { BrunoTableServerFacetProvider } from "./internal/server-facet";
+import {
+  BrunoTableServerRowPipelineAdapter,
+  type BrunoTableServerQueryInputs,
+} from "./internal/server-source-adapter";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 import {
   BrunoTableActiveFilterCount,
@@ -33,6 +37,7 @@ import {
   BrunoTableToolbarSpacer,
 } from "./internal/toolbar-capabilities";
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
+import { snapshotBrunoTableQuickFilterFields } from "./internal/quick-filter";
 
 export {
   BrunoTableActiveFilterCount,
@@ -52,18 +57,32 @@ export type {
 export function BrunoTableServer<
   TViewport,
   const TColumns extends BrunoTableColumns<LiveQueryViewportBaseRow<TViewport>>,
+  const TRouteBy extends Readonly<Record<string, unknown>> = never,
+  const TExternalFilters extends readonly unknown[] = readonly [],
 >(
-  props: BrunoTableServerProps<LiveQueryViewportBaseRow<TViewport>, TColumns, TViewport>,
+  props: BrunoTableServerProps<
+    LiveQueryViewportBaseRow<TViewport>,
+    TColumns,
+    TViewport,
+    TRouteBy,
+    TExternalFilters
+  >,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
   return <BrunoTableServerInstance key={tableId} props={props} tableId={tableId} />;
 }
 
-function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns<TRow>, TViewport>({
+function BrunoTableServerInstance<
+  TRow,
+  const TColumns extends BrunoTableColumns<TRow>,
+  TViewport,
+  TRouteBy extends Readonly<Record<string, unknown>>,
+  TExternalFilters extends readonly unknown[],
+>({
   props,
   tableId,
 }: Readonly<{
-  readonly props: BrunoTableServerProps<TRow, TColumns, TViewport>;
+  readonly props: BrunoTableServerProps<TRow, TColumns, TViewport, TRouteBy, TExternalFilters>;
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
@@ -93,7 +112,28 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  const queryInputsRef = useRef<BrunoTableServerQueryInputs>({
+    routeBy: props.routeBy,
+    externalFilters: props.externalFilters,
+    visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+  });
+  const stagingSemanticQueryRef = useRef(false);
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
+  const quickFilterFields = useMemo(
+    () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
+    [props.quickFilterFields],
+  );
+
+  useLayoutEffect(() => {
+    stagingSemanticQueryRef.current = true;
+  }, [
+    compiledColumns,
+    props.externalFilters,
+    props.quickFilterFields,
+    props.routeBy,
+    props.viewportSource.completeRawSelect,
+    props.viewportSource.viewport,
+  ]);
 
   useLayoutEffect(() => {
     const unsubscribe = rowPipelineAdapter.subscribePublication(() => {
@@ -107,15 +147,34 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   }, [props.viewportSource, rowPipelineAdapter]);
 
   useLayoutEffect(() => {
-    const queryConfiguration = rowPipelineAdapter.reconcileColumns(
-      compiledColumns,
-      props.quickFilterFields,
+    queryInputsRef.current = Object.freeze({
+      routeBy: props.routeBy,
+      externalFilters: props.externalFilters,
+      visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+    });
+    stageBrunoTableServerSemanticQuery(stagingSemanticQueryRef, () => {
+      const queryConfiguration = rowPipelineAdapter.reconcileColumns(
+        compiledColumns,
+        props.quickFilterFields,
+      );
+      runtime.reconcile(rowPipelineAdapter.getPublication(), compiledColumns, queryConfiguration);
+    });
+    const queryInputs = Object.freeze({
+      routeBy: props.routeBy,
+      externalFilters: props.externalFilters,
+      visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+    });
+    queryInputsRef.current = queryInputs;
+    rowPipelineAdapter.replace(
+      props.viewportSource.viewport,
+      runtimeView.getQuerySnapshot(),
+      queryInputs,
     );
-    runtime.reconcile(rowPipelineAdapter.getPublication(), compiledColumns, queryConfiguration);
-    rowPipelineAdapter.replace(props.viewportSource.viewport, runtimeView.getQuerySnapshot());
   }, [
     compiledColumns,
+    props.externalFilters,
     props.quickFilterFields,
+    props.routeBy,
     props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
     rowPipelineAdapter,
@@ -125,12 +184,20 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
 
   useLayoutEffect(() => {
     const replace = () => {
+      if (stagingSemanticQueryRef.current) return;
       const query = runtimeView.getQuerySnapshot();
-      rowPipelineAdapter.replace(props.viewportSource.viewport, query);
+      const queryInputs = Object.freeze({
+        ...queryInputsRef.current,
+        visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+      });
+      queryInputsRef.current = queryInputs;
+      rowPipelineAdapter.replace(props.viewportSource.viewport, query, queryInputs);
     };
-    const unsubscribe = runtimeView.subscribeQuery(replace);
+    const unsubscribeQuery = runtimeView.subscribeQuery(replace);
+    const unsubscribeColumnLayout = runtimeView.subscribeColumnLayout(replace);
     return () => {
-      unsubscribe();
+      unsubscribeQuery();
+      unsubscribeColumnLayout();
       rowPipelineAdapter.release();
     };
   }, [props.viewportSource.viewport, rowPipelineAdapter, runtimeView]);
@@ -155,27 +222,48 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   );
 
   return (
-    <BrunoTableClientFilterProvider runtime={runtimeView}>
-      <BrunoTableToolbarProvider
-        columns={compiledColumns}
-        resultRows={rowPipelineAdapter}
-        runtime={runtimeView}
-        tableId={tableId}
-      >
-        <BrunoTableView
+    <BrunoTableServerFacetProvider
+      columns={compiledColumns}
+      externalFilters={props.externalFilters}
+      quickFilterFields={quickFilterFields}
+      routeBy={props.routeBy}
+      runtime={runtimeView}
+      source={props.viewportSource}
+    >
+      <BrunoTableClientFilterProvider runtime={runtimeView}>
+        <BrunoTableToolbarProvider
+          columns={compiledColumns}
+          resultRows={rowPipelineAdapter}
           runtime={runtimeView}
           tableId={tableId}
-          compiledColumns={compiledColumns}
-          toolbar={toolbar}
-          rowPipeline={BrunoTableServerRowPipeline}
-          rowPipelineAdapter={rowPipelineAdapter}
-          renderColumnFilter={renderBrunoTableServerColumnFilter}
-          enableActiveCellCopy
-          gridOwnedControls={gridOwnedControls}
-        />
-      </BrunoTableToolbarProvider>
-    </BrunoTableClientFilterProvider>
+        >
+          <BrunoTableView
+            runtime={runtimeView}
+            tableId={tableId}
+            compiledColumns={compiledColumns}
+            toolbar={toolbar}
+            rowPipeline={BrunoTableServerRowPipeline}
+            rowPipelineAdapter={rowPipelineAdapter}
+            renderColumnFilter={renderBrunoTableServerColumnFilter}
+            enableActiveCellCopy
+            gridOwnedControls={gridOwnedControls}
+          />
+        </BrunoTableToolbarProvider>
+      </BrunoTableClientFilterProvider>
+    </BrunoTableServerFacetProvider>
   );
+}
+
+function stageBrunoTableServerSemanticQuery(
+  staging: { current: boolean },
+  reconcile: () => void,
+): void {
+  staging.current = true;
+  try {
+    reconcile();
+  } finally {
+    staging.current = false;
+  }
 }
 
 function requireBrunoTableId(tableId: unknown): string {

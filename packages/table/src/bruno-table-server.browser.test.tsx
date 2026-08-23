@@ -23,7 +23,9 @@ import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import { createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import {
   installBrunoTableClientCellRenderListenerForTable,
+  installBrunoTableClientColumnFilterTriggerRenderListener,
   installBrunoTableClientGridSurfaceRenderListenerForTable,
+  installBrunoTableClientHeaderRenderListenerForTable,
   installBrunoTableClientRowRenderListenerForTable,
   installBrunoTableClientViewRenderListenerForTable,
 } from "./internal/render-instrumentation";
@@ -112,6 +114,10 @@ const serverFilterColumns = [
   },
   columns[1],
 ] as const satisfies BrunoTableColumns<Row>;
+const serverRangeColumns = [
+  columns[0],
+  { ...columns[1], enableFilter: true },
+] as const satisfies BrunoTableColumns<Row>;
 
 const wideCenterIndexes = [
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
@@ -150,9 +156,10 @@ const browserCompleteRawSelect = Object.freeze([
 ]) as unknown as ActualViewportSource["completeRawSelect"];
 type BrowserViewport = Omit<
   ReturnType<typeof actualViewportReact.useLiveQueryViewport>["viewport"],
-  "destroy" | "replace"
+  "destroy" | "replace" | "semanticKey"
 > &
   Readonly<{
+    readonly semanticKey: (query: unknown) => unknown;
     readonly replace: (
       request: Readonly<{ readonly query: unknown; readonly sink: Sink }>,
     ) => Readonly<{
@@ -169,11 +176,29 @@ type Sink<TRow = Row> = Readonly<{
   ) => void;
 }>;
 
+function browserSemanticQueryKey(candidate: unknown): unknown {
+  return JSON.stringify(candidate, (key, value: unknown) => {
+    if (typeof value === "bigint") return `${value}n`;
+    if (key === "select" && Array.isArray(value)) {
+      return value.toSorted((left, right) => String(left).localeCompare(String(right)));
+    }
+    return value;
+  });
+}
+
+const browserWholeResult = () => ({
+  rows: [],
+  totalRows: 0,
+  version: 1,
+  status: "ready" as const,
+});
+
 function makeViewport(totalRows = 100, publishCount = true) {
   const requests: Array<Readonly<{ readonly query: unknown; readonly sink: Sink }>> = [];
   const windows: Array<Readonly<{ readonly firstRow: number; readonly lastRow: number }>> = [];
   const releases = vi.fn();
   const viewport: BrowserViewport = {
+    semanticKey: browserSemanticQueryKey,
     replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink }>) {
       requests.push(request);
       if (publishCount) request.sink.setRowCount(totalRows, true);
@@ -204,6 +229,7 @@ function serverProps(
     initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" as const }] as const,
     viewportSource: {
       viewport,
+      useWholeResult: browserWholeResult,
       completeRawSelect: browserCompleteRawSelect,
       totalRows: 100,
       version: 1,
@@ -239,8 +265,14 @@ describe("BrunoTableServer", () => {
     ).toHaveLength(0);
   });
 
-  test("keeps Server condition editing without synthesizing Set Filter facet choices", async () => {
+  test("mounts Server Set Filter facet work only while its overlay is open", async () => {
     const transport = makeViewport();
+    const useWholeResult = vi.fn(() => ({
+      rows: [{ symbol: "AAA", __bruno_table_facet_count: 2n }],
+      totalRows: 1,
+      version: 1,
+      status: "ready" as const,
+    }));
     const screen = await render(
       <BrunoTableServer
         tableId="TABLE_ID_SERVER_FILTERS"
@@ -248,6 +280,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 1,
@@ -256,14 +289,66 @@ describe("BrunoTableServer", () => {
       />,
     );
 
+    expect(useWholeResult).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
     const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
     await expect
       .element(dialog.getByRole("combobox", { name: "Filter operator for Symbol" }))
       .toBeVisible();
-    expect(dialog.getByRole("searchbox", { name: "Search values for Symbol" }).query()).toBeNull();
-    expect(dialog.getByRole("button", { name: "Select All" }).query()).toBeNull();
-    expect(dialog.getByRole("button", { name: "Clear All" }).query()).toBeNull();
+    await expect
+      .element(dialog.getByRole("searchbox", { name: "Search values for Symbol" }))
+      .toBeVisible();
+    await expect.element(dialog.getByRole("button", { name: "Select All" })).toBeVisible();
+    await expect.element(dialog.getByRole("button", { name: "Clear All" })).toBeVisible();
+    expect(useWholeResult).toHaveBeenCalledOnce();
+  });
+
+  test("presents every live Server facet lifecycle through an accessible status", async () => {
+    const cases = [
+      { status: "loading", label: "Loading filter values." },
+      {
+        status: "stale",
+        message: "Using cached values.",
+        label: "Filter values may be delayed. Using cached values.",
+      },
+      {
+        status: "error",
+        message: "Connection failed.",
+        label: "Live filter values unavailable. Connection failed.",
+      },
+      { status: "closed", label: "Live filter values stopped." },
+    ] as const;
+
+    for (const lifecycle of cases) {
+      const transport = makeViewport();
+      const screen = await render(
+        <BrunoTableServer
+          tableId={`TABLE_ID_SERVER_FILTER_${lifecycle.status.toUpperCase()}`}
+          columns={serverFilterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+          viewportSource={{
+            viewport: transport.viewport,
+            useWholeResult: () => ({
+              rows: [],
+              totalRows: 0,
+              version: 1,
+              status: lifecycle.status,
+              ...("message" in lifecycle ? { message: lifecycle.message } : {}),
+            }),
+            completeRawSelect: browserCompleteRawSelect,
+            totalRows: 100,
+            version: 1,
+            status: "ready",
+          }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+      await expect
+        .element(dialog.getByRole("status", { name: "Filter value status" }))
+        .toHaveTextContent(lifecycle.label);
+      await cleanup();
+    }
   });
 
   test("keeps fixed-height loading geometry when activation publishes a non-authoritative zero hint", async () => {
@@ -643,6 +728,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_START", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 1_000,
           version: 1,
@@ -838,6 +924,7 @@ describe("BrunoTableServer", () => {
     const transport = makeViewport(2);
     const source = {
       viewport: transport.viewport,
+      useWholeResult: browserWholeResult,
       completeRawSelect: browserCompleteRawSelect,
       totalRows: 2,
       version: 1,
@@ -931,9 +1018,49 @@ describe("BrunoTableServer", () => {
     await vi.waitFor(() => expect(grid.element().scrollTop).toBe(0));
   });
 
-  test("replaces exactly once when Column field mapping changes the projection", async () => {
+  test("uses source semantics for reactive External Filters instead of React identity", async () => {
+    const transport = makeViewport(100);
+    const initial = [{ field: "desk", type: "equals", filter: "rates" }] as const;
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_EXTERNAL_FILTERS")}
+        externalFilters={initial}
+      />,
+    );
+
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]?.query).toMatchObject({ where: initial });
+
+    await screen.rerender(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_EXTERNAL_FILTERS")}
+        externalFilters={[{ field: "desk", type: "equals", filter: "rates" }]}
+      />,
+    );
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.releases).not.toHaveBeenCalled();
+
+    await screen.rerender(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_EXTERNAL_FILTERS")}
+        externalFilters={[{ field: "desk", type: "equals", filter: "credit" }]}
+      />,
+    );
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.releases).toHaveBeenCalledOnce();
+    expect(transport.requests[1]?.query).toMatchObject({
+      where: [{ field: "desk", type: "equals", filter: "credit" }],
+    });
+  });
+
+  test("replaces exactly once with final projection and External Filters from one commit", async () => {
     const transport = makeViewport(1_000);
-    const screen = await render(<BrunoTableServer {...serverProps(transport.viewport, "ready")} />);
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        externalFilters={[{ field: "desk", type: "equals", filter: "rates" }]}
+      />,
+    );
     const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
     grid.element().scrollTop = 360;
     grid.element().dispatchEvent(new Event("scroll"));
@@ -942,9 +1069,11 @@ describe("BrunoTableServer", () => {
       <BrunoTableServer
         tableId="TABLE_ID_SERVER"
         columns={remappedColumns}
+        externalFilters={[{ field: "desk", type: "equals", filter: "credit" }]}
         initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 1_000,
           version: 1,
@@ -955,7 +1084,7 @@ describe("BrunoTableServer", () => {
     await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
     expect(transport.requests[1]?.query).toEqual({
       select: ["symbol"],
-      where: [],
+      where: [{ field: "desk", type: "equals", filter: "credit" }],
       orderBy: [{ field: "symbol", direction: "asc" }],
     });
     expect(transport.releases).toHaveBeenCalledTimes(1);
@@ -985,6 +1114,7 @@ describe("BrunoTableServer", () => {
     ] as const satisfies BrunoTableColumns<ProjectionRow>;
     const source = {
       viewport: transport.viewport,
+      useWholeResult: browserWholeResult,
       completeRawSelect: browserCompleteRawSelect,
       totalRows: 100,
       version: 1,
@@ -1010,6 +1140,8 @@ describe("BrunoTableServer", () => {
       />,
     );
     await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    await settleBrunoTableBrowserFrames();
+    expect(transport.requests).toHaveLength(2);
     expect(transport.releases).toHaveBeenCalledTimes(1);
     expect(projectionGetter).not.toHaveBeenCalled();
     expect(screen.getByRole("gridcell", { name: "OLD" }).query()).toBeNull();
@@ -1058,6 +1190,7 @@ describe("BrunoTableServer", () => {
         {...serverProps(transport.viewport, "loading")}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 2,
@@ -1082,6 +1215,7 @@ describe("BrunoTableServer", () => {
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
+            useWholeResult: browserWholeResult,
             completeRawSelect: browserCompleteRawSelect,
             totalRows: 100,
             version: 2,
@@ -1102,6 +1236,7 @@ describe("BrunoTableServer", () => {
         {...serverProps(transport.viewport, "error")}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 100,
           version: 3,
@@ -1128,6 +1263,7 @@ describe("BrunoTableServer", () => {
           {...serverProps(transport.viewport, status)}
           viewportSource={{
             viewport: transport.viewport,
+            useWholeResult: browserWholeResult,
             completeRawSelect: browserCompleteRawSelect,
             totalRows: 100,
             version: 1,
@@ -1349,6 +1485,297 @@ describe("BrunoTableServer", () => {
     }
   });
 
+  test("keeps native half-open ranges authoritative in the published View Server", async () => {
+    const inMemory = createInMemoryViewServerReact(actualViewportReact);
+    await Effect.runPromise(
+      inMemory.client.publishMany("orders", [
+        { id: "range-lower", symbol: "LOWER", price: 10, desk: "LDN" },
+        { id: "range-inside", symbol: "INSIDE", price: 19, desk: "LDN" },
+        { id: "range-upper", symbol: "UPPER", price: 20, desk: "LDN" },
+      ]),
+    );
+
+    function ActualRangeTable() {
+      const viewportSource = actualViewportReact.useLiveQueryViewport("orders");
+      return (
+        <BrunoTableServer
+          tableId="TABLE_ID_ACTUAL_SERVER_RANGE"
+          columns={serverRangeColumns}
+          initialFilters={[
+            {
+              columnId: "COL_ID_PRICE",
+              type: "inRange",
+              filter: 10,
+              filterTo: 20,
+            },
+          ]}
+          initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+          viewportSource={viewportSource}
+        />
+      );
+    }
+
+    try {
+      const screen = await render(
+        <inMemory.ViewServerInMemoryProvider>
+          <ActualRangeTable />
+        </inMemory.ViewServerInMemoryProvider>,
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "LOWER" })).toBeInTheDocument();
+      await expect.element(screen.getByRole("gridcell", { name: "INSIDE" })).toBeInTheDocument();
+      expect(screen.getByRole("gridcell", { name: "UPPER" }).query()).toBeNull();
+    } finally {
+      await Effect.runPromise(inMemory.close);
+    }
+  });
+
+  test("keeps one live whole-result facet beside the published viewport and releases it on close", async () => {
+    const inMemory = createInMemoryViewServerReact(actualViewportReact);
+    await Effect.runPromise(
+      inMemory.client.publishMany("orders", [
+        { id: "facet-1", symbol: "AAA", price: 10, desk: "LDN" },
+        { id: "facet-2", symbol: "BBB", price: 20, desk: "NYC" },
+        { id: "facet-3", symbol: "AAC", price: 30, desk: "LDN" },
+      ]),
+    );
+
+    function ActualFacetTable({ desk }: Readonly<{ desk: string }>) {
+      const viewportSource = actualViewportReact.useLiveQueryViewport("orders");
+      return (
+        <BrunoTableServer
+          tableId="TABLE_ID_ACTUAL_SERVER_FACET"
+          columns={serverFilterColumns}
+          externalFilters={[{ field: "desk", type: "equals", filter: desk }]}
+          initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+          viewportSource={viewportSource}
+        />
+      );
+    }
+
+    try {
+      const screen = await render(
+        <StrictMode>
+          <inMemory.ViewServerInMemoryProvider>
+            <ActualFacetTable desk="LDN" />
+          </inMemory.ViewServerInMemoryProvider>
+        </StrictMode>,
+      );
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(1);
+
+      const trigger = screen.getByRole("button", { name: "Filter Symbol" });
+      await userEvent.click(trigger);
+      const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+      await expect.element(dialog.getByRole("checkbox", { name: "Select AAA, 1" })).toBeVisible();
+      await expect.element(dialog.getByRole("checkbox", { name: "Select AAC, 1" })).toBeVisible();
+      expect(dialog.getByRole("checkbox", { name: /BBB/ }).query()).toBeNull();
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(2);
+
+      await Effect.runPromise(
+        inMemory.client.publish("orders", {
+          id: "facet-4",
+          symbol: "AAA",
+          price: 40,
+          desk: "LDN",
+        }),
+      );
+      await expect.element(dialog.getByRole("checkbox", { name: "Select AAA, 2" })).toBeVisible();
+
+      await Effect.runPromise(inMemory.client.delete("orders", "facet-3"));
+      await expect
+        .element(dialog.getByRole("checkbox", { name: /Select AAC/ }))
+        .not.toBeInTheDocument();
+
+      await screen.rerender(
+        <StrictMode>
+          <inMemory.ViewServerInMemoryProvider>
+            <ActualFacetTable desk="NYC" />
+          </inMemory.ViewServerInMemoryProvider>
+        </StrictMode>,
+      );
+      await expect.element(dialog.getByRole("checkbox", { name: "Select BBB, 1" })).toBeVisible();
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(2);
+
+      await userEvent.click(trigger);
+      await expect.element(dialog).not.toBeInTheDocument();
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(1);
+
+      await userEvent.click(trigger);
+      const reopenedDialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+      await expect
+        .element(reopenedDialog.getByRole("checkbox", { name: "Select BBB, 1" }))
+        .toBeVisible();
+      await userEvent.click(reopenedDialog.getByRole("button", { name: "Clear All" }));
+      await expect.element(screen.getByRole("region", { name: "No rows" })).toBeInTheDocument();
+      await Effect.runPromise(
+        inMemory.client.publish("orders", {
+          id: "facet-5",
+          symbol: "CCC",
+          price: 50,
+          desk: "NYC",
+        }),
+      );
+      await expect.element(screen.getByRole("region", { name: "No rows" })).toBeInTheDocument();
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(1);
+    } finally {
+      await Effect.runPromise(inMemory.close);
+    }
+  });
+
+  test("isolates 20 Hz whole-result facet publications from unrelated Server render islands", async () => {
+    const inMemory = createInMemoryViewServerReact(actualViewportReact);
+    await Effect.runPromise(
+      inMemory.client.publishMany(
+        "orders",
+        Array.from({ length: 100 }, (_, index) => ({
+          id: `facet-hot-${String(index)}`,
+          symbol: `A${String(index).padStart(3, "0")}`,
+          price: index,
+          desk: "LDN",
+        })),
+      ),
+    );
+
+    function HotFacetTable() {
+      const viewportSource = actualViewportReact.useLiveQueryViewport("orders");
+      return (
+        <BrunoTableServer
+          tableId="TABLE_ID_ACTUAL_SERVER_HOT_FACET"
+          columns={serverFilterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+          viewportSource={viewportSource}
+        />
+      );
+    }
+
+    try {
+      const screen = await render(
+        <inMemory.ViewServerInMemoryProvider>
+          <HotFacetTable />
+        </inMemory.ViewServerInMemoryProvider>,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+      await expect.element(dialog.getByRole("checkbox", { name: "Select A000, 1" })).toBeVisible();
+      await expect
+        .poll(
+          async () =>
+            (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+              .activeSubscriptions,
+        )
+        .toBe(2);
+
+      const unrelated = vi.fn();
+      const restores = [
+        installBrunoTableClientViewRenderListenerForTable(
+          "TABLE_ID_ACTUAL_SERVER_HOT_FACET",
+          unrelated,
+        ),
+        installBrunoTableClientGridSurfaceRenderListenerForTable(
+          "TABLE_ID_ACTUAL_SERVER_HOT_FACET",
+          unrelated,
+        ),
+        installBrunoTableClientHeaderRenderListenerForTable(
+          "TABLE_ID_ACTUAL_SERVER_HOT_FACET",
+          unrelated,
+        ),
+        installBrunoTableClientRowRenderListenerForTable(
+          "TABLE_ID_ACTUAL_SERVER_HOT_FACET",
+          unrelated,
+        ),
+        installBrunoTableClientCellRenderListenerForTable(
+          "TABLE_ID_ACTUAL_SERVER_HOT_FACET",
+          unrelated,
+        ),
+        installBrunoTableClientColumnFilterTriggerRenderListener((columnId) => {
+          if (columnId === "COL_ID_SYMBOL") unrelated();
+        }),
+        installBrunoTableToolbarSubscriptionListener((event) => {
+          if (event.tableId === "TABLE_ID_ACTUAL_SERVER_HOT_FACET" && event.phase === "notify") {
+            unrelated();
+          }
+        }),
+      ];
+      try {
+        for (let index = 60; index < 80; index += 1) {
+          await Effect.runPromise(
+            inMemory.client.publish("orders", {
+              id: `facet-hot-${String(index)}`,
+              symbol: "HOT",
+              price: index,
+              desk: "LDN",
+            }),
+          );
+        }
+        await userEvent.fill(
+          dialog.getByRole("searchbox", { name: "Search values for Symbol" }),
+          "HOT",
+        );
+        await expect
+          .element(dialog.getByRole("checkbox", { name: "Select HOT, 20" }))
+          .toBeVisible();
+        expect(unrelated).not.toHaveBeenCalled();
+
+        await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
+        await expect.element(dialog).not.toBeInTheDocument();
+        await expect
+          .poll(
+            async () =>
+              (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+                .activeSubscriptions,
+          )
+          .toBe(1);
+        unrelated.mockClear();
+        await Effect.runPromise(
+          inMemory.client.publish("orders", {
+            id: "facet-hot-80",
+            symbol: "HOT",
+            price: 80,
+            desk: "LDN",
+          }),
+        );
+        expect(unrelated).not.toHaveBeenCalled();
+        expect(
+          (await Effect.runPromise(inMemory.client.health())).engine.topics.orders
+            .activeSubscriptions,
+        ).toBe(1);
+      } finally {
+        for (const restore of restores) restore();
+      }
+    } finally {
+      await Effect.runPromise(inMemory.close);
+    }
+  });
+
   test("keeps nested Server hotkeys and sparse windows with the nearest Table", async () => {
     const outer = makeViewport(1_000);
     const inner = makeViewport(1_000);
@@ -1390,6 +1817,7 @@ describe("BrunoTableServer", () => {
         initialOrderBy={[{ columnId: "COL_ID_START", direction: "asc" }]}
         viewportSource={{
           viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
           completeRawSelect: browserCompleteRawSelect,
           totalRows: 1_000,
           version: 1,

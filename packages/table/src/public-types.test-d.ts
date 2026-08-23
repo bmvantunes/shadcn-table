@@ -3,6 +3,7 @@ import { describe, expectTypeOf, it } from "vitest";
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
@@ -124,6 +125,26 @@ const serverWitnessConfig = defineViewServerConfig({
 const serverWitnessReact = createViewServerReact(serverWitnessConfig);
 const orderViewportSource = serverWitnessReact.useLiveQueryViewport("orders");
 const positionViewportSource = serverWitnessReact.useLiveQueryViewport("positions");
+const leasedTypeSourceAdapter = SourceAdapter.make({
+  identity: { name: "bruno-table-route-type-tests" },
+  failure: Schema.Never,
+  materialized: undefined,
+  leased: {
+    metrics: Schema.Struct({ observed: Schema.BigInt }),
+    rejectionLocation: Schema.Struct({ offset: Schema.BigInt }),
+    definitionOptions: SourceAdapter.definitionOptions<undefined>(),
+  },
+});
+const leasedServerWitnessConfig = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: serverWitnessConfig.topics.orders.schema,
+      source: leasedTypeSourceAdapter.leasedSource(["status", "revision"], undefined),
+    },
+  },
+});
+const leasedServerWitnessReact = createViewServerReact(leasedServerWitnessConfig);
+const leasedOrderViewportSource = leasedServerWitnessReact.useLiveQueryViewport("orders");
 declare const unsafeAnyViewport: any;
 declare const unsafeUnknownViewport: unknown;
 declare const unsafeUnwitnessedViewport: Readonly<{ readonly destroy: () => void }>;
@@ -178,6 +199,12 @@ describe("BrunoTableServer viewport row witness", () => {
     void omittedCompleteRawSelect;
     // @ts-expect-error Server Sources must carry their source-owned complete raw projection.
     void BrunoTableServer({ ...matchingProps, viewportSource: sourceWithoutCompleteRawSelect });
+
+    const { useWholeResult: omittedUseWholeResult, ...sourceWithoutWholeResult } =
+      orderViewportSource;
+    void omittedUseWholeResult;
+    // @ts-expect-error Server Sources must carry their source-owned whole-result facet hook.
+    void BrunoTableServer({ ...matchingProps, viewportSource: sourceWithoutWholeResult });
 
     void orderViewportSource.viewport.replace({
       window: { firstRow: 0, lastRow: 9 },
@@ -1070,17 +1097,48 @@ describe("BrunoTable public types", () => {
     >();
     expectTypeOf(serverProps.children).toEqualTypeOf<ReactNode>();
 
-    const serverWithExternalFilters = {
+    void BrunoTableServer({
       ...serverProps,
       externalFilters: [{ field: "status", type: "equals", filter: "open" }],
-    };
-    // @ts-expect-error Server External Filter transport is deferred and structurally rejected.
-    const invalidServerExternalFilters: BrunoTableServerProps<
-      Order,
-      Columns,
-      typeof orderViewportSource.viewport
-    > = serverWithExternalFilters;
-    void invalidServerExternalFilters;
+    });
+    void BrunoTableServer({
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n },
+      externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10n }],
+    });
+    // @ts-expect-error leased sources require their complete exact Route tuple.
+    void BrunoTableServer({ ...common, viewportSource: leasedOrderViewportSource });
+    // @ts-expect-error leased sources reject missing Route fields.
+    void BrunoTableServer({
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open" },
+    });
+    // @ts-expect-error leased sources reject extra Route fields.
+    void BrunoTableServer({
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n, desk: "rates" },
+    });
+    // @ts-expect-error exact Route values reject the wrong scalar domain.
+    void BrunoTableServer({
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1 },
+    });
+    // @ts-expect-error source-free topics forbid Feed Route.
+    void BrunoTableServer({ ...serverProps, routeBy: { status: "open" } });
+    // @ts-expect-error External Filters reject unknown fields.
+    void BrunoTableServer({
+      ...serverProps,
+      externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
+    });
+    // @ts-expect-error External Filters preserve exact field operand domains.
+    void BrunoTableServer({
+      ...serverProps,
+      externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
+    });
 
     void BrunoTableClient({
       ...clientProps,

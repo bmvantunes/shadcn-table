@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
@@ -111,6 +112,26 @@ const emittedServerConfig = defineViewServerConfig({
 const emittedServerReact = createViewServerReact(emittedServerConfig);
 const source = emittedServerReact.useLiveQueryViewport("orders");
 const mismatchedSource = emittedServerReact.useLiveQueryViewport("positions");
+const emittedLeasedAdapter = SourceAdapter.make({
+  identity: { name: "emitted-bruno-table-route" },
+  failure: Schema.Never,
+  materialized: undefined,
+  leased: {
+    metrics: Schema.Struct({ observed: Schema.BigInt }),
+    rejectionLocation: Schema.Struct({ offset: Schema.BigInt }),
+    definitionOptions: SourceAdapter.definitionOptions<undefined>(),
+  },
+});
+const emittedLeasedSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      orders: {
+        schema: emittedServerConfig.topics.orders.schema,
+        source: emittedLeasedAdapter.leasedSource(["status", "revision"], undefined),
+      },
+    },
+  }),
+).useLiveQueryViewport("orders");
 declare const emittedUnsafeAnyViewport: any;
 declare const emittedUnsafeUnknownViewport: unknown;
 declare const emittedUnsafeUnwitnessedViewport: Readonly<{ readonly destroy: () => void }>;
@@ -227,6 +248,45 @@ const emittedWitnessedServerProps = {
   viewportSource: source,
 } as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 BrunoTableServer(emittedWitnessedServerProps);
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10n }],
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+});
+// @ts-expect-error emitted leased Server declarations require the exact Route tuple.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedLeasedSource });
+// @ts-expect-error emitted leased Server declarations reject missing Route fields.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open" },
+});
+// @ts-expect-error emitted leased Server declarations preserve exact Route value domains.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1 },
+});
+// @ts-expect-error emitted leased Server declarations reject extra Route fields.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n, desk: "rates" },
+});
+// @ts-expect-error emitted External Filters reject unknown source fields.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
+});
+// @ts-expect-error emitted External Filters preserve exact known-field operand domains.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
+});
 
 const emittedMismatchedServerProps: BrunoTableServerProps<
   Order,
@@ -261,6 +321,14 @@ BrunoTableServer({
   ...emittedWitnessedServerProps,
   // @ts-expect-error emitted Server Sources require the source-owned complete raw projection.
   viewportSource: sourceWithoutCompleteRawSelect,
+});
+
+const { useWholeResult: omittedUseWholeResult, ...sourceWithoutWholeResult } = source;
+void omittedUseWholeResult;
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted Server Sources require the source-owned whole-result facet hook.
+  viewportSource: sourceWithoutWholeResult,
 });
 
 source.viewport.replace({
@@ -876,14 +944,14 @@ const props = {
 const emittedServerWithExternalFilters = {
   ...props,
   externalFilters: [{ field: "status", type: "equals", filter: "open" }],
-};
-// @ts-expect-error emitted Server declarations reject deferred External Filter transport.
-const invalidEmittedServerExternalFilters: BrunoTableServerProps<
+} as const satisfies BrunoTableServerProps<
   Order,
   Columns,
-  typeof source.viewport
-> = emittedServerWithExternalFilters;
-void invalidEmittedServerExternalFilters;
+  typeof source.viewport,
+  never,
+  readonly [{ readonly field: "status"; readonly type: "equals"; readonly filter: "open" }]
+>;
+void emittedServerWithExternalFilters;
 
 type UnsupportedToolbarCountsStayAbsent = Expect<
   Equal<

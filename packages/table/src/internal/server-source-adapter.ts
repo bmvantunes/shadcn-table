@@ -17,7 +17,6 @@ import {
   columnUsesRawRowPresentation,
   compileBrunoTableServerProjectionFields,
   compileBrunoTableServerQueryPlan,
-  type BrunoTableCompiledServerQueryPlan,
 } from "./server-query";
 import { snapshotBrunoTableQuickFilterFields } from "./quick-filter";
 import {
@@ -65,6 +64,7 @@ type BrunoTableServerViewportGeneration = Readonly<{
 }>;
 
 export type BrunoTableServerViewportTransport<TRow> = Readonly<{
+  readonly semanticKey: (query: unknown) => unknown;
   readonly replace: (
     request: BrunoTableServerViewportRequest<TRow>,
   ) => BrunoTableServerViewportGeneration;
@@ -75,9 +75,21 @@ type ActiveGeneration = Readonly<{
   readonly controller: BrunoTableServerViewportGeneration;
   readonly semanticKey: Readonly<{
     readonly viewport: unknown;
-    readonly queryPlan: BrunoTableCompiledServerQueryPlan;
+    readonly query: unknown;
   }>;
 }>;
+
+export type BrunoTableServerQueryInputs = Readonly<{
+  readonly routeBy: Readonly<Record<string, unknown>> | undefined;
+  readonly externalFilters: readonly unknown[] | undefined;
+  readonly visibleColumnIds: readonly string[] | undefined;
+}>;
+
+const EMPTY_SERVER_QUERY_INPUTS: BrunoTableServerQueryInputs = Object.freeze({
+  routeBy: undefined,
+  externalFilters: undefined,
+  visibleColumnIds: undefined,
+});
 
 type RowEquivalencePlan = Readonly<{
   readonly fieldColumns: ReadonlyMap<string, readonly CompiledColumn[]>;
@@ -321,10 +333,21 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     notify(this.listeners);
   }
 
-  public replace(viewport: unknown, query: BrunoTableServerRuntimeQuery): void {
+  public replace(
+    viewport: unknown,
+    query: BrunoTableServerRuntimeQuery,
+    inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
+  ): void {
     const queryPlan = compileBrunoTableServerQueryPlan(
       this.columns,
       {
+        ...(inputs.routeBy === undefined ? {} : { routeBy: inputs.routeBy }),
+        ...(inputs.externalFilters === undefined
+          ? {}
+          : { externalFilters: inputs.externalFilters }),
+        ...(inputs.visibleColumnIds === undefined
+          ? {}
+          : { visibleColumnIds: inputs.visibleColumnIds }),
         filters: query.filters,
         quickFilter: query.quickFilter,
         quickFilterFields: this.quickFilterFields,
@@ -332,12 +355,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       },
       this.completeRawSelect,
     );
+    const transport = requireViewportTransport<TRow>(viewport);
     const semanticKey = Object.freeze({
       viewport,
-      queryPlan,
+      query: transport.semanticKey(queryPlan.query),
     });
     if (sameSemanticKey(this.active?.semanticKey, semanticKey)) return;
-    const transport = requireViewportTransport<TRow>(viewport);
     const nextNavigationMode =
       this.forceNextNavigationReset || this.lastReplacedViewport !== viewport
         ? "reset"
@@ -608,7 +631,12 @@ function requireViewportTransport<TRow>(
   if (typeof replace !== "function") {
     throw new TypeError("BrunoTable Server viewportSource.viewport must expose replace().");
   }
+  const semanticKey = Reflect.get(viewport, "semanticKey");
+  if (typeof semanticKey !== "function") {
+    throw new TypeError("BrunoTable Server viewportSource.viewport must expose semanticKey().");
+  }
   return Object.freeze({
+    semanticKey: (query) => Reflect.apply(semanticKey, viewport, [query]),
     replace: (request) => {
       const candidate = Reflect.apply(replace, viewport, [request]);
       if (typeof candidate !== "object" || candidate === null) {
@@ -729,27 +757,7 @@ function sameSemanticKey(
   return (
     previous !== undefined &&
     previous.viewport === next.viewport &&
-    sameCompiledQuery(previous.queryPlan, next.queryPlan)
-  );
-}
-
-function sameCompiledQuery(
-  leftPlan: BrunoTableCompiledServerQueryPlan,
-  rightPlan: BrunoTableCompiledServerQueryPlan,
-): boolean {
-  const left = leftPlan.query;
-  const right = rightPlan.query;
-  return (
-    sameProjectionFields(left.select, right.select) &&
-    sameArray(
-      left.orderBy,
-      right.orderBy,
-      (leftOrder, rightOrder) =>
-        leftOrder.field === rightOrder.field && leftOrder.direction === rightOrder.direction,
-    ) &&
-    sameArray(left.where, right.where, (leftWhere, rightWhere) =>
-      sameQueryValue(leftWhere, rightWhere, leftPlan, rightPlan),
-    )
+    Object.is(previous.query, next.query)
   );
 }
 
@@ -769,78 +777,6 @@ function sameArray<TValue>(
 
 function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
   return sameArray(left, right, Object.is);
-}
-
-function sameQueryValue(
-  left: unknown,
-  right: unknown,
-  leftPlan: BrunoTableCompiledServerQueryPlan,
-  rightPlan: BrunoTableCompiledServerQueryPlan,
-): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return sameArray(left, right, (leftValue, rightValue) =>
-      sameQueryValue(leftValue, rightValue, leftPlan, rightPlan),
-    );
-  }
-  if (
-    typeof left !== "object" ||
-    left === null ||
-    typeof right !== "object" ||
-    right === null ||
-    Array.isArray(left) ||
-    Array.isArray(right)
-  ) {
-    return false;
-  }
-  const leftKeys = Reflect.ownKeys(left);
-  const rightKeys = Reflect.ownKeys(right);
-  const leftSemantics = leftPlan.operandSemantics.get(left);
-  const rightSemantics = rightPlan.operandSemantics.get(right);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key) =>
-        Object.prototype.hasOwnProperty.call(right, key) &&
-        (key === "filter" || key === "filterTo"
-          ? sameQueryOperand(
-              Reflect.get(left, key),
-              Reflect.get(right, key),
-              leftSemantics,
-              rightSemantics,
-            )
-          : sameQueryValue(Reflect.get(left, key), Reflect.get(right, key), leftPlan, rightPlan)),
-    )
-  );
-}
-
-function sameQueryOperand(
-  left: unknown,
-  right: unknown,
-  leftSemantics: CompiledColumn["semantics"] | undefined,
-  rightSemantics: CompiledColumn["semantics"] | undefined,
-): boolean {
-  if (leftSemantics === undefined || rightSemantics === undefined) return Object.is(left, right);
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      sameArray(left, right, (leftValue, rightValue) =>
-        sameQueryOperand(leftValue, rightValue, leftSemantics, rightSemantics),
-      )
-    );
-  }
-  if (
-    leftSemantics.codecId !== rightSemantics.codecId ||
-    leftSemantics.codecVersion !== rightSemantics.codecVersion
-  ) {
-    return false;
-  }
-  try {
-    return leftSemantics.equivalent(left, right) && rightSemantics.equivalent(left, right);
-  } catch {
-    return false;
-  }
 }
 
 function compileRowEquivalencePlan(columns: readonly CompiledColumn[]): RowEquivalencePlan {

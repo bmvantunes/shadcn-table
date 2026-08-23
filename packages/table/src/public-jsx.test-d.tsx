@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { SourceAdapter } from "effect-view-server/source-adapter";
 
 import {
   BrunoTableClient,
@@ -147,6 +148,32 @@ const serverTypeReact = createViewServerReact(
   }),
 );
 const serverSource = serverTypeReact.useLiveQueryViewport("rows");
+const leasedJsxAdapter = SourceAdapter.make({
+  identity: { name: "bruno-table-jsx-route-tests" },
+  failure: Schema.Never,
+  materialized: undefined,
+  leased: {
+    metrics: Schema.Struct({ observed: Schema.BigInt }),
+    rejectionLocation: Schema.Struct({ offset: Schema.BigInt }),
+    definitionOptions: SourceAdapter.definitionOptions<undefined>(),
+  },
+});
+const leasedJsxSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+          hiddenLabel: Schema.String,
+        }),
+        source: leasedJsxAdapter.leasedSource(["name", "revision"], undefined),
+      },
+    },
+  }),
+).useLiveQueryViewport("rows");
 
 const serverComponentProps = {
   tableId: "TABLE_ID_JSX_SERVER",
@@ -158,13 +185,33 @@ const serverComponentProps = {
 
 const validServer = <BrunoTableServer {...serverComponentProps} />;
 void validServer;
+const validLeasedServerProps = {
+  ...serverComponentProps,
+  viewportSource: leasedJsxSource,
+  routeBy: { name: "Ada", revision: 1n },
+} as const;
+void (<BrunoTableServer {...validLeasedServerProps} />);
+const missingLeasedRouteProps = { ...validLeasedServerProps, routeBy: { name: "Ada" } };
+// @ts-expect-error leased JSX calls require every exact Route Field.
+void (<BrunoTableServer {...missingLeasedRouteProps} />);
+const wrongLeasedRouteProps = {
+  ...validLeasedServerProps,
+  routeBy: { name: "Ada", revision: 1 },
+};
+// @ts-expect-error leased JSX calls preserve exact Route value domains.
+void (<BrunoTableServer {...wrongLeasedRouteProps} />);
+const extraLeasedRouteProps = {
+  ...validLeasedServerProps,
+  routeBy: { name: "Ada", revision: 1n, desk: "rates" },
+};
+// @ts-expect-error leased JSX calls reject extra Route Fields.
+void (<BrunoTableServer {...extraLeasedRouteProps} />);
 
 const invalidServerClientSource = { ...serverComponentProps, clientSource };
 // @ts-expect-error Server Tables reject Client Sources through composed props.
 void (<BrunoTableServer {...invalidServerClientSource} />);
-const invalidServerExternalFilters = { ...serverComponentProps, externalFilters: [] };
-// @ts-expect-error Issue #17 owns the future Server External Filter contract.
-void (<BrunoTableServer {...invalidServerExternalFilters} />);
+const validServerExternalFilters = { ...serverComponentProps, externalFilters: [] };
+void (<BrunoTableServer {...validServerExternalFilters} />);
 const invalidServerQuickFilterFields = { ...serverComponentProps, quickFilterFields: [42] };
 // @ts-expect-error Server Quick Filter fields must be string Row fields.
 void (<BrunoTableServer {...invalidServerQuickFilterFields} />);

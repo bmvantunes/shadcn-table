@@ -35,7 +35,7 @@ export type BrunoTableSetFilterCommand =
 
 export type BrunoTableClientFacetOption = Readonly<{
   readonly value: unknown;
-  readonly count: number;
+  readonly count: number | bigint;
   readonly display: string;
 }>;
 
@@ -285,6 +285,42 @@ export function createBrunoTableClientFacetSnapshot<TRow>(
   );
 }
 
+export function createBrunoTableServerFacetSnapshot(
+  options: Readonly<{
+    readonly column: CompiledColumn;
+    readonly countAlias: string;
+    readonly rows: readonly unknown[];
+    readonly expression: unknown;
+  }>,
+): BrunoTableClientFacetSnapshot {
+  if (options.column.kind !== "field") {
+    throw new TypeError("BrunoTable Server facets require a Field Column.");
+  }
+  const liveOptions: BrunoTableClientFacetOption[] = [];
+  for (const candidate of options.rows) {
+    if (typeof candidate !== "object" || candidate === null) continue;
+    const rawValue = Reflect.get(candidate, options.column.field);
+    const rawCount = Reflect.get(candidate, options.countAlias);
+    if (typeof rawCount !== "bigint" || rawCount < 0n) continue;
+    const decoded = options.column.semantics.decodeRuntime(rawValue);
+    if (decoded._tag !== "Success") continue;
+    liveOptions.push(
+      Object.freeze({
+        value: decoded.value,
+        count: rawCount,
+        display: safeFormatDisplay(options.column, decoded.value),
+      }),
+    );
+  }
+  return completeFacetSnapshot(
+    options.column,
+    liveOptions,
+    readBrunoTableSetFilterIntent(options.column, options.expression),
+    undefined,
+    0n,
+  );
+}
+
 function facetDependenciesUnchanged(
   facetColumn: CompiledColumn,
   columns: readonly CompiledColumn[],
@@ -360,6 +396,7 @@ function completeFacetSnapshot(
   liveOptions: readonly BrunoTableClientFacetOption[],
   intent: BrunoTableSetFilterIntent,
   liveBuckets?: ReadonlyMap<string, readonly { readonly value: unknown }[]>,
+  zeroCount: number | bigint = 0,
 ): BrunoTableClientFacetSnapshot {
   const options = Array.from(liveOptions);
   const liveIndex =
@@ -381,7 +418,9 @@ function completeFacetSnapshot(
                 areBrunoTableSetValuesEquivalent(column, candidate.value, value),
               ) === true;
       if (isLive) continue;
-      options.push(Object.freeze({ value, count: 0, display: safeFormatDisplay(column, value) }));
+      options.push(
+        Object.freeze({ value, count: zeroCount, display: safeFormatDisplay(column, value) }),
+      );
     }
   }
   return Object.freeze({ intent, options: Object.freeze(options) });

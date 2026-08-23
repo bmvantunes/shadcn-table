@@ -196,6 +196,8 @@ export type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
  */
 export type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  /** Source-owned whole-result hook used only while a Server Set Filter overlay is open. */
+  readonly useWholeResult: (...arguments_: never[]) => unknown;
   readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 
@@ -1299,6 +1301,8 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
+  TRouteBy extends Readonly<Record<string, unknown>> = never,
+  TExternalFilters extends readonly unknown[] = readonly [],
 > = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> &
   BrunoTableReadOnlyCapability & {
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
@@ -1313,9 +1317,9 @@ export type BrunoTableServerProps<
             : never
           : never
     >;
+    readonly externalFilters?: TExternalFilters;
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
-    readonly externalFilters?: never;
     readonly editable?: never;
     readonly rowSelection?: never;
     readonly rangeSelection?: never;
@@ -1323,4 +1327,27 @@ export type BrunoTableServerProps<
     readonly onFill?: never;
     readonly onUndo?: never;
     readonly onRedo?: never;
-  };
+  } & BrunoTableServerRouteCapability<TRouteBy> &
+  BrunoTableServerQueryAuthority<TViewport, TRouteBy, TExternalFilters>;
+
+type BrunoTableServerRouteCapability<TRouteBy> = [TRouteBy] extends [never]
+  ? { readonly routeBy?: never }
+  : { readonly routeBy: TRouteBy };
+
+type BrunoTableServerQueryAuthority<
+  TViewport,
+  TRouteBy,
+  TExternalFilters extends readonly unknown[],
+> = TViewport extends {
+  readonly semanticKey: (
+    query: {
+      readonly select: LiveQueryViewportCompleteRawSelect<TViewport>;
+      readonly where: TExternalFilters;
+      readonly orderBy: readonly [];
+    } & ([TRouteBy] extends [never]
+      ? { readonly routeBy?: never }
+      : { readonly routeBy: TRouteBy }),
+  ) => unknown;
+}
+  ? unknown
+  : { readonly __brunoTableInvalidServerQueryAuthority: never };

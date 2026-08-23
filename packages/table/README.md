@@ -117,17 +117,19 @@ set; issue #3 deliberately exposes no consumer-side grid-definition or compilati
 Both renderers use one continuous virtual row space, one native scroll owner, and no pagination
 state or controls. `BrunoTableServer` writes authoritative View Server row keys and payloads into
 sparse absolute slots, keeps window movement inside a semantic query generation, and replaces that
-generation only for projection, filter, or sort changes. Consumers pass the typed result of a
+generation only for route, projection, filter, or sort changes. An open Server Set Filter uses the
+same source's independent whole-result hook and never facets sparse loaded slots. Consumers pass the typed result of a
 compatible Viewport Source directly; they never provide `getRowId` or observe Effect, TanStack, or
 viewport-controller types through BrunoTable's public declarations.
 
-The Server integration requires `effect-view-server@4.2.4` or newer at the application's source
+The Server integration requires `effect-view-server@4.2.6` at the application's source
 boundary. It contains the insertion-cleanup guarantee from issue #408, source-native Match None
 from issue #409, and the declaration-bundle-safe invariant base-row witness completed by issue 465,
 issue 469, and issue 471. Issue 473 adds the source-owned complete raw projection used whenever a
 formatter, functional class, or renderer lawfully reads the complete row. BrunoTable maps empty Set
 inclusion intent to the source's `{ type: "FALSE" }` expression and does not emulate it by enumerating
-current facet values.
+current facet values. Issue 477 adds the topic-bound whole-result hook that keeps an open live facet
+independent from the primary viewport generation.
 
 The Client root accepts optional children for page-specific toolbar composition; absent children do
 not reserve vertical space.

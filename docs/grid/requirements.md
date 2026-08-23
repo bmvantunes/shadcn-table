@@ -572,13 +572,13 @@ Each eligible Field Column exposes every operator supported by its Value Type an
 
 Every admitted `in` operand is non-empty. Type checking, runtime sanitization, and editor validation reject an empty `in` expression rather than assigning it Match-None semantics.
 
-The Client live Set Filter derives its complete facet domain from admitted resident Client rows after Quick Filter and every other Grid Filter, excluding the current Column Identity's expression. It never infers the domain from visible or virtualized rows. Server faceting remains a later capability and must never infer a whole-result domain from loaded sparse blocks.
+The Client live Set Filter derives its complete facet domain from admitted resident Client rows after Quick Filter and every other Grid Filter, excluding the current Column Identity's expression. It never infers the domain from visible or virtualized rows. An open Server Set Filter instead owns one narrow live whole-result grouped subscription under Feed Route, External Filters, Quick Filter, and every other Grid Filter while excluding only its own expression; it never infers a domain from loaded sparse blocks and releases the subscription on close.
 
 Set Filter checkbox options and value-level Select All select filter values only and do not install Row Selection, selected-row state, body checkboxes, or row Select All.
 
 Set Filter partial state preserves compact `only these` inclusion and `everything except these` exclusion intent. Starting at All and deselecting records exclusion; starting at None and selecting records inclusion. Select All or manually selecting the final available value removes the column filter atomically. Passive facet updates never normalize or rewrite intent.
 
-Clear All records empty Set Filter inclusion as an explicit Match-None Filter Expression. Client evaluates it as false for present and future values. It is never `undefined`, an empty `in`, or a negation of the current facet domain. A later Server implementation requires the source-native translation tracked in [effect-view-server#409](https://github.com/bmvantunes/effect-view-server/issues/409).
+Clear All records empty Set Filter inclusion as an explicit Match-None Filter Expression. Client evaluates it as false for present and future values, while Server compiles it to View Server's source-native Match None expression. It is never `undefined`, an empty `in`, or a negation of the current facet domain.
 
 Continuous text and numeric filter input auto-applies through a 150 ms TanStack Pacer debounce. Discrete Boolean/Select choices and operator changes with valid required operands apply immediately. Filter overlays contain no Apply or Reset buttons. Grid Filters across different columns always combine with `AND`; compound conditions within one column may use `AND`, `OR`, and `NOT`. Quick Filter remains a separate OR across its eligible fields.
 

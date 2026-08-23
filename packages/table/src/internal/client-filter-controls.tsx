@@ -42,6 +42,7 @@ import {
   isBrunoTableQuickFilterTextWithinLimit,
 } from "./quick-filter";
 import { recordBrunoTableClientQuickFilterRender } from "./render-instrumentation";
+import { BrunoTableServerSetFilterFacet } from "./server-facet";
 
 export type BrunoTableClientFilterProviderProps = {
   readonly runtime: BrunoTableRowPipelineRuntimeView;
@@ -101,7 +102,7 @@ export const renderBrunoTableServerColumnFilter = (
     <BrunoTableColumnFilter
       column={column}
       runtime={runtime}
-      renderSetFilterFacet={false}
+      setFilterFacet={BrunoTableServerSetFilterFacet}
       activateHeaderCommand={activateHeaderCommand}
       restoreColumnFocus={restoreColumnFocus}
       registerColumnFilterOpener={registerColumnFilterOpener}

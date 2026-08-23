@@ -35,6 +35,16 @@ const query = Object.freeze({
 
 const completeRawSelect = ["symbol", "price"] as const;
 
+function semanticQueryKey(candidate: unknown): unknown {
+  return JSON.stringify(candidate, (key, value: unknown) => {
+    if (typeof value === "bigint") return `${value}n`;
+    if (key === "select" && Array.isArray(value)) {
+      return value.toSorted((left, right) => String(left).localeCompare(String(right)));
+    }
+    return value;
+  });
+}
+
 function makeViewport<TRow = Row>() {
   let request:
     | Readonly<{
@@ -51,11 +61,19 @@ function makeViewport<TRow = Row>() {
     | undefined;
   const setWindow = vi.fn();
   const release = vi.fn();
+  const semanticKey = vi.fn(semanticQueryKey);
   const replace = vi.fn((next: NonNullable<typeof request>) => {
     request = next;
     return { setWindow, release };
   });
-  return { viewport: { replace }, replace, setWindow, release, getRequest: () => request };
+  return {
+    viewport: { replace, semanticKey },
+    replace,
+    semanticKey,
+    setWindow,
+    release,
+    getRequest: () => request,
+  };
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
@@ -94,6 +112,46 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.setWindow).toHaveBeenLastCalledWith({ firstRow: 10, lastRow: 29 });
     expect(transport.replace).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("uses source-owned semantic identity for exact Route and external operands", () => {
+    const transport = makeViewport();
+    const stableKey = Object.freeze({});
+    transport.semanticKey.mockReturnValue(stableKey);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      ["symbol"],
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+
+    adapter.replace(transport.viewport, query, {
+      routeBy: { book: 9_007_199_254_740_993n },
+      externalFilters: [{ field: "price", type: "equals", filter: 10 }],
+      visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+    });
+    adapter.replace(transport.viewport, query, {
+      routeBy: { book: 9_007_199_254_740_993n },
+      externalFilters: [{ field: "price", type: "equals", filter: 10 }],
+      visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+    });
+
+    expect(transport.semanticKey).toHaveBeenCalledTimes(2);
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.getRequest()?.query).toEqual({
+      routeBy: { book: 9_007_199_254_740_993n },
+      select: ["symbol", "price"],
+      where: [{ field: "price", type: "equals", filter: 10 }],
+      orderBy: [{ field: "symbol", direction: "asc" }],
+    });
   });
 
   it("rejects a malformed replacement viewport before changing the active source", () => {
@@ -516,6 +574,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(() =>
       adapter.replace(
         {
+          semanticKey: semanticQueryKey,
           replace(request: Readonly<{ readonly sink: NonNullable<typeof failedSink> }>) {
             failedSink = request.sink;
             request.sink.setRowCount(1, true);
@@ -550,6 +609,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       completeRawSelect,
     );
     const viewport = {
+      semanticKey: semanticQueryKey,
       replace: vi.fn(() => ({ release, setWindow: undefined })),
     };
     adapter.reconcileSource({
