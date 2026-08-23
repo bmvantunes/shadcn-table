@@ -263,6 +263,46 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     expect(requestAnimationFrame).not.toHaveBeenCalled();
   });
 
+  it("keeps a valid new drag when only its obsolete pre-gesture anchor disappears", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_A", columnId: "COL_ID_B" }, structure);
+    const view = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+    } as unknown as Window;
+    range.startPointerGesture(
+      {
+        button: 0,
+        clientX: 0,
+        clientY: 0,
+        pointerId: 47,
+        shiftKey: false,
+        target: null,
+        preventDefault: vi.fn(),
+      } as unknown as PointerEvent,
+      { rowId: "ROW_B", columnId: "COL_ID_B", rowIndex: 1 },
+      gestureGrid(view),
+      vi.fn(),
+      vi.fn(),
+      () => false,
+    );
+    range.extend({ rowId: "ROW_C", columnId: "COL_ID_B" }, structure, "vertical");
+
+    const withoutOldAnchor = createBrunoTableCellRangeStructure(
+      ["ROW_B", "ROW_C", "ROW_D"],
+      structure.columnIds,
+    );
+    range.reconcile(withoutOldAnchor);
+    expect(range.isPointerGestureActive()).toBe(true);
+    expect(range.getSnapshot().range?.rowIds).toEqual(["ROW_B", "ROW_C"]);
+    expect(range.consumeStructuralInvalidation()).toBe(false);
+
+    range.cancelPointerGesture();
+    expect(range.getSnapshot()).toEqual({});
+  });
+
   it("projects a tied diagonal Shift pointer start back to the visible anchor", () => {
     const range = new BrunoTableCellRangeRuntime();
     range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);

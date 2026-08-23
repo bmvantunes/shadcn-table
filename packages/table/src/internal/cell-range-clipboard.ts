@@ -108,6 +108,7 @@ type BrunoTableCellRangeGestureEvent =
       readonly resources: BrunoTableCellRangeGestureResources;
     }>
   | Readonly<{ readonly type: "ACQUIRE_AXIS"; readonly axis: BrunoTableCellRangeAxis }>
+  | Readonly<{ readonly type: "SANITIZE_BEFORE"; readonly before: BrunoTableCellRangeSnapshot }>
   | Readonly<{ readonly type: "COMMIT" | "CANCEL" | "INVALIDATE" }>;
 
 type BrunoTableCellRangeGestureContext = Readonly<{
@@ -156,6 +157,7 @@ const brunoTableCellRangeGestureMachine = createMachine(
             target: "axisLocked",
             actions: assign({ axis: ({ event }) => event.axis }),
           },
+          SANITIZE_BEFORE: { actions: assign({ before: ({ event }) => event.before }) },
           COMMIT: { target: "idle", actions: ["releaseGestureResources", "clearGestureContext"] },
           CANCEL: { target: "idle", actions: ["releaseGestureResources", "clearGestureContext"] },
           INVALIDATE: {
@@ -166,6 +168,7 @@ const brunoTableCellRangeGestureMachine = createMachine(
       },
       axisLocked: {
         on: {
+          SANITIZE_BEFORE: { actions: assign({ before: ({ event }) => event.before }) },
           COMMIT: { target: "idle", actions: ["releaseGestureResources", "clearGestureContext"] },
           CANCEL: { target: "idle", actions: ["releaseGestureResources", "clearGestureContext"] },
           INVALIDATE: {
@@ -254,6 +257,8 @@ export type BrunoTableCellRangeInstrumentationEvent =
       readonly kind: "mounted-decoration";
       readonly tableId: string;
       readonly mountedCellCount: number;
+      readonly writtenCellCount: number;
+      readonly projectionCandidateCount: number;
     }>;
 
 type BrunoTableCellRangeInstrumentationListener = (
@@ -339,7 +344,17 @@ export class BrunoTableCellRangeRuntime {
   private snapshot = EMPTY_RANGE_SNAPSHOT;
   private grid: HTMLElement | null = null;
   private observer: MutationObserver | undefined;
-  private decorationFrame: number | null = null;
+  private decorationFrame:
+    | Readonly<{ readonly view: Window; readonly grid: HTMLElement; readonly id: number }>
+    | undefined;
+  private readonly mountedCellCoordinates = new Map<
+    HTMLElement,
+    Readonly<{ readonly rowId: string; readonly columnId: string }>
+  >();
+  private readonly mountedCellsByRow = new Map<string, Map<string, Set<HTMLElement>>>();
+  private readonly decoratedCells = new Set<HTMLElement>();
+  private readonly pendingDecorationCells = new Set<HTMLElement>();
+  private pendingDecorationProjectionCandidateCount = 0;
   private pointerGesture: BrunoTableCellRangePointerGesture | undefined;
   private gestureActor: ReturnType<typeof createBrunoTableCellRangeGestureActor> | undefined;
   private structuralInvalidationPendingCopy = false;
@@ -358,11 +373,29 @@ export class BrunoTableCellRangeRuntime {
   public readonly attachGrid = (grid: HTMLElement | null): void => {
     if (this.grid === grid) return;
     if (this.pointerGesture !== undefined) this.cancelPointerGesture();
+    this.cancelDecorationFrame();
     this.observer?.disconnect();
     this.observer = undefined;
+    this.clearDecoratedCells();
+    this.mountedCellCoordinates.clear();
+    this.mountedCellsByRow.clear();
     this.grid = grid;
     if (grid === null) return;
-    this.observer = new MutationObserver(() => this.scheduleDecoration());
+    const view = grid.ownerDocument.defaultView;
+    if (view === null) return;
+    this.registerMountedCells(grid);
+    this.observer = new view.MutationObserver((records) => {
+      let registryChanged = false;
+      for (const record of records) {
+        for (const removed of record.removedNodes) {
+          registryChanged = this.unregisterMountedCells(removed) || registryChanged;
+        }
+        for (const added of record.addedNodes) {
+          registryChanged = this.registerMountedCells(added) || registryChanged;
+        }
+      }
+      if (registryChanged) this.scheduleDecoration();
+    });
     this.observer.observe(grid, { childList: true, subtree: true });
     this.scheduleDecoration();
   };
@@ -373,9 +406,11 @@ export class BrunoTableCellRangeRuntime {
     this.gestureActor = undefined;
     this.observer?.disconnect();
     this.observer = undefined;
+    this.cancelDecorationFrame();
+    this.clearDecoratedCells();
+    this.mountedCellCoordinates.clear();
+    this.mountedCellsByRow.clear();
     this.grid = null;
-    if (this.decorationFrame !== null) cancelAnimationFrame(this.decorationFrame);
-    this.decorationFrame = null;
     this.listeners.clear();
   };
 
@@ -394,6 +429,7 @@ export class BrunoTableCellRangeRuntime {
     activate: (hit: BrunoTableCellRangeHit) => void,
     restoreActive: () => void,
     scrollHorizontalByPhysical: (delta: number) => boolean,
+    currentActive?: BrunoTableCellCoordinate,
   ): boolean => {
     const structure = this.structure;
     const view = grid.ownerDocument.defaultView;
@@ -443,10 +479,15 @@ export class BrunoTableCellRangeRuntime {
       },
     });
     event.preventDefault();
-    const next =
-      event.shiftKey && this.snapshot.anchor !== undefined
+    const next = event.shiftKey
+      ? this.snapshot.range !== undefined
         ? this.extend(hit, structure)
-        : this.replace(hit, structure);
+        : currentActive !== undefined && containsCoordinate(structure, currentActive)
+          ? this.extendFromCurrent(currentActive, hit, structure)
+          : this.snapshot.anchor !== undefined
+            ? this.extend(hit, structure)
+            : this.replace(hit, structure)
+      : this.replace(hit, structure);
     if (gestureActor.getSnapshot().pointerId !== event.pointerId) return true;
     const focus = next.range?.focus ?? next.anchor;
     if (focus !== undefined) {
@@ -526,17 +567,22 @@ export class BrunoTableCellRangeRuntime {
   ): BrunoTableCellRangeSnapshot => {
     if (this.structure === structure) return this.snapshot;
     const gesture = this.pointerGesture;
+    const gestureActor = gesture === undefined ? undefined : this.ensureGestureActor();
+    const before = gestureActor?.getSnapshot().before;
+    const beforeMatches = before === undefined || snapshotMatchesStructure(before, structure);
+    const currentMatches = snapshotMatchesStructure(this.snapshot, structure);
     if (
       gesture !== undefined &&
-      (!snapshotMatchesStructure(this.ensureGestureActor().getSnapshot().before, structure) ||
-        !snapshotMatchesStructure(this.snapshot, structure))
+      (!currentMatches || (before?.range !== undefined && !beforeMatches))
     ) {
-      const before = this.ensureGestureActor().getSnapshot().before;
-      const invalidatedRange = before.range !== undefined || this.snapshot.range !== undefined;
-      this.ensureGestureActor().send({ type: "INVALIDATE" });
+      const invalidatedRange = before?.range !== undefined || this.snapshot.range !== undefined;
+      gestureActor?.send({ type: "INVALIDATE" });
       this.structure = structure;
       if (invalidatedRange) this.structuralInvalidationPendingCopy = true;
       return this.publish(EMPTY_RANGE_SNAPSHOT);
+    }
+    if (gestureActor !== undefined && !beforeMatches) {
+      gestureActor.send({ type: "SANITIZE_BEFORE", before: EMPTY_RANGE_SNAPSHOT });
     }
     this.structure = structure;
     const anchor = this.snapshot.anchor;
@@ -589,7 +635,9 @@ export class BrunoTableCellRangeRuntime {
   ): BrunoTableCellRangeSnapshot => {
     if (this.snapshot === snapshot) return snapshot;
     if (sameSnapshot(this.snapshot, snapshot)) return this.snapshot;
+    const previous = this.snapshot;
     this.snapshot = snapshot;
+    this.enqueueDecorationDelta(previous, snapshot);
     recordInstrumentation({ kind: "publication", tableId: this.tableId });
     for (const listener of this.listeners) listener();
     this.scheduleDecoration();
@@ -597,42 +645,338 @@ export class BrunoTableCellRangeRuntime {
   };
 
   private readonly scheduleDecoration = (): void => {
-    if (this.grid === null || this.decorationFrame !== null) return;
-    this.decorationFrame = requestAnimationFrame(() => {
-      this.decorationFrame = null;
-      this.decorateMountedCells();
+    const grid = this.grid;
+    const view = grid?.ownerDocument.defaultView;
+    if (grid === null || grid === undefined || view === null || view === undefined) return;
+    if (this.decorationFrame !== undefined) return;
+    const frame = Object.freeze({
+      view,
+      grid,
+      id: view.requestAnimationFrame(() => {
+        if (this.decorationFrame !== frame) return;
+        this.decorationFrame = undefined;
+        if (this.grid === grid) this.decorateMountedCells();
+      }),
     });
+    this.decorationFrame = frame;
+  };
+
+  private readonly cancelDecorationFrame = (): void => {
+    const frame = this.decorationFrame;
+    if (frame === undefined) return;
+    this.decorationFrame = undefined;
+    frame.view.cancelAnimationFrame(frame.id);
+  };
+
+  private readonly registerMountedCells = (root: Node): boolean => {
+    const grid = this.grid;
+    if (grid === null) return false;
+    let changed = false;
+    for (const cell of ownedGridCellsWithin(root, grid)) {
+      const rowId = cell.dataset["brunoRowId"];
+      const columnId = cell.dataset["brunoColumnId"];
+      if (rowId === undefined || columnId === undefined) continue;
+      if (this.mountedCellCoordinates.has(cell)) continue;
+      this.mountedCellCoordinates.set(cell, { rowId, columnId });
+      changed = true;
+      let columns = this.mountedCellsByRow.get(rowId);
+      if (columns === undefined) {
+        columns = new Map();
+        this.mountedCellsByRow.set(rowId, columns);
+      }
+      let cells = columns.get(columnId);
+      if (cells === undefined) {
+        cells = new Set();
+        columns.set(columnId, cells);
+      }
+      cells.add(cell);
+      if (this.isCellSelected(rowId, columnId)) this.pendingDecorationCells.add(cell);
+    }
+    return changed;
+  };
+
+  private readonly unregisterMountedCells = (root: Node): boolean => {
+    const HTMLElementConstructor = this.grid?.ownerDocument.defaultView?.HTMLElement;
+    if (HTMLElementConstructor === undefined || !(root instanceof HTMLElementConstructor)) {
+      return false;
+    }
+    let changed = false;
+    if (this.mountedCellCoordinates.has(root)) {
+      this.unregisterMountedCell(root);
+      changed = true;
+    }
+    for (const cell of root.querySelectorAll<HTMLElement>(
+      '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+    )) {
+      if (!this.mountedCellCoordinates.has(cell)) continue;
+      this.unregisterMountedCell(cell);
+      changed = true;
+    }
+    return changed;
+  };
+
+  private readonly unregisterMountedCell = (cell: HTMLElement): void => {
+    const coordinate = this.mountedCellCoordinates.get(cell);
+    if (coordinate === undefined) return;
+    this.mountedCellCoordinates.delete(cell);
+    const columns = this.mountedCellsByRow.get(coordinate.rowId);
+    const cells = columns?.get(coordinate.columnId);
+    cells?.delete(cell);
+    if (cells?.size === 0) columns?.delete(coordinate.columnId);
+    if (columns?.size === 0) this.mountedCellsByRow.delete(coordinate.rowId);
+    this.pendingDecorationCells.delete(cell);
+    if (this.decoratedCells.delete(cell)) clearCellRangeDecoration(cell);
+  };
+
+  private readonly clearDecoratedCells = (): void => {
+    for (const cell of this.decoratedCells) clearCellRangeDecoration(cell);
+    this.decoratedCells.clear();
+    this.pendingDecorationCells.clear();
+    this.pendingDecorationProjectionCandidateCount = 0;
   };
 
   private readonly decorateMountedCells = (): void => {
-    const grid = this.grid;
-    if (grid === null) return;
-    const mountedCells = grid.querySelectorAll<HTMLElement>(
-      '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
-    );
-    let ownedMountedCellCount = 0;
-    for (const cell of mountedCells) {
-      if (cell.closest('[role="grid"]') !== grid) continue;
-      ownedMountedCellCount += 1;
-      const rowId = cell.dataset["brunoRowId"];
-      const columnId = cell.dataset["brunoColumnId"];
-      const selected =
-        rowId !== undefined && columnId !== undefined && this.isCellSelected(rowId, columnId);
+    let inspectedCellCount = 0;
+    let writtenCellCount = 0;
+    const pending = [...this.pendingDecorationCells];
+    this.pendingDecorationCells.clear();
+    for (const cell of pending) {
+      inspectedCellCount += 1;
+      const coordinate = this.mountedCellCoordinates.get(cell);
+      if (coordinate === undefined) continue;
+      const selected = this.isCellSelected(coordinate.rowId, coordinate.columnId);
+      const decorated = this.decoratedCells.has(cell);
+      if (selected === decorated) continue;
       if (selected) {
-        cell.setAttribute("aria-selected", "true");
-        cell.setAttribute("data-bruno-cell-range-selected", "");
-        cell.style.boxShadow = "inset 0 0 0 2px Highlight";
+        this.decoratedCells.add(cell);
+        applyCellRangeDecoration(cell);
       } else {
-        cell.removeAttribute("aria-selected");
-        cell.removeAttribute("data-bruno-cell-range-selected");
-        cell.style.removeProperty("box-shadow");
+        this.decoratedCells.delete(cell);
+        clearCellRangeDecoration(cell);
       }
+      writtenCellCount += 1;
     }
     recordInstrumentation({
       kind: "mounted-decoration",
       tableId: this.tableId,
-      mountedCellCount: ownedMountedCellCount,
+      mountedCellCount: inspectedCellCount,
+      writtenCellCount,
+      projectionCandidateCount: this.pendingDecorationProjectionCandidateCount,
     });
+    this.pendingDecorationProjectionCandidateCount = 0;
+  };
+
+  private readonly enqueueDecorationDelta = (
+    previous: BrunoTableCellRangeSnapshot,
+    next: BrunoTableCellRangeSnapshot,
+  ): void => {
+    const structure = this.structure;
+    if (previous.range === undefined && next.range === undefined) {
+      if (previous.anchor !== undefined) {
+        this.pendingDecorationProjectionCandidateCount += 1;
+        this.enqueueMountedCoordinate(previous.anchor.rowId, previous.anchor.columnId);
+      }
+      if (next.anchor !== undefined) {
+        this.pendingDecorationProjectionCandidateCount += 1;
+        this.enqueueMountedCoordinate(next.anchor.rowId, next.anchor.columnId);
+      }
+      return;
+    }
+    const previousHorizontal = horizontalSelectionInterval(previous);
+    const nextHorizontal = horizontalSelectionInterval(next);
+    if (
+      structure !== undefined &&
+      previousHorizontal !== undefined &&
+      nextHorizontal !== undefined &&
+      previousHorizontal.identity === nextHorizontal.identity
+    ) {
+      const columns = this.mountedCellsByRow.get(previousHorizontal.identity);
+      if (columns !== undefined) {
+        for (const [columnId, cells] of columns) {
+          this.pendingDecorationProjectionCandidateCount += 1;
+          if (
+            identityFallsWithin(
+              structure.columnIndexById,
+              columnId,
+              previousHorizontal.first,
+              previousHorizontal.last,
+            ) ===
+            identityFallsWithin(
+              structure.columnIndexById,
+              columnId,
+              nextHorizontal.first,
+              nextHorizontal.last,
+            )
+          ) {
+            continue;
+          }
+          for (const cell of cells) this.pendingDecorationCells.add(cell);
+        }
+      }
+      return;
+    }
+    const previousVertical = verticalSelectionInterval(previous);
+    const nextVertical = verticalSelectionInterval(next);
+    if (
+      structure !== undefined &&
+      previousVertical !== undefined &&
+      nextVertical !== undefined &&
+      previousVertical.identity === nextVertical.identity
+    ) {
+      const deltaSize = identityIntervalDeltaSize(
+        structure.rowIndexById,
+        previousVertical.first,
+        previousVertical.last,
+        nextVertical.first,
+        nextVertical.last,
+      );
+      if (deltaSize === undefined || deltaSize > this.mountedCellsByRow.size) {
+        for (const [rowId, columns] of this.mountedCellsByRow) {
+          const cells = columns.get(previousVertical.identity);
+          if (cells === undefined) continue;
+          this.pendingDecorationProjectionCandidateCount += 1;
+          if (
+            identityFallsWithin(
+              structure.rowIndexById,
+              rowId,
+              previousVertical.first,
+              previousVertical.last,
+            ) ===
+            identityFallsWithin(
+              structure.rowIndexById,
+              rowId,
+              nextVertical.first,
+              nextVertical.last,
+            )
+          ) {
+            continue;
+          }
+          for (const cell of cells) this.pendingDecorationCells.add(cell);
+        }
+        return;
+      }
+      this.enqueueIdentityIntervalDelta(
+        structure.rowIds,
+        structure.rowIndexById,
+        previousVertical.first,
+        previousVertical.last,
+        nextVertical.first,
+        nextVertical.last,
+        (rowId) => {
+          this.pendingDecorationProjectionCandidateCount += 1;
+          this.enqueueMountedCoordinate(rowId, previousVertical.identity);
+        },
+      );
+      return;
+    }
+    for (const cell of this.decoratedCells) this.pendingDecorationCells.add(cell);
+    this.enqueueMountedSelectionProjection(next, structure);
+  };
+
+  private readonly enqueueMountedSelectionProjection = (
+    snapshot: BrunoTableCellRangeSnapshot,
+    structure: BrunoTableCellRangeStructure | undefined,
+  ): void => {
+    const anchor = snapshot.anchor;
+    if (anchor === undefined) return;
+    const range = snapshot.range;
+    if (range === undefined) {
+      this.pendingDecorationProjectionCandidateCount += 1;
+      this.enqueueMountedCoordinate(anchor.rowId, anchor.columnId);
+      return;
+    }
+    if (range.axis === "horizontal") {
+      const columns = this.mountedCellsByRow.get(range.rowId);
+      if (columns === undefined) return;
+      for (const [columnId, cells] of columns) {
+        this.pendingDecorationProjectionCandidateCount += 1;
+        if (
+          structure !== undefined &&
+          !identityFallsWithin(
+            structure.columnIndexById,
+            columnId,
+            range.columnIds[0],
+            range.columnIds.at(-1),
+          )
+        ) {
+          continue;
+        }
+        for (const cell of cells) this.pendingDecorationCells.add(cell);
+      }
+      return;
+    }
+    if (range.rowIds.length <= this.mountedCellsByRow.size) {
+      for (const rowId of range.rowIds) {
+        this.pendingDecorationProjectionCandidateCount += 1;
+        this.enqueueMountedCoordinate(rowId, range.columnId);
+      }
+      return;
+    }
+    for (const [rowId, columns] of this.mountedCellsByRow) {
+      const cells = columns.get(range.columnId);
+      if (cells === undefined) continue;
+      this.pendingDecorationProjectionCandidateCount += 1;
+      if (
+        structure !== undefined &&
+        !identityFallsWithin(structure.rowIndexById, rowId, range.rowIds[0], range.rowIds.at(-1))
+      ) {
+        continue;
+      }
+      for (const cell of cells) this.pendingDecorationCells.add(cell);
+    }
+  };
+
+  private readonly enqueueIdentityIntervalDelta = (
+    identities: readonly string[],
+    indexById: ReadonlyMap<string, number>,
+    previousFirst: string,
+    previousLast: string | undefined,
+    nextFirst: string,
+    nextLast: string | undefined,
+    enqueue: (identity: string) => void,
+  ): void => {
+    const previousStart = indexById.get(previousFirst);
+    const previousEnd = previousLast === undefined ? undefined : indexById.get(previousLast);
+    const nextStart = indexById.get(nextFirst);
+    const nextEnd = nextLast === undefined ? undefined : indexById.get(nextLast);
+    if (
+      previousStart === undefined ||
+      previousEnd === undefined ||
+      nextStart === undefined ||
+      nextEnd === undefined
+    ) {
+      for (const cell of this.mountedCellCoordinates.keys()) this.pendingDecorationCells.add(cell);
+      return;
+    }
+    const previousLow = Math.min(previousStart, previousEnd);
+    const previousHigh = Math.max(previousStart, previousEnd);
+    const nextLow = Math.min(nextStart, nextEnd);
+    const nextHigh = Math.max(nextStart, nextEnd);
+    if (previousHigh < nextLow || nextHigh < previousLow) {
+      for (let index = previousLow; index <= previousHigh; index += 1) enqueue(identities[index]!);
+      for (let index = nextLow; index <= nextHigh; index += 1) enqueue(identities[index]!);
+      return;
+    }
+    for (
+      let index = Math.min(previousLow, nextLow);
+      index < Math.max(previousLow, nextLow);
+      index += 1
+    ) {
+      enqueue(identities[index]!);
+    }
+    for (
+      let index = Math.min(previousHigh, nextHigh) + 1;
+      index <= Math.max(previousHigh, nextHigh);
+      index += 1
+    ) {
+      enqueue(identities[index]!);
+    }
+  };
+
+  private readonly enqueueMountedCoordinate = (rowId: string, columnId: string): void => {
+    const cells = this.mountedCellsByRow.get(rowId)?.get(columnId);
+    if (cells === undefined) return;
+    for (const cell of cells) this.pendingDecorationCells.add(cell);
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
@@ -768,6 +1112,32 @@ function recordInstrumentation(event: BrunoTableCellRangeInstrumentationEvent): 
       // Diagnostics must never alter the interaction they observe.
     }
   }
+}
+
+function ownedGridCellsWithin(root: Node, grid: HTMLElement): readonly HTMLElement[] {
+  const HTMLElementConstructor = grid.ownerDocument.defaultView?.HTMLElement;
+  if (HTMLElementConstructor === undefined || !(root instanceof HTMLElementConstructor)) return [];
+  const candidates = [
+    ...(root.matches('[role="gridcell"][data-bruno-row-id][data-bruno-column-id]')
+      ? [root as HTMLElement]
+      : []),
+    ...root.querySelectorAll<HTMLElement>(
+      '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+    ),
+  ];
+  return candidates.filter((cell) => cell.closest('[role="grid"]') === grid);
+}
+
+function applyCellRangeDecoration(cell: HTMLElement): void {
+  cell.setAttribute("aria-selected", "true");
+  cell.setAttribute("data-bruno-cell-range-selected", "");
+  cell.style.boxShadow = "inset 0 0 0 2px Highlight";
+}
+
+function clearCellRangeDecoration(cell: HTMLElement): void {
+  cell.removeAttribute("aria-selected");
+  cell.removeAttribute("data-bruno-cell-range-selected");
+  cell.style.removeProperty("box-shadow");
 }
 
 export function captureBrunoTableClipboardSnapshot(
@@ -998,6 +1368,83 @@ function identityFallsWithin(
     candidate >= Math.min(first, last) &&
     candidate <= Math.max(first, last)
   );
+}
+
+type BrunoTableCellRangeSelectionInterval = Readonly<{
+  readonly identity: string;
+  readonly first: string;
+  readonly last: string;
+}>;
+
+function horizontalSelectionInterval(
+  snapshot: BrunoTableCellRangeSnapshot,
+): BrunoTableCellRangeSelectionInterval | undefined {
+  const range = snapshot.range;
+  if (range?.axis === "horizontal") {
+    const last = range.columnIds.at(-1);
+    if (last === undefined) return undefined;
+    return {
+      identity: range.rowId,
+      first: range.columnIds[0],
+      last,
+    };
+  }
+  if (range !== undefined || snapshot.anchor === undefined) return undefined;
+  return {
+    identity: snapshot.anchor.rowId,
+    first: snapshot.anchor.columnId,
+    last: snapshot.anchor.columnId,
+  };
+}
+
+function verticalSelectionInterval(
+  snapshot: BrunoTableCellRangeSnapshot,
+): BrunoTableCellRangeSelectionInterval | undefined {
+  const range = snapshot.range;
+  if (range?.axis === "vertical") {
+    const last = range.rowIds.at(-1);
+    if (last === undefined) return undefined;
+    return {
+      identity: range.columnId,
+      first: range.rowIds[0],
+      last,
+    };
+  }
+  if (range !== undefined || snapshot.anchor === undefined) return undefined;
+  return {
+    identity: snapshot.anchor.columnId,
+    first: snapshot.anchor.rowId,
+    last: snapshot.anchor.rowId,
+  };
+}
+
+function identityIntervalDeltaSize(
+  indexById: ReadonlyMap<string, number>,
+  previousFirst: string,
+  previousLast: string,
+  nextFirst: string,
+  nextLast: string,
+): number | undefined {
+  const previousStart = indexById.get(previousFirst);
+  const previousEnd = indexById.get(previousLast);
+  const nextStart = indexById.get(nextFirst);
+  const nextEnd = indexById.get(nextLast);
+  if (
+    previousStart === undefined ||
+    previousEnd === undefined ||
+    nextStart === undefined ||
+    nextEnd === undefined
+  ) {
+    return undefined;
+  }
+  const previousLow = Math.min(previousStart, previousEnd);
+  const previousHigh = Math.max(previousStart, previousEnd);
+  const nextLow = Math.min(nextStart, nextEnd);
+  const nextHigh = Math.max(nextStart, nextEnd);
+  if (previousHigh < nextLow || nextHigh < previousLow) {
+    return previousHigh - previousLow + 1 + (nextHigh - nextLow + 1);
+  }
+  return Math.abs(previousLow - nextLow) + Math.abs(previousHigh - nextHigh);
 }
 
 function sameIdentities(left: readonly string[], right: readonly string[]): boolean {

@@ -2231,6 +2231,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
   const runCopy = (event: BrunoTableHotkeyGesture): void => {
     if ((!enableActiveCellCopy && cellRange === undefined) || !ownsGridSurface(event)) return;
+    const clipboard = gridElement.current?.ownerDocument.defaultView?.navigator.clipboard;
     if (cellRange !== undefined) event.preventDefault();
     const active = navigation.getSnapshot();
     if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
@@ -2255,7 +2256,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       announceCopy("Copy failed: the selected cells are no longer available");
       return;
     }
-    if (navigator.clipboard?.writeText === undefined) {
+    if (clipboard?.writeText === undefined) {
       announceCopy("Copy failed: clipboard access is unavailable");
       return;
     }
@@ -2289,7 +2290,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     event.preventDefault();
     let write: Promise<void>;
     try {
-      write = navigator.clipboard.writeText(text);
+      write = clipboard.writeText(text);
     } catch {
       announceCopy("Copy failed: the browser rejected the clipboard write");
       return;
@@ -2329,6 +2330,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
     const horizontalLogicalSign = getComputedStyle(grid).direction === "rtl" ? -1 : 1;
     const activeBefore = navigation.getSnapshot();
+    const currentActive =
+      activeBefore?.region === "body" && activeBefore.rowId !== undefined
+        ? { rowId: activeBefore.rowId, columnId: activeBefore.columnId }
+        : undefined;
     cellRange.startPointerGesture(
       event.nativeEvent,
       hit,
@@ -2340,6 +2345,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         navigation.restoreActiveCell(activeBefore);
       },
       (physicalDelta) => scrollByLogical(horizontalLogicalSign * physicalDelta),
+      currentActive,
     );
   };
   const runColumnResize = (

@@ -19,6 +19,7 @@ import {
   registerBrunoTableForeignDocumentHeldShift,
   registerBrunoTableForeignDocumentHotkeys,
   isBrunoTableForeignDocumentShiftHeld,
+  type BrunoTableCoreHotkeyBinding,
 } from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
@@ -480,9 +481,11 @@ export function useBrunoTableGridHotkeys(
     }) satisfies HotkeyCallback,
   }));
   const escapeCommandRef = useRef(commands.escape);
+  const copyCommandRef = useRef(commands.copy);
   useEffect(() => {
     escapeCommandRef.current = commands.escape;
-  }, [commands.escape]);
+    copyCommandRef.current = commands.copy;
+  }, [commands.copy, commands.escape]);
   const escapeBindings = ownerScopedBindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length);
   useBrunoTableHotkeys(
     target,
@@ -513,15 +516,28 @@ export function useBrunoTableGridHotkeys(
     ) {
       return;
     }
-    const escapeBindings = BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
-      hotkey,
-      onTrigger: ((event) => {
-        const currentOwner = target.current;
-        if (!ownsBrunoTableHotkeyTarget(currentOwner, event.target)) return;
-        escapeCommandRef.current(event);
-      }) satisfies HotkeyCallback,
-    }));
-    const cleanupDocument = registerBrunoTableForeignDocumentHotkeys(ownerDocument, escapeBindings);
+    const foreignBindings: readonly BrunoTableCoreHotkeyBinding[] = [
+      ...BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
+        hotkey,
+        onTrigger: ((event) => {
+          const currentOwner = target.current;
+          if (!ownsBrunoTableHotkeyTarget(currentOwner, event.target)) return;
+          escapeCommandRef.current(event);
+        }) satisfies HotkeyCallback,
+      })),
+      {
+        hotkey: "Mod+C",
+        onTrigger: ((event) => {
+          const currentOwner = target.current;
+          if (event.target !== currentOwner) return;
+          copyCommandRef.current(event);
+        }) satisfies HotkeyCallback,
+      },
+    ];
+    const cleanupDocument = registerBrunoTableForeignDocumentHotkeys(
+      ownerDocument,
+      foreignBindings,
+    );
     foreignRegistrationRef.current = {
       owner,
       cleanup: cleanupDocument,
