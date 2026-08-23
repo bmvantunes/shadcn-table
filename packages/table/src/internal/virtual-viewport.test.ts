@@ -1154,6 +1154,45 @@ describe("BrunoTableViewportRuntime", () => {
     expect(removeProperty).toHaveBeenCalled();
   });
 
+  it("keeps the leading utility gutter in pinned-start resize preview offsets", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_PREVIEW_GUTTER_START",
+        field: "name",
+        headerName: "Preview gutter start",
+        valueType: "text",
+        pinned: "start",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_PREVIEW_GUTTER_CENTER",
+        field: "name",
+        headerName: "Preview gutter center",
+        valueType: "text",
+        width: 120,
+      },
+    ]);
+    const setProperty = vi.fn();
+    const viewport = new BrunoTableViewportRuntime(36, 40);
+    viewport.setLayout(2, columns);
+    viewport.attach({
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 500,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty },
+    } as unknown as HTMLElement);
+
+    viewport.previewColumnWidth("COL_ID_PREVIEW_GUTTER_START", 160);
+
+    expect(setProperty).toHaveBeenCalledWith(
+      brunoTableColumnCssVariable("pinned-start-offset", "COL_ID_PREVIEW_GUTTER_START"),
+      "40px",
+    );
+  });
+
   it("publishes one bounded structural preview when shrinking a wide centre exposes columns", () => {
     const columns = compileColumns([
       {

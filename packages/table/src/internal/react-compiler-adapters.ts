@@ -341,6 +341,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   focusFallback,
   focusHandoff,
   defaultLoadingRowCount,
+  leadingUtilityWidth = 0,
   children,
 }: {
   readonly runtime: BrunoTableRuntimeView;
@@ -349,6 +350,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   readonly focusFallback: () => void;
   readonly focusHandoff: BrunoTableFocusHandoff;
   readonly defaultLoadingRowCount: number;
+  readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableLoadingViewportAdapterState) => ReactElement;
 }): ReactElement {
   const columnLayout = useSyncExternalStore(
@@ -361,7 +363,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   const logicalRowCount =
     Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : defaultLoadingRowCount;
   const [viewport] = useState(() => {
-    const next = new BrunoTableViewportRuntime(0);
+    const next = new BrunoTableViewportRuntime(0, leadingUtilityWidth);
     next.setLayout(logicalRowCount, columns);
     return next;
   });

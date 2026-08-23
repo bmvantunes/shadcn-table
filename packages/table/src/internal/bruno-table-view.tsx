@@ -923,6 +923,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         focusFallback={focusFallback}
         focusHandoff={focusHandoff}
         tableId={tableId}
+        rowSelection={rowSelection}
       />
     );
   }
@@ -1118,6 +1119,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
   }: BrunoTableViewportAdapterProps): ReactElement {
     return (
       <BrunoTableViewportAdapterBoundary
+        key={rowSelection === undefined ? "no-leading-utility" : "row-selection-utility"}
         columns={columns}
         leadingUtilityWidth={rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH}
         navigation={navigation}
@@ -2149,6 +2151,27 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (!ownsGridSurface(event)) return;
     navigation.activateForFocus();
     const active = navigation.getSnapshot();
+    if (intent === "space" && rowSelection !== undefined && active !== undefined) {
+      event.preventDefault();
+      if (active.region === "header") {
+        const header = rowSelection.getHeaderSnapshot();
+        if (header.disabled) return;
+        rowSelection.toggleAll(!header.checked);
+        const selectedCount = rowSelection.getHeaderSnapshot().selectedCount;
+        setAnnouncement(
+          selectedCount === 0
+            ? "All matching rows deselected"
+            : `${String(selectedCount)} matching ${selectedCount === 1 ? "row" : "rows"} selected`,
+        );
+        return;
+      }
+      const rowId = active.rowId ?? rowSpace.getRowId(active.rowIndex);
+      if (rowId === undefined) return;
+      const checked = rowSelection.getRowSnapshot(rowId);
+      rowSelection.toggleRow(rowId, !checked, shift);
+      setAnnouncement(`Row ${String(active.rowIndex + 1)} ${checked ? "deselected" : "selected"}`);
+      return;
+    }
     const column = logicalColumns.find((candidate) => candidate.columnId === active?.columnId);
     if (active?.region === "body" && (intent === "enter" || intent === "f2")) {
       if (column !== undefined && enterInteractiveCell(active, column)) event.preventDefault();
@@ -2231,7 +2254,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
         />
       ) : null}
-      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter />}
+      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter owner={gridElement} />}
       <div
         ref={attachGrid}
         data-bruno-scroll-owner=""
@@ -2248,9 +2271,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           (rowSelection === undefined ? 0 : 1)
         }
         aria-keyshortcuts={
-          enableActiveCellCopy
-            ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C"
-            : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
+          rowSelection === undefined
+            ? enableActiveCellCopy
+              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C"
+              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
+            : enableActiveCellCopy
+              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C Space Shift+Space"
+              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space"
         }
         onFocus={(event) => {
           if (event.target === event.currentTarget) navigation.activateForFocus();
@@ -2792,6 +2819,7 @@ const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHea
         indeterminate={snapshot.mixed}
         onClick={() => selection.toggleAll(!snapshot.checked)}
         onPointerDown={(event) => event.stopPropagation()}
+        tabIndex={-1}
       />
     </th>
   );
@@ -3015,9 +3043,14 @@ const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
         aria-label={`Select row ${String(logicalRowIndex + 1)}`}
         checked={checked}
         onClick={(event) =>
-          selection.toggleRow(rowId, !checked, event.detail > 0 && isBrunoTableHotkeyHeld("Shift"))
+          selection.toggleRow(
+            rowId,
+            !checked,
+            event.detail > 0 && isBrunoTableHotkeyHeld("Shift", event.currentTarget),
+          )
         }
         onPointerDown={(event) => event.stopPropagation()}
+        tabIndex={-1}
       />
     </td>
   );
@@ -4553,6 +4586,7 @@ const LoadingRows = memo(function LoadingRows({
   focusFallback,
   focusHandoff,
   tableId,
+  rowSelection,
 }: {
   readonly runtime: BrunoTableRuntimeView;
   readonly totalRows: number;
@@ -4560,15 +4594,19 @@ const LoadingRows = memo(function LoadingRows({
   readonly focusFallback: () => void;
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly tableId: string;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
 }) {
+  const rowSelectionWidth = rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH;
   return (
     <BrunoTableLoadingViewportAdapterBoundary
+      key={rowSelection === undefined ? "no-leading-utility" : "row-selection-utility"}
       compiledColumns={compiledColumns}
       defaultLoadingRowCount={DEFAULT_LOADING_ROW_COUNT}
       focusFallback={focusFallback}
       focusHandoff={focusHandoff}
       runtime={runtime}
       totalRows={totalRows}
+      leadingUtilityWidth={rowSelectionWidth}
     >
       {(adapter) => {
         const virtualWindow = adapter.viewportSnapshot.virtualWindow;
@@ -4583,7 +4621,7 @@ const LoadingRows = memo(function LoadingRows({
             <div
               ref={adapter.attachGrid}
               aria-busy="true"
-              aria-colcount={adapter.columns.length}
+              aria-colcount={adapter.columns.length + (rowSelection === undefined ? 0 : 1)}
               aria-label="Loading table rows"
               aria-rowcount={adapter.logicalRowCount}
               data-bruno-scroll-owner=""
@@ -4600,14 +4638,14 @@ const LoadingRows = memo(function LoadingRows({
                 data-bruno-row-layer=""
                 style={{
                   position: "relative",
-                  width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                  width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
                 }}
               >
                 <table
                   role="presentation"
                   style={{
                     tableLayout: "fixed",
-                    width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                    width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
                   }}
                 >
                   <tbody
@@ -4616,7 +4654,7 @@ const LoadingRows = memo(function LoadingRows({
                       display: "block",
                       height: virtualWindow.totalHeight,
                       position: "relative",
-                      width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                      width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
                     }}
                   >
                     {Array.from(
@@ -4637,6 +4675,8 @@ const LoadingRows = memo(function LoadingRows({
                           top={offset * ROW_HEIGHT}
                           viewportFill={viewportFill}
                           width={renderedTableWidth}
+                          rowSelection={rowSelection}
+                          columnIndexOffset={rowSelection === undefined ? 0 : 1}
                         />
                       ),
                     )}
@@ -4654,6 +4694,8 @@ const LoadingRows = memo(function LoadingRows({
                     side="start"
                     tableId={tableId}
                     totalHeight={virtualWindow.totalHeight}
+                    leadingUtilityWidth={rowSelectionWidth}
+                    columnIndexOffset={rowSelection === undefined ? 0 : 1}
                   />
                 ) : null}
                 {virtualWindow.pinnedEnd.length > 0 ? (
@@ -4669,6 +4711,8 @@ const LoadingRows = memo(function LoadingRows({
                     side="end"
                     tableId={tableId}
                     totalHeight={virtualWindow.totalHeight}
+                    leadingUtilityWidth={rowSelectionWidth}
+                    columnIndexOffset={rowSelection === undefined ? 0 : 1}
                   />
                 ) : null}
               </div>
@@ -4693,6 +4737,8 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
   side,
   tableId,
   totalHeight,
+  leadingUtilityWidth,
+  columnIndexOffset,
 }: {
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly columns: readonly CompiledColumn[];
@@ -4705,12 +4751,14 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
   readonly side: "start" | "end";
   readonly tableId: string;
   readonly totalHeight: number;
+  readonly leadingUtilityWidth: number;
+  readonly columnIndexOffset: number;
 }) {
   const width = totalColumnWidth(columns);
   return (
     <BrunoTablePinnedOverlayShell
       layerWidth={layerWidth}
-      leadingUtilityWidth={0}
+      leadingUtilityWidth={leadingUtilityWidth}
       side={side}
       top={0}
       totalHeight={totalHeight}
@@ -4738,7 +4786,8 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
               key={column.columnId}
               column={column}
               columnIndex={
-                side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+                columnIndexOffset +
+                (side === "start" ? index : pinnedStartCount + precedingColumnCount + index)
               }
               id={loadingCellDomId(instanceId, tableId, rowStart + offset, column.columnId)}
             />

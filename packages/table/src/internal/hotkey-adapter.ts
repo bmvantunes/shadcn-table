@@ -16,7 +16,9 @@ import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
 import {
   registerBrunoTableCaptureHotkeys,
+  registerBrunoTableForeignDocumentHeldShift,
   registerBrunoTableForeignDocumentHotkeys,
+  isBrunoTableForeignDocumentShiftHeld,
 } from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
@@ -362,13 +364,38 @@ export function brunoTableHotkeyRegistrationBound(
 }
 
 /** One table-local bridge initializes TanStack's held-key lifecycle without per-cell subscriptions. */
-export function BrunoTableHeldShiftHotkeyAdapter(): null {
+export function BrunoTableHeldShiftHotkeyAdapter({
+  owner,
+}: {
+  readonly owner: RefObject<HTMLElement | null>;
+}): null {
   useKeyHold("Shift");
+  useEffect(() => {
+    const ownerDocument = owner.current?.ownerDocument;
+    if (
+      ownerDocument === undefined ||
+      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
+    ) {
+      return;
+    }
+    return registerBrunoTableForeignDocumentHeldShift(ownerDocument);
+  }, [owner]);
   return null;
 }
 
 /** Reads TanStack's shared held-key state synchronously for a pointer command. */
-export function isBrunoTableHotkeyHeld(key: "Shift"): boolean {
+export function isBrunoTableHotkeyHeld(
+  key: "Shift",
+  owner?: Readonly<{ readonly ownerDocument: Document | null }>,
+): boolean {
+  const ownerDocument = owner?.ownerDocument;
+  if (
+    ownerDocument !== undefined &&
+    ownerDocument !== null &&
+    ownerDocument.defaultView !== (typeof window === "undefined" ? undefined : window)
+  ) {
+    return isBrunoTableForeignDocumentShiftHeld(ownerDocument);
+  }
   return getKeyStateTracker().isKeyHeld(key);
 }
 

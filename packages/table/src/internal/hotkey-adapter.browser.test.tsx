@@ -7,6 +7,8 @@ import { cleanup, render } from "vitest-browser-react";
 import {
   BRUNO_TABLE_GRID_HOTKEYS,
   BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
+  BrunoTableHeldShiftHotkeyAdapter,
+  isBrunoTableHotkeyHeld,
   requestBrunoTableHotkeyWorkflowAction,
   useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
@@ -71,11 +73,13 @@ function OwningDocumentAdapterProbe({
   commands,
   onInput,
   ownerDocument,
+  trackHeldShift = false,
 }: Readonly<{
   captureAction: () => void;
   commands: BrunoTableGridHotkeyCommands;
   onInput: (input: HTMLInputElement | null) => void;
   ownerDocument: Document;
+  trackHeldShift?: boolean;
 }>) {
   const ownerRef = useRef<HTMLElement>(null);
   const setInput = useCallback((input: HTMLInputElement | null) => onInput(input), [onInput]);
@@ -88,6 +92,7 @@ function OwningDocumentAdapterProbe({
       aria-label="Secondary-document table hotkeys"
       data-bruno-table="secondary-document"
     >
+      {trackHeldShift ? <BrunoTableHeldShiftHotkeyAdapter owner={ownerRef} /> : null}
       <input ref={setInput} aria-label="Secondary-document descendant" />
     </section>,
     ownerDocument.body,
@@ -100,6 +105,45 @@ afterEach(async () => {
 });
 
 describe("BrunoTable hotkey Adapter browser contract", () => {
+  test("tracks held Shift in the table owner document", async () => {
+    let input: HTMLInputElement | null = null;
+    const screen = await render(
+      <iframe aria-label="Held-key document" role="document" title="Held-key document" />,
+    );
+    const frame = screen.getByRole("document", { name: "Held-key document" }).element();
+    if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
+      throw new Error("Expected a same-origin held-key document.");
+    }
+    const ownerDocument = frame.contentDocument;
+    const ownerWindow = frame.contentWindow;
+    if (ownerWindow === null) throw new Error("Expected a held-key window.");
+    await screen.rerender(
+      <>
+        <iframe aria-label="Held-key document" role="document" title="Held-key document" />
+        <OwningDocumentAdapterProbe
+          captureAction={() => undefined}
+          commands={probeCommands()}
+          onInput={(candidate) => {
+            input = candidate;
+          }}
+          ownerDocument={ownerDocument}
+          trackHeldShift
+        />
+      </>,
+    );
+    await vi.waitFor(() => expect(input).not.toBeNull());
+    const foreignInput = input as HTMLInputElement | null;
+    if (foreignInput === null) throw new Error("Expected the held-key descendant.");
+    const ownerGlobal = ownerWindow as Window & typeof globalThis;
+    const ForeignKeyboardEvent = ownerGlobal.KeyboardEvent;
+    foreignInput.dispatchEvent(
+      new ForeignKeyboardEvent("keydown", { bubbles: true, key: "Shift", shiftKey: true }),
+    );
+    expect(isBrunoTableHotkeyHeld("Shift", foreignInput)).toBe(true);
+    foreignInput.dispatchEvent(new ForeignKeyboardEvent("keyup", { bubbles: true, key: "Shift" }));
+    expect(isBrunoTableHotkeyHeld("Shift", foreignInput)).toBe(false);
+  });
+
   test.each([
     { platform: "windows" as const, modifier: { ctrlKey: true } },
     { platform: "mac" as const, modifier: { metaKey: true } },

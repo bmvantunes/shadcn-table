@@ -881,7 +881,7 @@ export class BrunoTableViewportRuntime {
       const columnIndex = this.layout.pinnedStart.findIndex(
         (candidate) => candidate.columnId === columnId,
       );
-      let offset = 0;
+      let offset = this.leadingUtilityWidth;
       for (const [index, candidate] of this.layout.pinnedStart.entries()) {
         if (index >= columnIndex) {
           set(

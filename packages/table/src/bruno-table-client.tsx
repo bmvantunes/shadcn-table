@@ -54,10 +54,7 @@ export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<
   props: BrunoTableClientProps<TRow, TColumns>,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
-  const capabilityKey = props.rowSelection === true ? "row-selection" : "plain";
-  return (
-    <BrunoTableClientInstance key={`${tableId}:${capabilityKey}`} props={props} tableId={tableId} />
-  );
+  return <BrunoTableClientInstance key={tableId} props={props} tableId={tableId} />;
 }
 
 function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns<TRow>>({
@@ -97,8 +94,9 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     return created;
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
-  const [rowSelection] = useState(() =>
-    props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined,
+  const rowSelection = useMemo(
+    () => (props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined),
+    [props.rowSelection],
   );
   const runtimeView = runtime.getView();
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);

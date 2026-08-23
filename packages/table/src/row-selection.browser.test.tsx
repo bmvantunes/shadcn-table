@@ -48,6 +48,8 @@ describe("ordinary Client Row Selection", () => {
 
     const selectAll = page.getByRole("checkbox", { name: "Select all rows" });
     const ada = page.getByRole("checkbox", { name: "Select row 1" });
+    await expect.element(selectAll).toHaveAttribute("tabindex", "-1");
+    await expect.element(ada).toHaveAttribute("tabindex", "-1");
     await expect.element(selectAll).not.toBeChecked();
     await userEvent.click(ada);
     await expect.element(ada).toBeChecked();
@@ -57,6 +59,127 @@ describe("ordinary Client Row Selection", () => {
     await userEvent.click(selectAll);
     await expect.element(selectAll).toBeChecked();
     await expect.element(page.getByRole("checkbox", { name: "Select row 3" })).toBeChecked();
+  });
+
+  test("uses the stable grid Space command without adding virtualized Tab stops", async () => {
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_GRID_SPACE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+
+    const grid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_GRID_SPACE" });
+    await expect
+      .element(grid)
+      .toHaveAttribute(
+        "aria-keyshortcuts",
+        "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space",
+      );
+    grid.element().focus();
+    await userEvent.keyboard(" ");
+    await expect.element(page.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
+
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Shift>} {/Shift}");
+    await expect.element(page.getByRole("checkbox", { name: "Select row 2" })).toBeChecked();
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select all rows" }))
+      .toHaveAttribute("aria-checked", "mixed");
+  });
+
+  test("preserves table state when the optional capability changes", async () => {
+    const renderTable = (rowSelection: true | undefined) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_DYNAMIC"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        {...(rowSelection === true ? { rowSelection } : {})}
+      />
+    );
+    const screen = await render(renderTable(undefined));
+    await settleBrunoTableBrowserFrames();
+    await page.getByRole("button", { name: /Sort by Name/ }).click();
+    await expect.element(page.getByRole("gridcell", { name: "Curie" })).toBeInTheDocument();
+
+    await screen.rerender(renderTable(true));
+    await settleBrunoTableBrowserFrames();
+    const names = page
+      .getByRole("gridcell")
+      .all()
+      .map((cell) => cell.element().textContent)
+      .filter((value) => value === "Ada" || value === "Babbage" || value === "Curie");
+    expect(names).toEqual(["Curie", "Babbage", "Ada"]);
+    await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).toBeEnabled();
+
+    await screen.rerender(renderTable(undefined));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      page
+        .getByRole("gridcell")
+        .all()
+        .map((cell) => cell.element().textContent)
+        .filter((value) => value === "Ada" || value === "Babbage" || value === "Curie"),
+    ).toEqual(["Curie", "Babbage", "Ada"]);
+    await expect.element(page.getByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  test("keeps the selection gutter while Client rows are loading", async () => {
+    const loadingColumns = [
+      {
+        columnId: "COL_ID_START",
+        field: "name",
+        headerName: "Start",
+        valueType: "text",
+        pinned: "start",
+        width: 80,
+      },
+      {
+        columnId: "COL_ID_CENTER",
+        field: "name",
+        headerName: "Center",
+        valueType: "text",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_END",
+        field: "name",
+        headerName: "End",
+        valueType: "text",
+        pinned: "end",
+        width: 80,
+      },
+    ] satisfies BrunoTableColumns<Row>;
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_LOADING"
+        columns={loadingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_CENTER", direction: "asc" }]}
+        clientSource={{ rows: [] as readonly Row[], totalRows: 100, version: 1, status: "loading" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+
+    const grid = page.getByRole("grid", { name: "Loading table rows" });
+    await expect.element(grid).toHaveAttribute("aria-colcount", "4");
+    const selectionCell = page
+      .getByRole("gridcell", { name: "Row selection loading" })
+      .nth(0)
+      .element();
+    const pinnedStart = page.getByRole("gridcell", { name: "Loading Start" }).nth(0).element();
+    expect(pinnedStart.closest('[data-bruno-pinned-body-region="start"]')).not.toBeNull();
+    expect(pinnedStart.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      selectionCell.getBoundingClientRect().right - 1,
+    );
   });
 
   test("Shift-click selects the inclusive current projection without changing grid focus", async () => {
@@ -247,6 +370,22 @@ describe("ordinary Client Row Selection", () => {
     await settleBrunoTableBrowserFrames();
     expect(rowCheckboxForCell("Ada").getAttribute("aria-checked")).toBe("false");
     await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).not.toBeChecked();
+
+    const grid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_FILTERED" });
+    grid.element().focus();
+    await userEvent.keyboard("{ArrowUp}");
+    await userEvent.keyboard(" ");
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
+        "1 matching row selected",
+      ),
+    );
+    await userEvent.keyboard(" ");
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
+        "All matching rows deselected",
+      ),
+    );
 
     const restoredRows = [{ id: "a", name: "Ada" }, ...nextRows.slice(1)] satisfies readonly Row[];
     await screen.rerender(
