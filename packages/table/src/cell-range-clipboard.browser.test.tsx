@@ -552,6 +552,87 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("rejects keyboard navigation while a pointer range workflow owns the anchor", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_POINTER_KEYBOARD_OWNERSHIP";
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const writes: string[] = [];
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    try {
+      await render(table(tableId));
+      await settleBrunoTableBrowserFrames();
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      const ada = page.getByRole("gridcell", { name: "Ada", exact: true });
+      const quantity = page.getByRole("gridcell", {
+        name: "9007199254740993 displayed",
+        exact: true,
+      });
+      const adaBounds = ada.element().getBoundingClientRect();
+      const quantityBounds = quantity.element().getBoundingClientRect();
+      ada.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: adaBounds.left + adaBounds.width / 2,
+          clientY: adaBounds.top + adaBounds.height / 2,
+          pointerId: 58,
+        }),
+      );
+      quantity.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: quantityBounds.left + quantityBounds.width / 2,
+          clientY: quantityBounds.top + quantityBounds.height / 2,
+          pointerId: 58,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      await expect.element(ada).toHaveAttribute("aria-selected", "true");
+      await expect.element(quantity).toHaveAttribute("aria-selected", "true");
+      const activeBeforeNavigation = grid.element().getAttribute("aria-activedescendant");
+      const publicationsBeforeNavigation = events.filter(
+        (event) => event.kind === "publication",
+      ).length;
+
+      grid.element().focus();
+      const navigation = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowLeft",
+      });
+      grid.element().dispatchEvent(navigation);
+      await settleBrunoTableBrowserFrames();
+      expect(navigation.defaultPrevented).toBe(true);
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeBeforeNavigation);
+      expect(events.filter((event) => event.kind === "publication")).toHaveLength(
+        publicationsBeforeNavigation,
+      );
+
+      quantity.element().dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          clientX: quantityBounds.left + quantityBounds.width / 2,
+          clientY: quantityBounds.top + quantityBounds.height / 2,
+          pointerId: 58,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["Ada\t4\t9007199254740993"]));
+    } finally {
+      restoreClipboard();
+      removeInstrumentation();
+    }
+  });
+
   test("completes a vertical-dominant diagonal drag by projecting onto the anchor column", async () => {
     const writes: string[] = [];
     const restoreClipboard = installClipboard(async (text) => {
@@ -1127,6 +1208,78 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     } finally {
       removeInstrumentation();
     }
+  });
+
+  test("routes document Escape only to the sibling table with an active range gesture", async () => {
+    await render(
+      <>
+        {table("TABLE_ID_CELL_RANGE_ESCAPE_ACTIVE")}
+        {table("TABLE_ID_CELL_RANGE_ESCAPE_FOCUSED")}
+      </>,
+    );
+    const activeGrid = page.getByRole("grid", {
+      name: "Data for TABLE_ID_CELL_RANGE_ESCAPE_ACTIVE",
+    });
+    const focusedGrid = page.getByRole("grid", {
+      name: "Data for TABLE_ID_CELL_RANGE_ESCAPE_FOCUSED",
+    });
+    const activeAda = activeGrid.getByRole("gridcell", { name: "Ada", exact: true });
+    const activeBabbage = activeGrid.getByRole("gridcell", { name: "Babbage", exact: true });
+    const activeCurie = activeGrid.getByRole("gridcell", { name: "Curie", exact: true });
+    const focusedAda = focusedGrid.getByRole("gridcell", { name: "Ada", exact: true });
+    const focusedScore = focusedGrid.getByRole("gridcell", { name: "4", exact: true });
+
+    focusedGrid.element().focus();
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await settleBrunoTableBrowserFrames();
+    await expect.element(focusedAda).toHaveAttribute("aria-selected", "true");
+    await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
+
+    await userEvent.click(activeAda);
+    const babbageBounds = activeBabbage.element().getBoundingClientRect();
+    const curieBounds = activeCurie.element().getBoundingClientRect();
+    activeBabbage.element().dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: babbageBounds.left + babbageBounds.width / 2,
+        clientY: babbageBounds.top + babbageBounds.height / 2,
+        pointerId: 59,
+      }),
+    );
+    activeCurie.element().dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientX: curieBounds.left + curieBounds.width / 2,
+        clientY: curieBounds.top + curieBounds.height / 2,
+        pointerId: 59,
+      }),
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect.element(activeBabbage).toHaveAttribute("aria-selected", "true");
+    await expect.element(activeCurie).toHaveAttribute("aria-selected", "true");
+
+    focusedGrid.element().focus();
+    const firstEscape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    focusedGrid.element().dispatchEvent(firstEscape);
+    await settleBrunoTableBrowserFrames();
+    expect(firstEscape.defaultPrevented).toBe(true);
+    await expect.element(activeAda).toHaveAttribute("aria-selected", "true");
+    await expect.element(activeBabbage).not.toHaveAttribute("aria-selected");
+    await expect.element(activeCurie).not.toHaveAttribute("aria-selected");
+    await expect.element(focusedAda).toHaveAttribute("aria-selected", "true");
+    await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
+
+    await userEvent.keyboard("{Escape}");
+    await settleBrunoTableBrowserFrames();
+    await expect.element(focusedAda).not.toHaveAttribute("aria-selected");
+    await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
   });
 
   test("cancels an armed drag before replacing its grid owner", async () => {

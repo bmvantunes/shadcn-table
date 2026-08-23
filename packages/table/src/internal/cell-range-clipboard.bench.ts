@@ -4,9 +4,13 @@ import {
   BrunoTableCellRangeRuntime,
   captureBrunoTableClipboardSnapshot,
   createBrunoTableCellRangeStructure,
+  installBrunoTableCellRangeInstrumentationListener,
   serializeBrunoTableClipboardSnapshot,
   type BrunoTableClipboardTarget,
 } from "./cell-range-clipboard";
+import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
+import { compileColumns } from "./compile-columns";
+import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 
 const referenceFrameBudgetMs = 8.33;
 const copyResponsivenessBudgetMs = 50;
@@ -42,9 +46,21 @@ largeSpanRange.extend(
   largeSpanStructure,
   "vertical",
 );
+let largeSpanPublications = 0;
+let largeSpanMaterializations = 0;
+largeSpanRange.subscribe(() => {
+  largeSpanPublications += 1;
+});
+const removeLargeSpanInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+  "TABLE_ID_CELL_RANGE_MEMBERSHIP_BENCH",
+  (event) => {
+    if (event.kind === "identity-span-materialization") largeSpanMaterializations += 1;
+  },
+);
 
 describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
   afterAll(() => {
+    removeLargeSpanInstrumentation();
     const valuePublicationP99Ms = percentile99(valuePublicationDurationsMs);
     const extensionP99Ms = percentile99(extensionDurationsMs);
     const snapshotP99Ms = percentile99(snapshotDurationsMs);
@@ -71,6 +87,11 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
     if (extensionPublications !== extensionDurationsMs.length) {
       throw new Error("Expected every measured Cell Range extension to publish exactly once.");
     }
+    if (largeSpanPublications !== extensionDurationsMs.length || largeSpanMaterializations !== 0) {
+      throw new Error(
+        "Large Cell Range extensions materialized identities or missed publications.",
+      );
+    }
     if (
       valuePublicationP99Ms > referenceFrameBudgetMs ||
       extensionP99Ms > referenceFrameBudgetMs ||
@@ -80,6 +101,9 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
     }
     if (snapshotP99Ms > copyResponsivenessBudgetMs) {
       throw new Error("Cell Range immutable Copy exceeded its responsiveness budget.");
+    }
+    if (copyRuntime.getCellCacheDiagnosticSnapshot().installed !== 0) {
+      throw new Error("Cell Range Copy populated the reactive render cache.");
     }
   });
 
@@ -110,17 +134,22 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
   );
 
-  let destination = residentRows - 1;
+  let destination = largeSpanRows.length - 1;
   bench(
-    "projects one vertical gesture over 10,000 identities with one publication",
+    "projects one vertical gesture over 100,000 identities without materializing the span",
     () => {
-      range.replace({ rowId: rowIds[0]!, columnId: columnIds[0]! }, structure);
-      const publicationsBefore = publications;
       const startedAt = performance.now();
-      range.extend({ rowId: rowIds[destination]!, columnId: columnIds[0]! }, structure, "vertical");
+      largeSpanRange.extend(
+        { rowId: largeSpanRows[destination]!, columnId: columnIds[0]! },
+        largeSpanStructure,
+        "vertical",
+      );
       extensionDurationsMs.push(performance.now() - startedAt);
-      extensionPublications += publications - publicationsBefore;
-      destination = destination === residentRows - 1 ? residentRows - 2 : residentRows - 1;
+      extensionPublications += 1;
+      destination =
+        destination === largeSpanRows.length - 1
+          ? largeSpanRows.length - 2
+          : largeSpanRows.length - 1;
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
   );
@@ -130,14 +159,51 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
     rowIds: [rowIds[0]!, ...rowIds.slice(1)],
     columnIds: [columnIds[0]!],
   };
+  const copyColumns = compileColumns([
+    {
+      columnId: columnIds[0]!,
+      field: "value",
+      headerName: "Value",
+      valueType: "bigint",
+    },
+  ]);
+  const copyRows = rowIds.map((rowId, index) => ({
+    id: rowId,
+    value: BigInt(index) + 9_007_199_254_740_993n,
+  }));
+  const copyAdapter = new BrunoTableClientRowPipelineAdapter(
+    { rows: copyRows, totalRows: copyRows.length, version: 1, status: "ready" },
+    (row) => row.id,
+    copyColumns,
+    undefined,
+    [{ columnId: columnIds[0]!, direction: "asc" }],
+  );
+  const copyRuntime = new BrunoTableGridRuntime(
+    copyAdapter.getPublication(),
+    copyColumns,
+    copyAdapter.getQueryConfiguration(copyColumns),
+    "TABLE_ID_CELL_RANGE_COPY_BENCH",
+  );
   bench(
     "captures and serializes one immutable 10,000-cell vertical Clipboard Snapshot",
     () => {
       const startedAt = performance.now();
-      const snapshot = captureBrunoTableClipboardSnapshot(copyTarget, ({ rowId }) => ({
-        value: BigInt(rowId.slice("ROW_".length)) + 9_007_199_254_740_993n,
-        formatCanonicalText: String,
-      }));
+      const readCell = copyRuntime.captureCellCommandReader();
+      const snapshot = captureBrunoTableClipboardSnapshot(copyTarget, ({ rowId, columnId }) => {
+        const cell = readCell(rowId, columnId);
+        if (
+          cell.kind !== "available" ||
+          !cell.rowPresent ||
+          cell.column === undefined ||
+          isBrunoTableInvalidCellValue(cell.value)
+        ) {
+          return undefined;
+        }
+        return {
+          value: cell.value,
+          formatCanonicalText: cell.column.semantics.formatCanonicalText,
+        };
+      });
       if (snapshot === undefined) throw new Error("Expected a complete Clipboard Snapshot.");
       serializeBrunoTableClipboardSnapshot(snapshot);
       snapshotDurationsMs.push(performance.now() - startedAt);

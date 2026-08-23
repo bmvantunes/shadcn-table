@@ -69,6 +69,26 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
   page: (event: BrunoTableHotkeyGesture, direction: -1 | 1, extendCellRange?: boolean) => void;
 }>;
 
+type BrunoTableDocumentEscapeRegistration = Readonly<{
+  readonly owner: RefObject<HTMLElement | null>;
+  readonly isActive: () => boolean;
+}>;
+
+const documentEscapeRegistrations = new WeakMap<
+  Document,
+  Set<BrunoTableDocumentEscapeRegistration>
+>();
+
+function activeDocumentEscapeRegistration(
+  document: Document | undefined,
+): BrunoTableDocumentEscapeRegistration | undefined {
+  if (document === undefined) return undefined;
+  for (const registration of documentEscapeRegistrations.get(document) ?? []) {
+    if (registration.isActive()) return registration;
+  }
+  return undefined;
+}
+
 function createBrunoTableGridHotkeyBindings(
   commands: BrunoTableGridHotkeyCommands,
 ): readonly BrunoTableHotkeyBinding[] {
@@ -425,22 +445,47 @@ export function useBrunoTableGridHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: BrunoTableGridHotkeyCommands,
 ): void {
+  const commandsRef = useRef(commands);
+  const documentEscapeRegistrationRef = useRef<BrunoTableDocumentEscapeRegistration>({
+    owner: target,
+    isActive: () => commandsRef.current.documentEscapeActive?.() === true,
+  });
   const reactDocumentTargetRef = useRef<Document | null>(null);
+  useLayoutEffect(() => {
+    commandsRef.current = commands;
+  }, [commands]);
   useLayoutEffect(() => {
     const ownerDocument = target.current?.ownerDocument ?? null;
     reactDocumentTargetRef.current =
       ownerDocument?.defaultView === (typeof window === "undefined" ? undefined : window)
         ? ownerDocument
         : null;
-  });
+    const registration = documentEscapeRegistrationRef.current;
+    if (ownerDocument === null || registration === undefined) return;
+    let registrations = documentEscapeRegistrations.get(ownerDocument);
+    if (registrations === undefined) {
+      registrations = new Set();
+      documentEscapeRegistrations.set(ownerDocument, registrations);
+    }
+    registrations.add(registration);
+    return () => {
+      registrations?.delete(registration);
+      if (registrations?.size === 0) documentEscapeRegistrations.delete(ownerDocument);
+    };
+  }, [target]);
   const bindings = createBrunoTableGridHotkeyBindings(commands);
   const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
     onTrigger: (event: BrunoTableHotkeyGesture) => {
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
-      const ownsActiveDocumentGesture =
-        index < BRUNO_TABLE_ESCAPE_HOTKEYS.length && commands.documentEscapeActive?.() === true;
-      if (!ownsTarget && !ownsActiveDocumentGesture) return;
+      if (index < BRUNO_TABLE_ESCAPE_HOTKEYS.length) {
+        if (event.defaultPrevented) return;
+        const registration = documentEscapeRegistrationRef.current;
+        const activeRegistration = activeDocumentEscapeRegistration(target.current?.ownerDocument);
+        if (activeRegistration !== undefined) {
+          if (activeRegistration !== registration) return;
+        } else if (!ownsTarget) return;
+      } else if (!ownsTarget) return;
       binding.onTrigger(event);
     },
   }));

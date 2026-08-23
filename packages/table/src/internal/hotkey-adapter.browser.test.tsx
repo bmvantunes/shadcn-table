@@ -256,6 +256,51 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(innerCopy).toHaveBeenCalledOnce();
   });
 
+  test.each(["active-first", "active-last"] as const)(
+    "gives an active document Escape gesture exclusive ownership when mounted $order",
+    async (order) => {
+      let active = true;
+      const activeEscape = vi.fn((event: { readonly preventDefault: () => void }) =>
+        event.preventDefault(),
+      );
+      const focusedEscape = vi.fn();
+      const activeProbe = (
+        <AdapterProbe
+          key="active"
+          commands={probeCommands({
+            documentEscapeActive: () => active,
+            escape: activeEscape,
+          })}
+          label="Active gesture table"
+        />
+      );
+      const focusedProbe = (
+        <AdapterProbe
+          key="focused"
+          commands={probeCommands({ escape: focusedEscape })}
+          label="Focused sibling table"
+        />
+      );
+      const screen = await render(
+        <>{order === "active-first" ? [activeProbe, focusedProbe] : [focusedProbe, activeProbe]}</>,
+      );
+      const focused = screen.getByRole("region", { name: "Focused sibling table" }).element();
+
+      focused.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      );
+      expect(activeEscape).toHaveBeenCalledOnce();
+      expect(focusedEscape).not.toHaveBeenCalled();
+
+      active = false;
+      focused.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      );
+      expect(activeEscape).toHaveBeenCalledOnce();
+      expect(focusedEscape).toHaveBeenCalledOnce();
+    },
+  );
+
   test("registers Mod+A only for an installed Row Selection command", async () => {
     const manager = getHotkeyManager();
     const selectAll = vi.fn();

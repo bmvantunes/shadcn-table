@@ -20,6 +20,7 @@ type BrunoTableHorizontalCellRange = Readonly<{
   readonly rowId: string;
   readonly rowIds: readonly [string];
   readonly columnIds: readonly [string, string, ...string[]];
+  readonly columnSpan: BrunoTableIdentitySpan;
   readonly anchor: BrunoTableCellCoordinate;
   readonly focus: BrunoTableCellCoordinate;
 }>;
@@ -28,6 +29,7 @@ type BrunoTableVerticalCellRange = Readonly<{
   readonly axis: "vertical";
   readonly columnId: string;
   readonly rowIds: readonly [string, string, ...string[]];
+  readonly rowSpan: BrunoTableIdentitySpan;
   readonly columnIds: readonly [string];
   readonly anchor: BrunoTableCellCoordinate;
   readonly focus: BrunoTableCellCoordinate;
@@ -41,6 +43,13 @@ export type BrunoTableCellRangeSnapshot = Readonly<{
 }>;
 
 type BrunoTableNonEmptyIdentitySpan = readonly [string, ...string[]];
+
+type BrunoTableIdentitySpan = Readonly<{
+  readonly identities: readonly string[];
+  readonly start: number;
+  readonly end: number;
+  readonly tableId: string;
+}>;
 
 export type BrunoTableClipboardTarget =
   | Readonly<{
@@ -253,6 +262,7 @@ export function createBrunoTableCellRangeGestureActor(): Readonly<{
 export type BrunoTableCellRangeInstrumentationEvent =
   | Readonly<{ readonly kind: "publication"; readonly tableId: string }>
   | Readonly<{ readonly kind: "pointer-frame"; readonly tableId: string }>
+  | Readonly<{ readonly kind: "identity-span-materialization"; readonly tableId: string }>
   | Readonly<{
       readonly kind: "mounted-decoration";
       readonly tableId: string;
@@ -533,7 +543,7 @@ export class BrunoTableCellRangeRuntime {
     if (anchor === undefined || !containsCoordinate(structure, target)) return this.snapshot;
     const axis = axisHint ?? this.snapshot.range?.axis ?? chooseAxis(anchor, target, structure);
     if (axis === undefined) return this.publish(Object.freeze({ anchor }));
-    const range = createRange(axis, anchor, target, structure);
+    const range = createRange(axis, anchor, target, structure, this.tableId);
     return this.publish(
       range === undefined ? Object.freeze({ anchor }) : Object.freeze({ anchor, range }),
     );
@@ -553,7 +563,8 @@ export class BrunoTableCellRangeRuntime {
     }
     const anchor = freezeCoordinate(current);
     const axis = chooseAxis(anchor, target, structure);
-    const range = axis === undefined ? undefined : createRange(axis, anchor, target, structure);
+    const range =
+      axis === undefined ? undefined : createRange(axis, anchor, target, structure, this.tableId);
     return this.publish(
       range === undefined ? Object.freeze({ anchor }) : Object.freeze({ anchor, range }),
     );
@@ -632,12 +643,17 @@ export class BrunoTableCellRangeRuntime {
       return identityFallsWithin(
         structure.columnIndexById,
         columnId,
-        range.columnIds[0],
-        range.columnIds.at(-1),
+        identitySpanFirst(range.columnSpan),
+        identitySpanLast(range.columnSpan),
       );
     }
     if (range.columnId !== columnId) return false;
-    return identityFallsWithin(structure.rowIndexById, rowId, range.rowIds[0], range.rowIds.at(-1));
+    return identityFallsWithin(
+      structure.rowIndexById,
+      rowId,
+      identitySpanFirst(range.rowSpan),
+      identitySpanLast(range.rowSpan),
+    );
   };
 
   private readonly publish = (
@@ -893,8 +909,8 @@ export class BrunoTableCellRangeRuntime {
           !identityFallsWithin(
             structure.columnIndexById,
             columnId,
-            range.columnIds[0],
-            range.columnIds.at(-1),
+            identitySpanFirst(range.columnSpan),
+            identitySpanLast(range.columnSpan),
           )
         ) {
           continue;
@@ -903,11 +919,11 @@ export class BrunoTableCellRangeRuntime {
       }
       return;
     }
-    if (range.rowIds.length <= this.mountedCellsByRow.size) {
-      for (const rowId of range.rowIds) {
+    if (identitySpanLength(range.rowSpan) <= this.mountedCellsByRow.size) {
+      forEachIdentitySpan(range.rowSpan, (rowId) => {
         this.pendingDecorationProjectionCandidateCount += 1;
         this.enqueueMountedCoordinate(rowId, range.columnId);
-      }
+      });
       return;
     }
     for (const [rowId, columns] of this.mountedCellsByRow) {
@@ -916,7 +932,12 @@ export class BrunoTableCellRangeRuntime {
       this.pendingDecorationProjectionCandidateCount += 1;
       if (
         structure !== undefined &&
-        !identityFallsWithin(structure.rowIndexById, rowId, range.rowIds[0], range.rowIds.at(-1))
+        !identityFallsWithin(
+          structure.rowIndexById,
+          rowId,
+          identitySpanFirst(range.rowSpan),
+          identitySpanLast(range.rowSpan),
+        )
       ) {
         continue;
       }
@@ -1191,8 +1212,16 @@ export function serializeBrunoTableClipboardSnapshot(
 
 export function clipboardTargetFromRange(range: BrunoTableCellRange): BrunoTableClipboardTarget {
   return range.axis === "horizontal"
-    ? Object.freeze({ axis: range.axis, rowIds: range.rowIds, columnIds: range.columnIds })
-    : Object.freeze({ axis: range.axis, rowIds: range.rowIds, columnIds: range.columnIds });
+    ? Object.freeze({
+        axis: range.axis,
+        rowIds: range.rowIds,
+        columnIds: materializeIdentitySpan(range.columnSpan),
+      })
+    : Object.freeze({
+        axis: range.axis,
+        rowIds: materializeIdentitySpan(range.rowSpan),
+        columnIds: range.columnIds,
+      });
 }
 
 export function clipboardTargetFromSelection(
@@ -1250,56 +1279,104 @@ function createRange(
   anchor: BrunoTableCellCoordinate,
   target: BrunoTableCellCoordinate,
   structure: BrunoTableCellRangeStructure,
+  tableId: string,
 ): BrunoTableCellRange | undefined {
   if (axis === "horizontal") {
-    const columnIds = identitySpan(
+    const columnSpan = createIdentitySpan(
       structure.columnIds,
       structure.columnIndexById,
       anchor.columnId,
       target.columnId,
+      tableId,
     );
-    if (!hasIdentitySpan(columnIds)) return undefined;
+    if (columnSpan === undefined) return undefined;
     const rowIds: readonly [string] = Object.freeze([anchor.rowId]);
+    const columnIds = lazyMaterializeIdentitySpan(columnSpan);
     return Object.freeze({
       axis,
       rowId: anchor.rowId,
       rowIds,
-      columnIds: Object.freeze(columnIds),
+      get columnIds() {
+        return columnIds();
+      },
+      columnSpan,
       anchor,
       focus: Object.freeze({ rowId: anchor.rowId, columnId: target.columnId }),
     });
   }
-  const rowIds = identitySpan(structure.rowIds, structure.rowIndexById, anchor.rowId, target.rowId);
-  if (!hasIdentitySpan(rowIds)) return undefined;
+  const rowSpan = createIdentitySpan(
+    structure.rowIds,
+    structure.rowIndexById,
+    anchor.rowId,
+    target.rowId,
+    tableId,
+  );
+  if (rowSpan === undefined) return undefined;
+  const rowIds = lazyMaterializeIdentitySpan(rowSpan);
   const columnIds: readonly [string] = Object.freeze([anchor.columnId]);
   return Object.freeze({
     axis,
     columnId: anchor.columnId,
-    rowIds: Object.freeze(rowIds),
+    get rowIds() {
+      return rowIds();
+    },
+    rowSpan,
     columnIds,
     anchor,
     focus: Object.freeze({ rowId: target.rowId, columnId: anchor.columnId }),
   });
 }
 
-function identitySpan(
+function createIdentitySpan(
   identities: readonly string[],
   indexById: ReadonlyMap<string, number>,
   firstIdentity: string,
   secondIdentity: string,
-): readonly string[] {
+  tableId: string,
+): BrunoTableIdentitySpan | undefined {
   const first = indexById.get(firstIdentity);
   const second = indexById.get(secondIdentity);
-  if (first === undefined || second === undefined || first === second) return [];
+  if (first === undefined || second === undefined || first === second) return undefined;
   const start = Math.min(first, second);
   const end = Math.max(first, second);
-  return identities.slice(start, end + 1);
+  return Object.freeze({ identities, start, end, tableId });
 }
 
-function hasIdentitySpan(
-  identities: readonly string[],
-): identities is readonly [string, string, ...string[]] {
-  return identities.length >= 2;
+function identitySpanLength(span: BrunoTableIdentitySpan): number {
+  return span.end - span.start + 1;
+}
+
+function identitySpanFirst(span: BrunoTableIdentitySpan): string {
+  return span.identities[span.start]!;
+}
+
+function identitySpanLast(span: BrunoTableIdentitySpan): string {
+  return span.identities[span.end]!;
+}
+
+function materializeIdentitySpan(
+  span: BrunoTableIdentitySpan,
+): readonly [string, string, ...string[]] {
+  recordInstrumentation({ kind: "identity-span-materialization", tableId: span.tableId });
+  return Object.freeze(span.identities.slice(span.start, span.end + 1)) as readonly [
+    string,
+    string,
+    ...string[],
+  ];
+}
+
+function lazyMaterializeIdentitySpan(
+  span: BrunoTableIdentitySpan,
+): () => readonly [string, string, ...string[]] {
+  let materialized: readonly [string, string, ...string[]] | undefined;
+  return () => (materialized ??= materializeIdentitySpan(span));
+}
+
+function forEachIdentitySpan(
+  span: BrunoTableIdentitySpan,
+  visit: (identity: string) => void,
+): void {
+  for (let index = span.start; index <= span.end; index += 1) visit(span.identities[index]!);
 }
 
 function hasNonEmptyIdentitySpan(
@@ -1314,25 +1391,32 @@ function rangeMatchesStructure(
 ): boolean {
   if (range.axis === "horizontal") {
     if (!structure.rowIndexById.has(range.rowId)) return false;
-    const lastColumnId = range.columnIds.at(-1);
-    if (lastColumnId === undefined) return false;
-    return sameIdentities(
-      identitySpan(
-        structure.columnIds,
-        structure.columnIndexById,
-        range.columnIds[0],
-        lastColumnId,
-      ),
-      range.columnIds,
+    return identitySpanMatchesStructure(
+      range.columnSpan,
+      structure.columnIds,
+      structure.columnIndexById,
     );
   }
   if (!structure.columnIndexById.has(range.columnId)) return false;
-  const lastRowId = range.rowIds.at(-1);
-  if (lastRowId === undefined) return false;
-  return sameIdentities(
-    identitySpan(structure.rowIds, structure.rowIndexById, range.rowIds[0], lastRowId),
-    range.rowIds,
-  );
+  return identitySpanMatchesStructure(range.rowSpan, structure.rowIds, structure.rowIndexById);
+}
+
+function identitySpanMatchesStructure(
+  span: BrunoTableIdentitySpan,
+  identities: readonly string[],
+  indexById: ReadonlyMap<string, number>,
+): boolean {
+  const first = indexById.get(identitySpanFirst(span));
+  const last = indexById.get(identitySpanLast(span));
+  if (first === undefined || last === undefined) return false;
+  const start = Math.min(first, last);
+  const end = Math.max(first, last);
+  if (end - start !== span.end - span.start) return false;
+  if (identities === span.identities && start === span.start && end === span.end) return true;
+  for (let offset = 0; offset <= end - start; offset += 1) {
+    if (identities[start + offset] !== span.identities[span.start + offset]) return false;
+  }
+  return true;
 }
 
 function snapshotMatchesStructure(
@@ -1378,12 +1462,10 @@ function horizontalSelectionInterval(
 ): BrunoTableCellRangeSelectionInterval | undefined {
   const range = snapshot.range;
   if (range?.axis === "horizontal") {
-    const last = range.columnIds.at(-1);
-    if (last === undefined) return undefined;
     return {
       identity: range.rowId,
-      first: range.columnIds[0],
-      last,
+      first: identitySpanFirst(range.columnSpan),
+      last: identitySpanLast(range.columnSpan),
     };
   }
   if (range !== undefined || snapshot.anchor === undefined) return undefined;
@@ -1399,12 +1481,10 @@ function verticalSelectionInterval(
 ): BrunoTableCellRangeSelectionInterval | undefined {
   const range = snapshot.range;
   if (range?.axis === "vertical") {
-    const last = range.rowIds.at(-1);
-    if (last === undefined) return undefined;
     return {
       identity: range.columnId,
-      first: range.rowIds[0],
-      last,
+      first: identitySpanFirst(range.rowSpan),
+      last: identitySpanLast(range.rowSpan),
     };
   }
   if (range !== undefined || snapshot.anchor === undefined) return undefined;
@@ -1444,11 +1524,6 @@ function identityIntervalDeltaSize(
   return Math.abs(previousLow - nextLow) + Math.abs(previousHigh - nextHigh);
 }
 
-function sameIdentities(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((identity, index) => identity === right[index]);
-}
-
 function sameSnapshot(
   left: BrunoTableCellRangeSnapshot,
   right: BrunoTableCellRangeSnapshot,
@@ -1465,9 +1540,7 @@ function sameSnapshot(
   }
   return (
     left.range.focus.rowId === right.range.focus.rowId &&
-    left.range.focus.columnId === right.range.focus.columnId &&
-    sameIdentities(left.range.rowIds, right.range.rowIds) &&
-    sameIdentities(left.range.columnIds, right.range.columnIds)
+    left.range.focus.columnId === right.range.focus.columnId
   );
 }
 

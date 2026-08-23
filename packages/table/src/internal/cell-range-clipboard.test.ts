@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   BrunoTableCellRangeRuntime,
   captureBrunoTableClipboardSnapshot,
+  clipboardTargetFromRange,
   createBrunoTableCellRangeGestureActor,
   createBrunoTableCellRangeStructure,
   createBrunoTableCellRangeStructureFromRowSpace,
@@ -108,6 +109,41 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       rowIds: ["ROW_A", "ROW_B", "ROW_C", "ROW_D"],
       columnIds: ["COL_ID_C"],
     });
+  });
+
+  it("retains a 100,000-row exact span without materializing identities on extension", () => {
+    const tableId = "TABLE_ID_RANGE_MATERIALIZATION";
+    const rowIds = Object.freeze(
+      Array.from({ length: 100_000 }, (_unused, index) => `ROW_${String(index)}`),
+    );
+    const largeStructure = createBrunoTableCellRangeStructure(rowIds, ["COL_ID_A"]);
+    const range = new BrunoTableCellRangeRuntime(tableId);
+    let materializations = 0;
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => {
+        if (event.kind === "identity-span-materialization") materializations += 1;
+      },
+    );
+    try {
+      range.replace({ rowId: rowIds[0]!, columnId: "COL_ID_A" }, largeStructure);
+      for (let iteration = 0; iteration < 100; iteration += 1) {
+        const rowId = rowIds[iteration % 2 === 0 ? 99_999 : 99_998]!;
+        range.extend({ rowId, columnId: "COL_ID_A" }, largeStructure, "vertical");
+      }
+      expect(materializations).toBe(0);
+
+      const selected = range.getSnapshot().range;
+      expect(selected?.axis).toBe("vertical");
+      if (selected === undefined) throw new Error("Expected a vertical Cell Range.");
+      const target = clipboardTargetFromRange(selected);
+      expect(materializations).toBe(1);
+      expect(target.rowIds).toHaveLength(99_999);
+      expect(target.rowIds[0]).toBe("ROW_0");
+      expect(target.rowIds.at(-1)).toBe("ROW_99998");
+    } finally {
+      removeInstrumentation();
+    }
   });
 
   it("locks a pointer extension to its acquired dominant axis and projects diagonal hits", () => {

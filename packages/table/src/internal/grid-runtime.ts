@@ -213,6 +213,14 @@ export type BrunoTableRuntimeView = {
   ) => BrunoTableRowCellSnapshot;
   readonly getCellSnapshot: (rowId: BrunoTableRowId, columnId: string) => BrunoTableCellSnapshot;
   readonly getCellValueSnapshot: (rowId: BrunoTableRowId, columnId: string) => unknown;
+  readonly captureCellCommandReader: () => (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableCellSnapshot;
+  readonly getCellCacheDiagnosticSnapshot: () => Readonly<{
+    readonly installed: number;
+    readonly pending: number;
+  }>;
   readonly getColumnCommandSnapshot: (columnId: string) => BrunoTableColumnCommandSnapshot;
   readonly getColumnFilterSnapshot: (columnId: string) => unknown;
   readonly getColumnFilterVersionSnapshot: (columnId: string) => number;
@@ -681,6 +689,8 @@ export class BrunoTableGridRuntime<TRow> {
         getRowCellSnapshot: this.getRowCellSnapshot,
         getCellSnapshot: this.getCellSnapshot,
         getCellValueSnapshot: this.getCellValueSnapshot,
+        captureCellCommandReader: this.captureCellCommandReader,
+        getCellCacheDiagnosticSnapshot: this.getCellCacheDiagnosticSnapshot,
         getQuerySnapshot: this.getQuerySnapshot,
         getFilterSnapshot: this.getFilterSnapshot,
         getQuickFilterSnapshot: this.getQuickFilterSnapshot,
@@ -955,6 +965,27 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly getCellValueSnapshot = (rowId: BrunoTableRowId, columnId: string): unknown =>
     this.currentCellSnapshot(rowId, columnId).value;
+
+  public readonly captureCellCommandReader = (): ((
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ) => BrunoTableCellSnapshot) => {
+    const rowSpace = this.state.rowSpace;
+    const columnsById = this.columnsById;
+    return (rowId, columnId) => readCellSnapshot(rowSpace, columnsById, rowId, columnId);
+  };
+
+  public readonly getCellCacheDiagnosticSnapshot = (): Readonly<{
+    readonly installed: number;
+    readonly pending: number;
+  }> =>
+    Object.freeze({
+      installed: [...this.cellSnapshots.values()].reduce(
+        (count, snapshots) => count + snapshots.size,
+        0,
+      ),
+      pending: this.pendingCellLru.size,
+    });
 
   public readonly getQuerySnapshot = (): BrunoTableQuerySnapshot => this.query;
 

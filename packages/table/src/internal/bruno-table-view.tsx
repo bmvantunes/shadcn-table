@@ -2178,6 +2178,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   ): void => {
     if (!ownsGridSurface(event)) return;
     event.preventDefault();
+    if (cellRange?.isPointerGestureActive() === true) return;
     const currentRange = cellRange?.getSnapshot().range;
     const extendingRange = extendCellRange && cellRange !== undefined;
     if (extendingRange && currentRange !== undefined && cellRangeStructure !== undefined) {
@@ -2286,8 +2287,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (target === undefined) return;
     let snapshot: ReturnType<typeof captureBrunoTableClipboardSnapshot>;
     try {
+      const readCell = runtime.captureCellCommandReader();
       snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
-        const cell = runtime.getCellSnapshot(rowId, columnId);
+        const cell = readCell(rowId, columnId);
         if (
           cell.kind !== "available" ||
           !cell.rowPresent ||

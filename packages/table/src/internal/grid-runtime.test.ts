@@ -2069,6 +2069,27 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(refreshed.value).toBe("Changed");
   });
 
+  it("captures coherent command reads without installing reactive cell snapshots", () => {
+    const manyRows = Array.from({ length: 4_100 }, (_, index) => ({
+      id: `row-${String(index)}`,
+      name: `Name ${String(index)}`,
+    })) satisfies readonly Row[];
+    const runtime = createRuntime(source(manyRows));
+    const readCommandCell = runtime.captureCellCommandReader();
+    expect(runtime.getCellCacheDiagnosticSnapshot()).toEqual({ installed: 0, pending: 0 });
+    for (const row of manyRows) {
+      expect(readCommandCell(row.id, "COL_ID_NAME").value).toBe(row.name);
+    }
+    expect(runtime.getCellCacheDiagnosticSnapshot()).toEqual({ installed: 0, pending: 0 });
+
+    const installed = runtime.getCellSnapshot("row-0", "COL_ID_NAME");
+    expect(runtime.getCellSnapshot("row-0", "COL_ID_NAME")).toBe(installed);
+
+    runtime.publish(source(manyRows.with(0, { id: "row-0", name: "Changed" })));
+    expect(readCommandCell("row-0", "COL_ID_NAME").value).toBe("Name 0");
+    expect(runtime.captureCellCommandReader()("row-0", "COL_ID_NAME").value).toBe("Changed");
+  });
+
   it("refreshes abandoned row-aware cell reads and bounds pending snapshots", () => {
     const manyRows = Array.from({ length: 4_100 }, (_, index) => ({
       id: `row-${String(index)}`,
