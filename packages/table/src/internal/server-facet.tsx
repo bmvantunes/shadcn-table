@@ -157,6 +157,7 @@ function sameServerFacetQuerySnapshot(
 }
 
 const BrunoTableServerFacetContext = createContext<BrunoTableServerFacetContextValue | null>(null);
+const emptyBrunoTableServerFacetRows: readonly unknown[] = Object.freeze([]);
 
 export function BrunoTableServerFacetProvider({
   children,
@@ -227,15 +228,16 @@ function BrunoTableResolvedServerSetFilterFacet({
 }>): ReactElement {
   const result = useBrunoTableServerWholeResult(semanticSnapshot.source, plan.query);
   const expression = querySnapshot.filterCollection.filtersByColumn.get(column.columnId);
+  const coherentRows = result.status === "loading" ? emptyBrunoTableServerFacetRows : result.rows;
   const snapshot = useMemo(
     () =>
       createBrunoTableServerFacetSnapshot({
         column,
         countAlias: plan.countAlias,
-        rows: result.rows,
+        rows: coherentRows,
         expression,
       }),
-    [column, expression, plan.countAlias, result.rows],
+    [coherentRows, column, expression, plan.countAlias],
   );
   const lifecycle = useMemo(
     () => ({ status: result.status, message: result.message }),

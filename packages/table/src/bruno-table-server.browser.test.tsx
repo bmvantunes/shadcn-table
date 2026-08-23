@@ -385,12 +385,28 @@ describe("BrunoTableServer", () => {
         <BrunoTableServer
           tableId={`TABLE_ID_SERVER_FILTER_${lifecycle.status.toUpperCase()}`}
           columns={serverFilterColumns}
+          {...(lifecycle.status === "loading"
+            ? {
+                initialFilters: [
+                  {
+                    columnId: "COL_ID_SYMBOL" as const,
+                    type: "in" as const,
+                    filter: ["RETAINED INTENT"],
+                    caseSensitive: true,
+                    accentSensitive: true,
+                  },
+                ],
+              }
+            : {})}
           initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
           viewportSource={{
             viewport: transport.viewport,
             useWholeResult: () => ({
-              rows: [],
-              totalRows: 0,
+              rows:
+                lifecycle.status === "loading"
+                  ? [{ symbol: "UNACCEPTED", __bruno_table_facet_count: 1n }]
+                  : [],
+              totalRows: lifecycle.status === "loading" ? 1 : 0,
               version: 1,
               status: lifecycle.status,
               ...("message" in lifecycle ? { message: lifecycle.message } : {}),
@@ -418,6 +434,12 @@ describe("BrunoTableServer", () => {
         await expect
           .element(dialog.getByRole("heading", { name: "No values found" }))
           .not.toBeInTheDocument();
+      }
+      if (lifecycle.status === "loading") {
+        await expect
+          .element(dialog.getByRole("checkbox", { name: "Select RETAINED INTENT, 0" }))
+          .toBeVisible();
+        expect(dialog.getByRole("checkbox", { name: /UNACCEPTED/ }).query()).toBeNull();
       }
       await cleanup();
     }
