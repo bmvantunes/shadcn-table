@@ -61,6 +61,14 @@ describe("ordinary Client Row Selection", () => {
     await userEvent.click(selectAll);
     await expect.element(selectAll).toBeChecked();
     await expect.element(page.getByRole("checkbox", { name: "Select row 3" })).toBeChecked();
+
+    await userEvent.click(selectAll);
+    await expect.element(selectAll).not.toBeChecked();
+    expect(selectAll.element().ownerDocument.activeElement).toBe(selectAll.element());
+    await userEvent.keyboard(
+      detectPlatform() === "mac" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+    );
+    await expect.element(selectAll).toBeChecked();
   });
 
   test("uses the stable grid Space command without adding virtualized Tab stops", async () => {
@@ -571,6 +579,18 @@ describe("ordinary Client Row Selection", () => {
     await settleBrunoTableBrowserFrames();
     await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).toBeDisabled();
     expect(page.getByRole("checkbox", { name: /Select row/ }).query()).toBeNull();
+    const grid = page
+      .getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_EMPTY_FILTER" })
+      .element();
+    grid.focus();
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "a",
+      ...(detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+    });
+    expect(grid.dispatchEvent(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   test("keeps simultaneous and Strict Mode table lifetimes isolated", async () => {

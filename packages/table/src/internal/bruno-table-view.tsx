@@ -2055,6 +2055,20 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 
   const ownsGridSurface = (event: BrunoTableHotkeyGesture): boolean =>
     event.target === gridElement.current;
+  const ownsRowSelectionCommand = (event: BrunoTableHotkeyGesture): boolean => {
+    const grid = gridElement.current;
+    if (grid === null) return false;
+    if (event.target === grid) return true;
+    if (!isNodeInBrunoTableRealm(grid, event.target)) return false;
+    const ElementConstructor = grid.ownerDocument.defaultView?.Element;
+    if (ElementConstructor === undefined || !(event.target instanceof ElementConstructor)) {
+      return false;
+    }
+    return (
+      event.target.closest("[data-bruno-row-selection-select-all]")?.closest('[role="grid"]') ===
+      grid
+    );
+  };
   const resolveEventColumn = (event: BrunoTableHotkeyGesture): CompiledColumn | undefined => {
     const target = event.target instanceof Element ? event.target : null;
     const header = target?.closest<HTMLElement>("th[data-bruno-column-id]");
@@ -2225,10 +2239,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
   };
   const runSelectAll = (event: BrunoTableHotkeyGesture): void => {
-    if (!ownsGridSurface(event) || rowSelection === undefined) return;
+    if (!ownsRowSelectionCommand(event) || rowSelection === undefined) return;
+    event.preventDefault();
     const header = rowSelection.getHeaderSnapshot();
     if (header.disabled) return;
-    event.preventDefault();
     if (header.checked) return;
     rowSelection.toggleAll(true);
     const selectedCount = rowSelection.getHeaderSnapshot().selectedCount;
@@ -2851,6 +2865,7 @@ const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHea
         aria-label="Select all rows"
         aria-keyshortcuts="Control+A Meta+A"
         checked={snapshot.checked}
+        data-bruno-row-selection-select-all=""
         disabled={snapshot.disabled}
         indeterminate={snapshot.mixed}
         onClick={() => selection.toggleAll(!snapshot.checked)}
