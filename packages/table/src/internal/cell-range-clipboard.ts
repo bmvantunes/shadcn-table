@@ -172,6 +172,11 @@ const brunoTableCellRangeGestureMachine = createMachine(
 type BrunoTableCellRangeGestureProjection = BrunoTableCellRangeGestureContext &
   Readonly<{ readonly value: "idle" | "armed" | "axisLocked" }>;
 
+const EMPTY_GESTURE_PROJECTION: BrunoTableCellRangeGestureProjection = Object.freeze({
+  value: "idle",
+  ...EMPTY_GESTURE_CONTEXT,
+});
+
 function createBrunoTableCellRangeGestureActor(): Readonly<{
   readonly stop: () => void;
   readonly send: (event: BrunoTableCellRangeGestureEvent) => void;
@@ -339,11 +344,13 @@ export class BrunoTableCellRangeRuntime {
     this.listeners.clear();
   };
 
-  public readonly isPointerGestureActive = (): boolean =>
-    this.ensureGestureActor().getSnapshot().value !== "idle";
+  public readonly isPointerGestureActive = (): boolean => {
+    const gestureActor = this.gestureActor;
+    return gestureActor !== undefined && gestureActor.getSnapshot().value !== "idle";
+  };
 
   public readonly getPointerGestureSnapshot = (): BrunoTableCellRangeGestureProjection =>
-    this.ensureGestureActor().getSnapshot();
+    this.gestureActor?.getSnapshot() ?? EMPTY_GESTURE_PROJECTION;
 
   public readonly startPointerGesture = (
     event: PointerEvent,

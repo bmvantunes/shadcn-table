@@ -2492,16 +2492,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       }
       const range = cellRange?.getSnapshot().range;
       const active = navigation.getSnapshot();
-      if (
-        cellRange !== undefined &&
-        range !== undefined &&
-        active?.region === "body" &&
-        active.rowId !== undefined &&
-        cellRangeStructure !== undefined &&
-        ownsGridSurface(event)
-      ) {
+      if (cellRange !== undefined && range !== undefined && ownsGridSurface(event)) {
         event.preventDefault();
-        cellRange.replace({ rowId: active.rowId, columnId: active.columnId }, cellRangeStructure);
+        if (
+          active?.region === "body" &&
+          active.rowId !== undefined &&
+          cellRangeStructure !== undefined
+        ) {
+          cellRange.replace({ rowId: active.rowId, columnId: active.columnId }, cellRangeStructure);
+        } else {
+          cellRange.clear();
+        }
         return;
       }
       if (event.defaultPrevented) return;

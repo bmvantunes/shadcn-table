@@ -323,6 +323,14 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       grid.element().focus();
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes).toEqual(["Ada\t4"]));
+      await userEvent.keyboard("{Escape}");
+      await settleBrunoTableBrowserFrames();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .not.toHaveAttribute("aria-selected");
+      await expect
+        .element(page.getByRole("gridcell", { name: "4", exact: true }))
+        .not.toHaveAttribute("aria-selected");
 
       await userEvent.click(page.getByRole("gridcell", { name: "Ada" }));
       await userEvent.click(page.getByRole("button", { name: "Sort by Name" }));

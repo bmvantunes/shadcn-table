@@ -16,11 +16,13 @@ const structure = createBrunoTableCellRangeStructure(
   ["COL_ID_A", "COL_ID_B", "COL_ID_C", "COL_ID_D"],
 );
 
-function gestureGrid(view: Window): HTMLElement {
+function gestureGrid(view: Window, releasePointerCapture = vi.fn()): HTMLElement {
   return {
     ownerDocument: { defaultView: view },
     focus: vi.fn(),
     setPointerCapture: vi.fn(),
+    hasPointerCapture: vi.fn(() => true),
+    releasePointerCapture,
     getBoundingClientRect: vi.fn(() => ({ top: 0 }) as DOMRect),
     querySelector: vi.fn(() => null),
     clientTop: 0,
@@ -312,7 +314,8 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       }),
       removeEventListener: vi.fn(),
     } as unknown as Window;
-    const grid = gestureGrid(view);
+    const releasePointerCapture = vi.fn();
+    const grid = gestureGrid(view, releasePointerCapture);
     range.startPointerGesture(
       {
         button: 0,
@@ -335,6 +338,7 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       pointerId: 44,
       target: null,
     } as unknown as PointerEvent);
+    expect(releasePointerCapture).toHaveBeenCalledWith(44);
     expect(range.getPointerGestureSnapshot()).toEqual({
       value: "idle",
       pointerId: undefined,
@@ -372,12 +376,17 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     expect(start(44)).toBe(true);
     expect(range.getPointerGestureSnapshot()).toMatchObject({ value: "armed", pointerId: 44 });
     range.dispose();
-    expect(range.getPointerGestureSnapshot()).toEqual({
+    const disposedProjection = range.getPointerGestureSnapshot();
+    expect(range.isPointerGestureActive()).toBe(false);
+    expect(disposedProjection).toEqual({
       value: "idle",
       pointerId: undefined,
       before: {},
       axis: undefined,
     });
+    expect(range.getPointerGestureSnapshot()).toBe(disposedProjection);
+    range.dispose();
+    expect(range.getPointerGestureSnapshot()).toBe(disposedProjection);
     expect(start(45)).toBe(true);
     expect(range.getPointerGestureSnapshot()).toMatchObject({ value: "armed", pointerId: 45 });
     range.dispose();

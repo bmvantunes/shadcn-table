@@ -22,6 +22,8 @@ const structure = createBrunoTableCellRangeStructure(rowIds, columnIds);
 const range = new BrunoTableCellRangeRuntime("TABLE_ID_CELL_RANGE_BENCH");
 range.replace({ rowId: rowIds[0]!, columnId: columnIds[0]! }, structure);
 let publications = 0;
+let valueOnlyPublications = 0;
+let extensionPublications = 0;
 range.subscribe(() => {
   publications += 1;
 });
@@ -53,6 +55,8 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
         residentRows,
         logicalColumns,
         publications,
+        valueOnlyPublications,
+        extensionPublications,
         valuePublicationP99Ms,
         extensionP99Ms,
         snapshotP99Ms,
@@ -61,8 +65,11 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
         copyResponsivenessBudgetMs,
       })}\n`,
     );
-    if (publications !== extensionDurationsMs.length) {
+    if (valueOnlyPublications !== 0) {
       throw new Error("Value-only reconciliation published Cell Range state.");
+    }
+    if (extensionPublications !== extensionDurationsMs.length) {
+      throw new Error("Expected every measured Cell Range extension to publish exactly once.");
     }
     if (
       valuePublicationP99Ms > referenceFrameBudgetMs ||
@@ -79,9 +86,11 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
   bench(
     "retains the exact range for value-only publications without notifications",
     () => {
+      const publicationsBefore = publications;
       const startedAt = performance.now();
       range.reconcile(structure);
       valuePublicationDurationsMs.push(performance.now() - startedAt);
+      valueOnlyPublications += publications - publicationsBefore;
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
   );
@@ -106,10 +115,11 @@ describe("BrunoTable Cell Range benchmark (8.33 ms/120 Hz reference)", () => {
     "projects one vertical gesture over 10,000 identities with one publication",
     () => {
       range.replace({ rowId: rowIds[0]!, columnId: columnIds[0]! }, structure);
-      publications -= 1;
+      const publicationsBefore = publications;
       const startedAt = performance.now();
       range.extend({ rowId: rowIds[destination]!, columnId: columnIds[0]! }, structure, "vertical");
       extensionDurationsMs.push(performance.now() - startedAt);
+      extensionPublications += publications - publicationsBefore;
       destination = destination === residentRows - 1 ? residentRows - 2 : residentRows - 1;
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
