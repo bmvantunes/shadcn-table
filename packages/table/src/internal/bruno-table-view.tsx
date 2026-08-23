@@ -72,7 +72,6 @@ import {
   type BrunoTableHotkeyGesture,
   isBrunoTableHotkeyWorkflowOwner,
   requestBrunoTableHotkeyWorkflowAction,
-  useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
   useBrunoTableHotkeyWorkflowAction,
   BrunoTableHeldShiftHotkeyAdapter,
@@ -1185,6 +1184,22 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     rowSelection,
     cellRange,
   }: BrunoTableViewportAdapterProps): ReactElement {
+    const reconcileRangeAnchorAfterCommittedNavigation = useCallback(
+      (activeCell: BrunoTableActiveCell | undefined, logicalColumns: readonly CompiledColumn[]) => {
+        if (cellRange === undefined) return;
+        const structure = createBrunoTableCellRangeStructureFromRowSpace(
+          rowSpace,
+          logicalColumns.map((column) => column.columnId),
+        );
+        cellRange.reconcileAfterCommittedNavigation(
+          structure,
+          activeCell?.region === "body" && activeCell.rowId !== undefined
+            ? { rowId: activeCell.rowId, columnId: activeCell.columnId }
+            : undefined,
+        );
+      },
+      [cellRange, rowSpace],
+    );
     return (
       <BrunoTableViewportAdapterBoundary
         key={rowSelection === undefined ? "no-leading-utility" : "row-selection-utility"}
@@ -1193,6 +1208,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         navigation={navigation}
         queryGeneration={queryGeneration}
         queryNavigationMode={queryNavigationMode}
+        onCommittedNavigationChange={reconcileRangeAnchorAfterCommittedNavigation}
         rowSpace={rowSpace}
         runtime={runtime}
       >
@@ -2231,7 +2247,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
   const runCopy = (event: BrunoTableHotkeyGesture): void => {
     if ((!enableActiveCellCopy && cellRange === undefined) || !ownsGridSurface(event)) return;
-    const clipboard = gridElement.current?.ownerDocument.defaultView?.navigator.clipboard;
+    const clipboard = navigator.clipboard;
     if (cellRange !== undefined) event.preventDefault();
     const active = navigation.getSnapshot();
     if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
@@ -2543,12 +2559,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     navigate: runNavigation,
     page: runPageNavigation,
   });
-  useBrunoTableColumnGestureEscape(gridElement, (event) => {
-    if (columnGesture.current === undefined) return;
-    event.preventDefault();
-    gestureCancel.current();
-  });
-
   return (
     <div style={{ position: "relative" }}>
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
@@ -2557,7 +2567,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
         />
       ) : null}
-      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter owner={gridElement} />}
+      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter />}
       <div
         ref={attachGrid}
         data-bruno-scroll-owner=""
@@ -2748,6 +2758,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           instanceId={instanceId}
           logicalColumns={logicalColumns}
           navigation={navigation}
+          cellRange={cellRange}
           openHeaderFilter={openHeaderFilter}
           renderColumnFilter={renderColumnFilter}
           restoreColumnFocus={restoreColumnFocus}
@@ -2873,6 +2884,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   instanceId,
   logicalColumns,
   navigation,
+  cellRange,
   openHeaderFilter,
   renderColumnFilter,
   restoreColumnFocus,
@@ -2887,6 +2899,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   readonly instanceId: string;
   readonly logicalColumns: readonly CompiledColumn[];
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly openHeaderFilter: (columnId: string) => void;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly restoreColumnFocus: (columnId: string) => void;
@@ -2935,6 +2948,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   return (
     <ActiveDescendantProxy
       activeCell={activeCell}
+      cellRange={cellRange}
       column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
       columnIndex={offsetLogicalColumnIndex(
         logicalColumns.findIndex((column) => column.columnId === activeCell.columnId),
@@ -3366,11 +3380,7 @@ const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
         checked={checked}
         data-bruno-row-selection-checkbox=""
         onClick={(event) =>
-          selection.toggleRow(
-            rowId,
-            !checked,
-            event.detail > 0 && isBrunoTableHotkeyHeld("Shift", event.currentTarget),
-          )
+          selection.toggleRow(rowId, !checked, event.detail > 0 && isBrunoTableHotkeyHeld("Shift"))
         }
         onPointerDown={(event) => event.stopPropagation()}
         tabIndex={-1}
@@ -3982,6 +3992,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
 
 const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   activeCell,
+  cellRange,
   column,
   columnIndex,
   instanceId,
@@ -3990,6 +4001,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   tableId,
 }: {
   readonly activeCell: BrunoTableActiveCell;
+  readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly column: CompiledColumn | undefined;
   readonly columnIndex: number;
   readonly instanceId: string;
@@ -4013,6 +4025,7 @@ const ActiveDescendantProxy = memo(function ActiveDescendantProxy({
   return (
     <ActiveBodyDescendantProxy
       activeCell={activeCell}
+      cellRange={cellRange}
       column={column}
       columnIndex={columnIndex}
       instanceId={instanceId}
@@ -4071,6 +4084,7 @@ const ActiveHeaderDescendantProxy = memo(function ActiveHeaderDescendantProxy({
 
 const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
   activeCell,
+  cellRange,
   column,
   columnIndex,
   instanceId,
@@ -4078,6 +4092,7 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
   tableId,
 }: {
   readonly activeCell: BrunoTableActiveCell;
+  readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly column: CompiledColumn;
   readonly columnIndex: number;
   readonly instanceId: string;
@@ -4085,6 +4100,19 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
   readonly tableId: string;
 }) {
   const rowId = activeCell.rowId;
+  const subscribeCellRange = useMemo(
+    () => cellRange?.subscribe ?? (() => () => undefined),
+    [cellRange],
+  );
+  const getCellRangeSelection = useMemo(
+    () => () => rowId !== undefined && cellRange?.isCellSelected(rowId, column.columnId) === true,
+    [cellRange, column.columnId, rowId],
+  );
+  const selected = useSyncExternalStore(
+    subscribeCellRange,
+    getCellRangeSelection,
+    getCellRangeSelection,
+  );
   const rowAware = proxyPresentationUsesRawRow(column);
   const getRowIdentitySnapshot = useMemo(
     () => () => runtime.getRowSpaceSnapshot()?.getRowId(activeCell.rowIndex),
@@ -4141,6 +4169,7 @@ const ActiveBodyDescendantProxy = memo(function ActiveBodyDescendantProxy({
         id={activeDomIdForRowIdentity(instanceId, tableId, activeCell, currentRowId)}
         data-bruno-active-proxy=""
         aria-colindex={columnIndex + 1}
+        aria-selected={selected || undefined}
         role="gridcell"
       >
         {content}

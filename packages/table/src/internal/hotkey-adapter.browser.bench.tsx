@@ -7,7 +7,6 @@ import {
   BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT,
-  useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
   type BrunoTableGridHotkeyCommands,
 } from "./hotkey-adapter";
@@ -53,7 +52,6 @@ function AdapterBenchmarkProbe() {
     page: () => undefined,
   };
   useBrunoTableGridHotkeys(ownerRef, commands);
-  useBrunoTableColumnGestureEscape(ownerRef, () => undefined);
   return (
     <section
       ref={ownerRef}
@@ -81,7 +79,7 @@ beforeAll(async () => {
   if (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
       BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT !==
-    76
+    60
   ) {
     throw new Error("The Browser benchmark registration-definition bound changed unexpectedly.");
   }

@@ -14,7 +14,7 @@ import type { ReactElement, RefCallback } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type { BrunoTableQueryNavigationMode, BrunoTableRuntimeView } from "./grid-runtime";
-import type { BrunoTableNavigationRuntime } from "./navigation";
+import type { BrunoTableActiveCell, BrunoTableNavigationRuntime } from "./navigation";
 import {
   BRUNO_TABLE_ROW_HEIGHT,
   BrunoTableViewportRuntime,
@@ -150,6 +150,7 @@ export function BrunoTableViewportAdapterBoundary({
   navigation,
   queryGeneration,
   queryNavigationMode,
+  onCommittedNavigationChange,
   leadingUtilityWidth = 0,
   children,
 }: {
@@ -159,6 +160,10 @@ export function BrunoTableViewportAdapterBoundary({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+  readonly onCommittedNavigationChange?: (
+    activeCell: BrunoTableActiveCell | undefined,
+    columns: readonly CompiledColumn[],
+  ) => void;
   readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
@@ -265,9 +270,11 @@ export function BrunoTableViewportAdapterBoundary({
       // origin remains a header origin, so its DOM focus and logical header navigation survive.
       navigation.resetForCommittedQuery(rowSpace, logicalColumns);
     }
+    onCommittedNavigationChange?.(navigation.getSnapshot(), logicalColumns);
   }, [
     logicalColumns,
     navigation,
+    onCommittedNavigationChange,
     queryNavigationMode,
     queryGeneration,
     rowSpace,
@@ -279,10 +286,12 @@ export function BrunoTableViewportAdapterBoundary({
     filterPositionResetEpochRef.current = filterPositionResetEpoch;
     resetViewportForCommittedQuery();
     navigation.resetForCommittedQuery(rowSpace, logicalColumns);
+    onCommittedNavigationChange?.(navigation.getSnapshot(), logicalColumns);
   }, [
     filterPositionResetEpoch,
     logicalColumns,
     navigation,
+    onCommittedNavigationChange,
     resetViewportForCommittedQuery,
     rowSpace,
   ]);

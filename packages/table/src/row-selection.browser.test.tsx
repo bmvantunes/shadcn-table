@@ -1,5 +1,4 @@
 import { StrictMode } from "react";
-import { createPortal } from "react-dom";
 import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
@@ -178,85 +177,6 @@ describe("ordinary Client Row Selection", () => {
     ).toEqual(["Curie", "Babbage", "Ada"]);
     await expect.element(page.getByRole("checkbox")).not.toBeInTheDocument();
   });
-
-  for (const lifecycle of ["ready", "loading"] as const) {
-    test(`preserves foreign-document ${lifecycle} grid focus when the optional capability changes`, async () => {
-      const screen = await render(
-        <iframe
-          aria-label="Row selection table document"
-          role="document"
-          title="Row selection table document"
-        />,
-      );
-      const frame = screen
-        .getByRole("document", { name: "Row selection table document" })
-        .element();
-      if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
-        throw new Error("Expected a same-origin row selection table document.");
-      }
-      const ownerDocument = frame.contentDocument;
-      const tableId = `TABLE_ID_ROW_SELECTION_FOREIGN_DYNAMIC_${lifecycle.toUpperCase()}`;
-      const clientSource =
-        lifecycle === "ready"
-          ? { rows, totalRows: rows.length, version: 1, status: "ready" as const }
-          : { rows: [], totalRows: rows.length, version: 1, status: "loading" as const };
-      const renderTable = (rowSelection: true | undefined) => (
-        <>
-          <iframe
-            aria-label="Row selection table document"
-            role="document"
-            title="Row selection table document"
-          />
-          {createPortal(
-            <BrunoTableClient
-              tableId={tableId}
-              columns={columns}
-              initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-              clientSource={clientSource}
-              getRowId={(row) => row.id}
-              {...(rowSelection === true ? { rowSelection } : {})}
-            />,
-            ownerDocument.body,
-          )}
-        </>
-      );
-      await screen.rerender(renderTable(undefined));
-      await settleBrunoTableBrowserFrames();
-      const findGrid = () =>
-        ownerDocument.querySelector<HTMLElement>(
-          `[role="grid"][aria-label="${lifecycle === "ready" ? `Data for ${tableId}` : "Loading table rows"}"]`,
-        );
-      const findSelectionSurface = () =>
-        ownerDocument.querySelector(
-          lifecycle === "ready"
-            ? '[role="checkbox"]'
-            : '[role="gridcell"][aria-label="Row selection loading"]',
-        );
-      const initialGrid = findGrid();
-      if (initialGrid === null) throw new Error("Expected the foreign-document grid.");
-      initialGrid.focus();
-      expect(ownerDocument.activeElement).toBe(initialGrid);
-      expect(document.activeElement).toBe(frame);
-
-      await screen.rerender(renderTable(true));
-      await settleBrunoTableBrowserFrames();
-      const enabledGrid = findGrid();
-      expect(enabledGrid).not.toBe(initialGrid);
-      expect(initialGrid.isConnected).toBe(false);
-      expect(findSelectionSurface()).not.toBeNull();
-      expect(ownerDocument.activeElement).toBe(enabledGrid);
-      expect(document.activeElement).toBe(frame);
-
-      await screen.rerender(renderTable(undefined));
-      await settleBrunoTableBrowserFrames();
-      const disabledGrid = findGrid();
-      expect(disabledGrid).not.toBe(enabledGrid);
-      expect(enabledGrid?.isConnected).toBe(false);
-      expect(findSelectionSurface()).toBeNull();
-      expect(ownerDocument.activeElement).toBe(disabledGrid);
-      expect(document.activeElement).toBe(frame);
-    });
-  }
 
   test("keeps the selection gutter while Client rows are loading", async () => {
     const loadingColumns = [

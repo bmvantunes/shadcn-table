@@ -344,9 +344,7 @@ export class BrunoTableCellRangeRuntime {
   private snapshot = EMPTY_RANGE_SNAPSHOT;
   private grid: HTMLElement | null = null;
   private observer: MutationObserver | undefined;
-  private decorationFrame:
-    | Readonly<{ readonly view: Window; readonly grid: HTMLElement; readonly id: number }>
-    | undefined;
+  private decorationFrame: number | null = null;
   private readonly mountedCellCoordinates = new Map<
     HTMLElement,
     Readonly<{ readonly rowId: string; readonly columnId: string }>
@@ -381,10 +379,8 @@ export class BrunoTableCellRangeRuntime {
     this.mountedCellsByRow.clear();
     this.grid = grid;
     if (grid === null) return;
-    const view = grid.ownerDocument.defaultView;
-    if (view === null) return;
     this.registerMountedCells(grid);
-    this.observer = new view.MutationObserver((records) => {
+    this.observer = new MutationObserver((records) => {
       let registryChanged = false;
       for (const record of records) {
         for (const removed of record.removedNodes) {
@@ -599,6 +595,19 @@ export class BrunoTableCellRangeRuntime {
     return this.snapshot;
   };
 
+  public readonly reconcileAfterCommittedNavigation = (
+    structure: BrunoTableCellRangeStructure,
+    activeCell?: BrunoTableCellCoordinate,
+  ): BrunoTableCellRangeSnapshot => {
+    const hadRange = this.snapshot.range !== undefined;
+    this.reconcile(structure);
+    if (hadRange || this.structuralInvalidationPendingCopy) return this.snapshot;
+    if (activeCell !== undefined && containsCoordinate(structure, activeCell)) {
+      return this.replace(activeCell, structure);
+    }
+    return this.clear();
+  };
+
   public readonly clear = (): BrunoTableCellRangeSnapshot => {
     this.cancelPointerGesture();
     this.structuralInvalidationPendingCopy = false;
@@ -646,26 +655,17 @@ export class BrunoTableCellRangeRuntime {
 
   private readonly scheduleDecoration = (): void => {
     const grid = this.grid;
-    const view = grid?.ownerDocument.defaultView;
-    if (grid === null || grid === undefined || view === null || view === undefined) return;
-    if (this.decorationFrame !== undefined) return;
-    const frame = Object.freeze({
-      view,
-      grid,
-      id: view.requestAnimationFrame(() => {
-        if (this.decorationFrame !== frame) return;
-        this.decorationFrame = undefined;
-        if (this.grid === grid) this.decorateMountedCells();
-      }),
+    if (grid === null || this.decorationFrame !== null) return;
+    this.decorationFrame = requestAnimationFrame(() => {
+      this.decorationFrame = null;
+      if (this.grid === grid) this.decorateMountedCells();
     });
-    this.decorationFrame = frame;
   };
 
   private readonly cancelDecorationFrame = (): void => {
-    const frame = this.decorationFrame;
-    if (frame === undefined) return;
-    this.decorationFrame = undefined;
-    frame.view.cancelAnimationFrame(frame.id);
+    if (this.decorationFrame === null) return;
+    cancelAnimationFrame(this.decorationFrame);
+    this.decorationFrame = null;
   };
 
   private readonly registerMountedCells = (root: Node): boolean => {
@@ -696,10 +696,7 @@ export class BrunoTableCellRangeRuntime {
   };
 
   private readonly unregisterMountedCells = (root: Node): boolean => {
-    const HTMLElementConstructor = this.grid?.ownerDocument.defaultView?.HTMLElement;
-    if (HTMLElementConstructor === undefined || !(root instanceof HTMLElementConstructor)) {
-      return false;
-    }
+    if (!(root instanceof HTMLElement)) return false;
     let changed = false;
     if (this.mountedCellCoordinates.has(root)) {
       this.unregisterMountedCell(root);
@@ -1115,8 +1112,7 @@ function recordInstrumentation(event: BrunoTableCellRangeInstrumentationEvent): 
 }
 
 function ownedGridCellsWithin(root: Node, grid: HTMLElement): readonly HTMLElement[] {
-  const HTMLElementConstructor = grid.ownerDocument.defaultView?.HTMLElement;
-  if (HTMLElementConstructor === undefined || !(root instanceof HTMLElementConstructor)) return [];
+  if (!(root instanceof HTMLElement)) return [];
   const candidates = [
     ...(root.matches('[role="gridcell"][data-bruno-row-id][data-bruno-column-id]')
       ? [root as HTMLElement]

@@ -14,13 +14,6 @@ import type {
 } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
-import {
-  registerBrunoTableCaptureHotkeys,
-  registerBrunoTableForeignDocumentHeldShift,
-  registerBrunoTableForeignDocumentHotkeys,
-  isBrunoTableForeignDocumentShiftHeld,
-  type BrunoTableCoreHotkeyBinding,
-} from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
 // closed Key union. Keep the compatibility assertion at this one Adapter seam.
@@ -310,12 +303,7 @@ export const BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT: number 
 export const BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_GRID_HOTKEYS.length - BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT;
 export const BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GRID_HOTKEYS.length;
-export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly Hotkey[] =
-  BRUNO_TABLE_ESCAPE_HOTKEYS;
-// One table owns every React registration plus the complete modifier-insensitive
-// capture-phase column-gesture Escape definition set.
-export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
-  BRUNO_TABLE_GRID_HOTKEYS.length + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length;
+export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GRID_HOTKEYS.length;
 export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_ROW_SELECTION_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
@@ -379,39 +367,14 @@ export function brunoTableHotkeyRegistrationBound(
   );
 }
 
-/** One table-local bridge initializes TanStack's held-key lifecycle without per-cell subscriptions. */
-export function BrunoTableHeldShiftHotkeyAdapter({
-  owner,
-}: {
-  readonly owner: RefObject<HTMLElement | null>;
-}): null {
+/** Initializes TanStack's shared held-key lifecycle without per-cell subscriptions. */
+export function BrunoTableHeldShiftHotkeyAdapter(): null {
   useKeyHold("Shift");
-  useEffect(() => {
-    const ownerDocument = owner.current?.ownerDocument;
-    if (
-      ownerDocument === undefined ||
-      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
-    ) {
-      return;
-    }
-    return registerBrunoTableForeignDocumentHeldShift(ownerDocument);
-  }, [owner]);
   return null;
 }
 
 /** Reads TanStack's shared held-key state synchronously for a pointer command. */
-export function isBrunoTableHotkeyHeld(
-  key: "Shift",
-  owner?: Readonly<{ readonly ownerDocument: Document | null }>,
-): boolean {
-  const ownerDocument = owner?.ownerDocument;
-  if (
-    ownerDocument !== undefined &&
-    ownerDocument !== null &&
-    ownerDocument.defaultView !== (typeof window === "undefined" ? undefined : window)
-  ) {
-    return isBrunoTableForeignDocumentShiftHeld(ownerDocument);
-  }
+export function isBrunoTableHotkeyHeld(key: "Shift"): boolean {
   return getKeyStateTracker().isKeyHeld(key);
 }
 
@@ -462,11 +425,9 @@ export function useBrunoTableGridHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: BrunoTableGridHotkeyCommands,
 ): void {
-  const ownerDocumentRef = useRef<Document | null>(null);
   const reactDocumentTargetRef = useRef<Document | null>(null);
   useLayoutEffect(() => {
     const ownerDocument = target.current?.ownerDocument ?? null;
-    ownerDocumentRef.current = ownerDocument;
     reactDocumentTargetRef.current =
       ownerDocument?.defaultView === (typeof window === "undefined" ? undefined : window)
         ? ownerDocument
@@ -480,12 +441,6 @@ export function useBrunoTableGridHotkeys(
       binding.onTrigger(event, context);
     }) satisfies HotkeyCallback,
   }));
-  const escapeCommandRef = useRef(commands.escape);
-  const copyCommandRef = useRef(commands.copy);
-  useEffect(() => {
-    escapeCommandRef.current = commands.escape;
-    copyCommandRef.current = commands.copy;
-  }, [commands.copy, commands.escape]);
   const escapeBindings = ownerScopedBindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length);
   useBrunoTableHotkeys(
     target,
@@ -498,91 +453,6 @@ export function useBrunoTableGridHotkeys(
     reactDocumentTargetRef as unknown as RefObject<HTMLElement | null>,
     escapeBindings,
     "allow",
-  );
-  const foreignRegistrationRef = useRef<
-    Readonly<{ owner: HTMLElement; cleanup: () => void }> | undefined
-  >(undefined);
-  useEffect(() => {
-    const owner = target.current;
-    const ownerDocument = ownerDocumentRef.current;
-    const previous = foreignRegistrationRef.current;
-    if (previous?.owner === owner) return;
-    previous?.cleanup();
-    foreignRegistrationRef.current = undefined;
-    if (
-      owner === null ||
-      ownerDocument === null ||
-      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
-    ) {
-      return;
-    }
-    const foreignBindings: readonly BrunoTableCoreHotkeyBinding[] = [
-      ...BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
-        hotkey,
-        onTrigger: ((event) => {
-          const currentOwner = target.current;
-          if (!ownsBrunoTableHotkeyTarget(currentOwner, event.target)) return;
-          escapeCommandRef.current(event);
-        }) satisfies HotkeyCallback,
-      })),
-      {
-        hotkey: "Mod+C",
-        onTrigger: ((event) => {
-          const currentOwner = target.current;
-          if (event.target !== currentOwner) return;
-          copyCommandRef.current(event);
-        }) satisfies HotkeyCallback,
-      },
-    ];
-    const cleanupDocument = registerBrunoTableForeignDocumentHotkeys(
-      ownerDocument,
-      foreignBindings,
-    );
-    foreignRegistrationRef.current = {
-      owner,
-      cleanup: cleanupDocument,
-    };
-  });
-  useEffect(
-    () => () => {
-      foreignRegistrationRef.current?.cleanup();
-      foreignRegistrationRef.current = undefined;
-    },
-    [],
-  );
-}
-
-export function useBrunoTableColumnGestureEscape(
-  target: RefObject<HTMLElement | null>,
-  onTrigger: (event: BrunoTableHotkeyGesture) => void,
-): void {
-  const onTriggerRef = useRef(onTrigger);
-  useEffect(() => {
-    onTriggerRef.current = onTrigger;
-  }, [onTrigger]);
-  const registrationRef = useRef<
-    Readonly<{ ownerWindow: Window; cleanup: () => void }> | undefined
-  >(undefined);
-  useEffect(() => {
-    const ownerWindow = target.current?.ownerDocument.defaultView;
-    const previous = registrationRef.current;
-    if (previous?.ownerWindow === ownerWindow) return;
-    previous?.cleanup();
-    registrationRef.current = undefined;
-    if (ownerWindow === undefined || ownerWindow === null) return;
-    const cleanup = registerBrunoTableCaptureHotkeys(
-      ownerWindow,
-      BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
-      (event) => onTriggerRef.current(event),
-    );
-    registrationRef.current = { ownerWindow, cleanup };
-  });
-  useEffect(
-    () => () => {
-      registrationRef.current?.cleanup();
-      registrationRef.current = undefined;
-    },
-    [],
   );
 }
 

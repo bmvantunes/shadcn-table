@@ -1,7 +1,6 @@
 import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
-import { StrictMode, useCallback, useState } from "react";
-import { createPortal } from "react-dom";
-import { afterEach, describe, expect, test, vi, type MockInstance } from "vite-plus/test";
+import { StrictMode } from "react";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
@@ -284,6 +283,17 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
             page.getByRole("gridcell", { name: "Ada" }).element().id,
           ),
         );
+        await settleBrunoTableBrowserFrames();
+        await expect
+          .element(page.getByRole("gridcell", { name: "Ada" }))
+          .toHaveAttribute("aria-selected", "true");
+        await expect
+          .element(page.getByRole("gridcell", { name: "Babbage" }))
+          .not.toHaveAttribute("aria-selected");
+        grid.element().focus();
+        await userEvent.keyboard(copyGesture());
+        await vi.waitFor(() => expect(writes).toEqual(["Ada"]));
+        writes.length = 0;
         events.length = 0;
         if (interaction === "keyboard") {
           grid.element().focus();
@@ -1031,229 +1041,6 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await expect.element(target).toHaveAttribute("aria-selected", "true");
     } finally {
       removeInstrumentation();
-    }
-  });
-
-  test("keeps same-origin portal interactions native without publishing a range", async () => {
-    const tableId = "TABLE_ID_CELL_RANGE_PORTAL_INTERACTIVE";
-    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
-    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
-      tableId,
-      (event) => events.push(event),
-    );
-    const action = vi.fn();
-    const portalColumns = [
-      {
-        columnId: "COL_ID_NAME",
-        field: "name",
-        headerName: "Name",
-        valueType: "text",
-        width: 180,
-        cellRenderer: ({ row }: { readonly row: Row }) => (
-          <button type="button" onClick={action}>
-            Open {row.name}
-          </button>
-        ),
-      },
-      columns[1]!,
-    ] satisfies BrunoTableColumns<Row>;
-
-    function SameOriginPortalTable() {
-      const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
-      const attachFrame = useCallback((frame: HTMLIFrameElement | null) => {
-        const body = frame?.contentDocument?.body;
-        if (body !== undefined && body !== null) {
-          setPortalRoot((current) => (current === body ? current : body));
-        }
-      }, []);
-      return (
-        <>
-          <iframe
-            ref={attachFrame}
-            aria-label="Portal table realm"
-            role="document"
-            title="Portal table realm"
-          />
-          {portalRoot === null
-            ? null
-            : createPortal(
-                <BrunoTableClient
-                  tableId={tableId}
-                  columns={portalColumns}
-                  initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-                  clientSource={source()}
-                  getRowId={(row) => row.id}
-                />,
-                portalRoot,
-              )}
-        </>
-      );
-    }
-
-    try {
-      await render(<SameOriginPortalTable />);
-      const frameElement = page.getByRole("document", { name: "Portal table realm" });
-      const frame = page.frameLocator(frameElement);
-      const button = frame.getByRole("button", { name: "Open Ada", exact: true });
-      const owner = frame.getByRole("gridcell", { name: "Open Ada", exact: true });
-      const grid = frame.getByRole("grid", { name: `Data for ${tableId}` });
-      await expect.element(grid).toBeVisible();
-      await settleBrunoTableBrowserFrames();
-      events.length = 0;
-      const buttonElement = button.element() as HTMLButtonElement;
-      const realm = buttonElement.ownerDocument.defaultView;
-      if (realm === null) throw new Error("expected the portal document realm");
-      const ariaMutations: MutationRecord[] = [];
-      const observer = new realm.MutationObserver((records: MutationRecord[]) =>
-        ariaMutations.push(...records),
-      );
-      observer.observe(buttonElement.ownerDocument.body, {
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["aria-selected"],
-      });
-
-      buttonElement.focus();
-      const pointerDown = new realm.PointerEvent("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        pointerId: 42,
-      });
-      const pointerUp = new realm.PointerEvent("pointerup", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        pointerId: 42,
-      });
-      const click = new realm.MouseEvent("click", { bubbles: true, cancelable: true });
-      expect(buttonElement.dispatchEvent(pointerDown)).toBe(true);
-      expect(pointerDown.defaultPrevented).toBe(false);
-      expect(buttonElement.dispatchEvent(pointerUp)).toBe(true);
-      expect(pointerUp.defaultPrevented).toBe(false);
-      expect(buttonElement.dispatchEvent(click)).toBe(true);
-      expect(click.defaultPrevented).toBe(false);
-      await settleBrunoTableBrowserFrames();
-
-      expect(action).toHaveBeenCalledOnce();
-      expect(buttonElement.ownerDocument.activeElement).toBe(buttonElement);
-      expect(events.filter((event) => event.kind === "publication")).toHaveLength(0);
-      expect(ariaMutations).toHaveLength(0);
-      await expect.element(owner).not.toHaveAttribute("aria-selected");
-      observer.disconnect();
-    } finally {
-      removeInstrumentation();
-    }
-  });
-
-  test("uses the portal grid realm for Clipboard and decoration frames", async () => {
-    const tableId = "TABLE_ID_CELL_RANGE_PORTAL_REALM";
-    const hostWrites = vi.fn(async (_text: string) => {});
-    const restoreHostClipboard = installClipboard(hostWrites);
-    let portalRealm: Window | null = null;
-    let portalClipboardDescriptor: PropertyDescriptor | undefined;
-    const portalWrite = vi.fn(async (_text: string) => {});
-    let portalRequestFrame: MockInstance<Window["requestAnimationFrame"]> | undefined;
-    let portalCancelFrame: MockInstance<Window["cancelAnimationFrame"]> | undefined;
-    const hostRequestFrame = vi.spyOn(window, "requestAnimationFrame");
-
-    try {
-      await render(<iframe aria-label="Portal Clipboard realm" role="document" />);
-      const frame = page.getByRole("document", { name: "Portal Clipboard realm" });
-      const portal = page.frameLocator(frame);
-      const frameElement = frame.element() as HTMLIFrameElement;
-      const body = frameElement.contentDocument?.body;
-      portalRealm = frameElement.contentWindow;
-      if (body === undefined || body === null || portalRealm === null) {
-        throw new Error("expected same-origin portal document");
-      }
-      portalClipboardDescriptor = Object.getOwnPropertyDescriptor(
-        portalRealm.navigator,
-        "clipboard",
-      );
-      Object.defineProperty(portalRealm.navigator, "clipboard", {
-        configurable: true,
-        value: { writeText: portalWrite },
-      });
-      const requestFrame = portalRealm.requestAnimationFrame.bind(portalRealm);
-      const cancelFrame = portalRealm.cancelAnimationFrame.bind(portalRealm);
-      portalRequestFrame = vi
-        .spyOn(portalRealm, "requestAnimationFrame")
-        .mockImplementation((callback) => requestFrame(callback));
-      portalCancelFrame = vi
-        .spyOn(portalRealm, "cancelAnimationFrame")
-        .mockImplementation((id) => cancelFrame(id));
-      const screen = await render(table(tableId), { container: body, baseElement: body });
-      await settleBrunoTableBrowserFrames();
-      const realmConstructors = portalRealm as unknown as {
-        readonly PointerEvent: typeof PointerEvent;
-      };
-      const bodyCells = portal.getByRole("gridcell");
-      const adaCell = bodyCells.nth(0);
-      const babbageCell = bodyCells.nth(columns.length);
-      const grid = portal.getByRole("grid", { name: `Data for ${tableId}` });
-      hostRequestFrame.mockClear();
-      hostRequestFrame.mockImplementation(() => 999);
-      portalRequestFrame?.mockClear();
-
-      for (const [cell, shiftKey, pointerId] of [
-        [adaCell, false, 81],
-        [babbageCell, true, 82],
-      ] as const) {
-        cell.element().dispatchEvent(
-          new realmConstructors.PointerEvent("pointerdown", {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            pointerId,
-            shiftKey,
-          }),
-        );
-        cell.element().dispatchEvent(
-          new realmConstructors.PointerEvent("pointerup", {
-            bubbles: true,
-            cancelable: true,
-            pointerId,
-            shiftKey,
-          }),
-        );
-      }
-      await expect.element(babbageCell).toHaveAttribute("aria-selected", "true");
-      expect(portalRequestFrame).toHaveBeenCalled();
-
-      grid.element().focus();
-      await userEvent.keyboard(copyGesture());
-      await vi.waitFor(() => expect(portalWrite).toHaveBeenCalledWith("Ada\nBabbage"));
-      expect(hostWrites).not.toHaveBeenCalled();
-
-      portalRequestFrame?.mockImplementation(() => 777);
-      adaCell.element().dispatchEvent(
-        new realmConstructors.PointerEvent("pointerdown", {
-          bubbles: true,
-          cancelable: true,
-          button: 0,
-          pointerId: 83,
-        }),
-      );
-      adaCell.element().dispatchEvent(
-        new realmConstructors.PointerEvent("pointerup", {
-          bubbles: true,
-          cancelable: true,
-          pointerId: 83,
-        }),
-      );
-      await screen.unmount();
-      expect(portalCancelFrame).toHaveBeenCalledWith(777);
-    } finally {
-      const realm = portalRealm;
-      if (realm !== null) {
-        if (portalClipboardDescriptor === undefined) {
-          delete (realm.navigator as { clipboard?: Clipboard }).clipboard;
-        } else {
-          Object.defineProperty(realm.navigator, "clipboard", portalClipboardDescriptor);
-        }
-      }
-      restoreHostClipboard();
     }
   });
 
@@ -2224,6 +2011,49 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     } finally {
       restoreClipboard();
     }
+  });
+
+  test("preserves selected state on a virtual Active Cell proxy", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_SELECTED_ACTIVE_PROXY";
+    const virtualRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${String(index).padStart(3, "0")}`,
+      name: `Row ${String(index).padStart(3, "0")}`,
+      score: index,
+      quantity: BigInt(index),
+    }));
+    const proxyTable = (nextRows: readonly Row[], version: number) => (
+      <BrunoTableClient
+        tableId={tableId}
+        columns={[columns[0]!]}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={source(nextRows, version)}
+        getRowId={(row) => row.id}
+      />
+    );
+    const screen = await render(proxyTable(virtualRows, 1));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard(
+      detectPlatform() === "mac"
+        ? "{Meta>}{Shift>}{ArrowDown}{/Shift}{/Meta}"
+        : "{Control>}{Shift>}{ArrowDown}{/Shift}{/Control}",
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect
+      .element(page.getByRole("gridcell", { name: "Row 099", exact: true }))
+      .toHaveAttribute("aria-selected", "true");
+
+    grid.element().scrollTop = 0;
+    grid.element().dispatchEvent(new Event("scroll", { bubbles: true }));
+    await settleBrunoTableBrowserFrames();
+    const activeProxy = page.getByRole("gridcell", { name: "Row 099", exact: true });
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeProxy.element().id);
+    await expect.element(activeProxy).toHaveAttribute("aria-selected", "true");
+
+    await screen.rerender(proxyTable(virtualRows.slice(1), 2));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeProxy.element().id);
+    await expect.element(activeProxy).not.toHaveAttribute("aria-selected");
   });
 
   test("registers scoped Mod+C through the shared adapter and removes it on cleanup", async () => {

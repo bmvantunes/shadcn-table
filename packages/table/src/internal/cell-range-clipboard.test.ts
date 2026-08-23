@@ -154,6 +154,29 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     expect(range.extend({ rowId: "ROW_C", columnId: "COL_ID_B" }, changedStructure)).toEqual({});
   });
 
+  it("retains one structural Copy rejection across repeated committed navigation resets", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
+    range.extend({ rowId: "ROW_D", columnId: "COL_ID_B" }, structure);
+    const changedStructure = createBrunoTableCellRangeStructure(
+      ["ROW_A", "ROW_B", "ROW_C"],
+      structure.columnIds,
+    );
+
+    range.reconcileAfterCommittedNavigation(changedStructure, {
+      rowId: "ROW_A",
+      columnId: "COL_ID_B",
+    });
+    range.reconcileAfterCommittedNavigation(changedStructure, {
+      rowId: "ROW_A",
+      columnId: "COL_ID_B",
+    });
+
+    expect(range.getSnapshot()).toEqual({});
+    expect(range.consumeStructuralInvalidation()).toBe(true);
+    expect(range.consumeStructuralInvalidation()).toBe(false);
+  });
+
   it("keeps valid active gestures across unrelated structure changes and invalidates changed spans", () => {
     const range = new BrunoTableCellRangeRuntime();
     range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
