@@ -136,7 +136,7 @@ export class BrunoTableRowSelectionRuntime {
 
   public readonly toggleAll = (checked: boolean): number => {
     if (this.grouped || this.projectedRowIds.length === 0) return 0;
-    if (checked && this.headerSnapshot.checked) return 0;
+    if (checked ? this.headerSnapshot.checked : this.selectedProjectedCount === 0) return 0;
     const changed = new Set<string>();
     for (const rowId of this.projectedRowIds) this.setSelected(rowId, checked, changed);
     this.anchorRowId = undefined;

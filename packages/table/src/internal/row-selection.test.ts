@@ -146,6 +146,14 @@ describe("BrunoTableRowSelectionRuntime", () => {
     expect(selection.toggleAll(true)).toBe(0);
     expect(header).not.toHaveBeenCalled();
     expect(row).not.toHaveBeenCalled();
+
+    expect(selection.toggleAll(false)).toBe(3);
+    header.mockClear();
+    row.mockClear();
+
+    expect(selection.toggleAll(false)).toBe(0);
+    expect(header).not.toHaveBeenCalled();
+    expect(row).not.toHaveBeenCalled();
   });
 
   it("clears selection and its anchor before a future grouped projection and restores empty", () => {

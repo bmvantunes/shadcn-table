@@ -10,6 +10,7 @@ const rowIds = Object.freeze(
 const selection = new BrunoTableRowSelectionRuntime(rowIds);
 const gestureSelection = new BrunoTableRowSelectionRuntime(rowIds);
 const repeatedSelectAllSelection = new BrunoTableRowSelectionRuntime(rowIds);
+const repeatedClearAllSelection = new BrunoTableRowSelectionRuntime(rowIds);
 const sourceSnapshotToken = Object.freeze({});
 repeatedSelectAllSelection.toggleAll(true);
 let headerNotifications = 0;
@@ -104,13 +105,14 @@ describe("BrunoTable Row Selection benchmark (8.33 ms/120 Hz reference)", () => 
   );
 
   bench(
-    "repeats an already-satisfied Select All command with zero projected visits",
+    "repeats already-satisfied select and clear commands with zero projected visits",
     () => {
       const startedAt = performance.now();
-      const visitedRows = repeatedSelectAllSelection.toggleAll(true);
+      const selectedVisits = repeatedSelectAllSelection.toggleAll(true);
+      const clearedVisits = repeatedClearAllSelection.toggleAll(false);
       repeatedSelectAllDurationsMs.push(performance.now() - startedAt);
-      if (visitedRows !== 0) {
-        throw new Error("Repeated Select All visited an already-selected projection.");
+      if (selectedVisits !== 0 || clearedVisits !== 0) {
+        throw new Error("An already-satisfied selection command visited the projection.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
