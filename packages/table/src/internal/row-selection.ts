@@ -37,6 +37,17 @@ export type BrunoTableRowSelectionHeaderSnapshot = Readonly<{
   readonly rowCount: number;
 }>;
 
+type BrunoTableRowSelectionToggleResult =
+  | Readonly<{ readonly kind: "ignored" }>
+  | Readonly<{ readonly kind: "single"; readonly checked: boolean }>
+  | Readonly<{
+      readonly kind: "range";
+      readonly checked: boolean;
+      readonly startIndex: number;
+      readonly endIndex: number;
+      readonly rowCount: number;
+    }>;
+
 const ENABLED = Object.freeze({ enabled: true as const });
 const DISABLED = Object.freeze({ enabled: false as const });
 
@@ -89,15 +100,27 @@ export class BrunoTableRowSelectionRuntime {
     };
   };
 
-  public readonly toggleRow = (rowId: string, checked: boolean, shift: boolean): void => {
-    if (this.grouped || !this.sourceRowIdSet.has(rowId)) return;
+  public readonly toggleRow = (
+    rowId: string,
+    checked: boolean,
+    shift: boolean,
+  ): BrunoTableRowSelectionToggleResult => {
+    if (this.grouped || !this.sourceRowIdSet.has(rowId)) return { kind: "ignored" };
     const changed = new Set<string>();
     const targetIndex = this.projectedRowIndex.get(rowId);
     const anchorIndex =
       this.anchorRowId === undefined ? undefined : this.projectedRowIndex.get(this.anchorRowId);
+    let result: BrunoTableRowSelectionToggleResult = { kind: "single", checked };
     if (shift && targetIndex !== undefined && anchorIndex !== undefined) {
       const start = Math.min(anchorIndex, targetIndex);
       const end = Math.max(anchorIndex, targetIndex);
+      result = {
+        kind: "range",
+        checked,
+        startIndex: start,
+        endIndex: end,
+        rowCount: end - start + 1,
+      };
       for (let index = start; index <= end; index += 1) {
         const candidate = this.projectedRowIds[index];
         if (candidate !== undefined) this.setSelected(candidate, checked, changed);
@@ -107,6 +130,7 @@ export class BrunoTableRowSelectionRuntime {
     }
     this.anchorRowId = rowId;
     this.publishSelectionChange(changed);
+    return result;
   };
 
   public readonly toggleAll = (checked: boolean): void => {

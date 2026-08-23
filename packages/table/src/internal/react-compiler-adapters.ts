@@ -309,10 +309,14 @@ class BrunoTableGridAttachment {
   }
 
   public readonly attach = (element: HTMLDivElement | null): void => {
+    const previousGrid = this.element;
+    const activeElement = previousGrid?.ownerDocument.activeElement;
     if (
       element === null &&
-      document.activeElement !== null &&
-      this.element?.contains(document.activeElement)
+      previousGrid !== null &&
+      activeElement !== undefined &&
+      activeElement !== null &&
+      previousGrid.contains(activeElement)
     ) {
       this.focusHandoff.release();
       this.focusFallback();

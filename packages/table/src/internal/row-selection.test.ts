@@ -6,13 +6,25 @@ describe("BrunoTableRowSelectionRuntime", () => {
   it("selects ordinary rows by stable identity and applies inclusive Shift ranges", () => {
     const selection = new BrunoTableRowSelectionRuntime(["a", "b", "c", "d"]);
 
-    selection.toggleRow("b", true, false);
-    selection.toggleRow("d", true, true);
+    expect(selection.toggleRow("b", true, false)).toEqual({ kind: "single", checked: true });
+    expect(selection.toggleRow("d", true, true)).toEqual({
+      kind: "range",
+      checked: true,
+      startIndex: 1,
+      endIndex: 3,
+      rowCount: 3,
+    });
 
     expect(selection.getSelectedRowIds()).toEqual(["b", "c", "d"]);
     expect(selection.getAnchorRowId()).toBe("d");
 
-    selection.toggleRow("b", false, true);
+    expect(selection.toggleRow("b", false, true)).toEqual({
+      kind: "range",
+      checked: false,
+      startIndex: 1,
+      endIndex: 3,
+      rowCount: 3,
+    });
     expect(selection.getSelectedRowIds()).toEqual([]);
     expect(selection.getAnchorRowId()).toBe("b");
   });
@@ -66,7 +78,7 @@ describe("BrunoTableRowSelectionRuntime", () => {
     selection.toggleRow("a", true, false);
     selection.reconcile(["a", "b", "c"], ["b", "c"]);
 
-    selection.toggleRow("c", true, true);
+    expect(selection.toggleRow("c", true, true)).toEqual({ kind: "single", checked: true });
 
     expect(selection.getSelectedRowIds()).toEqual(["a", "c"]);
     expect(selection.getAnchorRowId()).toBe("c");

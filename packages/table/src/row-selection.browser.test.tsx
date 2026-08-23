@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -88,6 +89,11 @@ describe("ordinary Client Row Selection", () => {
     await userEvent.keyboard("{ArrowDown}");
     await userEvent.keyboard("{Shift>} {/Shift}");
     await expect.element(page.getByRole("checkbox", { name: "Select row 2" })).toBeChecked();
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
+        "2 rows selected, rows 1 through 2",
+      ),
+    );
     await expect
       .element(page.getByRole("checkbox", { name: "Select all rows" }))
       .toHaveAttribute("aria-checked", "mixed");
@@ -130,6 +136,85 @@ describe("ordinary Client Row Selection", () => {
     ).toEqual(["Curie", "Babbage", "Ada"]);
     await expect.element(page.getByRole("checkbox")).not.toBeInTheDocument();
   });
+
+  for (const lifecycle of ["ready", "loading"] as const) {
+    test(`preserves foreign-document ${lifecycle} grid focus when the optional capability changes`, async () => {
+      const screen = await render(
+        <iframe
+          aria-label="Row selection table document"
+          role="document"
+          title="Row selection table document"
+        />,
+      );
+      const frame = screen
+        .getByRole("document", { name: "Row selection table document" })
+        .element();
+      if (!(frame instanceof HTMLIFrameElement) || frame.contentDocument === null) {
+        throw new Error("Expected a same-origin row selection table document.");
+      }
+      const ownerDocument = frame.contentDocument;
+      const tableId = `TABLE_ID_ROW_SELECTION_FOREIGN_DYNAMIC_${lifecycle.toUpperCase()}`;
+      const clientSource =
+        lifecycle === "ready"
+          ? { rows, totalRows: rows.length, version: 1, status: "ready" as const }
+          : { rows: [], totalRows: rows.length, version: 1, status: "loading" as const };
+      const renderTable = (rowSelection: true | undefined) => (
+        <>
+          <iframe
+            aria-label="Row selection table document"
+            role="document"
+            title="Row selection table document"
+          />
+          {createPortal(
+            <BrunoTableClient
+              tableId={tableId}
+              columns={columns}
+              initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+              clientSource={clientSource}
+              getRowId={(row) => row.id}
+              {...(rowSelection === true ? { rowSelection } : {})}
+            />,
+            ownerDocument.body,
+          )}
+        </>
+      );
+      await screen.rerender(renderTable(undefined));
+      await settleBrunoTableBrowserFrames();
+      const findGrid = () =>
+        ownerDocument.querySelector<HTMLElement>(
+          `[role="grid"][aria-label="${lifecycle === "ready" ? `Data for ${tableId}` : "Loading table rows"}"]`,
+        );
+      const findSelectionSurface = () =>
+        ownerDocument.querySelector(
+          lifecycle === "ready"
+            ? '[role="checkbox"]'
+            : '[role="gridcell"][aria-label="Row selection loading"]',
+        );
+      const initialGrid = findGrid();
+      if (initialGrid === null) throw new Error("Expected the foreign-document grid.");
+      initialGrid.focus();
+      expect(ownerDocument.activeElement).toBe(initialGrid);
+      expect(document.activeElement).toBe(frame);
+
+      await screen.rerender(renderTable(true));
+      await settleBrunoTableBrowserFrames();
+      const enabledGrid = findGrid();
+      expect(enabledGrid).not.toBe(initialGrid);
+      expect(initialGrid.isConnected).toBe(false);
+      expect(findSelectionSurface()).not.toBeNull();
+      expect(ownerDocument.activeElement).toBe(enabledGrid);
+      expect(document.activeElement).toBe(frame);
+
+      await screen.rerender(renderTable(undefined));
+      await settleBrunoTableBrowserFrames();
+      const disabledGrid = findGrid();
+      expect(disabledGrid).not.toBe(enabledGrid);
+      expect(enabledGrid?.isConnected).toBe(false);
+      expect(findSelectionSurface()).toBeNull();
+      expect(ownerDocument.activeElement).toBe(disabledGrid);
+      expect(document.activeElement).toBe(frame);
+    });
+  }
 
   test("keeps the selection gutter while Client rows are loading", async () => {
     const loadingColumns = [
@@ -300,7 +385,7 @@ describe("ordinary Client Row Selection", () => {
     expect(rowCheckboxForCell("Zelda").getAttribute("aria-checked")).toBe("false");
   });
 
-  test("keeps selection through vertical virtualization and uses native Space semantics", async () => {
+  test("keeps pointer focus and selection on the stable grid through virtualization", async () => {
     const manyRows = Array.from({ length: 2_000 }, (_unused, index) => ({
       id: `row-${String(index).padStart(4, "0")}`,
       name: `Row ${String(index).padStart(4, "0")}`,
@@ -318,20 +403,22 @@ describe("ordinary Client Row Selection", () => {
     await settleBrunoTableBrowserFrames();
 
     const first = page.getByRole("checkbox", { name: "Select row 1", exact: true });
-    first.element().focus();
-    await userEvent.keyboard(" ");
-    await expect.element(first).toBeChecked();
     const grid = page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_VIRTUAL" });
+    await userEvent.click(first);
+    await expect.element(first).toBeChecked();
+    expect(document.activeElement).toBe(first.element());
     grid.element().scrollTop = grid.element().scrollHeight;
     grid.element().dispatchEvent(new Event("scroll"));
     await settleBrunoTableBrowserFrames();
     expect(page.getByRole("checkbox", { name: "Select row 1", exact: true }).query()).toBeNull();
+    expect(document.activeElement).toBe(grid.element());
+    await userEvent.keyboard(" ");
     grid.element().scrollTop = 0;
     grid.element().dispatchEvent(new Event("scroll"));
     await settleBrunoTableBrowserFrames();
     await expect
       .element(page.getByRole("checkbox", { name: "Select row 1", exact: true }))
-      .toBeChecked();
+      .not.toBeChecked();
   });
 
   test("selects the complete filtered projection without adopting later matching rows", async () => {

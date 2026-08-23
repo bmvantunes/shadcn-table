@@ -1073,7 +1073,13 @@ function FocusFallbackOnUnmount({
   useLayoutEffect(() => {
     const root = ref.current;
     return () => {
-      if (document.activeElement !== null && root?.contains(document.activeElement)) {
+      const activeElement = root?.ownerDocument.activeElement;
+      if (
+        root !== null &&
+        activeElement !== undefined &&
+        activeElement !== null &&
+        root.contains(activeElement)
+      ) {
         focusFallback();
       }
     };
@@ -1871,10 +1877,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   const attachGrid = useMemo(
     () => (element: HTMLDivElement | null) => {
+      const previousGrid = gridElement.current;
+      const activeElement = previousGrid?.ownerDocument.activeElement;
       if (
         element === null &&
-        document.activeElement !== null &&
-        gridElement.current?.contains(document.activeElement)
+        previousGrid !== null &&
+        activeElement !== undefined &&
+        activeElement !== null &&
+        previousGrid.contains(activeElement)
       ) {
         focusHandoff.release();
         focusFallback();
@@ -1884,6 +1894,20 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       if (element !== null && focusHandoff.claim()) element.focus({ preventScroll: true });
     },
     [attach, focusFallback, focusHandoff],
+  );
+  const attachBodyLayerWithFocusHandoff = useMemo<RefCallback<HTMLElement>>(
+    () => (element) => {
+      const detach = attachBodyLayer(element);
+      if (element === null) return detach;
+      return () => {
+        const activeElement = element.ownerDocument.activeElement;
+        if (activeElement !== null && element.contains(activeElement)) {
+          gridElement.current?.focus({ preventScroll: true });
+        }
+        detach?.();
+      };
+    },
+    [attachBodyLayer],
   );
   const activateHeaderCommand = useMemo(
     () => (columnId: string) => {
@@ -2168,8 +2192,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       const rowId = active.rowId ?? rowSpace.getRowId(active.rowIndex);
       if (rowId === undefined) return;
       const checked = rowSelection.getRowSnapshot(rowId);
-      rowSelection.toggleRow(rowId, !checked, shift);
-      setAnnouncement(`Row ${String(active.rowIndex + 1)} ${checked ? "deselected" : "selected"}`);
+      const result = rowSelection.toggleRow(rowId, !checked, shift);
+      if (result.kind === "ignored") return;
+      setAnnouncement(
+        result.kind === "range" && result.rowCount > 1
+          ? `${String(result.rowCount)} rows ${result.checked ? "selected" : "deselected"}, rows ${String(result.startIndex + 1)} through ${String(result.endIndex + 1)}`
+          : `Row ${String(active.rowIndex + 1)} ${checked ? "deselected" : "selected"}`,
+      );
       return;
     }
     const column = logicalColumns.find((candidate) => candidate.columnId === active?.columnId);
@@ -2350,7 +2379,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                   return rowId === undefined ? (
                     <UnloadedRow
                       key={`slot:${String(offset)}`}
-                      attachBodyLayer={attachBodyLayer}
+                      attachBodyLayer={attachBodyLayerWithFocusHandoff}
                       center={columnWindow.center}
                       centerStartIndex={columnWindow.centerStartIndex}
                       instanceId={instanceId}
@@ -2369,7 +2398,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                   ) : (
                     <BrunoTableRow
                       key={`row:${rowId}`}
-                      attachBodyLayer={attachBodyLayer}
+                      attachBodyLayer={attachBodyLayerWithFocusHandoff}
                       rowId={rowId}
                       instanceId={instanceId}
                       tableId={tableId}
@@ -2395,7 +2424,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           </table>
           {columnWindow.pinnedStart.length > 0 ? (
             <BrunoTablePinnedBodyRegion
-              attachBodyLayer={attachBodyLayer}
+              attachBodyLayer={attachBodyLayerWithFocusHandoff}
               columns={columnWindow.pinnedStart}
               instanceId={instanceId}
               pinnedStartCount={columnWindow.pinnedStart.length}
@@ -2413,7 +2442,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           ) : null}
           {columnWindow.pinnedEnd.length > 0 ? (
             <BrunoTablePinnedBodyRegion
-              attachBodyLayer={attachBodyLayer}
+              attachBodyLayer={attachBodyLayerWithFocusHandoff}
               columns={columnWindow.pinnedEnd}
               instanceId={instanceId}
               pinnedStartCount={columnWindow.pinnedStart.length}
