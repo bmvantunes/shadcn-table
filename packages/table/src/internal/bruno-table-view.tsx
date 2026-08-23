@@ -2510,7 +2510,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     );
   };
   useBrunoTableGridHotkeys(gridElement, {
-    documentEscapeActive: () => columnGesture.current !== undefined,
+    documentEscapeActive: () =>
+      columnGesture.current !== undefined || cellRange?.isPointerGestureActive() === true,
     escape: (event) => {
       if (cellRange?.cancelPointerGesture() === true) {
         event.preventDefault();

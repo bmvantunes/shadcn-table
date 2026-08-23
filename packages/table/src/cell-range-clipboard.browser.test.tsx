@@ -1049,6 +1049,86 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("cancels an active range gesture from document Escape after focus leaves the grid", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_OUTSIDE_ESCAPE";
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    try {
+      await render(
+        <>
+          <input aria-label="Outside range focus" />
+          {table(tableId)}
+        </>,
+      );
+      const ada = page.getByRole("gridcell", { name: "Ada", exact: true });
+      const babbage = page.getByRole("gridcell", { name: "Babbage", exact: true });
+      const curie = page.getByRole("gridcell", { name: "Curie", exact: true });
+      await userEvent.click(ada);
+      const babbageBounds = babbage.element().getBoundingClientRect();
+      const curieBounds = curie.element().getBoundingClientRect();
+      babbage.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: babbageBounds.left + babbageBounds.width / 2,
+          clientY: babbageBounds.top + babbageBounds.height / 2,
+          pointerId: 46,
+        }),
+      );
+      curie.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          clientX: curieBounds.left + curieBounds.width / 2,
+          clientY: curieBounds.top + curieBounds.height / 2,
+          pointerId: 46,
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      await expect.element(babbage).toHaveAttribute("aria-selected", "true");
+      await expect.element(curie).toHaveAttribute("aria-selected", "true");
+
+      const outside = page.getByRole("textbox", { name: "Outside range focus" });
+      outside.element().focus();
+      const escape = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+      outside.element().dispatchEvent(escape);
+      await settleBrunoTableBrowserFrames();
+
+      expect(escape.defaultPrevented).toBe(true);
+      await expect.element(outside).toHaveFocus();
+      await expect.element(ada).toHaveAttribute("aria-selected", "true");
+      await expect.element(babbage).not.toHaveAttribute("aria-selected");
+      await expect.element(curie).not.toHaveAttribute("aria-selected");
+      const workAfterEscape = events.filter(
+        (event) => event.kind === "pointer-frame" || event.kind === "publication",
+      ).length;
+      curie
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, cancelable: true, pointerId: 46 }),
+        );
+      curie
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 46 }),
+        );
+      await settleBrunoTableBrowserFrames();
+      expect(
+        events.filter((event) => event.kind === "pointer-frame" || event.kind === "publication"),
+      ).toHaveLength(workAfterEscape);
+    } finally {
+      removeInstrumentation();
+    }
+  });
+
   test("cancels an armed drag before replacing its grid owner", async () => {
     const tableId = "TABLE_ID_CELL_RANGE_GRID_REPLACEMENT";
     const events: BrunoTableCellRangeInstrumentationEvent[] = [];
