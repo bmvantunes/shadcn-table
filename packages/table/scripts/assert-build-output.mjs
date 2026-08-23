@@ -617,7 +617,11 @@ if (packageJson.dependencies?.["@tanstack/react-hotkeys"] !== "0.10.0") {
   );
 }
 
-if (Object.hasOwn(packageJson.dependencies ?? {}, "@tanstack/hotkeys")) {
+const installableDependencySections = ["dependencies", "peerDependencies", "optionalDependencies"];
+const declaresDirectDependency = (name) =>
+  installableDependencySections.some((section) => Object.hasOwn(packageJson[section] ?? {}, name));
+
+if (declaresDirectDependency("@tanstack/hotkeys")) {
   throw new Error("BrunoTable must not depend directly on TanStack Hotkeys core.");
 }
 
@@ -627,7 +631,7 @@ if (packageJson.dependencies?.["@tanstack/react-pacer"] !== "0.23.0") {
   );
 }
 
-if (Object.hasOwn(packageJson.dependencies ?? {}, "@tanstack/pacer")) {
+if (declaresDirectDependency("@tanstack/pacer")) {
   throw new Error("React-bound BrunoTable pacing must not depend directly on TanStack Pacer core.");
 }
 

@@ -6,12 +6,7 @@ import {
 } from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
-import type {
-  Hotkey,
-  HotkeyCallback,
-  RegisterableHotkey,
-  UseHotkeyDefinition,
-} from "@tanstack/react-hotkeys";
+import type { Hotkey, RegisterableHotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
 
@@ -22,7 +17,7 @@ export const BRUNO_TABLE_CONTEXT_MENU_HOTKEY = "ContextMenu" as RegisterableHotk
 type BrunoTableHotkeyBinding = Readonly<{
   hotkey: RegisterableHotkey;
   allowInTextInput?: boolean;
-  onTrigger: HotkeyCallback;
+  onTrigger: (event: BrunoTableHotkeyGesture) => void;
 }>;
 
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
@@ -390,9 +385,13 @@ function useBrunoTableHotkeys(
 ): void {
   const definitions: UseHotkeyDefinition[] = bindings.map((binding) => ({
     hotkey: binding.hotkey,
-    callback: (event, context) => {
+    callback: (event) => {
       if (event.isComposing) return;
-      binding.onTrigger(event, context);
+      binding.onTrigger({
+        defaultPrevented: event.defaultPrevented,
+        preventDefault: event.preventDefault.bind(event),
+        target: event.target,
+      });
     },
     options: { ignoreInputs: binding.allowInTextInput !== true },
   }));
@@ -436,10 +435,10 @@ export function useBrunoTableGridHotkeys(
   const bindings = createBrunoTableGridHotkeyBindings(commands);
   const ownerScopedBindings = bindings.map((binding) => ({
     ...binding,
-    onTrigger: ((event, context) => {
+    onTrigger: (event: BrunoTableHotkeyGesture) => {
       if (!ownsBrunoTableHotkeyTarget(target.current, event.target)) return;
-      binding.onTrigger(event, context);
-    }) satisfies HotkeyCallback,
+      binding.onTrigger(event);
+    },
   }));
   const escapeBindings = ownerScopedBindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length);
   useBrunoTableHotkeys(

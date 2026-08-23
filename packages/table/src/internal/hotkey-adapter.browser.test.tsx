@@ -228,11 +228,26 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     );
     expect(outerRegistration?.options.conflictBehavior).toBe("error");
 
-    inner.dispatchEvent(
-      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "c", ...modifier }),
-    );
+    const innerCopyEvent = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "c",
+      ...modifier,
+    });
+    inner.dispatchEvent(innerCopyEvent);
     expect(innerCopy).toHaveBeenCalledOnce();
     expect(outerCopy).not.toHaveBeenCalled();
+    const innerGesture = innerCopy.mock.calls[0]?.[0];
+    expect(Object.getPrototypeOf(innerGesture)).toBe(Object.prototype);
+    expect(Object.keys(innerGesture).sort()).toEqual([
+      "defaultPrevented",
+      "preventDefault",
+      "target",
+    ]);
+    expect("key" in innerGesture).toBe(false);
+    expect("ctrlKey" in innerGesture).toBe(false);
+    innerGesture.preventDefault();
+    expect(innerCopyEvent.defaultPrevented).toBe(true);
 
     outer.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "c", ...modifier }),

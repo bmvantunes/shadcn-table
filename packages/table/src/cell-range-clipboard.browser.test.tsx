@@ -2047,6 +2047,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     grid.element().dispatchEvent(new Event("scroll", { bubbles: true }));
     await settleBrunoTableBrowserFrames();
     const activeProxy = page.getByRole("gridcell", { name: "Row 099", exact: true });
+    expect(activeProxy.element().hasAttribute("data-bruno-active-proxy")).toBe(true);
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeProxy.element().id);
     await expect.element(activeProxy).toHaveAttribute("aria-selected", "true");
 

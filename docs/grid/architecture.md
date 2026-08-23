@@ -104,9 +104,10 @@ Raw keyboard evidence is admitted only through an explicit build-guard map keyed
 normalized root-relative module paths. Its only current member is `internal/hotkey-adapter.ts`, the
 only capability allowed to import React Hotkeys. Production code may not import Hotkeys core,
 install keyboard DOM listeners, or maintain handwritten modifier/key-state logic. The Adapter may
-only declare TanStack bindings and translate matched gestures into typed BrunoTable commands. It may not interpret event
-keys or modifiers. The Adapter exposes a private key- and
-modifier-free gesture capability to command owners. Future native editor or IME handling must add
+only declare TanStack bindings and translate matched gestures into typed BrunoTable commands. It may
+not interpret event keys or modifiers. Before dispatch, it creates a new private gesture object
+containing only `target`, the captured `defaultPrevented` state, and a bound `preventDefault`; raw
+key and modifier fields do not cross into command owners at runtime. Future native editor or IME handling must add
 its own `native-evidence` capability, limited to component-owned composition evidence, instead of
 weakening this rule or teaching the guard JavaScript binding inference. The emitted guard admits
 only listener evidence structurally attributed to a sanctioned boundary. A future native boundary
