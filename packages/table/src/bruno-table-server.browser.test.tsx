@@ -21,6 +21,7 @@ import {
 } from "./index";
 import type { BrunoTableColumns, BrunoTableQuickFilterFields, BrunoTableValueType } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { BrunoTableGridRuntime, createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import { brunoTableTestSemanticQueryKey } from "./internal/server-semantic-key.test-support";
 import {
@@ -300,6 +301,46 @@ function serverProps(
 afterEach(async () => cleanup());
 
 describe("BrunoTableServer", () => {
+  test("uses TanStack held Shift for pointer multi-sort without raw mouse modifiers", async () => {
+    const transport = makeViewport(1);
+    const commands = vi.fn();
+    const removeListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_SERVER_HELD_SHIFT_SORT",
+      commands,
+    );
+    try {
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_HELD_SHIFT_SORT")}
+        />,
+      );
+      const priceSort = screen.getByRole("button", { name: "Sort by Price" });
+
+      await userEvent.keyboard("{Shift>}");
+      priceSort
+        .element()
+        .dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: false }),
+        );
+      await userEvent.keyboard("{/Shift}");
+
+      await expect
+        .element(
+          screen.getByRole("button", {
+            name: "Sort by Price, currently ascending, priority 2",
+          }),
+        )
+        .toBeInTheDocument();
+      expect(commands).toHaveBeenLastCalledWith({
+        type: "column.sort.toggle",
+        columnId: "COL_ID_PRICE",
+        multi: true,
+      });
+    } finally {
+      removeListener();
+    }
+  });
+
   test("installs no ordinary Row Selection UI or dormant checkbox surface", async () => {
     const transport = makeViewport(1);
     const screen = await render(

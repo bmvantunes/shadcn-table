@@ -334,6 +334,9 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       source: `function adapter(event: KeyboardEvent) { return event.getModifierState("Shift"); }`,
       mode: "adapter",
     },
+    {
+      source: `function pointer(event: MouseEvent | PointerEvent | WheelEvent) { return event.shiftKey || event.ctrlKey; }`,
+    },
   ].map(async ({ source, lang = "ts", mode = "production" }) => ({
     ast: await parseAstAsync(source, { lang }),
     mode,
@@ -343,9 +346,6 @@ const keyboardBoundaryAllowedSmokes = await Promise.all(
   [
     {
       source: `function domain(entry: { key: string }) { const { key } = entry; return entry.key === key; }`,
-    },
-    {
-      source: `function pointer(event: MouseEvent | PointerEvent | WheelEvent) { return event.shiftKey || event.ctrlKey; }`,
     },
     {
       source: `function adapter(event: KeyboardEvent) { return event.isComposing; }`,
@@ -840,6 +840,18 @@ function assertKeyboardBoundary(ast, label, mode) {
       )} interpretation inside an approved evidence boundary`;
       return;
     }
+    if (
+      mode === "production" &&
+      ((node.type === "MemberExpression" && isRawModifierProperty(memberPropertyName(node))) ||
+        (node.type === "Property" &&
+          parent?.type === "ObjectPattern" &&
+          isRawModifierProperty(propertyName(node))))
+    ) {
+      violation = `manual ${String(
+        node.type === "MemberExpression" ? memberPropertyName(node) : propertyName(node),
+      )} modifier interpretation outside the React Hotkeys Adapter`;
+      return;
+    }
   });
   if (violation !== undefined) {
     throw new Error(`${label} violates the BrunoTable keyboard boundary: ${String(violation)}.`);
@@ -909,6 +921,10 @@ function isKeyboardInterpretationProperty(name) {
     "shiftKey",
     "getModifierState",
   ].includes(name ?? "");
+}
+
+function isRawModifierProperty(name) {
+  return ["ctrlKey", "metaKey", "altKey", "shiftKey", "getModifierState"].includes(name ?? "");
 }
 
 function staticStringValue(node) {

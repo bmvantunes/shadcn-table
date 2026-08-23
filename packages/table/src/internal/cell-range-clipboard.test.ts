@@ -208,6 +208,8 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
         restored += 1;
       },
       () => false,
+      undefined,
+      true,
     );
     expect(range.isPointerGestureActive()).toBe(true);
     expect(activated.at(-1)).toMatchObject({ rowId: "ROW_B", columnId: "COL_ID_D" });
@@ -267,6 +269,8 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       vi.fn(),
       vi.fn(),
       () => false,
+      undefined,
+      true,
     );
     expect(range.getSnapshot().range?.columnIds).toEqual(["COL_ID_B", "COL_ID_C"]);
     let publications = 0;
@@ -351,6 +355,8 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
       activated,
       vi.fn(),
       () => false,
+      undefined,
+      true,
     );
 
     expect(range.getSnapshot()).toEqual({ anchor: { rowId: "ROW_B", columnId: "COL_ID_B" } });

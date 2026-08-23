@@ -211,9 +211,9 @@ type BrunoTableColumnPointerDownHandler = (
   kind: "resize" | "reorder",
 ) => void;
 const INTERACTIVE_DESCENDANT_SELECTOR =
-  'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
+  'a[href],area[href],button,input,label,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
 const INTERACTIVE_ROLE_SELECTOR =
-  '[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"]';
+  '[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"],[role="radio"],[role="spinbutton"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="tab"],[role="treeitem"]';
 const CELL_RANGE_POINTER_EXCLUSION_SELECTOR = `${INTERACTIVE_DESCENDANT_SELECTOR},${INTERACTIVE_ROLE_SELECTOR}`;
 const EMBEDDED_BROWSING_CONTEXT_SELECTOR = "iframe,object,embed";
 const VISUALLY_HIDDEN: CSSProperties = {
@@ -2178,10 +2178,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   ): void => {
     if (!ownsGridSurface(event)) return;
     event.preventDefault();
-    navigation.activateForFocus();
-    const current = navigation.getSnapshot();
     const currentRange = cellRange?.getSnapshot().range;
     const extendingRange = extendCellRange && cellRange !== undefined;
+    if (extendingRange && currentRange !== undefined && cellRangeStructure !== undefined) {
+      const rowIndex = cellRangeStructure.rowIndexById.get(currentRange.focus.rowId);
+      if (rowIndex !== undefined) {
+        navigation.activateBody(rowIndex, currentRange.focus.rowId, currentRange.focus.columnId);
+      }
+    } else {
+      navigation.activateForFocus();
+    }
+    const current = navigation.getSnapshot();
     if (
       extendingRange &&
       current?.region === "body" &&
@@ -2362,6 +2369,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       },
       (physicalDelta) => scrollByLogical(horizontalLogicalSign * physicalDelta),
       currentActive,
+      isBrunoTableHotkeyHeld("Shift"),
     );
   };
   const runColumnResize = (
@@ -2502,6 +2510,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     );
   };
   useBrunoTableGridHotkeys(gridElement, {
+    documentEscapeActive: () => columnGesture.current !== undefined,
     escape: (event) => {
       if (cellRange?.cancelPointerGesture() === true) {
         event.preventDefault();
@@ -2567,7 +2576,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
         />
       ) : null}
-      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter />}
+      <BrunoTableHeldShiftHotkeyAdapter />
       <div
         ref={attachGrid}
         data-bruno-scroll-owner=""
@@ -3547,9 +3556,9 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               event.preventDefault();
               activateHeaderCommand(column.columnId);
             }}
-            onClick={(event) => {
+            onClick={() => {
               activateHeaderCommand(column.columnId);
-              toggleHeaderSort(column.columnId, event.shiftKey);
+              toggleHeaderSort(column.columnId, isBrunoTableHotkeyHeld("Shift"));
             }}
           >
             <span className="truncate">{column.headerName}</span>

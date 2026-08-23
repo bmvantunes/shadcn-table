@@ -9378,10 +9378,12 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("columnheader", { name: "Score" }))
       .toHaveTextContent("↓1");
 
+    await userEvent.keyboard("{Shift>}");
     screen
       .getByRole("button", { name: "Sort by Name" })
       .element()
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: false }));
+    await userEvent.keyboard("{/Shift}");
     await expect
       .element(screen.getByRole("columnheader", { name: "Score" }))
       .toHaveAttribute("aria-sort", "descending");

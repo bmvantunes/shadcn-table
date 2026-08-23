@@ -2896,22 +2896,11 @@ describe("BrunoTable column management browser surface", () => {
       (event) => inactiveEvents.push(event),
     );
     try {
-      const ownerColumns = [
-        columns[0],
-        columns[1],
-        {
-          ...columns[2],
-          cellRenderer: () => <input aria-label="Owner gesture focus destination" />,
-        },
-      ] as const satisfies BrunoTableColumns<Row>;
       const screen = await render(
         <>
-          <BrunoTableClient<Row, typeof ownerColumns>
-            {...tableProps}
-            columns={ownerColumns}
-            tableId={ownerTableId}
-          />
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={ownerTableId} />
           <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
+          <input aria-label="Outside gesture focus destination" />
         </>,
       );
       const ownerRegion = screen.getByRole("region", { name: ownerTableId, exact: true });
@@ -2923,9 +2912,8 @@ describe("BrunoTable column management browser surface", () => {
       const inactiveHeader = inactiveRegion
         .getByRole("columnheader", { name: /Status/u })
         .element();
-      const destination = ownerRegion
-        .getByRole("textbox", { name: "Owner gesture focus destination" })
-        .first()
+      const destination = screen
+        .getByRole("textbox", { name: "Outside gesture focus destination" })
         .element();
 
       ownerHandle.dispatchEvent(

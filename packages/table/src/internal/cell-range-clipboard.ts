@@ -426,6 +426,7 @@ export class BrunoTableCellRangeRuntime {
     restoreActive: () => void,
     scrollHorizontalByPhysical: (delta: number) => boolean,
     currentActive?: BrunoTableCellCoordinate,
+    extend = false,
   ): boolean => {
     const structure = this.structure;
     const view = grid.ownerDocument.defaultView;
@@ -475,7 +476,7 @@ export class BrunoTableCellRangeRuntime {
       },
     });
     event.preventDefault();
-    const next = event.shiftKey
+    const next = extend
       ? this.snapshot.range !== undefined
         ? this.extend(hit, structure)
         : currentActive !== undefined && containsCoordinate(structure, currentActive)

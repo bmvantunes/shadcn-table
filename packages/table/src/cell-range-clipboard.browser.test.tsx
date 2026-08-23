@@ -165,13 +165,14 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
 
       await userEvent.click(page.getByRole("gridcell", { name: "Ada" }));
       const curie = page.getByRole("gridcell", { name: "Curie" });
+      await userEvent.keyboard("{Shift>}");
       curie.element().dispatchEvent(
         new PointerEvent("pointerdown", {
           bubbles: true,
           cancelable: true,
           button: 0,
           pointerId: 11,
-          shiftKey: true,
+          shiftKey: false,
         }),
       );
       curie.element().dispatchEvent(
@@ -179,9 +180,10 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           bubbles: true,
           cancelable: true,
           pointerId: 11,
-          shiftKey: true,
+          shiftKey: false,
         }),
       );
+      await userEvent.keyboard("{/Shift}");
       await settleBrunoTableBrowserFrames();
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes.at(-1)).toBe("Ada\nBabbage\nCurie"));
@@ -321,6 +323,68 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     },
   );
 
+  test("resumes a retained range from its exact focus after Active Cell resets inside the span", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_RETAINED_FOCUS";
+    const writes: string[] = [];
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    try {
+      await render(
+        <BrunoTableClient
+          tableId={tableId}
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={source()}
+          getRowId={(row) => row.id}
+          quickFilterFields={["name"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}");
+      await userEvent.fill(page.getByRole("searchbox", { name: "Quick Filter" }), "a");
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          page.getByRole("gridcell", { name: "Ada" }).element().id,
+        ),
+      );
+      events.length = 0;
+
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        page.getByRole("gridcell", { name: "4", exact: true }).element().id,
+      );
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "4", exact: true }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "9007199254740993 displayed", exact: true }))
+        .not.toHaveAttribute("aria-selected");
+      expect(events.filter((event) => event.kind === "publication")).toHaveLength(1);
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["Ada\t4"]));
+    } finally {
+      removeInstrumentation();
+      restoreClipboard();
+    }
+  });
+
   test("copies a retained range after committed sorting clears the body Active Cell", async () => {
     const writes: string[] = [];
     const restoreClipboard = installClipboard(async (text) => {
@@ -342,6 +406,9 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       grid.element().focus();
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes).toEqual(["Ada\t4"]));
+      await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes.at(-1)).toBe("Ada\t4\t9007199254740993"));
       await userEvent.keyboard("{Escape}");
       await settleBrunoTableBrowserFrames();
       await expect
@@ -356,7 +423,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       grid.element().focus();
       await userEvent.keyboard(copyGesture());
       await settleBrunoTableBrowserFrames();
-      expect(writes).toEqual(["Ada\t4"]);
+      expect(writes).toEqual(["Ada\t4", "Ada\t4\t9007199254740993"]);
     } finally {
       restoreClipboard();
     }
@@ -693,13 +760,14 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       name: "9007199254740997 displayed",
       exact: true,
     });
+    await userEvent.keyboard("{Shift>}");
     curieQuantity.element().dispatchEvent(
       new PointerEvent("pointerdown", {
         bubbles: true,
         cancelable: true,
         button: 0,
         pointerId: 28,
-        shiftKey: true,
+        shiftKey: false,
       }),
     );
     curieQuantity.element().dispatchEvent(
@@ -707,13 +775,58 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         bubbles: true,
         cancelable: true,
         pointerId: 28,
-        shiftKey: true,
+        shiftKey: false,
       }),
     );
+    await userEvent.keyboard("{/Shift}");
     await settleBrunoTableBrowserFrames();
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(babbageScore.element().id);
     await expect.element(babbageScore).toHaveAttribute("aria-selected", "true");
     await expect.element(curieQuantity).not.toHaveAttribute("aria-selected");
+  });
+
+  test("keeps native label interaction outside Cell Range ownership", async () => {
+    const changed = vi.fn();
+    const labelColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        width: 180,
+        cellRenderer: ({ row }: { readonly row: Row }) => (
+          <label>
+            <input
+              aria-label={`Toggle ${row.name}`}
+              type="checkbox"
+              onChange={() => changed(row.id)}
+            />
+            <span role="note" aria-label={`Toggle ${row.name} label`}>
+              Toggle {row.name}
+            </span>
+          </label>
+        ),
+      },
+      columns[1]!,
+      columns[2]!,
+    ] satisfies BrunoTableColumns<Row>;
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_CELL_RANGE_NATIVE_LABEL"
+        columns={labelColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={source()}
+        getRowId={(row) => row.id}
+      />,
+    );
+    const checkbox = page.getByRole("checkbox", { name: "Toggle Ada" });
+    await userEvent.click(page.getByRole("note", { name: "Toggle Ada label" }));
+    await settleBrunoTableBrowserFrames();
+    expect(changed).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledWith("ada");
+    expect(document.activeElement).toBe(checkbox.element());
+    const selectedCells = page.getByRole("gridcell", { selected: true }).all();
+    expect(selectedCells).toHaveLength(0);
   });
 
   test("does not start a range gesture from focusable custom cell content", async () => {
@@ -1616,6 +1729,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{/Shift}");
       const babbage = page.getByRole("gridcell", { name: "Babbage" });
       const bounds = babbage.element().getBoundingClientRect();
+      await userEvent.keyboard("{Shift>}");
       babbage.element().dispatchEvent(
         new PointerEvent("pointerdown", {
           bubbles: true,
@@ -1624,9 +1738,10 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           clientX: bounds.left + bounds.width / 2,
           clientY: bounds.top + bounds.height / 2,
           pointerId: 47,
-          shiftKey: true,
+          shiftKey: false,
         }),
       );
+      await userEvent.keyboard("{/Shift}");
 
       await screen.rerender(
         table(

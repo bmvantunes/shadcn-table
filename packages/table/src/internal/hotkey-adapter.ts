@@ -43,6 +43,7 @@ export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
 ] satisfies readonly Hotkey[]);
 
 export type BrunoTableGridHotkeyCommands = Readonly<{
+  documentEscapeActive?: (() => boolean) | undefined;
   escape: (event: BrunoTableHotkeyGesture) => void;
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
@@ -433,10 +434,13 @@ export function useBrunoTableGridHotkeys(
         : null;
   });
   const bindings = createBrunoTableGridHotkeyBindings(commands);
-  const ownerScopedBindings = bindings.map((binding) => ({
+  const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
     onTrigger: (event: BrunoTableHotkeyGesture) => {
-      if (!ownsBrunoTableHotkeyTarget(target.current, event.target)) return;
+      const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
+      const ownsActiveDocumentGesture =
+        index < BRUNO_TABLE_ESCAPE_HOTKEYS.length && commands.documentEscapeActive?.() === true;
+      if (!ownsTarget && !ownsActiveDocumentGesture) return;
       binding.onTrigger(event);
     },
   }));
