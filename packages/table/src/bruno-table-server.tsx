@@ -57,6 +57,13 @@ export type {
   BrunoTableGridFilterCommandCapability,
 } from "./internal/toolbar-capabilities";
 
+type BrunoTableServerFacetHookSource = Readonly<{
+  readonly useWholeResult: (...arguments_: never[]) => unknown;
+  readonly viewport: unknown;
+}>;
+
+const brunoTableServerFacetSources = new WeakMap<object, BrunoTableServerFacetHookSource>();
+
 export function BrunoTableServer<
   TViewport,
   const TColumns extends BrunoTableColumns<LiveQueryViewportBaseRow<TViewport>>,
@@ -112,11 +119,12 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
     [props.quickFilterFields],
   );
+  const facetSource = getBrunoTableServerFacetHookSource(props.viewportSource);
   const facetInputsRef = useRef({
     externalFilters: props.externalFilters,
     quickFilterFields,
     routeBy: props.routeBy,
-    source: props.viewportSource,
+    source: facetSource,
   });
   const [facetRuntime] = useState(
     () =>
@@ -127,7 +135,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         routeBy: props.routeBy,
         runtime: runtimeView,
         semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
-        source: props.viewportSource,
+        source: facetSource,
         transportIdentity: props.viewportSource.viewport,
       }),
   );
@@ -141,9 +149,9 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     props.externalFilters,
     props.quickFilterFields,
     props.routeBy,
-    props.viewportSource,
     props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
+    facetSource,
   ]);
 
   useLayoutEffect(() => {
@@ -175,7 +183,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       externalFilters: props.externalFilters,
       quickFilterFields,
       routeBy: props.routeBy,
-      source: props.viewportSource,
+      source: facetSource,
     };
     rowPipelineAdapter.replace(
       props.viewportSource.viewport,
@@ -192,11 +200,11 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     });
   }, [
     compiledColumns,
+    facetSource,
     facetRuntime,
     props.externalFilters,
     props.quickFilterFields,
     props.routeBy,
-    props.viewportSource,
     props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
     quickFilterFields,
@@ -280,6 +288,28 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       </BrunoTableClientFilterProvider>
     </BrunoTableServerFacetProvider>
   );
+}
+
+function getBrunoTableServerFacetHookSource(
+  source: BrunoTableServerFacetHookSource,
+): BrunoTableServerFacetHookSource {
+  if (
+    (typeof source.viewport !== "object" || source.viewport === null) &&
+    typeof source.viewport !== "function"
+  ) {
+    return Object.freeze({
+      useWholeResult: source.useWholeResult,
+      viewport: source.viewport,
+    });
+  }
+  const cached = brunoTableServerFacetSources.get(source.viewport);
+  if (cached !== undefined) return cached;
+  const created = Object.freeze({
+    useWholeResult: source.useWholeResult,
+    viewport: source.viewport,
+  });
+  brunoTableServerFacetSources.set(source.viewport, created);
+  return created;
 }
 
 function stageBrunoTableServerSemanticQuery(

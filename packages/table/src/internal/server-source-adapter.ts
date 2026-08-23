@@ -380,10 +380,15 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const queryPlan = compilePlan(nextInputs);
     this.projectionFields = queryPlan.query.select;
     const transport = requireViewportTransport<TRow>(viewport);
-    const semanticKey = Object.freeze({
-      viewport,
-      query: transport.semanticKey(queryPlan.query),
-    });
+    let semanticKey: ActiveGeneration["semanticKey"];
+    try {
+      semanticKey = Object.freeze({
+        viewport,
+        query: transport.semanticKey(queryPlan.query),
+      });
+    } catch (error) {
+      this.invalidateAfterSemanticKeyFailure(error);
+    }
     if (sameSemanticKey(this.active?.semanticKey, semanticKey)) {
       const active = this.active;
       if (active !== undefined) {
@@ -395,11 +400,16 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.forceNextNavigationReset = false;
       return;
     }
-    const semanticInputsChanged =
-      resetWhenInputsChange &&
-      this.active !== undefined &&
-      this.active.semanticKey.viewport === viewport &&
-      !Object.is(transport.semanticKey(compilePlan(this.active.inputs).query), semanticKey.query);
+    let semanticInputsChanged = false;
+    try {
+      semanticInputsChanged =
+        resetWhenInputsChange &&
+        this.active !== undefined &&
+        this.active.semanticKey.viewport === viewport &&
+        !Object.is(transport.semanticKey(compilePlan(this.active.inputs).query), semanticKey.query);
+    } catch (error) {
+      this.invalidateAfterSemanticKeyFailure(error);
+    }
     const nextNavigationMode =
       semanticInputsChanged ||
       this.forceNextNavigationReset ||
@@ -474,6 +484,25 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
 
   public getSemanticIdentity(): unknown {
     return this.active?.semanticKey;
+  }
+
+  private invalidateAfterSemanticKeyFailure(error: unknown): never {
+    const previous = this.active;
+    this.active = undefined;
+    this.dispatchedWindow = undefined;
+    this.forceNextNavigationReset = true;
+    if (previous !== undefined) {
+      this.store.invalidateGeneration(previous.token);
+      this.generationReleased = true;
+      preservePrimaryFailure(() => previous.controller.release());
+    }
+    this.suppressStorePublication = false;
+    this.alignObservedStoreSnapshot();
+    this.publication = this.createPublication();
+    preservePrimaryFailure(() => this.reconcileStructureSnapshot());
+    preservePrimaryFailure(() => this.publishResultRowCount(this.source.totalRows));
+    preservePrimaryFailure(() => notify(this.listeners));
+    throw error;
   }
 
   public readonly setRequiredRange = (start: number, end: number): void => {
@@ -780,8 +809,8 @@ function preservePrimaryFailure(operation: () => void): void {
   try {
     operation();
   } catch {
-    // The controller release failure is primary. Reconciliation is still attempted, but a
-    // subscriber failure must not replace the source transport error.
+    // Cleanup remains best-effort after a source failure; a secondary release, reconciliation,
+    // or subscriber failure must not replace the primary transport error.
   }
 }
 

@@ -762,16 +762,21 @@ describe("BrunoTableServer", () => {
       }
     });
     try {
-      const screen = await render(
+      const table = (
+        useWholeResult: (query: unknown) => ReturnType<typeof browserWholeResult>,
+        version = 1,
+      ) => (
         <BrunoTableServer
           {...serverProps(transport.viewport, "ready")}
           columns={serverFilterColumns}
           viewportSource={{
             ...serverProps(transport.viewport, "ready").viewportSource,
-            useWholeResult: wholeResult.useWholeResult,
+            useWholeResult,
+            version,
           }}
-        />,
+        />
       );
+      const screen = await render(table(wholeResult.useWholeResult));
       await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
       const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
       await expect
@@ -783,6 +788,14 @@ describe("BrunoTableServer", () => {
       const requestCount = transport.requests.length;
       const subscriptionCount = wholeResult.subscriptions.length;
       const releaseCount = wholeResult.releases.length;
+      await screen.rerender(table((query: unknown) => wholeResult.useWholeResult(query), 2));
+      await settleBrunoTableBrowserFrames();
+      expect(transport.semanticKey).not.toHaveBeenCalled();
+      expect(transport.requests).toHaveLength(requestCount);
+      expect(wholeResult.subscriptions).toHaveLength(subscriptionCount);
+      expect(wholeResult.releases).toHaveLength(releaseCount);
+      await expect.element(dialog).toBeInTheDocument();
+      wholeResult.useWholeResult.mockClear();
       expect(
         runtime?.dispatchGridCommand({
           type: "column.resize.commit",
@@ -900,17 +913,26 @@ describe("BrunoTableServer", () => {
     expect(transport.windows.at(-1)?.firstRow).toBeLessThanOrEqual(50);
     expect(transport.windows.at(-1)?.lastRow).toBeGreaterThanOrEqual(50);
     const loadingScrollTop = grid.element().scrollTop;
+    transport.requests[0]?.sink.setRowData({ 50: { symbol: "READY", price: 50 } }, { 50: "ready" });
+    transport.semanticKey.mockClear();
 
     await screen.rerender(
       <BrunoTableServer
         {...serverProps(transport.viewport, "ready")}
-        viewportSource={{ ...source, status: "ready", version: 2 }}
+        viewportSource={{
+          ...source,
+          status: "ready",
+          useWholeResult: () => browserWholeResult(),
+          version: 2,
+        }}
       />,
     );
     await settleBrunoTableBrowserFrames();
     expect(screen.getByRole("grid").element()).toBe(grid.element());
     expect(grid.element().scrollTop).toBe(loadingScrollTop);
+    await expect.element(grid).not.toHaveAttribute("aria-busy", "true");
     expect(transport.requests).toHaveLength(1);
+    expect(transport.semanticKey).not.toHaveBeenCalled();
   });
 
   test("copies only a loaded Server Active Cell through canonical value semantics", async () => {

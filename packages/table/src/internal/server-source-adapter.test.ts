@@ -637,6 +637,87 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(recovered.replace).toHaveBeenCalledTimes(1);
   });
 
+  it("invalidates a generation whose source semantic identity throws", () => {
+    const failure = new Error("semantic key failed");
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const firstSink = transport.getRequest()!.sink;
+    firstSink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    transport.semanticKey.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    expect(() =>
+      adapter.replace(transport.viewport, {
+        ...query,
+        filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" }],
+      }),
+    ).toThrow(failure);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
+  it("invalidates when comparing the prior source semantic identity throws", () => {
+    const failure = new Error("prior semantic key failed");
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const firstSink = transport.getRequest()!.sink;
+    firstSink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    transport.semanticKey
+      .mockImplementationOnce(() => Object.freeze({ changed: true }))
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+
+    expect(() =>
+      adapter.replace(
+        transport.viewport,
+        {
+          ...query,
+          filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" }],
+        },
+        {
+          routeBy: undefined,
+          externalFilters: [{ field: "price", type: "greaterThan", filter: 10 }],
+          visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+        },
+        true,
+      ),
+    ).toThrow(failure);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
   it("best-effort releases a partially valid generation before rejecting it", () => {
     const release = vi.fn(() => {
       throw new Error("secondary release failure");
