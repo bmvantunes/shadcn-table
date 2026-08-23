@@ -68,6 +68,12 @@ function makeViewport<TRow = Row>() {
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("keeps bigint semantic keys distinct from numeric-looking strings", () => {
+    expect(brunoTableTestSemanticQueryKey({ filter: 1n })).not.toBe(
+      brunoTableTestSemanticQueryKey({ filter: "1n" }),
+    );
+  });
+
   it("owns semantic replacement and keeps window movement inside one generation", () => {
     const transport = makeViewport();
     const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
@@ -1454,6 +1460,58 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.release).toHaveBeenCalledTimes(1);
     expect(transport.getRequest()?.query).toMatchObject({ select: completeRawSelect });
+  });
+
+  it("records visibility after a semantic no-op for later column reconciliation", () => {
+    const transport = makeViewport();
+    const initialColumns = compileColumns([
+      columns[0]!,
+      {
+        columnId: "COL_ID_DERIVED",
+        fields: ["symbol"],
+        headerName: "Derived",
+        valueType: "number",
+        valueGetter: () => 0,
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      initialColumns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+
+    adapter.replace(transport.viewport, query, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_SYMBOL"],
+    });
+    adapter.replace(
+      transport.viewport,
+      { ...query, generation: 1 },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_DERIVED"],
+      },
+    );
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+
+    adapter.reconcileColumns(
+      compileColumns([
+        columns[0]!,
+        {
+          columnId: "COL_ID_DERIVED",
+          fields: ["price"],
+          headerName: "Derived",
+          valueType: "number",
+          valueGetter: () => 0,
+        },
+      ]),
+      undefined,
+    );
+
+    expect(transport.release).toHaveBeenCalledTimes(1);
   });
 
   it("keeps hidden computed and raw-row presentation dormant during equivalent deliveries", () => {

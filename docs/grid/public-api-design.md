@@ -229,7 +229,8 @@ type BrunoTableServerProps<
   TViewport = unknown,
 > = BrunoTableBaseProps<TRow, TColumns> &
   BrunoTableSortingCapability<TColumns> &
-  BrunoTableGroupingCapability<TColumns> & {
+  BrunoTableGroupingCapability<TColumns> &
+  BrunoTableServerRouteCapability<ExactSourceRoute<TViewport>> & {
     getRowId?: never;
     // The source-owned base-row witness must be exactly TRow, and the source envelope carries its
     // authoritative completeRawSelect tuple for truthful raw-row presentation callbacks.
@@ -239,6 +240,10 @@ type BrunoTableServerProps<
     getRowVersion?: never;
     onSaveEdits?: never;
   };
+
+type BrunoTableServerRouteCapability<TRouteBy> = [TRouteBy] extends [never]
+  ? { routeBy?: never }
+  : { routeBy: TRouteBy };
 
 // The abbreviated shape above omits the conditional only for readability. The real Props type
 // requires LiveQueryViewportBaseRow<TViewport> to be exactly TRow in both directions; the source
@@ -266,7 +271,11 @@ type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
 
 type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
-  /** Source-owned whole-result hook active only while a Server Set Filter overlay is open. */
+  /**
+   * Source-owned hook active only while a Server Set Filter overlay is open. The private Adapter
+   * supplies its grouped, unwindowed Query and consumes the complete grouped facet result; the
+   * source Query type stays opaque to BrunoTable consumers.
+   */
   readonly useWholeResult: (...arguments_: never[]) => unknown;
   readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };

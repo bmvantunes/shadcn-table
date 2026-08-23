@@ -372,7 +372,16 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       viewport,
       query: transport.semanticKey(queryPlan.query),
     });
-    if (sameSemanticKey(this.active?.semanticKey, semanticKey)) return;
+    if (sameSemanticKey(this.active?.semanticKey, semanticKey)) {
+      const active = this.active;
+      if (active !== undefined) {
+        this.active = Object.freeze({
+          ...active,
+          inputs: nextInputs,
+        });
+      }
+      return;
+    }
     const semanticInputsChanged =
       resetWhenInputsChange &&
       this.active !== undefined &&
