@@ -2065,8 +2065,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return false;
     }
     return (
-      event.target.closest("[data-bruno-row-selection-select-all]")?.closest('[role="grid"]') ===
-      grid
+      event.target.closest("[data-bruno-row-selection-checkbox]")?.closest('[role="grid"]') === grid
     );
   };
   const resolveEventColumn = (event: BrunoTableHotkeyGesture): CompiledColumn | undefined => {
@@ -2845,11 +2844,19 @@ const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHea
   readonly selection: BrunoTableRowSelectionRuntime;
   readonly tableId: string;
 }) {
+  const checkbox = useRef<HTMLSpanElement | null>(null);
   const snapshot = useSyncExternalStore(
     selection.subscribeHeader,
     selection.getHeaderSnapshot,
     selection.getHeaderSnapshot,
   );
+  useLayoutEffect(() => {
+    const element = checkbox.current;
+    if (!snapshot.disabled || element === null || element.ownerDocument.activeElement !== element) {
+      return;
+    }
+    element.closest<HTMLElement>('[role="grid"]')?.focus({ preventScroll: true });
+  }, [snapshot.disabled]);
   return (
     <th
       aria-colindex={1}
@@ -2862,10 +2869,11 @@ const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHea
         <BrunoTableRowSelectionCommitDiagnosticProbe commitEvidence={snapshot} tableId={tableId} />
       ) : null}
       <Checkbox
+        ref={checkbox}
         aria-label="Select all rows"
         aria-keyshortcuts="Control+A Meta+A"
         checked={snapshot.checked}
-        data-bruno-row-selection-select-all=""
+        data-bruno-row-selection-checkbox=""
         disabled={snapshot.disabled}
         indeterminate={snapshot.mixed}
         onClick={() => selection.toggleAll(!snapshot.checked)}
@@ -3093,6 +3101,7 @@ const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
       <Checkbox
         aria-label={`Select row ${String(logicalRowIndex + 1)}`}
         checked={checked}
+        data-bruno-row-selection-checkbox=""
         onClick={(event) =>
           selection.toggleRow(
             rowId,

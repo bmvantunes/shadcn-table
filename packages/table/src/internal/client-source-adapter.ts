@@ -451,6 +451,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
     const emptySourceRowIdsSnapshot = Object.freeze({
+      authoritative: false,
       rowIds: EMPTY_ROWS,
       token: EMPTY_PERSISTENT_SEQUENCE.token,
     });
@@ -462,7 +463,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       const rowIds = coherent?.rowIds ?? EMPTY_PERSISTENT_SEQUENCE;
       sourceRowIdsByRows.set(
         rows,
-        Object.freeze({ rowIds: rowIds.asArray(), token: rowIds.token }),
+        Object.freeze({
+          authoritative: coherent !== undefined,
+          rowIds: rowIds.asArray(),
+          token: rowIds.token,
+        }),
       );
     };
     registerSourceRowIds(snapshot, installedCoherent);
@@ -578,6 +583,7 @@ export type BrunoTableClientRowsStore = Readonly<{
 }>;
 
 export type BrunoTableClientSourceRowIdsSnapshot = Readonly<{
+  readonly authoritative: boolean;
   readonly rowIds: readonly BrunoTableRowId[];
   readonly token: object;
 }>;

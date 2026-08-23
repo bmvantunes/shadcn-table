@@ -4611,6 +4611,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const rowsStore = adapter.createRowsStore(view, () => () => true);
     rowsStore.subscribe(() => undefined);
     const initialSource = rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot());
+    expect(initialSource.authoritative).toBe(true);
 
     runtime.publish(adapter.publish(source([{ ...first, note: "updated" }, second])));
 
@@ -4626,6 +4627,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     );
 
     const revisedSource = rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot());
+    expect(revisedSource.authoritative).toBe(true);
     expect(revisedSource.token).not.toBe(initialSource.token);
     expect(Array.from(revisedSource.rowIds)).toEqual(["replacement", "second"]);
   });

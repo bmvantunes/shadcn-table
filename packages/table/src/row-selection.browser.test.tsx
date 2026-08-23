@@ -57,8 +57,10 @@ describe("ordinary Client Row Selection", () => {
     await expect.element(ada).toBeChecked();
     await expect.element(selectAll).toHaveAttribute("data-indeterminate", "");
     await expect.element(selectAll).toHaveAttribute("aria-checked", "mixed");
-
-    await userEvent.click(selectAll);
+    expect(ada.element().ownerDocument.activeElement).toBe(ada.element());
+    await userEvent.keyboard(
+      detectPlatform() === "mac" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+    );
     await expect.element(selectAll).toBeChecked();
     await expect.element(page.getByRole("checkbox", { name: "Select row 3" })).toBeChecked();
 
@@ -591,6 +593,82 @@ describe("ordinary Client Row Selection", () => {
     });
     expect(grid.dispatchEvent(event)).toBe(false);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  test("returns focus to the grid when a live projection disables focused Select All", async () => {
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_DISABLE_FOCUS"
+        columns={columns}
+        initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }]}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+    const selectAll = page.getByRole("checkbox", { name: "Select all rows" });
+    await userEvent.click(selectAll);
+    expect(selectAll.element().ownerDocument.activeElement).toBe(selectAll.element());
+
+    const changedRows = rows.map((row) => (row.id === "a" ? { ...row, name: "Lovelace" } : row));
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_DISABLE_FOCUS"
+        columns={columns}
+        initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "Ada" }]}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: changedRows, totalRows: rows.length, version: 2, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect.element(selectAll).toBeDisabled();
+    expect(selectAll.element().ownerDocument.activeElement).toBe(
+      page.getByRole("grid", { name: "Data for TABLE_ID_ROW_SELECTION_DISABLE_FOCUS" }).element(),
+    );
+  });
+
+  test("preserves selection across a rejected row-count publication", async () => {
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_REJECTED_COUNT"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+    await userEvent.click(page.getByRole("checkbox", { name: "Select row 1" }));
+
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_REJECTED_COUNT"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length + 1, version: 2, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await expect.element(page.getByRole("alert")).toHaveTextContent("Expected 4 rows");
+
+    await screen.rerender(
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_REJECTED_COUNT"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 3, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+      />,
+    );
+    await settleBrunoTableBrowserFrames();
+    await expect.element(page.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
   });
 
   test("keeps simultaneous and Strict Mode table lifetimes isolated", async () => {

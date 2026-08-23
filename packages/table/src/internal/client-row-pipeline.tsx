@@ -168,8 +168,18 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
     rowPipelineAdapter.publishResultRowCount(nextRowIds.length);
-    rowSelection?.reconcile(sourceRowIds.rowIds, nextRowIds, sourceRowIds.token);
-  }, [nextRowIds, orderStore, queryGeneration, rowPipelineAdapter, rowSelection, sourceRowIds]);
+    if (sourceRowIds.authoritative) {
+      rowSelection?.reconcile(sourceRowIds.rowIds, nextRowIds, sourceRowIds.token);
+    }
+  }, [
+    invalid,
+    nextRowIds,
+    orderStore,
+    queryGeneration,
+    rowPipelineAdapter,
+    rowSelection,
+    sourceRowIds,
+  ]);
   const orderSnapshot = useSyncExternalStore(
     orderStore.subscribe,
     orderStore.getSnapshot,
