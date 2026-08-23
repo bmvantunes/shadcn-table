@@ -215,6 +215,51 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     expect(restored).toBe(0);
   });
 
+  it("clears a transient drag when its pre-gesture identity span is invalidated", () => {
+    const range = new BrunoTableCellRangeRuntime();
+    range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);
+    range.extend({ rowId: "ROW_B", columnId: "COL_ID_D" }, structure);
+    const requestAnimationFrame = vi.fn(() => 1);
+    const view = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame,
+      cancelAnimationFrame: vi.fn(),
+    } as unknown as Window;
+    range.startPointerGesture(
+      {
+        button: 0,
+        clientX: 0,
+        clientY: 0,
+        pointerId: 46,
+        shiftKey: true,
+        target: null,
+        preventDefault: vi.fn(),
+      } as unknown as PointerEvent,
+      { rowId: "ROW_B", columnId: "COL_ID_C", rowIndex: 1 },
+      gestureGrid(view),
+      vi.fn(),
+      vi.fn(),
+      () => false,
+    );
+    expect(range.getSnapshot().range?.columnIds).toEqual(["COL_ID_B", "COL_ID_C"]);
+    let publications = 0;
+    range.subscribe(() => {
+      publications += 1;
+    });
+
+    range.reconcile(
+      createBrunoTableCellRangeStructure(structure.rowIds, ["COL_ID_A", "COL_ID_B", "COL_ID_C"]),
+    );
+
+    expect(range.getPointerGestureSnapshot()).toMatchObject({ value: "idle" });
+    expect(range.getSnapshot()).toEqual({});
+    expect(publications).toBe(1);
+    expect(range.consumeStructuralInvalidation()).toBe(true);
+    expect(range.consumeStructuralInvalidation()).toBe(false);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
   it("projects a tied diagonal Shift pointer start back to the visible anchor", () => {
     const range = new BrunoTableCellRangeRuntime();
     range.replace({ rowId: "ROW_B", columnId: "COL_ID_B" }, structure);

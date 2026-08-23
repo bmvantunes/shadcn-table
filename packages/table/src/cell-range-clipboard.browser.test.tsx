@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { BrunoTableClient } from "./index";
+import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import {
   installBrunoTableCellRangeInstrumentationListener,
@@ -248,6 +248,93 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     }
   });
 
+  test("reseeds a surviving anchor from the reset Active Cell before the first Shift extension", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_QUERY_RESET_ANCHOR";
+    const writes: string[] = [];
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    try {
+      await render(
+        <BrunoTableClient
+          tableId={tableId}
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={source()}
+          getRowId={(row) => row.id}
+          quickFilterFields={["name"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>,
+      );
+      await userEvent.click(page.getByRole("gridcell", { name: "Babbage" }));
+      await userEvent.fill(page.getByRole("searchbox", { name: "Quick Filter" }), "a");
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          page.getByRole("gridcell", { name: "Ada" }).element().id,
+        ),
+      );
+      events.length = 0;
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
+      await settleBrunoTableBrowserFrames();
+
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .toHaveAttribute("aria-selected", "true");
+      await expect
+        .element(page.getByRole("gridcell", { name: "Babbage" }))
+        .toHaveAttribute("aria-selected", "true");
+      expect(events.filter((event) => event.kind === "publication")).toHaveLength(1);
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["Ada\nBabbage"]));
+    } finally {
+      removeInstrumentation();
+      restoreClipboard();
+    }
+  });
+
+  test("copies a retained range after committed sorting clears the body Active Cell", async () => {
+    const writes: string[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    try {
+      await render(table("TABLE_ID_CELL_RANGE_COPY_WITHOUT_ACTIVE_BODY"));
+      const grid = page.getByRole("grid", {
+        name: "Data for TABLE_ID_CELL_RANGE_COPY_WITHOUT_ACTIVE_BODY",
+      });
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+      await userEvent.click(page.getByRole("button", { name: "Sort by Score" }));
+      await settleBrunoTableBrowserFrames();
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        page.getByRole("columnheader", { name: "Score" }).element().id,
+      );
+
+      grid.element().focus();
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["Ada\t4"]));
+
+      await userEvent.click(page.getByRole("gridcell", { name: "Ada" }));
+      await userEvent.click(page.getByRole("button", { name: "Sort by Name" }));
+      grid.element().focus();
+      await userEvent.keyboard(copyGesture());
+      await settleBrunoTableBrowserFrames();
+      expect(writes).toEqual(["Ada\t4"]);
+    } finally {
+      restoreClipboard();
+    }
+  });
+
   test("locks pointer drag to the dominant axis after slop and batches mounted work by frame", async () => {
     const events: BrunoTableCellRangeInstrumentationEvent[] = [];
     const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
@@ -425,6 +512,83 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes.at(-1)).toBe("4\n2\n3"));
     } finally {
+      restoreClipboard();
+    }
+  });
+
+  test("projects a distinct release hit without scrolling or scheduling later work", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_POINTER_UP_PROJECTION";
+    const writes: string[] = [];
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    try {
+      await render(table(tableId));
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      const adaScore = page.getByRole("gridcell", { name: "4", exact: true });
+      const babbageScore = page.getByRole("gridcell", { name: "2", exact: true });
+      const curieScore = page.getByRole("gridcell", { name: "3", exact: true });
+      const adaBounds = adaScore.element().getBoundingClientRect();
+      const babbageBounds = babbageScore.element().getBoundingClientRect();
+      const curieBounds = curieScore.element().getBoundingClientRect();
+      const center = (bounds: DOMRect) => ({
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+      });
+
+      adaScore.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          pointerId: 48,
+          ...center(adaBounds),
+        }),
+      );
+      babbageScore.element().dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 48,
+          ...center(babbageBounds),
+        }),
+      );
+      await settleBrunoTableBrowserFrames();
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(babbageScore.element().id);
+      const scrollTopBeforeRelease = grid.element().scrollTop;
+      const scrollLeftBeforeRelease = grid.element().scrollLeft;
+
+      curieScore.element().dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 48,
+          ...center(curieBounds),
+        }),
+      );
+      expect(grid.element().scrollTop).toBe(scrollTopBeforeRelease);
+      expect(grid.element().scrollLeft).toBe(scrollLeftBeforeRelease);
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(curieScore.element().id);
+      await expect.element(adaScore).toHaveAttribute("aria-selected", "true");
+      await expect.element(babbageScore).toHaveAttribute("aria-selected", "true");
+      await expect.element(curieScore).toHaveAttribute("aria-selected", "true");
+      const workAfterRelease = events.filter(
+        (event) => event.kind === "pointer-frame" || event.kind === "publication",
+      ).length;
+      await settleBrunoTableBrowserFrames(3);
+      expect(
+        events.filter((event) => event.kind === "pointer-frame" || event.kind === "publication"),
+      ).toHaveLength(workAfterRelease);
+
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() => expect(writes).toEqual(["4\n2\n3"]));
+    } finally {
+      removeInstrumentation();
       restoreClipboard();
     }
   });
@@ -1236,6 +1400,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           .element(page.getByRole("columnheader", { name: "Wide 8" }))
           .toBeInTheDocument();
 
+        const scrollLeftBeforeRelease = grid.element().scrollLeft;
         target.element().dispatchEvent(
           new PointerEvent("pointerup", {
             bubbles: true,
@@ -1245,6 +1410,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
             pointerId: direction === "rtl" ? 24 : 23,
           }),
         );
+        expect(grid.element().scrollLeft).toBe(scrollLeftBeforeRelease);
         const framesAfterRelease = events.filter((event) => event.kind === "pointer-frame").length;
         expect(framesAfterRelease).toBeGreaterThan(0);
         expect(framesAfterRelease).toBeLessThanOrEqual(110);
@@ -1307,6 +1473,74 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
       await userEvent.keyboard(copyGesture());
       await vi.waitFor(() => expect(writes.at(-1)).toBe("Boole\nCurie"));
     } finally {
+      restoreClipboard();
+    }
+  });
+
+  test("rejects Copy once when a pre-gesture range invalidates after a transient shrink", async () => {
+    const tableId = "TABLE_ID_CELL_RANGE_PRE_GESTURE_INVALIDATION";
+    const writes: string[] = [];
+    const events: BrunoTableCellRangeInstrumentationEvent[] = [];
+    const restoreClipboard = installClipboard(async (text) => {
+      writes.push(text);
+    });
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => events.push(event),
+    );
+    try {
+      const screen = await render(table(tableId));
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      grid.element().focus();
+      await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{/Shift}");
+      const babbage = page.getByRole("gridcell", { name: "Babbage" });
+      const bounds = babbage.element().getBoundingClientRect();
+      babbage.element().dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          pointerId: 47,
+          shiftKey: true,
+        }),
+      );
+
+      await screen.rerender(
+        table(
+          tableId,
+          rows.filter((row) => row.id !== "curie"),
+          2,
+        ),
+      );
+      await settleBrunoTableBrowserFrames();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Ada" }))
+        .not.toHaveAttribute("aria-selected");
+      await expect.element(babbage).not.toHaveAttribute("aria-selected");
+      const workAfterInvalidation = events.filter(
+        (event) => event.kind === "pointer-frame" || event.kind === "publication",
+      ).length;
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 47, clientY: bounds.bottom }),
+      );
+      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 47 }));
+      await settleBrunoTableBrowserFrames(3);
+      expect(
+        events.filter((event) => event.kind === "pointer-frame" || event.kind === "publication"),
+      ).toHaveLength(workAfterInvalidation);
+
+      grid.element().focus();
+      await userEvent.keyboard(copyGesture());
+      await vi.waitFor(() =>
+        expect(
+          page.getByRole("log", { name: "Table interaction status" }).element().textContent,
+        ).toBe("Copy failed: the selected cells are no longer available"),
+      );
+      expect(writes).toHaveLength(0);
+    } finally {
+      removeInstrumentation();
       restoreClipboard();
     }
   });

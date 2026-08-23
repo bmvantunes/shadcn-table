@@ -448,6 +448,26 @@ export class BrunoTableCellRangeRuntime {
     );
   };
 
+  public readonly extendFromCurrent = (
+    current: BrunoTableCellCoordinate,
+    target: BrunoTableCellCoordinate,
+    structure: BrunoTableCellRangeStructure,
+  ): BrunoTableCellRangeSnapshot => {
+    this.reconcile(structure);
+    if (this.snapshot.range !== undefined) return this.extend(target, structure);
+    this.structuralInvalidationPendingCopy = false;
+    this.structure = structure;
+    if (!containsCoordinate(structure, current) || !containsCoordinate(structure, target)) {
+      return this.publish(EMPTY_RANGE_SNAPSHOT);
+    }
+    const anchor = freezeCoordinate(current);
+    const axis = chooseAxis(anchor, target, structure);
+    const range = axis === undefined ? undefined : createRange(axis, anchor, target, structure);
+    return this.publish(
+      range === undefined ? Object.freeze({ anchor }) : Object.freeze({ anchor, range }),
+    );
+  };
+
   public readonly reconcile = (
     structure: BrunoTableCellRangeStructure,
   ): BrunoTableCellRangeSnapshot => {
@@ -458,8 +478,13 @@ export class BrunoTableCellRangeRuntime {
       (!snapshotMatchesStructure(this.ensureGestureActor().getSnapshot().before, structure) ||
         !snapshotMatchesStructure(this.snapshot, structure))
     ) {
+      const before = this.ensureGestureActor().getSnapshot().before;
+      const invalidatedRange = before.range !== undefined || this.snapshot.range !== undefined;
       this.detachPointerGesture(gesture);
       this.ensureGestureActor().send({ type: "INVALIDATE" });
+      this.structure = structure;
+      if (invalidatedRange) this.structuralInvalidationPendingCopy = true;
+      return this.publish(EMPTY_RANGE_SNAPSHOT);
     }
     this.structure = structure;
     const anchor = this.snapshot.anchor;
@@ -582,7 +607,7 @@ export class BrunoTableCellRangeRuntime {
     gesture.clientX = event.clientX;
     gesture.clientY = event.clientY;
     gesture.target = event.target;
-    this.applyPointerFrame(gesture);
+    this.applyPointerFrame(gesture, false);
     this.detachPointerGesture(gesture);
     this.ensureGestureActor().send({ type: "COMMIT" });
   };
@@ -602,7 +627,10 @@ export class BrunoTableCellRangeRuntime {
     });
   };
 
-  private readonly applyPointerFrame = (gesture: BrunoTableCellRangePointerGesture): boolean => {
+  private readonly applyPointerFrame = (
+    gesture: BrunoTableCellRangePointerGesture,
+    allowAutoscroll = true,
+  ): boolean => {
     recordInstrumentation({ kind: "pointer-frame", tableId: this.tableId });
     const structure = this.structure;
     if (structure === undefined) return false;
@@ -630,6 +658,7 @@ export class BrunoTableCellRangeRuntime {
         if (rowIndex !== undefined) gesture.activate({ ...focus, rowIndex });
       }
     }
+    if (!allowAutoscroll) return false;
     if (axis === "horizontal") {
       const delta =
         gesture.clientX < bounds.left + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE

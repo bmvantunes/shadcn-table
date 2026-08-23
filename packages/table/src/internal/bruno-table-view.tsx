@@ -148,6 +148,7 @@ import {
 } from "./row-selection";
 import {
   captureBrunoTableClipboardSnapshot,
+  clipboardTargetFromRange,
   clipboardTargetFromSelection,
   closestBrunoTableCellRangeHit,
   createBrunoTableCellRangeStructure,
@@ -2193,10 +2194,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (extendingRange && current?.region === "body" && current.rowId !== undefined) {
           const currentCoordinate = { rowId: current.rowId, columnId: current.columnId };
           const nextCoordinate = { rowId: next.rowId, columnId: next.columnId };
-          if (cellRange.getSnapshot().anchor === undefined) {
-            cellRange.replace(currentCoordinate, cellRangeStructure);
-          }
-          const selection = cellRange.extend(nextCoordinate, cellRangeStructure);
+          const selection = cellRange.extendFromCurrent(
+            currentCoordinate,
+            nextCoordinate,
+            cellRangeStructure,
+          );
           const focus = selection.range?.focus ?? selection.anchor;
           if (focus !== undefined) {
             const rowIndex = cellRangeStructure.rowIndexById.get(focus.rowId);
@@ -2231,24 +2233,32 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if ((!enableActiveCellCopy && cellRange === undefined) || !ownsGridSurface(event)) return;
     if (cellRange !== undefined) event.preventDefault();
     const active = navigation.getSnapshot();
-    if (active?.region !== "body" || active.rowId === undefined) return;
+    if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
+    const structurallyInvalidated = cellRange?.consumeStructuralInvalidation() === true;
+    const selection = cellRange?.getSnapshot() ?? {};
+    const activeCoordinate =
+      active?.region === "body" && active.rowId !== undefined
+        ? { rowId: active.rowId, columnId: active.columnId }
+        : undefined;
+    const target =
+      selection.range !== undefined
+        ? clipboardTargetFromRange(selection.range)
+        : activeCoordinate === undefined
+          ? undefined
+          : clipboardTargetFromSelection({}, activeCoordinate);
+    if (!structurallyInvalidated && target === undefined) return;
     const copyToken = ++copyCommandToken.current;
     const announceCopy = (message: string): void => {
       if (copyCommandToken.current === copyToken) setAnnouncement(message);
     };
+    if (structurallyInvalidated) {
+      announceCopy("Copy failed: the selected cells are no longer available");
+      return;
+    }
     if (navigator.clipboard?.writeText === undefined) {
       announceCopy("Copy failed: clipboard access is unavailable");
       return;
     }
-    if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
-    if (cellRange?.consumeStructuralInvalidation() === true) {
-      announceCopy("Copy failed: the selected cells are no longer available");
-      return;
-    }
-    const target = clipboardTargetFromSelection(cellRange?.getSnapshot() ?? {}, {
-      rowId: active.rowId,
-      columnId: active.columnId,
-    });
     if (target === undefined) return;
     let snapshot: ReturnType<typeof captureBrunoTableClipboardSnapshot>;
     try {
