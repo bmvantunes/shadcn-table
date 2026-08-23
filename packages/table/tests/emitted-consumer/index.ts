@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
@@ -111,6 +112,26 @@ const emittedServerConfig = defineViewServerConfig({
 const emittedServerReact = createViewServerReact(emittedServerConfig);
 const source = emittedServerReact.useLiveQueryViewport("orders");
 const mismatchedSource = emittedServerReact.useLiveQueryViewport("positions");
+const emittedLeasedAdapter = SourceAdapter.make({
+  identity: { name: "emitted-bruno-table-route" },
+  failure: Schema.Never,
+  materialized: undefined,
+  leased: {
+    metrics: Schema.Struct({ observed: Schema.BigInt }),
+    rejectionLocation: Schema.Struct({ offset: Schema.BigInt }),
+    definitionOptions: SourceAdapter.definitionOptions<undefined>(),
+  },
+});
+const emittedLeasedSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      orders: {
+        schema: emittedServerConfig.topics.orders.schema,
+        source: emittedLeasedAdapter.leasedSource(["status", "revision"], undefined),
+      },
+    },
+  }),
+).useLiveQueryViewport("orders");
 declare const emittedUnsafeAnyViewport: any;
 declare const emittedUnsafeUnknownViewport: unknown;
 declare const emittedUnsafeUnwitnessedViewport: Readonly<{ readonly destroy: () => void }>;
@@ -227,6 +248,163 @@ const emittedWitnessedServerProps = {
   viewportSource: source,
 } as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 BrunoTableServer(emittedWitnessedServerProps);
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10n }],
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+});
+const emittedAnnotatedLeasedProps: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10n }],
+};
+void emittedAnnotatedLeasedProps;
+// @ts-expect-error emitted Server Props expose exactly Row, Columns, and Viewport generics.
+type InvalidEmittedServerRouteOverride = BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport,
+  never
+>;
+const invalidEmittedServerRouteOverride = null as unknown as InvalidEmittedServerRouteOverride;
+void invalidEmittedServerRouteOverride;
+void BrunoTableServer<
+  // @ts-expect-error emitted Server component exposes no Route/Where override generic.
+  typeof emittedLeasedSource.viewport,
+  Columns,
+  typeof emittedAnnotatedLeasedProps,
+  never
+>;
+// @ts-expect-error the emitted direct three-generic leased Props alias requires Feed Route.
+const emittedAnnotatedMissingRoute: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = { ...emittedWitnessedServerProps, viewportSource: emittedLeasedSource };
+void emittedAnnotatedMissingRoute;
+const emittedAnnotatedMissingRouteField: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted direct alias requires every Route field.
+  routeBy: { status: "open" },
+};
+void emittedAnnotatedMissingRouteField;
+const emittedAnnotatedExtraRouteField: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted direct alias rejects extra Route fields.
+  routeBy: { status: "open", revision: 1n, desk: "rates" },
+};
+void emittedAnnotatedExtraRouteField;
+const emittedAnnotatedWrongRouteValue: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted direct alias preserves exact Route values.
+  routeBy: { status: "open", revision: 1 },
+};
+void emittedAnnotatedWrongRouteValue;
+const emittedAnnotatedWrongExternalField: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+  // @ts-expect-error emitted direct alias rejects unknown External Filter fields.
+  externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
+};
+void emittedAnnotatedWrongExternalField;
+const emittedAnnotatedWrongExternalOperand: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+  // @ts-expect-error emitted direct alias preserves exact operand domains.
+  externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
+};
+void emittedAnnotatedWrongExternalOperand;
+const emittedAnnotatedMixedExternalRange: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof emittedLeasedSource.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  routeBy: { status: "open", revision: 1n },
+  // @ts-expect-error emitted direct alias keeps both bigint range bounds exact.
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
+};
+void emittedAnnotatedMixedExternalRange;
+const emittedAnnotatedMaterializedRoute: BrunoTableServerProps<
+  Order,
+  Columns,
+  typeof source.viewport
+> = {
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted direct source-free alias forbids Feed Route.
+  routeBy: { status: "open" },
+};
+void emittedAnnotatedMaterializedRoute;
+// @ts-expect-error emitted leased Server declarations require the exact Route tuple.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedLeasedSource });
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted leased Server declarations reject missing Route fields.
+  routeBy: { status: "open" },
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted leased Server declarations preserve exact Route value domains.
+  routeBy: { status: "open", revision: 1 },
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedLeasedSource,
+  // @ts-expect-error emitted leased Server declarations reject extra Route fields.
+  routeBy: { status: "open", revision: 1n, desk: "rates" },
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted External Filters reject unknown source fields.
+  externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted External Filters preserve exact known-field operand domains.
+  externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
+});
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted inRange bounds preserve one exact bigint operand domain.
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
+});
 
 const emittedMismatchedServerProps: BrunoTableServerProps<
   Order,
@@ -261,6 +439,14 @@ BrunoTableServer({
   ...emittedWitnessedServerProps,
   // @ts-expect-error emitted Server Sources require the source-owned complete raw projection.
   viewportSource: sourceWithoutCompleteRawSelect,
+});
+
+const { useWholeResult: omittedUseWholeResult, ...sourceWithoutWholeResult } = source;
+void omittedUseWholeResult;
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  // @ts-expect-error emitted Server Sources require the source-owned whole-result facet hook.
+  viewportSource: sourceWithoutWholeResult,
 });
 
 source.viewport.replace({
@@ -876,14 +1062,8 @@ const props = {
 const emittedServerWithExternalFilters = {
   ...props,
   externalFilters: [{ field: "status", type: "equals", filter: "open" }],
-};
-// @ts-expect-error emitted Server declarations reject deferred External Filter transport.
-const invalidEmittedServerExternalFilters: BrunoTableServerProps<
-  Order,
-  Columns,
-  typeof source.viewport
-> = emittedServerWithExternalFilters;
-void invalidEmittedServerExternalFilters;
+} as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+void emittedServerWithExternalFilters;
 
 type UnsupportedToolbarCountsStayAbsent = Expect<
   Equal<

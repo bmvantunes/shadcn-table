@@ -1,9 +1,12 @@
 import { afterAll, bench, describe } from "vite-plus/test";
 
 import { BrunoTableServerViewportStore } from "./server-viewport-store";
+import { createBrunoTableServerFacetSnapshot } from "./client-facet";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
+import { compileBrunoTableServerQueryPlan } from "./server-query";
+import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
 
 const referenceFrameBudgetMs = 8.33;
 const virtualRowCount = 1_000_000;
@@ -86,6 +89,7 @@ const adapter = new BrunoTableServerRowPipelineAdapter<Readonly<{ value: number 
   [{ columnId: "COL_ID_VALUE", direction: "asc" }],
 );
 const adapterViewport = {
+  semanticKey: brunoTableTestSemanticQueryKey,
   replace(request: Readonly<{ readonly sink: NonNullable<typeof adapterSink> }>) {
     replaceCalls += 1;
     adapterSink = request.sink;
@@ -177,6 +181,7 @@ const equivalenceAdapter = new BrunoTableServerRowPipelineAdapter<EquivalenceRow
   [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],
 );
 const equivalenceViewport = {
+  semanticKey: brunoTableTestSemanticQueryKey,
   replace(request: Readonly<{ readonly sink: NonNullable<typeof equivalenceSink> }>) {
     equivalenceSink = request.sink;
     return { setWindow: () => undefined, release: () => undefined };
@@ -315,6 +320,115 @@ describe("BrunoTable Server affected-slot publication benchmark", () => {
         throw new Error(
           `Affected-slot publication read ${String(affectedCellReads)} cells instead of ${String(equivalenceColumnCount)}.`,
         );
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },
+  );
+});
+
+const queryColumnCount = 256;
+const queryColumns = compileColumns(
+  Array.from({ length: queryColumnCount }, (_, index) => ({
+    columnId: `COL_ID_QUERY_${String(index)}`,
+    field: `field${String(index)}`,
+    headerName: `Query ${String(index)}`,
+    valueType: "number" as const,
+  })),
+);
+const queryFilters = Object.freeze(
+  Array.from({ length: 128 }, (_, index) =>
+    Object.freeze({
+      columnId: `COL_ID_QUERY_${String(index)}`,
+      type: "greaterThanOrEqual",
+      filter: index,
+    }),
+  ),
+);
+const queryQuickFields = Object.freeze(
+  Array.from({ length: 64 }, (_, index) => `quick${String(index)}`),
+);
+const queryVisibleColumnIds = Object.freeze(
+  Array.from({ length: 128 }, (_, index) => `COL_ID_QUERY_${String(index * 2)}`),
+);
+const queryCompileDurationsMs: number[] = [];
+
+describe("BrunoTable Server large semantic-query compilation benchmark", () => {
+  afterAll(() => {
+    assertP99FrameBudget("Server 256-column query compilation", queryCompileDurationsMs);
+  });
+
+  bench(
+    "compiles route, projection, 128 Grid Filters, and 64 Quick Filter fields",
+    () => {
+      const startedAt = performance.now();
+      const plan = compileBrunoTableServerQueryPlan(
+        queryColumns,
+        {
+          routeBy: { region: "emea", revision: 9_007_199_254_740_993n },
+          externalFilters: [{ field: "tenant", type: "equals", filter: "primary" }],
+          filters: queryFilters,
+          quickFilter: "risk",
+          quickFilterFields: queryQuickFields,
+          visibleColumnIds: queryVisibleColumnIds,
+          orderBy: [{ columnId: "COL_ID_QUERY_0", direction: "asc" }],
+        },
+        undefined,
+      );
+      queryCompileDurationsMs.push(performance.now() - startedAt);
+      if (plan.query.where.length !== 130 || plan.query.select.length !== 192) {
+        throw new Error("Large Server query benchmark compiled the wrong semantic shape.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },
+  );
+});
+
+const facetValueCount = 1_000;
+const facetRows = Object.freeze(
+  Array.from({ length: facetValueCount }, (_, index) =>
+    Object.freeze({
+      amount: 9_007_199_254_740_993n + BigInt(index),
+      __bruno_table_facet_count: BigInt((index % 97) + 1),
+    }),
+  ),
+);
+const facetColumn = compileColumns([
+  {
+    columnId: "COL_ID_FACET_AMOUNT",
+    enableSetFilter: true,
+    field: "amount",
+    headerName: "Amount",
+    valueType: "bigint",
+  },
+])[0]!;
+const facetPublicationDurationsMs: number[] = [];
+
+describe("BrunoTable Server whole-result facet publication benchmark", () => {
+  afterAll(() => {
+    assertP99FrameBudget("Server 1,000-value facet publication", facetPublicationDurationsMs);
+  });
+
+  bench(
+    "projects 1,000 exact bigint facet values and retains absent inclusion intent",
+    () => {
+      const absentValue = 9_007_199_254_742_993n;
+      const startedAt = performance.now();
+      const snapshot = createBrunoTableServerFacetSnapshot({
+        column: facetColumn,
+        countAlias: "__bruno_table_facet_count",
+        rows: facetRows,
+        expression: {
+          columnId: "COL_ID_FACET_AMOUNT",
+          type: "in",
+          filter: [facetRows[0]!.amount, absentValue],
+        },
+      });
+      facetPublicationDurationsMs.push(performance.now() - startedAt);
+      if (
+        snapshot.options.length !== facetValueCount + 1 ||
+        snapshot.options.at(-1)?.count !== 0n
+      ) {
+        throw new Error("Large Server facet benchmark projected the wrong live domain.");
       }
     },
     { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },

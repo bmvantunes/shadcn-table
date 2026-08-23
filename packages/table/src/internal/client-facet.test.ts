@@ -5,6 +5,7 @@ import {
   applyBrunoTableSetFilterCommand,
   createBrunoTableClientFacetSnapshot,
   createBrunoTableClientFacetStore,
+  createBrunoTableServerFacetSnapshot,
   isBrunoTableSetFilterExpression,
   readBrunoTableSetFilterIntent,
 } from "./client-facet";
@@ -56,6 +57,167 @@ const rows: readonly Row[] = Object.freeze([
 ]);
 
 describe("Client Set Filter intent", () => {
+  it("projects native whole-result Server facet rows without leaking the private count alias", () => {
+    const value = 9_007_199_254_740_993n;
+    expect(
+      createBrunoTableServerFacetSnapshot({
+        column: amountColumn,
+        countAlias: "__bruno_table_facet_count",
+        rows: [
+          { amount: value, __bruno_table_facet_count: 3n },
+          { amount: value + 1n, __bruno_table_facet_count: 2n },
+        ],
+        expression: {
+          columnId: "COL_ID_AMOUNT",
+          type: "in",
+          filter: [value, value + 2n],
+        },
+      }),
+    ).toEqual({
+      intent: { kind: "include", values: [value, value + 2n] },
+      options: [
+        { value, count: 3n, display: String(value) },
+        { value: value + 1n, count: 2n, display: String(value + 1n) },
+        { value: value + 2n, count: 0n, display: String(value + 2n) },
+      ],
+    });
+  });
+
+  it("keeps a colliding grouped source Field distinct from its plan-owned count alias", () => {
+    const field = "__bruno_table_facet_count";
+    const countAlias = `${field}_1`;
+    const column = compileColumns([
+      {
+        columnId: "COL_ID_COLLIDING_FACET",
+        enableSetFilter: true,
+        field,
+        headerName: "Facet",
+        valueType: "text",
+      },
+    ])[0]!;
+
+    expect(
+      createBrunoTableServerFacetSnapshot({
+        column,
+        countAlias,
+        rows: [{ [field]: "source value", [countAlias]: 4n }],
+        expression: undefined,
+      }),
+    ).toEqual({
+      intent: { kind: "all" },
+      options: [{ value: "source value", count: 4n, display: "source value" }],
+    });
+  });
+
+  it("coalesces equivalent decoded Server groups with exact bigint counts", () => {
+    type Token = Readonly<{ readonly raw: string }>;
+    const tokenColumn = compileColumns([
+      {
+        columnId: "COL_ID_SERVER_TOKEN",
+        enableSetFilter: true,
+        field: "token",
+        headerName: "Token",
+        valueType: {
+          codecId: "test/server-token-facet",
+          codecVersion: 1,
+          filterFamily: "select",
+          editorFamily: "text",
+          cellAlign: "start",
+          editorLayout: "inline",
+          defaultWidth: 120,
+          decodeRuntime: (input: unknown) =>
+            typeof input === "object" && input !== null && "raw" in input
+              ? ({ _tag: "Success", value: input as Token } as const)
+              : ({ _tag: "Failure", message: "Expected token." } as const),
+          equivalent: (left: Token, right: Token) =>
+            left.raw.toLocaleLowerCase() === right.raw.toLocaleLowerCase(),
+          compare: (left: Token, right: Token) =>
+            left.raw.toLocaleLowerCase().localeCompare(right.raw.toLocaleLowerCase()),
+          formatCanonicalText: (value: Token) => value.raw.toLocaleLowerCase(),
+          parseCanonicalText: (text: string) =>
+            ({ _tag: "Success", value: { raw: text } }) as const,
+          formatDisplay: (value: Token) => value.raw,
+          encodePersisted: (value: Token) => value.raw,
+          decodePersisted: (input: unknown) =>
+            typeof input === "string"
+              ? ({ _tag: "Success", value: { raw: input } } as const)
+              : ({ _tag: "Failure", message: "Expected token." } as const),
+        },
+      },
+    ])[0]!;
+    const first = Object.freeze({ raw: "A" });
+    const equivalent = Object.freeze({ raw: "a" });
+
+    expect(
+      createBrunoTableServerFacetSnapshot({
+        column: tokenColumn,
+        countAlias: "count",
+        rows: [
+          { token: first, count: 9_007_199_254_740_993n },
+          { token: equivalent, count: 2n },
+        ],
+        expression: undefined,
+      }),
+    ).toEqual({
+      intent: { kind: "all" },
+      options: [
+        {
+          value: first,
+          count: 9_007_199_254_740_995n,
+          display: "A",
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ["missing", {}],
+    ["number", { count: 1 }],
+    ["string", { count: "1" }],
+    ["negative", { count: -1n }],
+  ])("rejects a %s Server facet count instead of publishing a partial domain", (_name, count) => {
+    expect(() =>
+      createBrunoTableServerFacetSnapshot({
+        column: amountColumn,
+        countAlias: "count",
+        rows: [
+          { amount: 1n, count: 2n },
+          { amount: 2n, ...count },
+        ],
+        expression: undefined,
+      }),
+    ).toThrow("BrunoTable Server facet delivered an invalid aggregate count.");
+  });
+
+  it.each([null, undefined, "row", 1, true, () => undefined])(
+    "rejects a non-record Server facet row without publishing a valid prefix",
+    (candidate) => {
+      expect(() =>
+        createBrunoTableServerFacetSnapshot({
+          column: amountColumn,
+          countAlias: "count",
+          rows: [{ amount: 1n, count: 2n }, candidate],
+          expression: undefined,
+        }),
+      ).toThrow("BrunoTable Server facet delivered an invalid grouped row.");
+    },
+  );
+
+  it("accepts zero and arbitrarily large exact Server facet counts", () => {
+    const large = 9_007_199_254_740_993_123_456n;
+    expect(
+      createBrunoTableServerFacetSnapshot({
+        column: amountColumn,
+        countAlias: "count",
+        rows: [
+          { amount: 1n, count: 0n },
+          { amount: 2n, count: large },
+        ],
+        expression: undefined,
+      }).options.map(({ count }) => count),
+    ).toEqual([0n, large]);
+  });
+
   it("normalizes inclusion and exclusion through one complete column expression", () => {
     const excluded = applyBrunoTableSetFilterCommand(activeColumn, { kind: "all" }, [true, false], {
       type: "toggle",

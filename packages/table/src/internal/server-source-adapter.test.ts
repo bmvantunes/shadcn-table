@@ -4,6 +4,7 @@ import * as BigDecimal from "effect/BigDecimal";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
+import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
 import { BrunoTableBigDecimalColumn } from "../effect";
 import type { BrunoTableColumns } from "../public-types";
 
@@ -51,14 +52,28 @@ function makeViewport<TRow = Row>() {
     | undefined;
   const setWindow = vi.fn();
   const release = vi.fn();
+  const semanticKey = vi.fn(brunoTableTestSemanticQueryKey);
   const replace = vi.fn((next: NonNullable<typeof request>) => {
     request = next;
     return { setWindow, release };
   });
-  return { viewport: { replace }, replace, setWindow, release, getRequest: () => request };
+  return {
+    viewport: { replace, semanticKey },
+    replace,
+    semanticKey,
+    setWindow,
+    release,
+    getRequest: () => request,
+  };
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("keeps bigint semantic keys distinct from numeric-looking strings", () => {
+    expect(brunoTableTestSemanticQueryKey({ filter: 1n })).not.toBe(
+      brunoTableTestSemanticQueryKey({ filter: "1n" }),
+    );
+  });
+
   it("owns semantic replacement and keeps window movement inside one generation", () => {
     const transport = makeViewport();
     const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
@@ -94,6 +109,89 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.setWindow).toHaveBeenLastCalledWith({ firstRow: 10, lastRow: 29 });
     expect(transport.replace).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("uses source-owned semantic identity for exact Route and external operands", () => {
+    const transport = makeViewport();
+    const stableKey = Object.freeze({});
+    transport.semanticKey.mockReturnValue(stableKey);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      ["symbol"],
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+
+    adapter.replace(transport.viewport, query, {
+      routeBy: { book: 9_007_199_254_740_993n },
+      externalFilters: [{ field: "price", type: "equals", filter: 10 }],
+      visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+    });
+    adapter.replace(transport.viewport, query, {
+      routeBy: { book: 9_007_199_254_740_993n },
+      externalFilters: [{ field: "price", type: "equals", filter: 10 }],
+      visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+    });
+
+    expect(transport.semanticKey).toHaveBeenCalledTimes(2);
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.getRequest()?.query).toEqual({
+      routeBy: { book: 9_007_199_254_740_993n },
+      select: ["symbol", "price"],
+      where: [{ field: "price", type: "equals", filter: 10 }],
+      orderBy: [{ field: "symbol", direction: "asc" }],
+    });
+  });
+
+  it("resets navigation only when prop-owned query inputs change semantically", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    const reconcileQuery = Object.freeze({ ...query, navigationMode: "reconcile" as const });
+    const rates = {
+      routeBy: { book: 1n },
+      externalFilters: [{ field: "price", type: "equals", filter: 10 }],
+      visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+    } as const;
+    adapter.replace(transport.viewport, reconcileQuery, rates, true);
+    adapter.replace(
+      transport.viewport,
+      { ...reconcileQuery, generation: 1 },
+      {
+        ...rates,
+        externalFilters: [{ field: "price", type: "equals", filter: 20 }],
+      },
+      true,
+    );
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("reset");
+
+    adapter.replace(
+      transport.viewport,
+      {
+        ...reconcileQuery,
+        generation: 2,
+        orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
+      },
+      {
+        ...rates,
+        externalFilters: [{ field: "price", type: "equals", filter: 20 }],
+      },
+      true,
+    );
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("reconcile");
   });
 
   it("rejects a malformed replacement viewport before changing the active source", () => {
@@ -394,7 +492,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
     expect(adapter.getPublication().rowSpace?.getRowId(0)).toBeUndefined();
     expect(adapter.getPublication().totalRows).toBe(18);
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     transport.getRequest()!.sink.setRowCount(250, true);
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
     adapter.reconcileSource({
@@ -405,6 +503,71 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       status: "stale",
     });
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
+  });
+
+  it("bounds Server lifecycle status and message text at source admission", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "error",
+      statusCode: "S".repeat(256),
+      message: "M".repeat(1_024),
+    });
+
+    expect(adapter.getPublication().statusCode).toHaveLength(128);
+    expect(adapter.getPublication().message).toHaveLength(512);
+  });
+
+  it("clears the old authoritative result count until the replacement generation publishes", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const oldSink = transport.getRequest()!.sink;
+    oldSink.setRowCount(250, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(250);
+
+    adapter.replace(transport.viewport, query, {
+      externalFilters: [{ field: "price", type: "greaterThan", filter: 10 }],
+      routeBy: undefined,
+      visibleColumnIds: undefined,
+    });
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 250,
+      version: 2,
+      status: "loading",
+    });
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    oldSink.setRowCount(999, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+
+    transport.getRequest()!.sink.setRowCount(3, true);
+    expect(adapter.getResultRowCountSnapshot()).toBe(3);
   });
 
   it("projects loading geometry without retained or newly delivered row identity", () => {
@@ -516,6 +679,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(() =>
       adapter.replace(
         {
+          semanticKey: brunoTableTestSemanticQueryKey,
           replace(request: Readonly<{ readonly sink: NonNullable<typeof failedSink> }>) {
             failedSink = request.sink;
             request.sink.setRowCount(1, true);
@@ -529,13 +693,94 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(publishedRows).toEqual([]);
     expect(adapter.getPublication().rowSpace).toBeUndefined();
     expect(adapter.getPublication().totalRows).toBe(100);
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     failedSink!.setRowData({ 0: { symbol: "LATE", price: 0 } }, { 0: "late" });
     expect(adapter.getPublication().rowSpace).toBeUndefined();
 
     const recovered = makeViewport();
     expect(() => adapter.replace(recovered.viewport, query)).not.toThrow();
     expect(recovered.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates a generation whose source semantic identity throws", () => {
+    const failure = new Error("semantic key failed");
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const firstSink = transport.getRequest()!.sink;
+    firstSink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    transport.semanticKey.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    expect(() =>
+      adapter.replace(transport.viewport, {
+        ...query,
+        filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" }],
+      }),
+    ).toThrow(failure);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+  });
+
+  it("invalidates when comparing the prior source semantic identity throws", () => {
+    const failure = new Error("prior semantic key failed");
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const firstSink = transport.getRequest()!.sink;
+    firstSink.setRowData({ 0: { symbol: "OLD", price: 1 } }, { 0: "old" });
+    transport.semanticKey
+      .mockImplementationOnce(() => Object.freeze({ changed: true }))
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+
+    expect(() =>
+      adapter.replace(
+        transport.viewport,
+        {
+          ...query,
+          filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" }],
+        },
+        {
+          routeBy: undefined,
+          externalFilters: [{ field: "price", type: "greaterThan", filter: 10 }],
+          visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_PRICE"],
+        },
+        true,
+      ),
+    ).toThrow(failure);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    firstSink.setRowData({ 0: { symbol: "LATE", price: 2 } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace).toBeUndefined();
   });
 
   it("best-effort releases a partially valid generation before rejecting it", () => {
@@ -550,6 +795,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       completeRawSelect,
     );
     const viewport = {
+      semanticKey: brunoTableTestSemanticQueryKey,
       replace: vi.fn(() => ({ release, setWindow: undefined })),
     };
     adapter.reconcileSource({
@@ -613,7 +859,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     }
     expect(observedFailure).toBe(releaseFailure);
     expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
     expect(structureFailure).toHaveBeenCalledTimes(1);
     expect(countFailure).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(1);
@@ -1047,9 +1293,9 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     });
 
     expect(() => adapter.release()).toThrow(releaseFailure);
-    expect(publications.at(-1)).toEqual({ totalRows: 100, hasRows: false });
+    expect(publications.at(-1)).toEqual({ totalRows: 0, hasRows: false });
     expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(adapter.getResultRowCountSnapshot()).toBe(100);
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
   });
 
   it("replaces only when the normalized source projection changes", () => {
@@ -1139,9 +1385,11 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       ]),
       undefined,
     );
-    expect(adapter.getPublication().rowSpace).toBeUndefined();
-    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(adapter.getPublication().rowSpace?.getRow("old")).toMatchObject({ symbol: "OLD" });
+    expect(transport.release).not.toHaveBeenCalled();
     adapter.replace(transport.viewport, query);
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(adapter.getPublication().rowSpace?.getRow("old")).toBeUndefined();
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.release).toHaveBeenCalledTimes(1);
   });
@@ -1177,9 +1425,10 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       columns[1]!,
     ]);
     adapter.reconcileColumns(presentedColumns, undefined);
-    expect(transport.release).toHaveBeenCalledTimes(1);
-    expect(adapter.getPublication().rowSpace).toBeUndefined();
+    expect(transport.release).not.toHaveBeenCalled();
     adapter.replace(transport.viewport, { ...query, generation: 1 });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(transport.release).toHaveBeenCalledTimes(1);
     expect(transport.replace).toHaveBeenCalledTimes(2);
     expect(transport.getRequest()?.query).toMatchObject({ select: completeRawSelect });
 
@@ -1201,8 +1450,9 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.release).toHaveBeenCalledTimes(1);
 
     adapter.reconcileColumns(columns, undefined);
-    expect(transport.release).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledTimes(1);
     adapter.replace(transport.viewport, { ...query, generation: 3 });
+    expect(transport.release).toHaveBeenCalledTimes(2);
     expect(transport.replace).toHaveBeenCalledTimes(3);
     expect(transport.getRequest()?.query).toMatchObject({ select: ["symbol", "price"] });
   });
@@ -1299,6 +1549,284 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       where: [],
       orderBy: [{ field: "symbol", direction: "asc" }],
     });
+  });
+
+  it("ignores hidden computed dependencies and presentation until the column becomes visible", () => {
+    const transport = makeViewport();
+    const initialColumns = compileColumns([
+      columns[0]!,
+      {
+        columnId: "COL_ID_DERIVED",
+        fields: ["price"],
+        headerName: "Derived",
+        valueType: "number",
+        valueGetter: () => 0,
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      initialColumns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    const visibleSymbol = {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_SYMBOL"],
+    } as const;
+
+    adapter.replace(transport.viewport, query, visibleSymbol);
+    expect(transport.getRequest()?.query).toMatchObject({ select: ["symbol"] });
+
+    adapter.reconcileColumns(
+      compileColumns([
+        columns[0]!,
+        {
+          columnId: "COL_ID_DERIVED",
+          fields: ["symbol"],
+          headerName: "Derived again",
+          valueType: "number",
+          valueGetter: () => 1,
+          cellRenderer: () => "rendered",
+        },
+      ]),
+      undefined,
+    );
+    adapter.replace(transport.viewport, { ...query, generation: 1 }, visibleSymbol);
+
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.release).not.toHaveBeenCalled();
+
+    adapter.replace(
+      transport.viewport,
+      { ...query, generation: 2 },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_DERIVED"],
+      },
+    );
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(transport.getRequest()?.query).toMatchObject({ select: completeRawSelect });
+  });
+
+  it("records visibility after a semantic no-op for later column reconciliation", () => {
+    const transport = makeViewport();
+    const initialColumns = compileColumns([
+      columns[0]!,
+      {
+        columnId: "COL_ID_DERIVED",
+        fields: ["symbol"],
+        headerName: "Derived",
+        valueType: "number",
+        valueGetter: () => 0,
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      initialColumns,
+      undefined,
+      [],
+      query.orderBy,
+    );
+
+    adapter.replace(transport.viewport, query, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_SYMBOL"],
+    });
+    adapter.replace(
+      transport.viewport,
+      { ...query, generation: 1 },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_DERIVED"],
+      },
+    );
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+
+    adapter.reconcileColumns(
+      compileColumns([
+        columns[0]!,
+        {
+          columnId: "COL_ID_DERIVED",
+          fields: ["price"],
+          headerName: "Derived",
+          valueType: "number",
+          valueGetter: () => 0,
+        },
+      ]),
+      undefined,
+    );
+
+    expect(transport.release).not.toHaveBeenCalled();
+    adapter.replace(
+      transport.viewport,
+      { ...query, generation: 2 },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_DERIVED"],
+      },
+    );
+    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+  });
+
+  it("defers projection until replacement visibility exists for new Column Identities", () => {
+    const transport = makeViewport();
+    const first = compileColumns([columns[0]!]);
+    const second = compileColumns([
+      {
+        columnId: "COL_ID_REPLACEMENT",
+        field: "price",
+        headerName: "Replacement",
+        valueType: "number",
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      first,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+    );
+    adapter.replace(
+      transport.viewport,
+      { ...query, orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }] },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL"],
+      },
+    );
+
+    expect(() => adapter.reconcileColumns(second, undefined)).not.toThrow();
+    adapter.replace(
+      transport.viewport,
+      { ...query, orderBy: [{ columnId: "COL_ID_REPLACEMENT", direction: "asc" }] },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_REPLACEMENT"],
+      },
+    );
+
+    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.getRequest()?.query).toMatchObject({ select: ["price"] });
+  });
+
+  it("defers partial Column Identity projection until final reconciled visibility", () => {
+    const transport = makeViewport();
+    const first = compileColumns([
+      {
+        columnId: "COL_ID_A",
+        field: "symbol",
+        headerName: "A",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_B",
+        field: "price",
+        headerName: "B",
+        valueType: "number",
+      },
+    ]);
+    const second = compileColumns([
+      first[1]!,
+      {
+        columnId: "COL_ID_C",
+        field: "symbol",
+        headerName: "C",
+        valueType: "text",
+      },
+    ]);
+    const stableQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_B", direction: "asc" as const }],
+    };
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      first,
+      undefined,
+      [],
+      stableQuery.orderBy,
+    );
+    adapter.replace(transport.viewport, stableQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_A", "COL_ID_B"],
+    });
+    transport.getRequest()?.sink.setRowData({ 0: { symbol: "AAA", price: 10 } }, { 0: "row-1" });
+    const retained = adapter.getPublication().rowSpace?.getRow("row-1");
+
+    adapter.reconcileColumns(second, undefined);
+    adapter.replace(transport.viewport, stableQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_B", "COL_ID_C"],
+    });
+
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+    expect(transport.release).not.toHaveBeenCalled();
+    expect(adapter.getPublication().rowSpace?.getRow("row-1")).toBe(retained);
+  });
+
+  it("keeps hidden computed and raw-row presentation dormant during equivalent deliveries", () => {
+    const run = (kind: "computed" | "raw-presentation") => {
+      const hiddenGetter = vi.fn(() => 1);
+      const hiddenColumn =
+        kind === "computed"
+          ? {
+              columnId: "COL_ID_HIDDEN",
+              fields: ["price"] as const,
+              headerName: "Hidden derived",
+              valueType: "number" as const,
+              valueGetter: hiddenGetter,
+            }
+          : {
+              columnId: "COL_ID_HIDDEN",
+              field: "price" as const,
+              headerName: "Hidden raw presentation",
+              valueType: "number" as const,
+              valueFormatter: () => "formatted",
+            };
+      const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+        compileColumns([columns[0]!, hiddenColumn]),
+        undefined,
+        [],
+        query.orderBy,
+        completeRawSelect,
+      );
+      const transport = makeViewport();
+      adapter.reconcileSource({
+        viewport: transport.viewport,
+        completeRawSelect,
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      });
+      adapter.replace(transport.viewport, query, {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL"],
+      });
+      const stable = { symbol: "AAPL", price: 1 } as const;
+      transport.getRequest()!.sink.setRowData({ 0: stable }, { 0: "row-a" });
+      const publish = vi.fn();
+      adapter.subscribePublication(publish);
+      hiddenGetter.mockClear();
+
+      transport.getRequest()!.sink.setRowData({ 0: { symbol: "AAPL", price: 1 } }, { 0: "row-a" });
+
+      expect(hiddenGetter).not.toHaveBeenCalled();
+      expect(adapter.getPublication().rowSpace?.getRow("row-a")).toBe(stable);
+      expect(publish).not.toHaveBeenCalled();
+    };
+
+    run("computed");
+    run("raw-presentation");
   });
 
   it("uses the shared Quick Filter field admission policy", () => {

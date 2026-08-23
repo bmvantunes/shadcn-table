@@ -281,12 +281,16 @@ test("windows emitted Select filter options while retaining a selected value", a
 
   await userEvent.click(screen.getByRole("button", { name: "Filter Choice (active)" }));
   const dialog = screen.getByRole("dialog", { name: "Filter Choice" });
-  await expect.element(dialog.getByRole("status")).toHaveTextContent("Showing options 1–64 of 65");
+  await expect
+    .element(dialog.getByRole("status").nth(1))
+    .toHaveTextContent("Showing options 1–64 of 65");
   const selectedOption = dialog.getByRole("option", { name: "option-64" });
   await expect.element(selectedOption).toBeInTheDocument();
   expect((selectedOption.element() as HTMLOptionElement).selected).toBe(true);
   await userEvent.click(dialog.getByRole("button", { name: "Next filter options for Choice" }));
-  await expect.element(dialog.getByRole("status")).toHaveTextContent("Showing options 2–65 of 65");
+  await expect
+    .element(dialog.getByRole("status").nth(1))
+    .toHaveTextContent("Showing options 2–65 of 65");
   await expect.element(dialog.getByRole("option", { name: "option-0" })).not.toBeInTheDocument();
   expect(
     (dialog.getByRole("option", { name: "option-64" }).element() as HTMLOptionElement).selected,

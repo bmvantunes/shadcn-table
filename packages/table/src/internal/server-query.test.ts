@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import * as BigDecimal from "effect/BigDecimal";
 
+import { BrunoTableBigDecimalValueType } from "../effect";
 import { compileColumns } from "./compile-columns";
-import { compileBrunoTableServerQueryPlan } from "./server-query";
+import {
+  BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS,
+  compileBrunoTableServerFacetQuery,
+  compileBrunoTableServerQueryPlan,
+} from "./server-query";
 
 const columns = compileColumns([
   {
@@ -18,6 +24,18 @@ const columns = compileColumns([
     valueType: "bigint",
   },
   {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+  },
+  {
+    columnId: "COL_ID_AMOUNT",
+    field: "amount",
+    headerName: "Amount",
+    valueType: BrunoTableBigDecimalValueType,
+  },
+  {
     columnId: "COL_ID_NOTIONAL",
     fields: ["quantity", "price"],
     headerName: "Notional",
@@ -25,7 +43,15 @@ const columns = compileColumns([
     valueType: "number",
   },
 ]);
-const completeRawSelect = ["id", "symbol", "quantity", "price", "desk", "hiddenLabel"] as const;
+const completeRawSelect = [
+  "id",
+  "symbol",
+  "quantity",
+  "price",
+  "amount",
+  "desk",
+  "hiddenLabel",
+] as const;
 
 describe("compileBrunoTableServerQueryPlan", () => {
   it("rejects empty and non-field sorting at the runtime boundary", () => {
@@ -89,7 +115,7 @@ describe("compileBrunoTableServerQueryPlan", () => {
     ).query;
 
     expect(query).toEqual({
-      select: ["symbol", "quantity", "price", "desk"],
+      select: ["symbol", "quantity", "price", "amount", "desk"],
       where: [
         {
           type: "AND",
@@ -113,6 +139,74 @@ describe("compileBrunoTableServerQueryPlan", () => {
       ],
       orderBy: [{ field: "quantity", direction: "desc" }],
     });
+  });
+
+  it("retains Number, BigInt, and BigDecimal operands in their native domains", () => {
+    const amount = BigDecimal.fromStringUnsafe("9007199254740993.125");
+    const query = compileBrunoTableServerQueryPlan(
+      columns,
+      {
+        filters: [
+          { columnId: "COL_ID_PRICE", type: "equals", filter: 1.25 },
+          { columnId: "COL_ID_QUANTITY", type: "equals", filter: 9_007_199_254_740_993n },
+          { columnId: "COL_ID_AMOUNT", type: "equals", filter: amount },
+        ],
+        quickFilter: "",
+        quickFilterFields: [],
+        orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      },
+      completeRawSelect,
+    ).query;
+
+    expect(query.where).toEqual([
+      { field: "price", type: "equals", filter: 1.25 },
+      { field: "quantity", type: "equals", filter: 9_007_199_254_740_993n },
+      { field: "amount", type: "equals", filter: amount },
+    ]);
+    expect(Reflect.get(query.where[2]!, "filter")).toBe(amount);
+  });
+
+  it("forwards Feed Route and combines external, Quick, and Grid constraints in order", () => {
+    const minimum = 9_007_199_254_740_993n;
+    const routeBy = Object.freeze({ region: "emea", book: 7n });
+    const externalFilters = Object.freeze([
+      Object.freeze({ field: "desk", type: "equals", filter: "rates" }),
+      Object.freeze({ field: "quantity", type: "greaterThanOrEqual", filter: minimum }),
+    ]);
+
+    const query = compileBrunoTableServerQueryPlan(
+      columns,
+      {
+        routeBy,
+        externalFilters,
+        filters: [{ columnId: "COL_ID_SYMBOL", type: "equals", filter: "EUR" }],
+        quickFilter: "swap",
+        quickFilterFields: ["hiddenLabel", "symbol"],
+        visibleColumnIds: ["COL_ID_SYMBOL", "COL_ID_NOTIONAL"],
+        orderBy: [{ columnId: "COL_ID_QUANTITY", direction: "desc" }],
+      },
+      completeRawSelect,
+    ).query;
+
+    expect(query).toEqual({
+      routeBy,
+      select: ["symbol", "quantity", "price", "hiddenLabel"],
+      where: [
+        ...externalFilters,
+        { field: "symbol", type: "equals", filter: "EUR" },
+        {
+          type: "OR",
+          conditions: [
+            { field: "hiddenLabel", type: "contains", filter: "swap" },
+            { field: "symbol", type: "contains", filter: "swap" },
+          ],
+        },
+      ],
+      orderBy: [{ field: "quantity", direction: "desc" }],
+    });
+    expect(query.routeBy).toBe(routeBy);
+    expect(query.where[0]).toBe(externalFilters[0]);
+    expect(query.where[1]).toBe(externalFilters[1]);
   });
 
   it("compiles empty Set inclusion intent through source-native FALSE", () => {
@@ -142,6 +236,64 @@ describe("compileBrunoTableServerQueryPlan", () => {
     ).toThrow("Match None requires a Set Filter");
   });
 
+  it("compiles one narrow whole-result facet excluding only its own Grid Filter", () => {
+    const routeBy = Object.freeze({ region: "emea" });
+    expect(
+      compileBrunoTableServerFacetQuery(columns, "COL_ID_SYMBOL", {
+        routeBy,
+        externalFilters: [{ field: "desk", type: "equals", filter: "rates" }],
+        filters: [
+          { columnId: "COL_ID_SYMBOL", type: "matchNone" },
+          { columnId: "COL_ID_QUANTITY", type: "greaterThan", filter: 10n },
+        ],
+        quickFilter: "swap",
+        quickFilterFields: ["hiddenLabel", "symbol"],
+        orderBy: [{ columnId: "COL_ID_QUANTITY", direction: "desc" }],
+      }),
+    ).toEqual({
+      countAlias: BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS,
+      query: {
+        routeBy,
+        groupBy: ["symbol"],
+        aggregates: { [BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS]: { aggFunc: "count" } },
+        where: [
+          { field: "desk", type: "equals", filter: "rates" },
+          { field: "quantity", type: "greaterThan", filter: 10n },
+          {
+            type: "OR",
+            conditions: [
+              { field: "hiddenLabel", type: "contains", filter: "swap" },
+              { field: "symbol", type: "contains", filter: "swap" },
+            ],
+          },
+        ],
+        orderBy: [{ field: "symbol", direction: "asc" }],
+      },
+    });
+  });
+
+  it("derives a private facet count alias that cannot collide with the grouped source Field", () => {
+    const collidingColumns = compileColumns([
+      {
+        columnId: "COL_ID_COLLIDING_FACET",
+        enableSetFilter: true,
+        field: BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS,
+        headerName: "Facet",
+        valueType: "text",
+      },
+    ]);
+    const plan = compileBrunoTableServerFacetQuery(collidingColumns, "COL_ID_COLLIDING_FACET", {
+      filters: [],
+      quickFilter: "",
+      quickFilterFields: [],
+      orderBy: [{ columnId: "COL_ID_COLLIDING_FACET", direction: "asc" }],
+    });
+
+    expect(plan.countAlias).not.toBe(BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS);
+    expect(plan.query.groupBy).toEqual([BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS]);
+    expect(plan.query.aggregates).toEqual({ [plan.countAlias]: { aggFunc: "count" } });
+  });
+
   it("deduplicates projection fields without inferring from formatted output", () => {
     expect(
       compileBrunoTableServerQueryPlan(
@@ -154,7 +306,7 @@ describe("compileBrunoTableServerQueryPlan", () => {
         },
         completeRawSelect,
       ).query.select,
-    ).toEqual(["symbol", "quantity", "price"]);
+    ).toEqual(["symbol", "quantity", "price", "amount"]);
   });
 
   it("uses the source-owned complete raw projection only for raw-row-aware presentation", () => {
@@ -210,5 +362,37 @@ describe("compileBrunoTableServerQueryPlan", () => {
         undefined,
       ),
     ).toThrow("requires source-owned completeRawSelect");
+  });
+
+  it("ignores raw-row presentation on hidden columns", () => {
+    const presentedColumns = compileColumns([
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        valueFormatter: () => "formatted",
+      },
+    ]);
+
+    expect(
+      compileBrunoTableServerQueryPlan(
+        presentedColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          visibleColumnIds: ["COL_ID_SYMBOL"],
+          orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+        },
+        completeRawSelect,
+      ).query.select,
+    ).toEqual(["symbol"]);
   });
 });

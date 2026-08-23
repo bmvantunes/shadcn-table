@@ -28,6 +28,7 @@ export default defineConfig({
       "effect-view-server/config",
       "effect-view-server/react",
       "effect-view-server/react/testing",
+      "effect-view-server/source-adapter",
       "react",
       "react-dom/client",
       "react-dom/server",

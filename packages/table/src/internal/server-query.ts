@@ -1,9 +1,12 @@
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
 
 export type BrunoTableServerQueryInput = Readonly<{
+  readonly routeBy?: Readonly<Record<string, unknown>>;
+  readonly externalFilters?: readonly unknown[];
   readonly filters: readonly unknown[];
   readonly quickFilter: string;
   readonly quickFilterFields: readonly string[];
+  readonly visibleColumnIds?: readonly string[];
   readonly orderBy: readonly Readonly<{
     readonly columnId: string;
     readonly direction: "asc" | "desc";
@@ -11,6 +14,7 @@ export type BrunoTableServerQueryInput = Readonly<{
 }>;
 
 export type BrunoTableCompiledServerQuery = Readonly<{
+  readonly routeBy?: Readonly<Record<string, unknown>>;
   readonly select: readonly [string, ...string[]];
   readonly where: readonly unknown[];
   readonly orderBy: readonly Readonly<{
@@ -21,15 +25,35 @@ export type BrunoTableCompiledServerQuery = Readonly<{
 
 export type BrunoTableCompiledServerQueryPlan = Readonly<{
   readonly query: BrunoTableCompiledServerQuery;
-  readonly operandSemantics: ReadonlyMap<object, CompiledFieldColumn["semantics"]>;
+}>;
+
+export const BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS = "__bruno_table_facet_count";
+
+export type BrunoTableCompiledServerFacetQuery = Readonly<{
+  readonly routeBy?: Readonly<Record<string, unknown>>;
+  readonly groupBy: readonly [string];
+  readonly aggregates: Readonly<Record<string, Readonly<{ readonly aggFunc: "count" }>>>;
+  readonly where: readonly unknown[];
+  readonly orderBy: readonly [Readonly<{ readonly field: string; readonly direction: "asc" }>];
+}>;
+
+export type BrunoTableCompiledServerFacetQueryPlan = Readonly<{
+  readonly countAlias: string;
+  readonly query: BrunoTableCompiledServerFacetQuery;
 }>;
 
 export function compileBrunoTableServerProjectionFields(
   columns: readonly CompiledColumn[],
   quickFilterFields: readonly string[],
   completeRawSelect: readonly [string, ...string[]] | undefined,
+  visibleColumnIds?: readonly string[],
 ): readonly [string, ...string[]] {
-  if (columns.some(columnUsesRawRowPresentation)) {
+  const visibleIds = visibleColumnIds === undefined ? undefined : new Set(visibleColumnIds);
+  const activeColumns =
+    visibleIds === undefined
+      ? columns
+      : columns.filter((column) => visibleIds.has(column.columnId));
+  if (activeColumns.some(columnUsesRawRowPresentation)) {
     if (completeRawSelect === undefined) {
       throw new TypeError(
         "BrunoTable Server raw-row presentation requires source-owned completeRawSelect.",
@@ -38,7 +62,7 @@ export function compileBrunoTableServerProjectionFields(
     return completeRawSelect;
   }
   const fields = new Set<string>();
-  for (const column of columns) {
+  for (const column of activeColumns) {
     if (column.kind === "field") fields.add(column.field);
     else for (const field of column.fields) fields.add(field);
   }
@@ -57,7 +81,6 @@ export function compileBrunoTableServerQueryPlan(
   completeRawSelect: readonly [string, ...string[]] | undefined,
 ): BrunoTableCompiledServerQueryPlan {
   const fieldColumns = new Map<string, CompiledFieldColumn>();
-  const operandSemantics = new Map<object, CompiledFieldColumn["semantics"]>();
   for (const column of columns) {
     if (column.kind === "field") {
       fieldColumns.set(column.columnId, column);
@@ -67,11 +90,11 @@ export function compileBrunoTableServerQueryPlan(
     columns,
     input.quickFilterFields,
     completeRawSelect,
+    input.visibleColumnIds,
   );
 
-  const where = input.filters.map((filter) =>
-    compileFilter(filter, fieldColumns, operandSemantics),
-  );
+  const where = [...(input.externalFilters ?? [])];
+  where.push(...input.filters.map((filter) => compileFilter(filter, fieldColumns)));
   if (input.quickFilter.length > 0 && input.quickFilterFields.length > 0) {
     const quickFilterFields = [...input.quickFilterFields].sort();
     where.push(
@@ -99,12 +122,71 @@ export function compileBrunoTableServerQueryPlan(
 
   return Object.freeze({
     query: Object.freeze({
+      ...(input.routeBy === undefined ? {} : { routeBy: input.routeBy }),
       select,
       where: Object.freeze(where),
       orderBy: Object.freeze(orderBy),
     }),
-    operandSemantics,
   });
+}
+
+export function compileBrunoTableServerFacetQuery(
+  columns: readonly CompiledColumn[],
+  columnId: string,
+  input: BrunoTableServerQueryInput,
+): BrunoTableCompiledServerFacetQueryPlan {
+  const fieldColumns = new Map<string, CompiledFieldColumn>();
+  for (const column of columns) {
+    if (column.kind === "field") fieldColumns.set(column.columnId, column);
+  }
+  const column = fieldColumns.get(columnId);
+  if (column === undefined || !column.enableFilter || !column.enableSetFilter) {
+    throw new TypeError(`BrunoTable Server facet has no Query Field: ${columnId}`);
+  }
+  const where = [...(input.externalFilters ?? [])];
+  where.push(
+    ...selectBrunoTableServerFacetGridFilters(input.filters, columnId).map((filter) =>
+      compileFilter(filter, fieldColumns),
+    ),
+  );
+  if (input.quickFilter.length > 0 && input.quickFilterFields.length > 0) {
+    where.push(
+      Object.freeze({
+        type: "OR",
+        conditions: Object.freeze(
+          [...input.quickFilterFields]
+            .sort()
+            .map((field) => Object.freeze({ field, type: "contains", filter: input.quickFilter })),
+        ),
+      }),
+    );
+  }
+  const groupBy: readonly [string] = Object.freeze([column.field]);
+  const countAlias =
+    column.field === BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS
+      ? `${BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS}_1`
+      : BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS;
+  const orderBy: readonly [Readonly<{ readonly field: string; readonly direction: "asc" }>] =
+    Object.freeze([Object.freeze({ field: column.field, direction: "asc" })]);
+  return Object.freeze({
+    countAlias,
+    query: Object.freeze({
+      ...(input.routeBy === undefined ? {} : { routeBy: input.routeBy }),
+      groupBy,
+      aggregates: Object.freeze({
+        [countAlias]: Object.freeze({ aggFunc: "count" }),
+      }),
+      where: Object.freeze(where),
+      orderBy,
+    }),
+  });
+}
+
+export function selectBrunoTableServerFacetGridFilters(
+  filters: readonly unknown[],
+  columnId: string,
+): readonly unknown[] {
+  return filters.filter((filter) => !filterContainsColumn(filter, columnId));
 }
 
 export function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
@@ -118,7 +200,6 @@ export function columnUsesRawRowPresentation(column: CompiledColumn): boolean {
 function compileFilter(
   filter: unknown,
   columns: ReadonlyMap<string, CompiledFieldColumn>,
-  operandSemantics: Map<object, CompiledFieldColumn["semantics"]>,
 ): unknown {
   if (!isRecord(filter)) throw new TypeError("BrunoTable Server filter must be an object.");
   const type = Reflect.get(filter, "type");
@@ -129,15 +210,13 @@ function compileFilter(
     }
     return Object.freeze({
       type,
-      conditions: Object.freeze(
-        conditions.map((condition) => compileFilter(condition, columns, operandSemantics)),
-      ),
+      conditions: Object.freeze(conditions.map((condition) => compileFilter(condition, columns))),
     });
   }
   if (type === "NOT") {
     return Object.freeze({
       type,
-      condition: compileFilter(Reflect.get(filter, "condition"), columns, operandSemantics),
+      condition: compileFilter(Reflect.get(filter, "condition"), columns),
     });
   }
 
@@ -164,7 +243,6 @@ function compileFilter(
   copyOwn(filter, compiled, "filterTo");
   copyOwn(filter, compiled, "caseSensitive");
   copyOwn(filter, compiled, "accentSensitive");
-  operandSemantics.set(compiled, column.semantics);
   return Object.freeze(compiled);
 }
 
@@ -181,6 +259,16 @@ function copyOwn(
 
 function isRecord(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
   return typeof value === "object" && value !== null;
+}
+
+function filterContainsColumn(filter: unknown, columnId: string): boolean {
+  if (!isRecord(filter)) return false;
+  if (Reflect.get(filter, "columnId") === columnId) return true;
+  const conditions = Reflect.get(filter, "conditions");
+  if (Array.isArray(conditions)) {
+    return conditions.some((condition) => filterContainsColumn(condition, columnId));
+  }
+  return filterContainsColumn(Reflect.get(filter, "condition"), columnId);
 }
 
 const FIELD_FILTER_TYPES = new Set([

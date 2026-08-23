@@ -1592,7 +1592,9 @@ describe("BrunoTableClient browser surface", () => {
       rowRenders.mockClear();
       cellRenders.mockClear();
       await userEvent.fill(search, "missing");
-      await expect.element(dialog.getByRole("status")).toHaveTextContent("No values found");
+      await expect
+        .element(dialog.getByRole("status", { name: /No values found/ }))
+        .toHaveTextContent("No values found");
       expect(viewRenders).not.toHaveBeenCalled();
       expect(rowRenders).not.toHaveBeenCalled();
       expect(cellRenders).not.toHaveBeenCalled();
@@ -1819,7 +1821,7 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Filter Choice (active)" }));
     const dialog = screen.getByRole("dialog", { name: "Filter Choice" });
     await expect
-      .element(dialog.getByRole("status"))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 1–64 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
     await expect
@@ -1828,7 +1830,7 @@ describe("BrunoTableClient browser surface", () => {
 
     await userEvent.click(dialog.getByRole("button", { name: "Next filter options for Choice" }));
     await expect
-      .element(dialog.getByRole("status"))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 2–65 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-0" })).not.toBeInTheDocument();
     await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
@@ -1837,7 +1839,7 @@ describe("BrunoTableClient browser surface", () => {
       dialog.getByRole("button", { name: "Previous filter options for Choice" }),
     );
     await expect
-      .element(dialog.getByRole("status"))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 1–64 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-0" })).toBeInTheDocument();
   });

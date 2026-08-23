@@ -35,7 +35,7 @@ export type BrunoTableSetFilterCommand =
 
 export type BrunoTableClientFacetOption = Readonly<{
   readonly value: unknown;
-  readonly count: number;
+  readonly count: number | bigint;
   readonly display: string;
 }>;
 
@@ -285,6 +285,47 @@ export function createBrunoTableClientFacetSnapshot<TRow>(
   );
 }
 
+export function createBrunoTableServerFacetSnapshot(
+  options: Readonly<{
+    readonly column: CompiledColumn;
+    readonly countAlias: string;
+    readonly rows: readonly unknown[];
+    readonly expression: unknown;
+  }>,
+): BrunoTableClientFacetSnapshot {
+  if (options.column.kind !== "field") {
+    throw new TypeError("BrunoTable Server facets require a Field Column.");
+  }
+  const buckets = new Map<string, { value: unknown; count: bigint }[]>();
+  const liveOptions: { value: unknown; count: bigint }[] = [];
+  for (const candidate of options.rows) {
+    if (typeof candidate !== "object" || candidate === null) {
+      throw new TypeError("BrunoTable Server facet delivered an invalid grouped row.");
+    }
+    const rawValue = Reflect.get(candidate, options.column.field);
+    const rawCount = Reflect.get(candidate, options.countAlias);
+    if (typeof rawCount !== "bigint" || rawCount < 0n) {
+      throw new TypeError("BrunoTable Server facet delivered an invalid aggregate count.");
+    }
+    const decoded = options.column.semantics.decodeRuntime(rawValue);
+    if (decoded._tag !== "Success") continue;
+    addServerFacetValue(options.column, buckets, liveOptions, decoded.value, rawCount);
+  }
+  return completeFacetSnapshot(
+    options.column,
+    liveOptions.map(({ value, count }) =>
+      Object.freeze({
+        value,
+        count,
+        display: safeFormatDisplay(options.column, value),
+      }),
+    ),
+    readBrunoTableSetFilterIntent(options.column, options.expression),
+    undefined,
+    0n,
+  );
+}
+
 function facetDependenciesUnchanged(
   facetColumn: CompiledColumn,
   columns: readonly CompiledColumn[],
@@ -360,6 +401,7 @@ function completeFacetSnapshot(
   liveOptions: readonly BrunoTableClientFacetOption[],
   intent: BrunoTableSetFilterIntent,
   liveBuckets?: ReadonlyMap<string, readonly { readonly value: unknown }[]>,
+  zeroCount: number | bigint = 0,
 ): BrunoTableClientFacetSnapshot {
   const options = Array.from(liveOptions);
   const liveIndex =
@@ -381,7 +423,9 @@ function completeFacetSnapshot(
                 areBrunoTableSetValuesEquivalent(column, candidate.value, value),
               ) === true;
       if (isLive) continue;
-      options.push(Object.freeze({ value, count: 0, display: safeFormatDisplay(column, value) }));
+      options.push(
+        Object.freeze({ value, count: zeroCount, display: safeFormatDisplay(column, value) }),
+      );
     }
   }
   return Object.freeze({ intent, options: Object.freeze(options) });
@@ -411,13 +455,42 @@ function addFacetValue(
   value: unknown,
   increment: number,
 ): void {
+  addFacetValueInDomain(column, buckets, ordered, value, increment, addNumberFacetCounts);
+}
+
+function addServerFacetValue(
+  column: CompiledColumn,
+  buckets: Map<string, { value: unknown; count: bigint }[]>,
+  ordered: { value: unknown; count: bigint }[],
+  value: unknown,
+  increment: bigint,
+): void {
+  addFacetValueInDomain(column, buckets, ordered, value, increment, addBigIntFacetCounts);
+}
+
+function addNumberFacetCounts(left: number, right: number): number {
+  return left + right;
+}
+
+function addBigIntFacetCounts(left: bigint, right: bigint): bigint {
+  return left + right;
+}
+
+function addFacetValueInDomain<TCount>(
+  column: CompiledColumn,
+  buckets: Map<string, { value: unknown; count: TCount }[]>,
+  ordered: { value: unknown; count: TCount }[],
+  value: unknown,
+  increment: TCount,
+  add: (left: TCount, right: TCount) => TCount,
+): void {
   const key = facetValueKey(column, value);
   const bucket = buckets.get(key) ?? [];
   const existing = bucket.find((candidate) =>
     areBrunoTableSetValuesEquivalent(column, candidate.value, value),
   );
   if (existing !== undefined) {
-    existing.count += increment;
+    existing.count = add(existing.count, increment);
     return;
   }
   const entry = { value, count: increment };

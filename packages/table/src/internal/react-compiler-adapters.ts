@@ -52,6 +52,63 @@ class BrunoTableInstanceIdStore {
   };
 }
 
+type BrunoTableServerFacetHookSource = Readonly<{
+  readonly useWholeResult: (...arguments_: never[]) => unknown;
+  readonly viewport: unknown;
+}>;
+
+class BrunoTableServerFacetHookBridge {
+  public readonly source: BrunoTableServerFacetHookSource;
+
+  public constructor(
+    public readonly viewport: unknown,
+    private hook: BrunoTableServerFacetHookSource["useWholeResult"],
+  ) {
+    this.source = Object.freeze({
+      useWholeResult: (...arguments_: never[]) => this.hook(...arguments_),
+      viewport,
+    });
+  }
+
+  public updateHook(hook: BrunoTableServerFacetHookSource["useWholeResult"]): void {
+    this.hook = hook;
+  }
+}
+
+class BrunoTableServerFacetHookBridgeStore {
+  private committed: BrunoTableServerFacetHookBridge;
+
+  public constructor(source: BrunoTableServerFacetHookSource) {
+    this.committed = new BrunoTableServerFacetHookBridge(source.viewport, source.useWholeResult);
+  }
+
+  public resolve(source: BrunoTableServerFacetHookSource): BrunoTableServerFacetHookBridge {
+    return Object.is(this.committed.viewport, source.viewport)
+      ? this.committed
+      : new BrunoTableServerFacetHookBridge(source.viewport, source.useWholeResult);
+  }
+
+  public commit(
+    source: BrunoTableServerFacetHookSource,
+    bridge: BrunoTableServerFacetHookBridge,
+  ): void {
+    bridge.updateHook(source.useWholeResult);
+    this.committed = bridge;
+  }
+}
+
+export function useBrunoTableServerFacetHookSource(
+  source: BrunoTableServerFacetHookSource,
+): BrunoTableServerFacetHookSource {
+  "use no memo";
+  const [store] = useState(() => new BrunoTableServerFacetHookBridgeStore(source));
+  const bridge = store.resolve(source);
+  useLayoutEffect(() => {
+    store.commit(source, bridge);
+  }, [bridge, source, store]);
+  return bridge.source;
+}
+
 function useBrunoTableInstanceId(): string {
   const reactInstanceId = useId();
   const [{ subscribeInstanceId, getInstanceId, getServerInstanceId }] = useState(() => {

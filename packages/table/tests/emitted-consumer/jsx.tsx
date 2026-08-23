@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { SourceAdapter } from "effect-view-server/source-adapter";
 
 import {
   BrunoTableClient,
@@ -116,6 +117,31 @@ const emittedServerSource = createViewServerReact(
     },
   }),
 ).useLiveQueryViewport("rows");
+const emittedLeasedJsxAdapter = SourceAdapter.make({
+  identity: { name: "bruno-table-emitted-jsx-route-tests" },
+  failure: Schema.Never,
+  materialized: undefined,
+  leased: {
+    metrics: Schema.Struct({ observed: Schema.BigInt }),
+    rejectionLocation: Schema.Struct({ offset: Schema.BigInt }),
+    definitionOptions: SourceAdapter.definitionOptions<undefined>(),
+  },
+});
+const emittedLeasedJsxSource = createViewServerReact(
+  defineViewServerConfig({
+    topics: {
+      rows: {
+        schema: Schema.Struct({
+          id: ViewServerId,
+          name: Schema.String,
+          score: Schema.Number,
+          revision: Schema.BigInt,
+        }),
+        source: emittedLeasedJsxAdapter.leasedSource(["name", "revision"], undefined),
+      },
+    },
+  }),
+).useLiveQueryViewport("rows");
 
 const validEmittedServer = (
   <BrunoTableServer
@@ -126,6 +152,33 @@ const validEmittedServer = (
   />
 );
 void validEmittedServer;
+const validEmittedLeasedServerProps = {
+  tableId: "TABLE_ID_EMITTED_JSX_LEASED_SERVER",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+  viewportSource: emittedLeasedJsxSource,
+  routeBy: { name: "Ada", revision: 1n },
+} as const;
+void (<BrunoTableServer {...validEmittedLeasedServerProps} />);
+const missingEmittedLeasedRouteProps = {
+  ...validEmittedLeasedServerProps,
+  routeBy: { name: "Ada" },
+};
+// @ts-expect-error emitted leased JSX calls require every exact Route Field.
+void (<BrunoTableServer {...missingEmittedLeasedRouteProps} />);
+const wrongEmittedLeasedRouteProps = {
+  ...validEmittedLeasedServerProps,
+  routeBy: { name: "Ada", revision: 1 },
+};
+// @ts-expect-error emitted leased JSX calls preserve exact Route value domains.
+void (<BrunoTableServer {...wrongEmittedLeasedRouteProps} />);
+void (
+  <BrunoTableServer
+    {...validEmittedLeasedServerProps}
+    // @ts-expect-error emitted leased JSX calls reject extra Route Fields.
+    routeBy={{ name: "Ada", revision: 1n, desk: "rates" }}
+  />
+);
 
 const invalidEmittedServerIdentity = (
   <BrunoTableServer
@@ -174,7 +227,6 @@ const emittedServerClientSource = { ...emittedServerProps, clientSource };
 // @ts-expect-error emitted Server declarations reject Client Sources.
 void (<BrunoTableServer {...emittedServerClientSource} />);
 const emittedServerExternalFilters = { ...emittedServerProps, externalFilters: [] };
-// @ts-expect-error emitted issue #16 declarations expose no External Filter surface.
 void (<BrunoTableServer {...emittedServerExternalFilters} />);
 const emittedServerNumericQuickFilterFields = {
   ...emittedServerProps,
