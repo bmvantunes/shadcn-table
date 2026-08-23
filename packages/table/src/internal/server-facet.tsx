@@ -41,7 +41,6 @@ export type BrunoTableServerFacetSemanticSnapshot = Readonly<{
   readonly querySnapshot: BrunoTableQuerySnapshot;
   readonly routeBy: Readonly<Record<string, unknown>> | undefined;
   readonly runtime: BrunoTableRowPipelineRuntimeView;
-  readonly semanticIdentity: unknown;
   readonly source: unknown;
   readonly transportIdentity: unknown;
 }>;
@@ -116,10 +115,9 @@ export class BrunoTableServerFacetRuntime {
     if (
       sameServerFacetQuerySnapshot(this.#snapshot.querySnapshot, snapshot.querySnapshot) &&
       sameServerFacetSource(this.#snapshot.source, snapshot.source) &&
-      (Object.is(this.#snapshot.semanticIdentity, snapshot.semanticIdentity) ||
-        (Object.is(this.#snapshot.routeBy, snapshot.routeBy) &&
-          Object.is(this.#snapshot.externalFilters, snapshot.externalFilters) &&
-          Object.is(this.#snapshot.quickFilterFields, snapshot.quickFilterFields)))
+      Object.is(this.#snapshot.routeBy, snapshot.routeBy) &&
+      Object.is(this.#snapshot.externalFilters, snapshot.externalFilters) &&
+      Object.is(this.#snapshot.quickFilterFields, snapshot.quickFilterFields)
     ) {
       return;
     }

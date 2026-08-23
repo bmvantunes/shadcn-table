@@ -128,7 +128,6 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         querySnapshot: runtimeView.getQuerySnapshot(),
         routeBy: props.routeBy,
         runtime: runtimeView,
-        semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
         source: facetSource,
         transportIdentity: props.viewportSource.viewport,
       }),
@@ -189,7 +188,6 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       ...facetInputsRef.current,
       querySnapshot: runtimeView.getQuerySnapshot(),
       runtime: runtimeView,
-      semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
       transportIdentity: props.viewportSource.viewport,
     });
   }, [
@@ -226,7 +224,6 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         ...facetInputsRef.current,
         querySnapshot: query,
         runtime: runtimeView,
-        semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
         transportIdentity: props.viewportSource.viewport,
       });
     };

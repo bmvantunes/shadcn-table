@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { compileColumns } from "./compile-columns";
 import type { BrunoTableQuerySnapshot, BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
@@ -79,7 +79,6 @@ function snapshot({
     querySnapshot,
     routeBy,
     runtime: runtimeView,
-    semanticIdentity: Object.freeze({}),
     source,
     transportIdentity,
   });
@@ -87,16 +86,31 @@ function snapshot({
 
 describe("BrunoTableServerFacetRuntime", () => {
   it("retains its plan across normal sorting, own-filter intent, and source wrapper identity", () => {
-    const runtime = new BrunoTableServerFacetRuntime(snapshot());
+    const source = Object.freeze({});
+    const runtime = new BrunoTableServerFacetRuntime(snapshot({ source }));
     const initialSnapshot = runtime.getSnapshot();
     const initial = runtime.getFacetPlan(initialSnapshot, "COL_ID_SYMBOL");
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    const sorted: BrunoTableServerFacetSemanticSnapshot = Object.freeze({
+      ...initialSnapshot,
+      querySnapshot: Object.freeze({
+        ...initialSnapshot.querySnapshot,
+        orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" as const }],
+      }),
+    });
     const ignored = snapshot({
       filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "A" }],
       orderDirection: "desc",
-      source: Object.freeze({}),
+      source,
     });
 
+    runtime.reconcile(sorted);
+    expect(listener).not.toHaveBeenCalled();
     expect(runtime.getFacetPlan(ignored, "COL_ID_SYMBOL")).toBe(initial);
+    runtime.reconcile(ignored);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(runtime.getFacetPlan(runtime.getSnapshot(), "COL_ID_SYMBOL")).toBe(initial);
   });
 
   it("replaces its plan for External, peer, Route, Quick Filter, and transport inputs", () => {
@@ -129,5 +143,24 @@ describe("BrunoTableServerFacetRuntime", () => {
     runtime.reconcile(original);
 
     expect(runtime.getFacetPlan(runtime.getSnapshot(), "COL_ID_SYMBOL")).not.toBe(initial);
+  });
+
+  it("publishes when a cached facet plan changes but the primary query snapshot does not", () => {
+    const source = Object.freeze({});
+    const initial = snapshot({ source });
+    const runtime = new BrunoTableServerFacetRuntime(initial);
+    const initialPlan = runtime.getFacetPlan(initial, "COL_ID_SYMBOL");
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+
+    runtime.reconcile(
+      Object.freeze({
+        ...initial,
+        externalFilters: [{ field: "desk", type: "equals", filter: "NYC" }],
+      }),
+    );
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(runtime.getFacetPlan(runtime.getSnapshot(), "COL_ID_SYMBOL")).not.toBe(initialPlan);
   });
 });

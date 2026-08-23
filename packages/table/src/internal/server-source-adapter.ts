@@ -474,10 +474,6 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.reconcileStorePublication();
   }
 
-  public getSemanticIdentity(): unknown {
-    return this.active?.semanticKey;
-  }
-
   private invalidateAfterSemanticKeyFailure(error: unknown): never {
     const previous = this.active;
     this.active = undefined;
