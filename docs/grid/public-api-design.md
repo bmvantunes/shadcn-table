@@ -266,6 +266,8 @@ type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
 
 type BrunoTableServerSource<TViewport = unknown> = BrunoTableSourceChrome & {
   readonly viewport: TViewport;
+  /** Source-owned whole-result hook active only while a Server Set Filter overlay is open. */
+  readonly useWholeResult: (...arguments_: never[]) => unknown;
   readonly completeRawSelect: LiveQueryViewportCompleteRawSelect<TViewport>;
 };
 ```

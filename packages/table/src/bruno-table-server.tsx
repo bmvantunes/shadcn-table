@@ -21,7 +21,10 @@ import {
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { BrunoTableServerRowPipeline } from "./internal/server-row-pipeline";
-import { BrunoTableServerFacetProvider } from "./internal/server-facet";
+import {
+  BrunoTableServerFacetProvider,
+  BrunoTableServerFacetRuntime,
+} from "./internal/server-facet";
 import {
   BrunoTableServerRowPipelineAdapter,
   type BrunoTableServerQueryInputs,
@@ -57,32 +60,18 @@ export type {
 export function BrunoTableServer<
   TViewport,
   const TColumns extends BrunoTableColumns<LiveQueryViewportBaseRow<TViewport>>,
-  const TRouteBy extends Readonly<Record<string, unknown>> = never,
-  const TExternalFilters extends readonly unknown[] = readonly [],
 >(
-  props: BrunoTableServerProps<
-    LiveQueryViewportBaseRow<TViewport>,
-    TColumns,
-    TViewport,
-    TRouteBy,
-    TExternalFilters
-  >,
+  props: BrunoTableServerProps<LiveQueryViewportBaseRow<TViewport>, TColumns, TViewport>,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
   return <BrunoTableServerInstance key={tableId} props={props} tableId={tableId} />;
 }
 
-function BrunoTableServerInstance<
-  TRow,
-  const TColumns extends BrunoTableColumns<TRow>,
-  TViewport,
-  TRouteBy extends Readonly<Record<string, unknown>>,
-  TExternalFilters extends readonly unknown[],
->({
+function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns<TRow>, TViewport>({
   props,
   tableId,
 }: Readonly<{
-  readonly props: BrunoTableServerProps<TRow, TColumns, TViewport, TRouteBy, TExternalFilters>;
+  readonly props: BrunoTableServerProps<TRow, TColumns, TViewport>;
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
@@ -115,13 +104,31 @@ function BrunoTableServerInstance<
   const queryInputsRef = useRef<BrunoTableServerQueryInputs>({
     routeBy: props.routeBy,
     externalFilters: props.externalFilters,
-    visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+    visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
   });
   const stagingSemanticQueryRef = useRef(false);
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
   const quickFilterFields = useMemo(
     () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
     [props.quickFilterFields],
+  );
+  const facetInputsRef = useRef({
+    externalFilters: props.externalFilters,
+    quickFilterFields,
+    routeBy: props.routeBy,
+    source: props.viewportSource,
+  });
+  const [facetRuntime] = useState(
+    () =>
+      new BrunoTableServerFacetRuntime({
+        externalFilters: props.externalFilters,
+        quickFilterFields,
+        querySnapshot: runtimeView.getQuerySnapshot(),
+        routeBy: props.routeBy,
+        runtime: runtimeView,
+        semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
+        source: props.viewportSource,
+      }),
   );
 
   // This declaration must precede the reconciliation effect with the same semantic dependency
@@ -133,6 +140,7 @@ function BrunoTableServerInstance<
     props.externalFilters,
     props.quickFilterFields,
     props.routeBy,
+    props.viewportSource,
     props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
   ]);
@@ -159,45 +167,72 @@ function BrunoTableServerInstance<
     const queryInputs = Object.freeze({
       routeBy: props.routeBy,
       externalFilters: props.externalFilters,
-      visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+      visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
     });
     queryInputsRef.current = queryInputs;
+    facetInputsRef.current = {
+      externalFilters: props.externalFilters,
+      quickFilterFields,
+      routeBy: props.routeBy,
+      source: props.viewportSource,
+    };
     rowPipelineAdapter.replace(
       props.viewportSource.viewport,
       runtimeView.getQuerySnapshot(),
       queryInputs,
+      true,
     );
+    facetRuntime.reconcile({
+      ...facetInputsRef.current,
+      querySnapshot: runtimeView.getQuerySnapshot(),
+      runtime: runtimeView,
+      semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
+    });
   }, [
     compiledColumns,
+    facetRuntime,
     props.externalFilters,
     props.quickFilterFields,
     props.routeBy,
+    props.viewportSource,
     props.viewportSource.completeRawSelect,
     props.viewportSource.viewport,
+    quickFilterFields,
     rowPipelineAdapter,
     runtime,
     runtimeView,
   ]);
 
   useLayoutEffect(() => {
-    const replace = () => {
+    const replace = (resetWhenInputsChange: boolean) => {
       if (stagingSemanticQueryRef.current) return;
       const query = runtimeView.getQuerySnapshot();
       const queryInputs = Object.freeze({
         ...queryInputsRef.current,
-        visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
+        visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
       });
       queryInputsRef.current = queryInputs;
-      rowPipelineAdapter.replace(props.viewportSource.viewport, query, queryInputs);
+      rowPipelineAdapter.replace(
+        props.viewportSource.viewport,
+        query,
+        queryInputs,
+        resetWhenInputsChange,
+      );
+      facetRuntime.reconcile({
+        ...facetInputsRef.current,
+        querySnapshot: query,
+        runtime: runtimeView,
+        semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
+      });
     };
-    const unsubscribeQuery = runtimeView.subscribeQuery(replace);
-    const unsubscribeColumnLayout = runtimeView.subscribeColumnLayout(replace);
+    const unsubscribeQuery = runtimeView.subscribeQuery(() => replace(false));
+    const unsubscribeColumnStructure = runtimeView.subscribeColumnStructure(() => replace(true));
     return () => {
       unsubscribeQuery();
-      unsubscribeColumnLayout();
+      unsubscribeColumnStructure();
       rowPipelineAdapter.release();
     };
-  }, [props.viewportSource.viewport, rowPipelineAdapter, runtimeView]);
+  }, [facetRuntime, props.viewportSource.viewport, rowPipelineAdapter, runtimeView]);
 
   useLayoutEffect(() => {
     const notify = props.onPersistChange;
@@ -219,14 +254,7 @@ function BrunoTableServerInstance<
   );
 
   return (
-    <BrunoTableServerFacetProvider
-      columns={compiledColumns}
-      externalFilters={props.externalFilters}
-      quickFilterFields={quickFilterFields}
-      routeBy={props.routeBy}
-      runtime={runtimeView}
-      source={props.viewportSource}
-    >
+    <BrunoTableServerFacetProvider runtime={facetRuntime}>
       <BrunoTableClientFilterProvider runtime={runtimeView}>
         <BrunoTableToolbarProvider
           columns={compiledColumns}

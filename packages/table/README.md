@@ -92,7 +92,7 @@ representations as equal, and never compares by aligning scales through a power 
 `@bruno/table` does not import or require Effect; `effect@4.0.0-rc.111` is an optional peer used
 only by `@bruno/table/effect`. This optional value-type entry point is built against the separate
 public, versioned `effect-view-server@4.2.4/value-semantics` compatibility contract; the Server
-viewport integration described below requires 4.2.6. Admitted cross-bundle wire values are copied
+viewport integration described below requires 4.2.7. Admitted cross-bundle wire values are copied
 into owned local BigDecimals and receive opaque source-owned comparison metadata before BrunoTable
 exposes the full Effect value type. That focused runtime is inlined into `@bruno/table/effect`;
 applications do not install effect-view-server merely to use BigDecimal columns. BigDecimal columns
@@ -123,7 +123,7 @@ same source's independent whole-result hook and never facets sparse loaded slots
 compatible Viewport Source directly; they never provide `getRowId` or observe Effect, TanStack, or
 viewport-controller types through BrunoTable's public declarations.
 
-The Server integration requires `effect-view-server@4.2.6` at the application's source
+The Server integration requires `effect-view-server@4.2.7` at the application's source
 boundary. It contains the insertion-cleanup guarantee from issue #408, source-native Match None
 from issue #409, and the declaration-bundle-safe invariant base-row witness completed by issue 465,
 issue 469, and issue 471. Issue 473 adds the source-owned complete raw projection used whenever a

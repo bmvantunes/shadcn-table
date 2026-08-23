@@ -48,7 +48,12 @@ export function compileBrunoTableServerProjectionFields(
   completeRawSelect: readonly [string, ...string[]] | undefined,
   visibleColumnIds?: readonly string[],
 ): readonly [string, ...string[]] {
-  if (columns.some(columnUsesRawRowPresentation)) {
+  const visibleIds = visibleColumnIds === undefined ? undefined : new Set(visibleColumnIds);
+  const activeColumns =
+    visibleIds === undefined
+      ? columns
+      : columns.filter((column) => visibleIds.has(column.columnId));
+  if (activeColumns.some(columnUsesRawRowPresentation)) {
     if (completeRawSelect === undefined) {
       throw new TypeError(
         "BrunoTable Server raw-row presentation requires source-owned completeRawSelect.",
@@ -57,9 +62,7 @@ export function compileBrunoTableServerProjectionFields(
     return completeRawSelect;
   }
   const fields = new Set<string>();
-  const visibleIds = visibleColumnIds === undefined ? undefined : new Set(visibleColumnIds);
-  for (const column of columns) {
-    if (visibleIds !== undefined && !visibleIds.has(column.columnId)) continue;
+  for (const column of activeColumns) {
     if (column.kind === "field") fields.add(column.field);
     else for (const field of column.fields) fields.add(field);
   }

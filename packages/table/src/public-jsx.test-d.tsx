@@ -200,12 +200,13 @@ const wrongLeasedRouteProps = {
 };
 // @ts-expect-error leased JSX calls preserve exact Route value domains.
 void (<BrunoTableServer {...wrongLeasedRouteProps} />);
-const extraLeasedRouteProps = {
-  ...validLeasedServerProps,
-  routeBy: { name: "Ada", revision: 1n, desk: "rates" },
-};
-// @ts-expect-error leased JSX calls reject extra Route Fields.
-void (<BrunoTableServer {...extraLeasedRouteProps} />);
+void (
+  <BrunoTableServer
+    {...validLeasedServerProps}
+    // @ts-expect-error leased JSX calls reject extra Route Fields.
+    routeBy={{ name: "Ada", revision: 1n, desk: "rates" }}
+  />
+);
 
 const invalidServerClientSource = { ...serverComponentProps, clientSource };
 // @ts-expect-error Server Tables reject Client Sources through composed props.

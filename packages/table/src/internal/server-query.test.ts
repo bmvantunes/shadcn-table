@@ -363,4 +363,36 @@ describe("compileBrunoTableServerQueryPlan", () => {
       ),
     ).toThrow("requires source-owned completeRawSelect");
   });
+
+  it("ignores raw-row presentation on hidden columns", () => {
+    const presentedColumns = compileColumns([
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        valueFormatter: () => "formatted",
+      },
+    ]);
+
+    expect(
+      compileBrunoTableServerQueryPlan(
+        presentedColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          visibleColumnIds: ["COL_ID_SYMBOL"],
+          orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+        },
+        completeRawSelect,
+      ).query.select,
+    ).toEqual(["symbol"]);
+  });
 });

@@ -172,12 +172,13 @@ const wrongEmittedLeasedRouteProps = {
 };
 // @ts-expect-error emitted leased JSX calls preserve exact Route value domains.
 void (<BrunoTableServer {...wrongEmittedLeasedRouteProps} />);
-const extraEmittedLeasedRouteProps = {
-  ...validEmittedLeasedServerProps,
-  routeBy: { name: "Ada", revision: 1n, desk: "rates" },
-};
-// @ts-expect-error emitted leased JSX calls reject extra Route Fields.
-void (<BrunoTableServer {...extraEmittedLeasedRouteProps} />);
+void (
+  <BrunoTableServer
+    {...validEmittedLeasedServerProps}
+    // @ts-expect-error emitted leased JSX calls reject extra Route Fields.
+    routeBy={{ name: "Ada", revision: 1n, desk: "rates" }}
+  />
+);
 
 const invalidEmittedServerIdentity = (
   <BrunoTableServer

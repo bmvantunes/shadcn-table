@@ -1097,6 +1097,122 @@ describe("BrunoTable public types", () => {
     >();
     expectTypeOf(serverProps.children).toEqualTypeOf<ReactNode>();
 
+    const annotatedLeasedProps: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n },
+      externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10n }],
+    };
+    void annotatedLeasedProps;
+
+    // @ts-expect-error Server Props derive Route and External Filter authority from the viewport.
+    type InvalidServerRouteOverride = BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport,
+      never
+    >;
+    expectTypeOf<InvalidServerRouteOverride>();
+    void BrunoTableServer<
+      // @ts-expect-error the Server component exposes no caller-selectable Route/Where generics.
+      typeof leasedOrderViewportSource.viewport,
+      Columns,
+      typeof annotatedLeasedProps,
+      never
+    >;
+
+    // @ts-expect-error the direct three-generic leased Props alias requires Feed Route.
+    const annotatedMissingRoute: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = { ...common, viewportSource: leasedOrderViewportSource };
+    void annotatedMissingRoute;
+    const annotatedMissingRouteField: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error the direct alias requires every source-owned Route field.
+      routeBy: { status: "open" },
+    };
+    void annotatedMissingRouteField;
+    const annotatedExtraRouteField: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error the direct alias rejects fields outside the source-owned Route tuple.
+      routeBy: { status: "open", revision: 1n, desk: "rates" },
+    };
+    void annotatedExtraRouteField;
+    const annotatedWrongRouteValue: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error the direct alias preserves exact Route scalar domains.
+      routeBy: { status: "open", revision: 1 },
+    };
+    void annotatedWrongRouteValue;
+    const annotatedWrongExternalField: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n },
+      // @ts-expect-error the direct alias rejects unknown External Filter fields.
+      externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
+    };
+    void annotatedWrongExternalField;
+    const annotatedWrongExternalOperand: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n },
+      // @ts-expect-error the direct alias preserves exact known-field operand domains.
+      externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
+    };
+    void annotatedWrongExternalOperand;
+    const annotatedMixedExternalRange: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof leasedOrderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: leasedOrderViewportSource,
+      routeBy: { status: "open", revision: 1n },
+      // @ts-expect-error the direct alias keeps both bigint range bounds in one exact domain.
+      externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
+    };
+    void annotatedMixedExternalRange;
+    const annotatedMaterializedRoute: BrunoTableServerProps<
+      Order,
+      Columns,
+      typeof orderViewportSource.viewport
+    > = {
+      ...common,
+      viewportSource: orderViewportSource,
+      // @ts-expect-error the direct source-free alias forbids Feed Route.
+      routeBy: { status: "open" },
+    };
+    void annotatedMaterializedRoute;
+
     void BrunoTableServer({
       ...serverProps,
       externalFilters: [{ field: "status", type: "equals", filter: "open" }],
@@ -1109,39 +1225,39 @@ describe("BrunoTable public types", () => {
     });
     // @ts-expect-error leased sources require their complete exact Route tuple.
     void BrunoTableServer({ ...common, viewportSource: leasedOrderViewportSource });
-    // @ts-expect-error leased sources reject missing Route fields.
     void BrunoTableServer({
       ...common,
       viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error leased sources reject missing Route fields.
       routeBy: { status: "open" },
     });
-    // @ts-expect-error leased sources reject extra Route fields.
     void BrunoTableServer({
       ...common,
       viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error leased sources reject extra Route fields.
       routeBy: { status: "open", revision: 1n, desk: "rates" },
     });
-    // @ts-expect-error exact Route values reject the wrong scalar domain.
     void BrunoTableServer({
       ...common,
       viewportSource: leasedOrderViewportSource,
+      // @ts-expect-error exact Route values reject the wrong scalar domain.
       routeBy: { status: "open", revision: 1 },
     });
     // @ts-expect-error source-free topics forbid Feed Route.
     void BrunoTableServer({ ...serverProps, routeBy: { status: "open" } });
-    // @ts-expect-error External Filters reject unknown fields.
     void BrunoTableServer({
       ...serverProps,
+      // @ts-expect-error External Filters reject unknown fields.
       externalFilters: [{ field: "missing", type: "equals", filter: "open" }],
     });
-    // @ts-expect-error External Filters preserve exact field operand domains.
     void BrunoTableServer({
       ...serverProps,
+      // @ts-expect-error External Filters preserve exact field operand domains.
       externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
     });
-    // @ts-expect-error inRange bounds preserve one exact bigint operand domain.
     void BrunoTableServer({
       ...serverProps,
+      // @ts-expect-error inRange bounds preserve one exact bigint operand domain.
       externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
     });
 

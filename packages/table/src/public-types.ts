@@ -1,6 +1,8 @@
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportRouteBy,
+  LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
@@ -1301,8 +1303,6 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-  TRouteBy extends Readonly<Record<string, unknown>> = never,
-  TExternalFilters extends readonly unknown[] = readonly [],
 > = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> &
   BrunoTableReadOnlyCapability & {
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
@@ -1317,7 +1317,7 @@ export type BrunoTableServerProps<
             : never
           : never
     >;
-    readonly externalFilters?: TExternalFilters;
+    readonly externalFilters?: LiveQueryViewportWhere<NoInfer<TViewport>>;
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly editable?: never;
@@ -1327,8 +1327,12 @@ export type BrunoTableServerProps<
     readonly onFill?: never;
     readonly onUndo?: never;
     readonly onRedo?: never;
-  } & BrunoTableServerRouteCapability<TRouteBy> &
-  BrunoTableServerQueryAuthority<TViewport, TRouteBy, TExternalFilters>;
+  } & BrunoTableServerRouteCapability<LiveQueryViewportRouteBy<NoInfer<TViewport>>> &
+  BrunoTableServerQueryAuthority<
+    NoInfer<TViewport>,
+    LiveQueryViewportRouteBy<NoInfer<TViewport>>,
+    LiveQueryViewportWhere<NoInfer<TViewport>>
+  >;
 
 type BrunoTableServerRouteCapability<TRouteBy> = [TRouteBy] extends [never]
   ? { readonly routeBy?: never }

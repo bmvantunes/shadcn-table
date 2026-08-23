@@ -65,7 +65,7 @@ Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-se
 
 ## Leased feed routing
 
-This section specifies the shipped issue #17 contract. It requires effect-view-server 4.2.6 or
+This section specifies the shipped issue #17 contract. It requires effect-view-server 4.2.7 or
 newer, including the leased-route contract completed by
 [effect-view-server#464](https://github.com/bmvantunes/effect-view-server/issues/464).
 
@@ -110,7 +110,7 @@ Do not add `routeByFields` to BrunoTable. The source declaration is the only fie
 
 When the Feed Route changes semantically, release the old query generation, invalidate the complete sparse indexed cache, clear transient focus/selection/scroll state, and start the new logical row space at index zero. Preserve compatible grid preferences because route values are application state, not persisted grid intent. Route snapshots and equality must use the effect-view-server Adapter's exact query semantics so `bigint`, BigDecimal, and other admitted native values are never coerced or compared by React object identity.
 
-The compatible effect-view-server 4.2.6 release exposes that source-owned semantic identity through
+The compatible effect-view-server 4.2.7 release exposes that source-owned semantic identity through
 the Viewport Source's opaque `semanticKey` contract. [effect-view-server#477](https://github.com/bmvantunes/effect-view-server/issues/477)
 introduced the contract so leased Feed Routes and exact application conditions do not fall back to
 reference equality, generic serialization, duplicated schema logic, or Effect coupling in
@@ -144,8 +144,9 @@ columns therefore declare Value Type explicitly, while typed Column Helpers such
 `BrunoTableBigIntColumn` supply it. The Adapter must never inspect the first loaded row, because the
 source is sparse, a field may initially be nullish, and behavior cannot depend on scroll position.
 
-effect-view-server 4.2.6 exposes a source-owned, declaration-only invariant base-row witness through
-`LiveQueryViewportBaseRow`. The collision-resistant structural witness survives downstream
+effect-view-server 4.2.7 exposes source-owned, declaration-only invariant witnesses through
+`LiveQueryViewportBaseRow`, `LiveQueryViewportRouteBy`, and `LiveQueryViewportWhere`. The
+collision-resistant structural witnesses survive downstream
 declaration bundling without a root Effect or View Server import, while rejecting erased or
 unwitnessed viewports. [effect-view-server#465](https://github.com/bmvantunes/effect-view-server/issues/465)
 introduced the row contract and [effect-view-server#469](https://github.com/bmvantunes/effect-view-server/issues/469)
@@ -154,11 +155,12 @@ made it structurally stable for bundled downstream declarations, and
 the React/Effect declaration closure. BrunoTable does not substitute a public row
 generic, consumer wrapper, duplicated query schema, or `unknown` fallback.
 
-The same source envelope supplies `completeRawSelect`. Ordinary `valueFormatter`, functional
-`cellClassName`, and `cellRenderer` callbacks receive a genuine complete raw row, so the Adapter uses
-that tuple whenever any such callback is compiled. Without raw-row-aware presentation it retains the
-narrow field/computed/Quick Filter projection. A static class does not require a complete row.
-Changing between narrow and complete projection is one semantic Query Generation replacement.
+The same source envelope supplies `completeRawSelect`. A visible `valueFormatter`, functional
+`cellClassName`, or `cellRenderer` callback receives a genuine complete raw row, so the Adapter uses
+that tuple while its owning column is rendered. Hidden callbacks remain dormant. Without visible
+raw-row-aware presentation it retains the narrow field/computed/Quick Filter projection. A static
+class does not require a complete row. Changing between narrow and complete projection is one
+semantic Query Generation replacement.
 [effect-view-server#473](https://github.com/bmvantunes/effect-view-server/issues/473) and
 [effect-view-server#474](https://github.com/bmvantunes/effect-view-server/pull/474) own this contract;
 BrunoTable neither enumerates callback dependencies nor copies the topic schema.
@@ -196,7 +198,7 @@ generation.release();
 
 The Adapter, not the source callback flags, owns the Query Generation token. It allocates one token before `replace`, closes that token over the sink, and rejects every delivery after release or replacement. The optional `keepRenderedRows` argument passed to `setRowCount` is a delivery hint inside the current source controller; it never authorizes old-row retention across a semantic generation boundary.
 
-The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable requires `effect-view-server@4.2.6`, which also includes source-native Match None from #409, the isolated declaration-bundle-safe invariant base-row witness from #465/#469/#471, the authoritative complete raw projection from #473/#474, and the topic-bound independent whole-result hook from #477. BrunoTable does not hide older-package behavior with deferred sink publication, local facet reconstruction, or warning suppression.
+The compatible View Server React binding must install and deactivate this controller without invoking consumer sink callbacks from `useInsertionEffect`. [effect-view-server#408](https://github.com/bmvantunes/effect-view-server/issues/408) fixed that lifecycle boundary in `effect-view-server@2.3.1`. BrunoTable requires `effect-view-server@4.2.7`, which also includes source-native Match None from #409, the isolated declaration-bundle-safe invariant base-row witness from #465/#469/#471, the authoritative complete raw projection from #473/#474, the topic-bound independent whole-result hook from #477, and exact Route/Where viewport witnesses from #479. BrunoTable does not hide older-package behavior with deferred sink publication, local facet reconstruction, or warning suppression.
 
 ## Why a long-lived object
 

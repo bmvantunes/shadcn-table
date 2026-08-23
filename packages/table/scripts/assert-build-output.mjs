@@ -725,15 +725,15 @@ if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
   );
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.6") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.7") {
   throw new Error(
-    "The View Server integration is not pinned to the audited public 4.2.6 contract.",
+    "The View Server integration is not pinned to the audited public 4.2.7 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "4.2.6",
+    "effect-view-server": "4.2.7",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");

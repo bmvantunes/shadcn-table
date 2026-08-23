@@ -73,6 +73,7 @@ export type BrunoTableServerViewportTransport<TRow> = Readonly<{
 type ActiveGeneration = Readonly<{
   readonly token: number;
   readonly controller: BrunoTableServerViewportGeneration;
+  readonly inputs: BrunoTableServerQueryInputs;
   readonly semanticKey: Readonly<{
     readonly viewport: unknown;
     readonly query: unknown;
@@ -260,6 +261,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       columns,
       nextQuickFilterFields,
       this.completeRawSelect,
+      this.active?.inputs.visibleColumnIds,
     );
     if (
       columns === this.columns &&
@@ -293,7 +295,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.columns = columns;
     this.quickFilterFields = nextQuickFilterFields;
     this.projectionFields = nextProjectionFields;
-    this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
+    this.rowEquivalencePlan = compileRowEquivalencePlan(
+      columns,
+      this.active?.inputs.visibleColumnIds,
+    );
     this.columnsById = new Map(columns.map((column) => [column.columnId, column]));
     this.queryConfiguration = Object.freeze({
       baselineFilters: filterCollection.filters,
@@ -312,6 +317,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.columns,
       this.quickFilterFields,
       nextCompleteRawSelect,
+      this.active?.inputs.visibleColumnIds,
     );
     const replacingActiveSource =
       this.active !== undefined &&
@@ -337,32 +343,45 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     viewport: unknown,
     query: BrunoTableServerRuntimeQuery,
     inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
+    resetWhenInputsChange = false,
   ): void {
-    const queryPlan = compileBrunoTableServerQueryPlan(
-      this.columns,
-      {
-        ...(inputs.routeBy === undefined ? {} : { routeBy: inputs.routeBy }),
-        ...(inputs.externalFilters === undefined
-          ? {}
-          : { externalFilters: inputs.externalFilters }),
-        ...(inputs.visibleColumnIds === undefined
-          ? {}
-          : { visibleColumnIds: inputs.visibleColumnIds }),
-        filters: query.filters,
-        quickFilter: query.quickFilter,
-        quickFilterFields: this.quickFilterFields,
-        orderBy: query.orderBy,
-      },
-      this.completeRawSelect,
-    );
+    const nextInputs = snapshotServerQueryInputs(inputs);
+    this.rowEquivalencePlan = compileRowEquivalencePlan(this.columns, nextInputs.visibleColumnIds);
+    const compilePlan = (candidate: BrunoTableServerQueryInputs) =>
+      compileBrunoTableServerQueryPlan(
+        this.columns,
+        {
+          ...(candidate.routeBy === undefined ? {} : { routeBy: candidate.routeBy }),
+          ...(candidate.externalFilters === undefined
+            ? {}
+            : { externalFilters: candidate.externalFilters }),
+          ...(candidate.visibleColumnIds === undefined
+            ? {}
+            : { visibleColumnIds: candidate.visibleColumnIds }),
+          filters: query.filters,
+          quickFilter: query.quickFilter,
+          quickFilterFields: this.quickFilterFields,
+          orderBy: query.orderBy,
+        },
+        this.completeRawSelect,
+      );
+    const queryPlan = compilePlan(nextInputs);
+    this.projectionFields = queryPlan.query.select;
     const transport = requireViewportTransport<TRow>(viewport);
     const semanticKey = Object.freeze({
       viewport,
       query: transport.semanticKey(queryPlan.query),
     });
     if (sameSemanticKey(this.active?.semanticKey, semanticKey)) return;
+    const semanticInputsChanged =
+      resetWhenInputsChange &&
+      this.active !== undefined &&
+      this.active.semanticKey.viewport === viewport &&
+      !Object.is(transport.semanticKey(compilePlan(this.active.inputs).query), semanticKey.query);
     const nextNavigationMode =
-      this.forceNextNavigationReset || this.lastReplacedViewport !== viewport
+      semanticInputsChanged ||
+      this.forceNextNavigationReset ||
+      this.lastReplacedViewport !== viewport
         ? "reset"
         : query.navigationMode;
     const previous = this.active;
@@ -415,7 +434,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       notify(this.listeners);
       throw error;
     }
-    this.active = Object.freeze({ token: activeToken, controller, semanticKey });
+    this.active = Object.freeze({
+      token: activeToken,
+      controller,
+      inputs: nextInputs,
+      semanticKey,
+    });
     this.lastReplacedViewport = viewport;
     this.queryGeneration += 1;
     this.generationNavigationMode = nextNavigationMode;
@@ -424,6 +448,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.suppressStorePublication = false;
     this.forceFullStorePublication = true;
     this.reconcileStorePublication();
+  }
+
+  public getSemanticIdentity(): unknown {
+    return this.active?.semanticKey;
   }
 
   public readonly setRequiredRange = (start: number, end: number): void => {
@@ -761,6 +789,20 @@ function sameSemanticKey(
   );
 }
 
+function snapshotServerQueryInputs(
+  inputs: BrunoTableServerQueryInputs,
+): BrunoTableServerQueryInputs {
+  return Object.freeze({
+    routeBy: inputs.routeBy === undefined ? undefined : Object.freeze({ ...inputs.routeBy }),
+    externalFilters:
+      inputs.externalFilters === undefined ? undefined : Object.freeze([...inputs.externalFilters]),
+    visibleColumnIds:
+      inputs.visibleColumnIds === undefined
+        ? undefined
+        : Object.freeze([...inputs.visibleColumnIds]),
+  });
+}
+
 function sameProjectionFields(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((field) => right.includes(field));
 }
@@ -779,10 +821,15 @@ function sameStringArray(left: readonly string[], right: readonly string[]): boo
   return sameArray(left, right, Object.is);
 }
 
-function compileRowEquivalencePlan(columns: readonly CompiledColumn[]): RowEquivalencePlan {
+function compileRowEquivalencePlan(
+  columns: readonly CompiledColumn[],
+  visibleColumnIds?: readonly string[],
+): RowEquivalencePlan {
+  const visibleIds = visibleColumnIds === undefined ? undefined : new Set(visibleColumnIds);
   const fieldColumns = new Map<string, CompiledColumn[]>();
   const computedColumns: CompiledColumn[] = [];
   for (const column of columns) {
+    if (visibleIds !== undefined && !visibleIds.has(column.columnId)) continue;
     if (column.kind === "computed") {
       computedColumns.push(column);
       continue;
@@ -796,7 +843,11 @@ function compileRowEquivalencePlan(columns: readonly CompiledColumn[]): RowEquiv
       [...fieldColumns].map(([field, matching]) => [field, Object.freeze(matching)] as const),
     ),
     computedColumns: Object.freeze(computedColumns),
-    usesRawRowPresentation: columns.some(columnUsesRawRowPresentation),
+    usesRawRowPresentation: columns.some(
+      (column) =>
+        (visibleIds === undefined || visibleIds.has(column.columnId)) &&
+        columnUsesRawRowPresentation(column),
+    ),
   });
 }
 
