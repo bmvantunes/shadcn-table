@@ -423,7 +423,7 @@ describe("BrunoTableServer", () => {
       const facetStatus = dialog.getByRole("status").nth(0);
       if (lifecycle.status === "ready") {
         await expect.element(facetStatus).toBeEmptyDOMElement();
-        await expect.element(dialog.getByRole("status", { name: "All selected" })).toBeVisible();
+        await expect.element(dialog.getByRole("status").nth(1)).toHaveTextContent("All selected");
       } else {
         await expect.element(facetStatus).toHaveTextContent(lifecycle.label);
       }
@@ -465,8 +465,9 @@ describe("BrunoTableServer", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
     const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
-    await expect.element(dialog.getByRole("status", { name: "All selected" })).toBeVisible();
-    expect(dialog.getByRole("status", { name: "0 selected" }).query()).toBeNull();
+    const selectionStatus = dialog.getByRole("status").nth(1);
+    await expect.element(selectionStatus).toHaveTextContent("All selected");
+    await expect.element(selectionStatus).not.toHaveTextContent("0 selected");
     expect(dialog.getByRole("checkbox", { name: /UNACCEPTED/ }).query()).toBeNull();
   });
 
@@ -773,9 +774,10 @@ describe("BrunoTableServer", () => {
     await expect.element(dialog).not.toBeInTheDocument();
   });
 
-  test("keeps width-only commits out of Server semantic query work", async () => {
+  test("keeps same-viewport hook chrome and width commits out of Server semantic query work", async () => {
     const transport = makeViewport();
     const wholeResult = createBrowserWholeResultSpy();
+    const refreshedWholeResult = createBrowserWholeResultSpy();
     let runtime: BrunoTableGridRuntime<Row> | undefined;
     const removeLifetime = installBrunoTableToolbarLifetimeListener((event) => {
       if (
@@ -813,12 +815,15 @@ describe("BrunoTableServer", () => {
       const requestCount = transport.requests.length;
       const subscriptionCount = wholeResult.subscriptions.length;
       const releaseCount = wholeResult.releases.length;
-      await screen.rerender(table((query: unknown) => wholeResult.useWholeResult(query), 2));
+      await screen.rerender(
+        table((query: unknown) => refreshedWholeResult.useWholeResult(query), 2),
+      );
       await settleBrunoTableBrowserFrames();
       expect(transport.semanticKey).not.toHaveBeenCalled();
       expect(transport.requests).toHaveLength(requestCount);
       expect(wholeResult.subscriptions).toHaveLength(subscriptionCount);
       expect(wholeResult.releases).toHaveLength(releaseCount);
+      expect(refreshedWholeResult.useWholeResult).not.toHaveBeenCalled();
       await expect.element(dialog).toBeInTheDocument();
       wholeResult.useWholeResult.mockClear();
       expect(
@@ -838,9 +843,48 @@ describe("BrunoTableServer", () => {
       expect(wholeResult.subscriptions).toHaveLength(subscriptionCount);
       expect(wholeResult.releases).toHaveLength(releaseCount);
       await expect.element(dialog).toBeInTheDocument();
+
+      const trigger = screen.getByRole("button", { name: "Filter Symbol" });
+      await userEvent.click(trigger);
+      await vi.waitFor(() => expect(wholeResult.releases).toHaveLength(releaseCount + 1));
+      await userEvent.click(trigger);
+      await vi.waitFor(() => expect(refreshedWholeResult.subscriptions).toHaveLength(1));
+      expect(wholeResult.subscriptions).toHaveLength(subscriptionCount);
+      expect(refreshedWholeResult.releases).toHaveLength(0);
+      expect(transport.semanticKey).not.toHaveBeenCalled();
+      expect(transport.requests).toHaveLength(requestCount);
     } finally {
       removeLifetime();
     }
+  });
+
+  test("keeps facet hook ownership isolated for tables sharing one viewport", async () => {
+    const transport = makeViewport();
+    const firstWholeResult = createBrowserWholeResultSpy();
+    const secondWholeResult = createBrowserWholeResultSpy();
+    const source = serverProps(transport.viewport, "ready").viewportSource;
+    const screen = await render(
+      <>
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_SHARED_FIRST")}
+          columns={serverFilterColumns}
+          viewportSource={{ ...source, useWholeResult: firstWholeResult.useWholeResult }}
+        />
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_SHARED_SECOND")}
+          columns={serverFilterColumns}
+          viewportSource={{ ...source, useWholeResult: secondWholeResult.useWholeResult }}
+        />
+      </>,
+    );
+    const triggers = screen.getByRole("button", { name: "Filter Symbol" });
+    await userEvent.click(triggers.nth(0));
+    await vi.waitFor(() => expect(firstWholeResult.subscriptions).toHaveLength(1));
+    await userEvent.click(triggers.nth(0));
+    await userEvent.click(triggers.nth(1));
+    await vi.waitFor(() => expect(secondWholeResult.subscriptions).toHaveLength(1));
+    expect(firstWholeResult.useWholeResult).toHaveBeenCalledOnce();
+    expect(secondWholeResult.useWholeResult).toHaveBeenCalledOnce();
   });
 
   test("keeps an open Server facet subscription across sorting and its own filter intent", async () => {

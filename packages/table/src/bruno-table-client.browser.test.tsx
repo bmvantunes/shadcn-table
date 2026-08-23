@@ -1821,7 +1821,7 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Filter Choice (active)" }));
     const dialog = screen.getByRole("dialog", { name: "Filter Choice" });
     await expect
-      .element(dialog.getByRole("status", { name: "Showing options 1–64 of 65" }))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 1–64 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
     await expect
@@ -1830,7 +1830,7 @@ describe("BrunoTableClient browser surface", () => {
 
     await userEvent.click(dialog.getByRole("button", { name: "Next filter options for Choice" }));
     await expect
-      .element(dialog.getByRole("status", { name: "Showing options 2–65 of 65" }))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 2–65 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-0" })).not.toBeInTheDocument();
     await expect.element(dialog.getByRole("option", { name: "option-64" })).toBeInTheDocument();
@@ -1839,7 +1839,7 @@ describe("BrunoTableClient browser surface", () => {
       dialog.getByRole("button", { name: "Previous filter options for Choice" }),
     );
     await expect
-      .element(dialog.getByRole("status", { name: "Showing options 1–64 of 65" }))
+      .element(dialog.getByRole("status").nth(1))
       .toHaveTextContent("Showing options 1–64 of 65");
     await expect.element(dialog.getByRole("option", { name: "option-0" })).toBeInTheDocument();
   });

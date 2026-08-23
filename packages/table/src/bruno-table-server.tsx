@@ -41,6 +41,7 @@ import {
 } from "./internal/toolbar-capabilities";
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { snapshotBrunoTableQuickFilterFields } from "./internal/quick-filter";
+import { useBrunoTableServerFacetHookSource } from "./internal/react-compiler-adapters";
 
 export {
   BrunoTableActiveFilterCount,
@@ -56,13 +57,6 @@ export type {
   BrunoTableFilterControlProps,
   BrunoTableGridFilterCommandCapability,
 } from "./internal/toolbar-capabilities";
-
-type BrunoTableServerFacetHookSource = Readonly<{
-  readonly useWholeResult: (...arguments_: never[]) => unknown;
-  readonly viewport: unknown;
-}>;
-
-const brunoTableServerFacetSources = new WeakMap<object, BrunoTableServerFacetHookSource>();
 
 export function BrunoTableServer<
   TViewport,
@@ -119,7 +113,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
     [props.quickFilterFields],
   );
-  const facetSource = getBrunoTableServerFacetHookSource(props.viewportSource);
+  const facetSource = useBrunoTableServerFacetHookSource(props.viewportSource);
   const facetInputsRef = useRef({
     externalFilters: props.externalFilters,
     quickFilterFields,
@@ -288,28 +282,6 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       </BrunoTableClientFilterProvider>
     </BrunoTableServerFacetProvider>
   );
-}
-
-function getBrunoTableServerFacetHookSource(
-  source: BrunoTableServerFacetHookSource,
-): BrunoTableServerFacetHookSource {
-  if (
-    (typeof source.viewport !== "object" || source.viewport === null) &&
-    typeof source.viewport !== "function"
-  ) {
-    return Object.freeze({
-      useWholeResult: source.useWholeResult,
-      viewport: source.viewport,
-    });
-  }
-  const cached = brunoTableServerFacetSources.get(source.viewport);
-  if (cached !== undefined) return cached;
-  const created = Object.freeze({
-    useWholeResult: source.useWholeResult,
-    viewport: source.viewport,
-  });
-  brunoTableServerFacetSources.set(source.viewport, created);
-  return created;
 }
 
 function stageBrunoTableServerSemanticQuery(

@@ -455,19 +455,7 @@ function addFacetValue(
   value: unknown,
   increment: number,
 ): void {
-  const key = facetValueKey(column, value);
-  const bucket = buckets.get(key) ?? [];
-  const existing = bucket.find((candidate) =>
-    areBrunoTableSetValuesEquivalent(column, candidate.value, value),
-  );
-  if (existing !== undefined) {
-    existing.count += increment;
-    return;
-  }
-  const entry = { value, count: increment };
-  bucket.push(entry);
-  buckets.set(key, bucket);
-  ordered.push(entry);
+  addFacetValueInDomain(column, buckets, ordered, value, increment, addNumberFacetCounts);
 }
 
 function addServerFacetValue(
@@ -477,13 +465,32 @@ function addServerFacetValue(
   value: unknown,
   increment: bigint,
 ): void {
+  addFacetValueInDomain(column, buckets, ordered, value, increment, addBigIntFacetCounts);
+}
+
+function addNumberFacetCounts(left: number, right: number): number {
+  return left + right;
+}
+
+function addBigIntFacetCounts(left: bigint, right: bigint): bigint {
+  return left + right;
+}
+
+function addFacetValueInDomain<TCount>(
+  column: CompiledColumn,
+  buckets: Map<string, { value: unknown; count: TCount }[]>,
+  ordered: { value: unknown; count: TCount }[],
+  value: unknown,
+  increment: TCount,
+  add: (left: TCount, right: TCount) => TCount,
+): void {
   const key = facetValueKey(column, value);
   const bucket = buckets.get(key) ?? [];
   const existing = bucket.find((candidate) =>
     areBrunoTableSetValuesEquivalent(column, candidate.value, value),
   );
   if (existing !== undefined) {
-    existing.count += increment;
+    existing.count = add(existing.count, increment);
     return;
   }
   const entry = { value, count: increment };

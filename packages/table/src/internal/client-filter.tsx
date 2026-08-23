@@ -821,7 +821,7 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
           <h3 id={headingId} className="text-sm font-medium">
             Values
           </h3>
-          <Badge aria-label={selectionSummary} aria-live="polite" role="status" variant="secondary">
+          <Badge aria-live="polite" role="status" variant="secondary">
             {selectionSummary}
           </Badge>
         </div>
@@ -1558,11 +1558,7 @@ function FilterOperand({
         <label htmlFor={`${errorId}-${path}-value`}>Value</label>
         {optionCount > FILTER_SELECT_VISIBLE_OPTIONS ? (
           <div className="flex items-center justify-between gap-2 text-sm">
-            <span
-              aria-label={`Showing options ${String(optionWindowStart + 1)}–${String(optionWindowEnd)} of ${optionCount.toLocaleString("en-US")}`}
-              aria-live="polite"
-              role="status"
-            >
+            <span aria-live="polite" role="status">
               {`Showing options ${String(optionWindowStart + 1)}–${String(optionWindowEnd)} of ${optionCount.toLocaleString("en-US")}`}
             </span>
             <div className="flex gap-1">
