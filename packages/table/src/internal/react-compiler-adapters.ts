@@ -15,7 +15,11 @@ import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type { BrunoTableQueryNavigationMode, BrunoTableRuntimeView } from "./grid-runtime";
 import type { BrunoTableNavigationRuntime } from "./navigation";
-import { BrunoTableViewportRuntime, type BrunoTableViewportSnapshot } from "./virtual-viewport";
+import {
+  BRUNO_TABLE_ROW_HEIGHT,
+  BrunoTableViewportRuntime,
+  type BrunoTableViewportSnapshot,
+} from "./virtual-viewport";
 
 import type { BrunoTableLogicalRowSpace } from "./bruno-table-view";
 
@@ -89,6 +93,7 @@ export function BrunoTableViewportAdapterBoundary({
   navigation,
   queryGeneration,
   queryNavigationMode,
+  leadingUtilityWidth = 0,
   children,
 }: {
   readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -97,6 +102,7 @@ export function BrunoTableViewportAdapterBoundary({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+  readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
   const instanceId = useBrunoTableInstanceId();
@@ -135,7 +141,7 @@ export function BrunoTableViewportAdapterBoundary({
     [logicalColumns],
   );
   const [viewport] = useState(() => {
-    const next = new BrunoTableViewportRuntime();
+    const next = new BrunoTableViewportRuntime(BRUNO_TABLE_ROW_HEIGHT, leadingUtilityWidth);
     next.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
     return next;
   });

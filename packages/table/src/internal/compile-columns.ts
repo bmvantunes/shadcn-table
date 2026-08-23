@@ -7,6 +7,7 @@ import {
 
 const columnIdPrefix = "COL_ID_";
 const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS";
+const BRUNO_TABLE_ROW_SELECTION_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROW_SELECTION";
 const BRUNO_TABLE_MAX_SELECT_OPTIONS = 16_384;
 const columnIdSuffixStartPattern = /^[A-Z0-9_]/u;
 const columnIdWhitespacePattern = /\s/u;
@@ -91,6 +92,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   if (columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
     throw new ColumnConfigurationError(
       `BrunoTable columnId is reserved for the Rows System Column: ${columnId}`,
+    );
+  }
+
+  if (columnId === BRUNO_TABLE_ROW_SELECTION_COLUMN_ID) {
+    throw new ColumnConfigurationError(
+      `BrunoTable columnId is reserved for the Row Selection Column: ${columnId}`,
     );
   }
 

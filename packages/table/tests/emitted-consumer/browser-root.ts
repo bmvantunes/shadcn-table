@@ -18,6 +18,7 @@ const props: BrunoTableClientProps<BrowserRow, typeof columns> = {
   clientSource: { rows: [], totalRows: 0, version: 0, status: "ready" },
   getRowId: (row) => row.id,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  rowSelection: true,
 };
 BrunoTableClient(props);
 

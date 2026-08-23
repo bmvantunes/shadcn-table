@@ -70,7 +70,7 @@ type ColumnIdWhitespace =
   | "\u3000"
   | "\ufeff";
 type ColumnIdPattern = `COL_ID_${ColumnIdFirstCharacter}${Uppercase<string>}`;
-type BrunoTableReservedColumnId = "COL_ID_BRUNO_TABLE_ROWS";
+type BrunoTableReservedColumnId = "COL_ID_BRUNO_TABLE_ROWS" | "COL_ID_BRUNO_TABLE_ROW_SELECTION";
 
 export type BrunoTableColumnId<TColumnId extends ColumnIdPattern = ColumnIdPattern> =
   TColumnId extends BrunoTableReservedColumnId
@@ -1288,6 +1288,8 @@ export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+    /** Enables session-only Row Selection for ordinary Client source rows. */
+    readonly rowSelection?: true;
     readonly externalFilters?: never;
     readonly viewportSource?: never;
   };

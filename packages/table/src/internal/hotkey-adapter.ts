@@ -1,4 +1,9 @@
-import { detectPlatform, useHotkeys } from "@tanstack/react-hotkeys";
+import {
+  detectPlatform,
+  getKeyStateTracker,
+  useHotkeys,
+  useKeyHold,
+} from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import type {
@@ -354,6 +359,17 @@ export function brunoTableHotkeyRegistrationBound(
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
     activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT
   );
+}
+
+/** One table-local bridge initializes TanStack's held-key lifecycle without per-cell subscriptions. */
+export function BrunoTableHeldShiftHotkeyAdapter(): null {
+  useKeyHold("Shift");
+  return null;
+}
+
+/** Reads TanStack's shared held-key state synchronously for a pointer command. */
+export function isBrunoTableHotkeyHeld(key: "Shift"): boolean {
+  return getKeyStateTracker().isKeyHeld(key);
 }
 
 /**

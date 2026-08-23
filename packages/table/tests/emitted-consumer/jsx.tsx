@@ -97,6 +97,7 @@ const validClient = (
     columns={columns}
     initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
     clientSource={clientSource}
+    rowSelection
   />
 );
 void validClient;

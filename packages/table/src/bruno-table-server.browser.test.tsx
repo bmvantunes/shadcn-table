@@ -215,6 +215,22 @@ function serverProps(
 afterEach(async () => cleanup());
 
 describe("BrunoTableServer", () => {
+  test("installs no ordinary Row Selection UI or dormant checkbox surface", async () => {
+    const transport = makeViewport(1);
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_NO_SELECTION")}
+      />,
+    );
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(1));
+    transport.requests[0]!.sink.setRowData(
+      { 0: { id: "order-1", symbol: "AAA", price: 10, desk: "LDN" } },
+      { 0: "order-1" },
+    );
+    await settleBrunoTableBrowserFrames();
+    expect(screen.getByRole("checkbox", { name: /Select (all )?rows?/ }).query()).toBeNull();
+  });
+
   test("keeps Server condition editing without synthesizing Set Filter facet choices", async () => {
     const transport = makeViewport();
     const screen = await render(

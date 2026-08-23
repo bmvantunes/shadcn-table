@@ -11,6 +11,7 @@ import {
   recordBrunoTableClientViewRender,
 } from "./render-instrumentation";
 import { BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL } from "./test-diagnostic-build-contract";
+import { recordBrunoTableRowSelectionRender } from "./row-selection";
 
 export function BrunoTableViewCommitDiagnosticProbe({
   commitEvidence,
@@ -87,5 +88,21 @@ export function BrunoTableCellCommitDiagnosticProbe({
 }): ReactElement {
   void commitEvidence;
   useLayoutEffect(() => recordBrunoTableClientCellRender(rowId, columnId, tableId));
+  return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
+}
+
+export function BrunoTableRowSelectionCommitDiagnosticProbe({
+  commitEvidence,
+  rowId,
+  tableId,
+}: {
+  readonly commitEvidence: unknown;
+  readonly rowId?: string;
+  readonly tableId: string;
+}): ReactElement {
+  void commitEvidence;
+  useLayoutEffect(() =>
+    recordBrunoTableRowSelectionRender(tableId, rowId === undefined ? "header" : "row", rowId),
+  );
   return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
 }

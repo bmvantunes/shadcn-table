@@ -19,6 +19,7 @@ import {
 } from "@bruno/shadcn/empty";
 import { Skeleton } from "@bruno/shadcn/skeleton";
 import { Spinner } from "@bruno/shadcn/spinner";
+import { Checkbox } from "@bruno/shadcn/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -74,12 +75,15 @@ import {
   useBrunoTableColumnGestureEscape,
   useBrunoTableGridHotkeys,
   useBrunoTableHotkeyWorkflowAction,
+  BrunoTableHeldShiftHotkeyAdapter,
+  isBrunoTableHotkeyHeld,
 } from "./hotkey-adapter";
 import {
   BrunoTableCellCommitDiagnosticProbe,
   BrunoTableGridSurfaceCommitDiagnosticProbe,
   BrunoTableHeaderCommitDiagnosticProbe,
   BrunoTableRowCommitDiagnosticProbe,
+  BrunoTableRowSelectionCommitDiagnosticProbe,
   BrunoTableSortPanelCommitDiagnosticProbe,
   BrunoTableViewCommitDiagnosticProbe,
 } from "./commit-diagnostic-probes";
@@ -89,6 +93,7 @@ import {
 } from "./column-gesture";
 import {
   projectBrunoTableLogicalColumnIndex,
+  resolveBrunoTableReorderCenterBounds,
   resolveBrunoTableReorderTargetIndex,
   type BrunoTableReorderMeasurement,
 } from "./column-geometry";
@@ -136,8 +141,13 @@ import {
   BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS,
   type BrunoTableViewportSnapshot,
 } from "./virtual-viewport";
+import {
+  BRUNO_TABLE_ROW_SELECTION_COLUMN_ID,
+  type BrunoTableRowSelectionRuntime,
+} from "./row-selection";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
+const ROW_SELECTION_COLUMN_WIDTH = 40;
 type BrunoTableColumnWindow = Readonly<
   Pick<
     BrunoTableViewportSnapshot["virtualWindow"],
@@ -343,6 +353,8 @@ export type BrunoTableViewProps<
   readonly enableActiveCellCopy?: boolean;
   /** Private capability seam for controls that belong to every variant's grid-owned rail. */
   readonly gridOwnedControls?: ReactNode;
+  /** Private Client-only Row Selection capability. */
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
 };
 
 export type BrunoTableColumnFilterRendererProps = {
@@ -375,6 +387,7 @@ export type BrunoTableRowPipelineProps<
   readonly tableId: string;
   readonly columns: readonly CompiledColumn[];
   readonly rowPipelineAdapter: TAdapter;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly children: (snapshot: BrunoTableRowPipelineSnapshot) => ReactElement;
 };
 
@@ -414,6 +427,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   renderColumnFilter,
   enableActiveCellCopy = false,
   gridOwnedControls,
+  rowSelection,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
@@ -453,6 +467,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowPipelineAdapter={rowPipelineAdapter}
           renderColumnFilter={renderColumnFilter}
           enableActiveCellCopy={enableActiveCellCopy}
+          rowSelection={rowSelection}
         />
       </div>
     </section>
@@ -872,6 +887,7 @@ type BrunoTableGridBodyProps<TRuntime extends BrunoTableRuntimeView, TAdapter> =
   readonly rowPipelineAdapter: TAdapter;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly enableActiveCellCopy: boolean;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
 };
 
 function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
@@ -883,6 +899,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   rowPipelineAdapter,
   renderColumnFilter,
   enableActiveCellCopy,
+  rowSelection,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
@@ -916,6 +933,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       tableId={tableId}
       columns={compiledColumns}
       rowPipelineAdapter={rowPipelineAdapter}
+      rowSelection={rowSelection}
     >
       {(snapshot) =>
         body.kind === "empty" || body.kind === "invalid" ? (
@@ -939,6 +957,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             loading={snapshot.loading}
             renderColumnFilter={renderColumnFilter}
             enableActiveCellCopy={enableActiveCellCopy}
+            rowSelection={rowSelection}
           />
         )
       }
@@ -1078,6 +1097,7 @@ type BrunoTableViewportAdapterProps = {
   readonly loading: boolean;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly enableActiveCellCopy: boolean;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1094,10 +1114,12 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     loading,
     renderColumnFilter,
     enableActiveCellCopy,
+    rowSelection,
   }: BrunoTableViewportAdapterProps): ReactElement {
     return (
       <BrunoTableViewportAdapterBoundary
         columns={columns}
+        leadingUtilityWidth={rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH}
         navigation={navigation}
         queryGeneration={queryGeneration}
         queryNavigationMode={queryNavigationMode}
@@ -1131,6 +1153,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             revealCell={adapter.revealCell}
             renderColumnFilter={renderColumnFilter}
             enableActiveCellCopy={enableActiveCellCopy}
+            rowSelection={rowSelection}
           />
         )}
       </BrunoTableViewportAdapterBoundary>
@@ -1164,6 +1187,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   revealCell,
   renderColumnFilter,
   enableActiveCellCopy,
+  rowSelection,
 }: {
   readonly instanceId: string;
   readonly tableId: string;
@@ -1196,6 +1220,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   ) => void;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly enableActiveCellCopy: boolean;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
 }) {
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
@@ -1224,10 +1249,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     ],
   );
   const tableWidth = columnWindow.totalWidth;
+  const rowSelectionWidth = rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH;
   const viewportFill =
     columnWindow.pinnedEnd.length === 0 ? 0 : Math.max(0, viewportSnapshot.width - tableWidth);
   const renderedTableWidth = tableWidth + viewportFill;
   const logicalColumns = columns;
+  const columnIndexOffset = rowSelection === undefined ? 0 : 1;
   const gridElement = useRef<HTMLDivElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
   const focusRestoreFrame = useRef<number | null>(null);
@@ -1706,16 +1733,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     ].map((element) => element.getBoundingClientRect());
     const leftPinnedRects = direction === "rtl" ? pinnedEndRects : pinnedStartRects;
     const rightPinnedRects = direction === "rtl" ? pinnedStartRects : pinnedEndRects;
-    const reorderCenterBounds = Object.freeze({
-      left:
-        leftPinnedRects.length === 0
-          ? (gridRect?.left ?? 0)
-          : Math.max(...leftPinnedRects.map((rect) => rect.right)),
-      right:
-        rightPinnedRects.length === 0
-          ? (gridRect?.right ?? 0)
-          : Math.min(...rightPinnedRects.map((rect) => rect.left)),
-    });
+    const selectionRect = grid
+      ?.querySelector<HTMLElement>(
+        `th[data-bruno-column-id="${BRUNO_TABLE_ROW_SELECTION_COLUMN_ID}"]`,
+      )
+      ?.getBoundingClientRect();
+    const reorderCenterBounds = resolveBrunoTableReorderCenterBounds(
+      direction,
+      gridRect ?? { left: 0, right: 0 },
+      leftPinnedRects,
+      rightPinnedRects,
+      selectionRect,
+    );
     columnGesture.current = {
       kind,
       pointerId: event.pointerId,
@@ -2202,6 +2231,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
         />
       ) : null}
+      {rowSelection === undefined ? null : <BrunoTableHeldShiftHotkeyAdapter />}
       <div
         ref={attachGrid}
         data-bruno-scroll-owner=""
@@ -2212,7 +2242,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         tabIndex={0}
         aria-rowcount={rowSpace.totalRows + 1}
         aria-colcount={
-          columnWindow.pinnedStart.length + columnWindow.centerCount + columnWindow.pinnedEnd.length
+          columnWindow.pinnedStart.length +
+          columnWindow.centerCount +
+          columnWindow.pinnedEnd.length +
+          (rowSelection === undefined ? 0 : 1)
         }
         aria-keyshortcuts={
           enableActiveCellCopy
@@ -2241,14 +2274,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           data-bruno-row-layer=""
           style={{
             position: "relative",
-            width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+            width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
           }}
         >
           <table
             role="presentation"
             style={{
               tableLayout: "fixed",
-              width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+              width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
             }}
           >
             <BrunoTableHeaderRow
@@ -2270,6 +2303,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               viewportFill={viewportFill}
               renderColumnFilter={renderColumnFilter}
               registerColumnFilterOpener={registerColumnFilterOpener}
+              rowSelection={rowSelection}
+              columnIndexOffset={columnIndexOffset}
             />
             <tbody
               role="rowgroup"
@@ -2277,7 +2312,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                 display: "block",
                 height: virtualWindow.totalHeight,
                 position: "relative",
-                width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+                width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
               }}
             >
               {Array.from(
@@ -2301,6 +2336,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                       top={offset * ROW_HEIGHT}
                       viewportFill={viewportFill}
                       width={renderedTableWidth}
+                      rowSelection={rowSelection}
+                      columnIndexOffset={columnIndexOffset}
                     />
                   ) : (
                     <BrunoTableRow
@@ -2321,6 +2358,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                       logicalRowIndex={logicalRowIndex}
                       top={offset * ROW_HEIGHT}
                       width={renderedTableWidth}
+                      rowSelection={rowSelection}
+                      columnIndexOffset={columnIndexOffset}
                     />
                   );
                 },
@@ -2340,6 +2379,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               side="start"
               tableId={tableId}
               layerWidth={renderedTableWidth}
+              leadingUtilityWidth={rowSelectionWidth}
+              columnIndexOffset={columnIndexOffset}
               totalHeight={virtualWindow.totalHeight}
             />
           ) : null}
@@ -2357,6 +2398,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               side="end"
               tableId={tableId}
               layerWidth={renderedTableWidth}
+              leadingUtilityWidth={rowSelectionWidth}
+              columnIndexOffset={columnIndexOffset}
               totalHeight={virtualWindow.totalHeight}
             />
           ) : null}
@@ -2374,6 +2417,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
           visibleColumnIds={visibleColumnIds}
           virtualWindow={virtualWindow}
+          columnIndexOffset={columnIndexOffset}
         />
       </div>
       <BrunoTableScrollbarOverlay attach={attachScrollbarOverlay} />
@@ -2498,6 +2542,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   tableId,
   visibleColumnIds,
   virtualWindow,
+  columnIndexOffset,
 }: {
   readonly allColumns: readonly CompiledColumn[];
   readonly announce: (message: string) => void;
@@ -2511,6 +2556,7 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
   readonly tableId: string;
   readonly visibleColumnIds: readonly string[];
   readonly virtualWindow: BrunoTableViewportSnapshot["virtualWindow"];
+  readonly columnIndexOffset: number;
 }) {
   const activeCell = useSyncExternalStore(
     navigation.subscribe,
@@ -2534,7 +2580,10 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
         allColumns={allColumns}
         visibleColumnIds={visibleColumnIds}
         column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
-        columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
+        columnIndex={offsetLogicalColumnIndex(
+          logicalColumns.findIndex((column) => column.columnId === activeCell.columnId),
+          columnIndexOffset,
+        )}
         instanceId={instanceId}
         openHeaderFilter={openHeaderFilter}
         renderColumnFilter={renderColumnFilter}
@@ -2549,7 +2598,10 @@ const ActiveDescendantOutlet = memo(function ActiveDescendantOutlet({
     <ActiveDescendantProxy
       activeCell={activeCell}
       column={logicalColumns.find((column) => column.columnId === activeCell.columnId)}
-      columnIndex={logicalColumns.findIndex((column) => column.columnId === activeCell.columnId)}
+      columnIndex={offsetLogicalColumnIndex(
+        logicalColumns.findIndex((column) => column.columnId === activeCell.columnId),
+        columnIndexOffset,
+      )}
       instanceId={instanceId}
       renderColumnFilter={renderColumnFilter}
       runtime={runtime}
@@ -2710,6 +2762,41 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
   );
 });
 
+const BrunoTableRowSelectionHeaderCell = memo(function BrunoTableRowSelectionHeaderCell({
+  selection,
+  tableId,
+}: {
+  readonly selection: BrunoTableRowSelectionRuntime;
+  readonly tableId: string;
+}) {
+  const snapshot = useSyncExternalStore(
+    selection.subscribeHeader,
+    selection.getHeaderSnapshot,
+    selection.getHeaderSnapshot,
+  );
+  return (
+    <th
+      aria-colindex={1}
+      data-bruno-column-id={BRUNO_TABLE_ROW_SELECTION_COLUMN_ID}
+      role="columnheader"
+      scope="col"
+      style={rowSelectionCellStyle(6)}
+    >
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableRowSelectionCommitDiagnosticProbe commitEvidence={snapshot} tableId={tableId} />
+      ) : null}
+      <Checkbox
+        aria-label="Select all rows"
+        checked={snapshot.checked}
+        disabled={snapshot.disabled}
+        indeterminate={snapshot.mixed}
+        onClick={() => selection.toggleAll(!snapshot.checked)}
+        onPointerDown={(event) => event.stopPropagation()}
+      />
+    </th>
+  );
+});
+
 const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   activateHeaderCommand,
   allColumns,
@@ -2729,6 +2816,8 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   tableId,
   viewportFill,
   visibleColumnIds,
+  rowSelection,
+  columnIndexOffset,
 }: {
   readonly activateHeaderCommand: (columnId: string) => void;
   readonly allColumns: readonly CompiledColumn[];
@@ -2752,6 +2841,8 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
   readonly tableId: string;
   readonly viewportFill: number;
   readonly visibleColumnIds: readonly string[];
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
+  readonly columnIndexOffset: number;
 }) {
   return (
     <thead
@@ -2760,11 +2851,14 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
         background: "Canvas",
         position: "sticky",
         top: 0,
-        width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(renderedTableWidth)}px)`,
+        width: rowSelectionSurfaceWidth(renderedTableWidth, rowSelection),
         zIndex: 4,
       }}
     >
       <tr aria-rowindex={1} role="row" style={{ height: ROW_HEIGHT, maxHeight: ROW_HEIGHT }}>
+        {rowSelection === undefined ? null : (
+          <BrunoTableRowSelectionHeaderCell selection={rowSelection} tableId={tableId} />
+        )}
         {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
           <BrunoTableHeaderCommitDiagnosticProbe commitEvidence={columnWindow} tableId={tableId} />
         ) : null}
@@ -2777,7 +2871,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             navigation={navigation}
             instanceId={instanceId}
             tableId={tableId}
-            columnIndex={index}
+            columnIndex={columnIndexOffset + index}
             column={column}
             openHeaderFilter={openHeaderFilter}
             runtime={runtime}
@@ -2789,7 +2883,12 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             toggleHeaderSort={toggleHeaderSort}
             onColumnPointerDown={onColumnPointerDown}
             restoreColumnFocus={restoreColumnFocus}
-            style={pinnedCellStyle("start", columnWindow.pinnedStart, index)}
+            style={pinnedCellStyle(
+              "start",
+              columnWindow.pinnedStart,
+              index,
+              rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH,
+            )}
             visibleColumnIds={visibleColumnIds}
           />
         ))}
@@ -2810,7 +2909,12 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             navigation={navigation}
             instanceId={instanceId}
             tableId={tableId}
-            columnIndex={columnWindow.pinnedStart.length + columnWindow.centerStartIndex + index}
+            columnIndex={
+              columnIndexOffset +
+              columnWindow.pinnedStart.length +
+              columnWindow.centerStartIndex +
+              index
+            }
             column={column}
             openHeaderFilter={openHeaderFilter}
             runtime={runtime}
@@ -2840,7 +2944,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             aria-hidden="true"
             style={{
               padding: 0,
-              width: `var(${BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE}, ${String(viewportFill)}px)`,
+              width: rowSelectionViewportFillWidth(viewportFill, rowSelection),
             }}
           />
         ) : null}
@@ -2853,7 +2957,9 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
             navigation={navigation}
             instanceId={instanceId}
             tableId={tableId}
-            columnIndex={columnWindow.pinnedStart.length + columnWindow.centerCount + index}
+            columnIndex={
+              columnIndexOffset + columnWindow.pinnedStart.length + columnWindow.centerCount + index
+            }
             column={column}
             openHeaderFilter={openHeaderFilter}
             runtime={runtime}
@@ -2873,6 +2979,105 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
     </thead>
   );
 });
+
+const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
+  logicalRowIndex,
+  rowId,
+  selection,
+  tableId,
+}: {
+  readonly logicalRowIndex: number;
+  readonly rowId: string;
+  readonly selection: BrunoTableRowSelectionRuntime;
+  readonly tableId: string;
+}) {
+  const subscribe = useMemo(
+    () => (listener: () => void) => selection.subscribeRow(rowId, listener),
+    [rowId, selection],
+  );
+  const getSnapshot = useMemo(() => () => selection.getRowSnapshot(rowId), [rowId, selection]);
+  const checked = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return (
+    <td
+      aria-colindex={1}
+      data-bruno-column-id={BRUNO_TABLE_ROW_SELECTION_COLUMN_ID}
+      role="gridcell"
+      style={rowSelectionCellStyle(5)}
+    >
+      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
+        <BrunoTableRowSelectionCommitDiagnosticProbe
+          commitEvidence={checked}
+          rowId={rowId}
+          tableId={tableId}
+        />
+      ) : null}
+      <Checkbox
+        aria-label={`Select row ${String(logicalRowIndex + 1)}`}
+        checked={checked}
+        onClick={(event) =>
+          selection.toggleRow(rowId, !checked, event.detail > 0 && isBrunoTableHotkeyHeld("Shift"))
+        }
+        onPointerDown={(event) => event.stopPropagation()}
+      />
+    </td>
+  );
+});
+
+const BrunoTableRowSelectionLoadingCell = memo(function BrunoTableRowSelectionLoadingCell() {
+  return (
+    <td
+      aria-colindex={1}
+      aria-label="Row selection loading"
+      data-bruno-column-id={BRUNO_TABLE_ROW_SELECTION_COLUMN_ID}
+      role="gridcell"
+      style={rowSelectionCellStyle(5)}
+    >
+      <Skeleton aria-hidden="true" className="size-4" />
+    </td>
+  );
+});
+
+function rowSelectionCellStyle(zIndex: number): CSSProperties {
+  return {
+    alignItems: "center",
+    background: "Canvas",
+    display: "flex",
+    height: ROW_HEIGHT,
+    insetInlineStart: 0,
+    justifyContent: "center",
+    padding: 0,
+    position: "sticky",
+    width: ROW_SELECTION_COLUMN_WIDTH,
+    zIndex,
+  };
+}
+
+function rowSelectionSurfaceWidth(
+  fallbackWidth: number,
+  selection: BrunoTableRowSelectionRuntime | undefined,
+): string {
+  return surfaceWidthWithUtility(
+    fallbackWidth,
+    selection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH,
+  );
+}
+
+function surfaceWidthWithUtility(fallbackWidth: number, utilityWidth: number): string {
+  const liveWidth = `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(fallbackWidth)}px)`;
+  return utilityWidth === 0 ? liveWidth : `calc(${liveWidth} + ${String(utilityWidth)}px)`;
+}
+
+function rowSelectionViewportFillWidth(
+  fallbackWidth: number,
+  _selection: BrunoTableRowSelectionRuntime | undefined,
+): string {
+  const liveWidth = `var(${BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE}, ${String(fallbackWidth)}px)`;
+  return liveWidth;
+}
+
+function offsetLogicalColumnIndex(index: number, offset: number): number {
+  return index < 0 ? index : index + offset;
+}
 
 const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
   activateHeaderCommand,
@@ -3602,6 +3807,8 @@ const UnloadedRow = memo(function UnloadedRow({
   top,
   viewportFill,
   width,
+  rowSelection,
+  columnIndexOffset,
 }: {
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly center: readonly CompiledColumn[];
@@ -3616,6 +3823,8 @@ const UnloadedRow = memo(function UnloadedRow({
   readonly top: number;
   readonly viewportFill: number;
   readonly width: number;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
+  readonly columnIndexOffset: number;
 }) {
   return (
     <LoadingRow
@@ -3633,6 +3842,8 @@ const UnloadedRow = memo(function UnloadedRow({
       top={top}
       viewportFill={viewportFill}
       width={width}
+      rowSelection={rowSelection}
+      columnIndexOffset={columnIndexOffset}
     />
   );
 });
@@ -3654,6 +3865,8 @@ type BrunoTableRowProps = Readonly<{
   readonly logicalRowIndex: number;
   readonly top: number;
   readonly width: number;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
+  readonly columnIndexOffset: number;
 }>;
 
 const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
@@ -3674,6 +3887,8 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     logicalRowIndex,
     top,
     width,
+    rowSelection,
+    columnIndexOffset,
   } = props;
   const ownedCells = useMemo(
     () =>
@@ -3697,7 +3912,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
         tableLayout: "fixed",
         top,
         willChange: "transform",
-        width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(width)}px)`,
+        width: rowSelectionSurfaceWidth(width, rowSelection),
       }}
     >
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
@@ -3707,6 +3922,14 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
           tableId={tableId}
         />
       ) : null}
+      {rowSelection === undefined ? null : (
+        <BrunoTableRowSelectionCell
+          logicalRowIndex={logicalRowIndex}
+          rowId={rowId}
+          selection={rowSelection}
+          tableId={tableId}
+        />
+      )}
       {pinnedStart.length > 0 ? (
         <td
           aria-hidden="true"
@@ -3732,7 +3955,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
           rowId={rowId}
           instanceId={instanceId}
           tableId={tableId}
-          columnIndex={pinnedStartCount + centerStartIndex + index}
+          columnIndex={columnIndexOffset + pinnedStartCount + centerStartIndex + index}
           column={column}
         />
       ))}
@@ -3750,7 +3973,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
           aria-hidden="true"
           style={{
             padding: 0,
-            width: `var(${BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE}, ${String(viewportFill)}px)`,
+            width: rowSelectionViewportFillWidth(viewportFill, rowSelection),
           }}
         />
       ) : null}
@@ -3781,6 +4004,8 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
   side,
   tableId,
   totalHeight,
+  leadingUtilityWidth,
+  columnIndexOffset,
 }: {
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly columns: readonly CompiledColumn[];
@@ -3795,6 +4020,8 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
   readonly side: "start" | "end";
   readonly tableId: string;
   readonly totalHeight: number;
+  readonly leadingUtilityWidth: number;
+  readonly columnIndexOffset: number;
 }) {
   const width = totalColumnWidth(columns);
   return (
@@ -3804,6 +4031,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
       top={ROW_HEIGHT}
       totalHeight={totalHeight}
       width={width}
+      leadingUtilityWidth={leadingUtilityWidth}
     >
       {Array.from({ length: rowEnd - rowStart }, (_, offset) => {
         const logicalRowIndex = rowStart + offset;
@@ -3831,7 +4059,8 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
                   key={column.columnId}
                   column={column}
                   columnIndex={
-                    side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+                    columnIndexOffset +
+                    (side === "start" ? index : pinnedStartCount + precedingColumnCount + index)
                   }
                   id={loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId)}
                 />
@@ -3840,7 +4069,8 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
                   key={column.columnId}
                   column={column}
                   columnIndex={
-                    side === "start" ? index : pinnedStartCount + precedingColumnCount + index
+                    columnIndexOffset +
+                    (side === "start" ? index : pinnedStartCount + precedingColumnCount + index)
                   }
                   instanceId={instanceId}
                   rowId={rowId}
@@ -3863,6 +4093,7 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
   top,
   totalHeight,
   width,
+  leadingUtilityWidth,
 }: {
   readonly children: ReactNode;
   readonly layerWidth: number;
@@ -3870,6 +4101,7 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
   readonly top: number;
   readonly totalHeight: number;
   readonly width: number | string;
+  readonly leadingUtilityWidth: number;
 }) {
   return (
     <div
@@ -3880,7 +4112,7 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
         pointerEvents: "none",
         position: "absolute",
         top,
-        width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(layerWidth)}px)`,
+        width: surfaceWidthWithUtility(layerWidth, leadingUtilityWidth),
         zIndex: 3,
       }}
     >
@@ -3891,7 +4123,7 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
           background: "Canvas",
           height: totalHeight,
           insetInlineEnd: side === "end" ? 0 : undefined,
-          insetInlineStart: side === "start" ? 0 : undefined,
+          insetInlineStart: side === "start" ? leadingUtilityWidth : undefined,
           marginInlineStart: side === "end" ? "auto" : undefined,
           pointerEvents: "auto",
           position: "sticky",
@@ -4194,6 +4426,7 @@ function pinnedCellStyle(
   side: "start" | "end",
   columns: readonly CompiledColumn[],
   index: number,
+  leadingUtilityWidth = 0,
 ): CSSProperties {
   const column = columns[index];
   let offset = 0;
@@ -4206,6 +4439,7 @@ function pinnedCellStyle(
       offset += columns[cursor]?.semantics.width ?? 0;
     }
   }
+  if (side === "start") offset += leadingUtilityWidth;
   return {
     background: "Canvas",
     minWidth:
@@ -4476,6 +4710,7 @@ const LoadingPinnedBodyRegion = memo(function LoadingPinnedBodyRegion({
   return (
     <BrunoTablePinnedOverlayShell
       layerWidth={layerWidth}
+      leadingUtilityWidth={0}
       side={side}
       top={0}
       totalHeight={totalHeight}
@@ -4529,6 +4764,8 @@ const LoadingRow = memo(function LoadingRow({
   top,
   viewportFill,
   width,
+  rowSelection,
+  columnIndexOffset = 0,
 }: {
   readonly ariaRowIndexOffset?: number;
   readonly attachBodyLayer: RefCallback<HTMLElement>;
@@ -4544,6 +4781,8 @@ const LoadingRow = memo(function LoadingRow({
   readonly top: number;
   readonly viewportFill: number;
   readonly width: number;
+  readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
+  readonly columnIndexOffset?: number;
 }) {
   const ownedCells = useMemo(
     () =>
@@ -4567,9 +4806,10 @@ const LoadingRow = memo(function LoadingRow({
         tableLayout: "fixed",
         top,
         willChange: "transform",
-        width: `var(${BRUNO_TABLE_LIVE_TOTAL_WIDTH_CSS_VARIABLE}, ${String(width)}px)`,
+        width: rowSelectionSurfaceWidth(width, rowSelection),
       }}
     >
+      {rowSelection === undefined ? null : <BrunoTableRowSelectionLoadingCell />}
       {pinnedStart.length > 0 ? (
         <td
           aria-hidden="true"
@@ -4592,7 +4832,7 @@ const LoadingRow = memo(function LoadingRow({
         <LoadingCell
           key={column.columnId}
           column={column}
-          columnIndex={pinnedStart.length + centerStartIndex + index}
+          columnIndex={columnIndexOffset + pinnedStart.length + centerStartIndex + index}
           id={loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId)}
         />
       ))}
@@ -4610,7 +4850,7 @@ const LoadingRow = memo(function LoadingRow({
           aria-hidden="true"
           style={{
             padding: 0,
-            width: `var(${BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE}, ${String(viewportFill)}px)`,
+            width: rowSelectionViewportFillWidth(viewportFill, rowSelection),
           }}
         />
       ) : null}

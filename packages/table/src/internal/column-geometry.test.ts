@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   projectBrunoTableLogicalColumnIndex,
+  resolveBrunoTableReorderCenterBounds,
   resolveBrunoTableReorderTargetIndex,
 } from "./column-geometry";
 
@@ -56,5 +57,29 @@ describe("BrunoTable virtual reorder geometry", () => {
     expect(projectBrunoTableLogicalColumnIndex(6, 1, 6)).toBe(5);
     expect(projectBrunoTableLogicalColumnIndex(1, 6, 1)).toBe(2);
     expect(projectBrunoTableLogicalColumnIndex(4, 6, 1)).toBe(5);
+  });
+
+  it("excludes the leading utility gutter from LTR and RTL reorder bounds", () => {
+    const grid = { left: 100, right: 600 };
+    const ltrUtility = { left: 100, right: 140 };
+    const rtlUtility = { left: 560, right: 600 };
+
+    expect(resolveBrunoTableReorderCenterBounds("ltr", grid, [], [], ltrUtility)).toEqual({
+      left: 140,
+      right: 600,
+    });
+    expect(resolveBrunoTableReorderCenterBounds("rtl", grid, [], [], rtlUtility)).toEqual({
+      left: 100,
+      right: 560,
+    });
+    expect(
+      resolveBrunoTableReorderCenterBounds(
+        "ltr",
+        grid,
+        [{ left: 140, right: 260 }],
+        [{ left: 480, right: 600 }],
+        ltrUtility,
+      ),
+    ).toEqual({ left: 260, right: 480 });
   });
 });

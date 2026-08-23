@@ -100,6 +100,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   tableId,
   columns,
   rowPipelineAdapter,
+  rowSelection,
   children,
   filters,
   filterCollection,
@@ -166,7 +167,11 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
     rowPipelineAdapter.publishResultRowCount(nextRowIds.length);
-  }, [nextRowIds, orderStore, queryGeneration, rowPipelineAdapter]);
+    rowSelection?.reconcile(
+      rows.map((row) => row.rowId),
+      nextRowIds,
+    );
+  }, [nextRowIds, orderStore, queryGeneration, rowPipelineAdapter, rowSelection, rows]);
   const orderSnapshot = useSyncExternalStore(
     orderStore.subscribe,
     orderStore.getSnapshot,
