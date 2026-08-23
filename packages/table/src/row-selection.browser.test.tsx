@@ -91,7 +91,7 @@ describe("ordinary Client Row Selection", () => {
       .element(grid)
       .toHaveAttribute(
         "aria-keyshortcuts",
-        "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space Control+A Meta+A",
+        "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C Space Shift+Space Control+A Meta+A",
       );
     grid.element().focus();
     await userEvent.keyboard(" ");

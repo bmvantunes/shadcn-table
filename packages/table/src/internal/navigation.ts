@@ -217,6 +217,19 @@ export class BrunoTableNavigationRuntime {
     this.setActive({ region: "header", rowIndex: 0, columnId });
   };
 
+  public readonly activateBody = (rowIndex: number, rowId: string, columnId: string): boolean => {
+    if (
+      rowIndex < 0 ||
+      rowIndex >= this.rowSpace.totalRows ||
+      !this.columns.some((column) => column.columnId === columnId) ||
+      this.rowSpace.getRowId(rowIndex) !== rowId
+    ) {
+      return false;
+    }
+    this.bodyInitializationBlocked = false;
+    return this.setActive({ region: "body", rowIndex, rowId, columnId });
+  };
+
   public readonly setShape = (
     rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
     columns: readonly CompiledColumn[],

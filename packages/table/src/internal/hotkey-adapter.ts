@@ -71,8 +71,12 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
     alt: boolean,
     shift: boolean,
   ) => void;
-  navigate: (event: BrunoTableHotkeyGesture, command: BrunoTableNavigationCommand) => void;
-  page: (event: BrunoTableHotkeyGesture, direction: -1 | 1) => void;
+  navigate: (
+    event: BrunoTableHotkeyGesture,
+    command: BrunoTableNavigationCommand,
+    extendCellRange?: boolean,
+  ) => void;
+  page: (event: BrunoTableHotkeyGesture, direction: -1 | 1, extendCellRange?: boolean) => void;
 }>;
 
 function createBrunoTableGridHotkeyBindings(
@@ -156,24 +160,24 @@ function createBrunoTableGridHotkeyBindings(
     },
     {
       hotkey: "Shift+ArrowUp",
-      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "up" }),
+      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "up" }, true),
     },
     {
       hotkey: "Shift+ArrowDown",
-      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "down" }),
+      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "down" }, true),
     },
     {
       hotkey: "Shift+ArrowLeft",
       onTrigger: (event) => {
         commands.resize(event, -1, 50);
-        commands.navigate(event, { type: "step", direction: "left" });
+        commands.navigate(event, { type: "step", direction: "left" }, true);
       },
     },
     {
       hotkey: "Shift+ArrowRight",
       onTrigger: (event) => {
         commands.resize(event, 1, 50);
-        commands.navigate(event, { type: "step", direction: "right" });
+        commands.navigate(event, { type: "step", direction: "right" }, true);
       },
     },
     {
@@ -200,24 +204,24 @@ function createBrunoTableGridHotkeyBindings(
     },
     {
       hotkey: "Mod+Shift+ArrowUp",
-      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "start" }),
+      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "start" }, true),
     },
     {
       hotkey: "Mod+Shift+ArrowDown",
-      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "end" }),
+      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "end" }, true),
     },
     {
       hotkey: "Mod+Shift+ArrowLeft",
       onTrigger: (event) => {
         commands.resize(event, -1, 50);
-        commands.navigate(event, { type: "row-edge", edge: "start" });
+        commands.navigate(event, { type: "row-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Mod+Shift+ArrowRight",
       onTrigger: (event) => {
         commands.resize(event, 1, 50);
-        commands.navigate(event, { type: "row-edge", edge: "end" });
+        commands.navigate(event, { type: "row-edge", edge: "end" }, true);
       },
     },
     {
@@ -238,14 +242,14 @@ function createBrunoTableGridHotkeyBindings(
       hotkey: "Shift+Home",
       onTrigger: (event) => {
         commands.resize(event, "minimum", 0);
-        commands.navigate(event, { type: "row-edge", edge: "start" });
+        commands.navigate(event, { type: "row-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Shift+End",
       onTrigger: (event) => {
         commands.resize(event, "maximum", 0);
-        commands.navigate(event, { type: "row-edge", edge: "end" });
+        commands.navigate(event, { type: "row-edge", edge: "end" }, true);
       },
     },
     {
@@ -266,20 +270,20 @@ function createBrunoTableGridHotkeyBindings(
       hotkey: "Mod+Shift+Home",
       onTrigger: (event) => {
         commands.resize(event, "minimum", 0);
-        commands.navigate(event, { type: "grid-edge", edge: "start" });
+        commands.navigate(event, { type: "grid-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Mod+Shift+End",
       onTrigger: (event) => {
         commands.resize(event, "maximum", 0);
-        commands.navigate(event, { type: "grid-edge", edge: "end" });
+        commands.navigate(event, { type: "grid-edge", edge: "end" }, true);
       },
     },
     { hotkey: "PageUp", onTrigger: (event) => commands.page(event, -1) },
     { hotkey: "PageDown", onTrigger: (event) => commands.page(event, 1) },
-    { hotkey: "Shift+PageUp", onTrigger: (event) => commands.page(event, -1) },
-    { hotkey: "Shift+PageDown", onTrigger: (event) => commands.page(event, 1) },
+    { hotkey: "Shift+PageUp", onTrigger: (event) => commands.page(event, -1, true) },
+    { hotkey: "Shift+PageDown", onTrigger: (event) => commands.page(event, 1, true) },
   ];
 }
 

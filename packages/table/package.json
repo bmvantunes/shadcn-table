@@ -37,10 +37,11 @@
     "test:bench:column-management": "vp test bench src/internal/column-management.bench.ts --run",
     "test:bench:toolbar": "vp test bench src/internal/toolbar-capabilities.bench.ts --run",
     "test:bench:row-selection": "vp test bench src/internal/row-selection.bench.ts --run",
+    "test:bench:cell-range": "vp test bench src/internal/cell-range-clipboard.bench.ts --run",
     "test:bench:server-viewport": "vp test bench src/internal/server-viewport-store.bench.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-consumer/tsconfig.emitted-server.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:server-viewport"
+    "prepublishOnly": "vp run @bruno/shadcn#build && vp run check && vp run test && vp run test:browser && vp run test:types:source && vp run build && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:cell-range && vp run test:bench:server-viewport"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

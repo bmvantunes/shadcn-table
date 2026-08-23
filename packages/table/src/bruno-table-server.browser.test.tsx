@@ -1055,6 +1055,33 @@ describe("BrunoTableServer", () => {
       grid.element().dispatchEvent(copyLoaded);
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("AAPL"));
       expect(copyLoaded.defaultPrevented).toBe(true);
+      await expect
+        .element(screen.getByRole("gridcell", { name: "AAPL (LDN)" }))
+        .not.toHaveAttribute("aria-selected");
+      grid.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowDown",
+          shiftKey: true,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "INVALID (NYC)" }).element().id,
+        ),
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "INVALID (NYC)" }))
+        .not.toHaveAttribute("aria-selected");
+      grid.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+          shiftKey: true,
+        }),
+      );
 
       grid
         .element()
