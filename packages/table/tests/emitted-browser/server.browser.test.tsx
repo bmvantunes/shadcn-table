@@ -78,4 +78,5 @@ test("renders authoritative sparse slots from the emitted Server package", async
   await expect
     .element(screen.getByRole("grid", { name: "Data for TABLE_ID_EMITTED_SERVER" }))
     .toHaveAttribute("aria-rowcount", "1001");
+  expect(screen.getByRole("checkbox", { name: /Select (all )?rows?/ }).query()).toBeNull();
 });

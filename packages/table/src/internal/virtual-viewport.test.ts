@@ -1154,6 +1154,45 @@ describe("BrunoTableViewportRuntime", () => {
     expect(removeProperty).toHaveBeenCalled();
   });
 
+  it("keeps the leading utility gutter in pinned-start resize preview offsets", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_PREVIEW_GUTTER_START",
+        field: "name",
+        headerName: "Preview gutter start",
+        valueType: "text",
+        pinned: "start",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_PREVIEW_GUTTER_CENTER",
+        field: "name",
+        headerName: "Preview gutter center",
+        valueType: "text",
+        width: 120,
+      },
+    ]);
+    const setProperty = vi.fn();
+    const viewport = new BrunoTableViewportRuntime(36, 40);
+    viewport.setLayout(2, columns);
+    viewport.attach({
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 500,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty },
+    } as unknown as HTMLElement);
+
+    viewport.previewColumnWidth("COL_ID_PREVIEW_GUTTER_START", 160);
+
+    expect(setProperty).toHaveBeenCalledWith(
+      brunoTableColumnCssVariable("pinned-start-offset", "COL_ID_PREVIEW_GUTTER_START"),
+      "40px",
+    );
+  });
+
   it("publishes one bounded structural preview when shrinking a wide centre exposes columns", () => {
     const columns = compileColumns([
       {
@@ -2531,6 +2570,95 @@ describe("BrunoTableViewportRuntime", () => {
     });
     expect(snapshotAtWidth(440).pinnedStart).toHaveLength(1);
     expect(snapshotAtWidth(440).pinnedEnd).toHaveLength(1);
+  });
+
+  it("subtracts a leading utility gutter before pinning and exact reveal geometry", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_START_UTILITY",
+        field: "name",
+        headerName: "Start utility",
+        valueType: "text",
+        pinned: "start",
+        width: 180,
+      },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        columnId: `COL_ID_CENTER_UTILITY_${String(index)}`,
+        field: "name",
+        headerName: `Center utility ${String(index)}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+      {
+        columnId: "COL_ID_END_UTILITY",
+        field: "name",
+        headerName: "End utility",
+        valueType: "text",
+        pinned: "end",
+        width: 180,
+      },
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 480,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime(36, 40);
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    const scrollbarProperties = new Map<string, string>();
+    viewport.attachScrollbarOverlay({
+      style: {
+        setProperty: (property: string, value: string) => {
+          scrollbarProperties.set(property, value);
+        },
+      },
+    } as unknown as HTMLElement);
+
+    expect(viewport.getSnapshot()).toMatchObject({ width: 440 });
+    expect(viewport.getSnapshot().virtualWindow).toMatchObject({
+      pinningSuspended: false,
+      centerCount: 6,
+    });
+    expect(scrollbarProperties.get("--bruno-table-scrollbar-horizontal-start")).toBe("220px");
+
+    viewport.revealCell(0, "COL_ID_CENTER_UTILITY_5", "header");
+    callback!(0);
+    expect(element.scrollLeft).toBe(600);
+    expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe(
+      "COL_ID_CENTER_UTILITY_5",
+    );
+
+    const rtlElement = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 480,
+      ownerDocument: createRtlOwnerDocument("negative"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const rtlViewport = new BrunoTableViewportRuntime(36, 40);
+    rtlViewport.setLayout(2, columns);
+    rtlViewport.attach(rtlElement);
+    rtlViewport.revealCell(0, "COL_ID_CENTER_UTILITY_5", "header");
+    callback!(0);
+    expect(rtlElement.scrollLeft).toBe(-600);
+    expect(rtlViewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe(
+      "COL_ID_CENTER_UTILITY_5",
+    );
   });
 
   it("bounds, reveals, and restores an oversized centreless pinned layout", () => {

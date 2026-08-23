@@ -4,6 +4,29 @@ export type BrunoTableReorderMeasurement = Readonly<{
   readonly width: number;
 }>;
 
+export type BrunoTableInlineRect = Readonly<{ readonly left: number; readonly right: number }>;
+
+export function resolveBrunoTableReorderCenterBounds(
+  direction: "ltr" | "rtl",
+  gridRect: BrunoTableInlineRect,
+  leftPinnedRects: readonly BrunoTableInlineRect[],
+  rightPinnedRects: readonly BrunoTableInlineRect[],
+  leadingUtilityRect?: BrunoTableInlineRect,
+): Readonly<{ readonly left: number; readonly right: number }> {
+  const utilityLeftBoundary = direction === "ltr" ? leadingUtilityRect?.right : undefined;
+  const utilityRightBoundary = direction === "rtl" ? leadingUtilityRect?.left : undefined;
+  return Object.freeze({
+    left:
+      leftPinnedRects.length === 0
+        ? (utilityLeftBoundary ?? gridRect.left)
+        : Math.max(...leftPinnedRects.map((rect) => rect.right)),
+    right:
+      rightPinnedRects.length === 0
+        ? (utilityRightBoundary ?? gridRect.right)
+        : Math.min(...rightPinnedRects.map((rect) => rect.left)),
+  });
+}
+
 export function resolveBrunoTableReorderTargetIndex(
   cells: readonly BrunoTableReorderMeasurement[],
   pointerX: number,

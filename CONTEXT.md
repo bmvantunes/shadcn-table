@@ -172,6 +172,10 @@ _Avoid_: Page navigation, DOM focus search, selection reset
 An optional Client Table intent keyed to ordinary source Row Identities. It never selects grouped summaries or implies selection of the source rows represented by a group.
 _Avoid_: Group selection, Cell Range Selection, Active Cell
 
+**Row Selection Column**:
+The optional BrunoTable-owned leading control column that presents ordinary Client Row Selection checkboxes. It is outside Logical Column Order and user column preferences, and it is absent from Server and grouped tables.
+_Avoid_: Consumer column, navigable data column, persisted column
+
 **Cell Range Selection**:
 One contiguous one-axis cell intent used for multi-cell clipboard and, in an Editable Table, editing operations. It owns the exact ordered Row and Column Identity span selected by the user, may contain ordinary or grouped Client cells, and is either horizontal (`1×N`) or vertical (`N×1`). Value-only change does not retarget it, and a Server Table never creates it from its Active Cell.
 _Avoid_: Rectangular selection, matrix selection, two-dimensional range, Active Cell, Row Selection

@@ -119,6 +119,18 @@ const validClient = (
 );
 void validClient;
 
+const validClientRowSelection = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_CLIENT_ROW_SELECTION"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    rowSelection
+  />
+);
+void validClientRowSelection;
+
 const serverTypeReact = createViewServerReact(
   defineViewServerConfig({
     topics: {

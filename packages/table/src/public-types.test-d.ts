@@ -240,6 +240,24 @@ const persistedPreferences = {
   columnPinning: { start: ["COL_ID_SYMBOL"], end: [] },
 } as const satisfies BrunoTablePersistedState<Order, Columns>;
 
+const invalidPersistedSelectionWidth = {
+  ...persistedPreferences,
+  columnWidths: {
+    // @ts-expect-error The private Row Selection width is implementation-owned.
+    COL_ID_BRUNO_TABLE_ROW_SELECTION: 40,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSelectionWidth;
+
+const invalidPersistedSelectionGroupOrder = {
+  ...persistedPreferences,
+  groupOrderBy: [
+    // @ts-expect-error The private Row Selection identity is never grouped-sortable.
+    { columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void invalidPersistedSelectionGroupOrder;
+
 expectTypeOf(persistedPreferences.filters[0]!.columnId).toEqualTypeOf<"COL_ID_PRICE">();
 
 const persistedTextSearch = {
@@ -604,6 +622,7 @@ expectTypeOf<BrunoTableColumnId<"COL_ID_A B">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\tB">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_A\u3000B">>().toEqualTypeOf<never>();
 expectTypeOf<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROWS">>().toEqualTypeOf<never>();
+expectTypeOf<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROW_SELECTION">>().toEqualTypeOf<never>();
 
 const rawWhitespaceIdentityColumns = [
   {
@@ -663,6 +682,31 @@ void BrunoTableClient({
   clientSource: directViewServerResult,
 });
 
+const rawSelectionReservedIdentityColumns = [
+  {
+    columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION",
+    field: "price",
+    headerName: "Selection",
+    valueType: "number",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-raw-selection-reserved-identity",
+  // @ts-expect-error Consumers cannot claim the private Row Selection identity.
+  columns: rawSelectionReservedIdentityColumns,
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+void BrunoTableClient({
+  tableId: "invalid-selection-reserved-initial-order",
+  columns,
+  // @ts-expect-error The private Row Selection identity is never sortable.
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: directViewServerResult,
+});
+
 const invalidReservedHelperOptions = {
   columnId: "COL_ID_BRUNO_TABLE_ROWS",
   field: "price",
@@ -673,6 +717,17 @@ const invalidReservedHelperColumn = [
   BrunoTableNumberColumn(invalidReservedHelperOptions),
 ] satisfies BrunoTableColumns<Order>;
 void invalidReservedHelperColumn;
+
+const invalidSelectionReservedHelperOptions = {
+  columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION",
+  field: "price",
+  headerName: "Selection",
+} as const;
+const invalidSelectionReservedHelperColumn = [
+  // @ts-expect-error Column Helper inputs reject the private Row Selection identity.
+  BrunoTableNumberColumn(invalidSelectionReservedHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void invalidSelectionReservedHelperColumn;
 
 // @ts-expect-error A stable column identity must have a non-empty suffix.
 const emptyColumnId: BrunoTableColumnId = "COL_ID_";
@@ -1633,6 +1688,30 @@ const invalidServerWithRowId = {
   getRowId: (row: Order) => row.id,
   viewportSource: orderViewportSource,
 } satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
+
+const validClientRowSelection = {
+  tableId: "orders-selection",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  rowSelection: true,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+} as const satisfies BrunoTableClientProps<Order, Columns>;
+void validClientRowSelection;
+
+const invalidClientRowSelectionValue = {
+  ...validClientRowSelection,
+  rowSelection: false,
+} as const;
+// @ts-expect-error Row Selection is an exact opt-in capability, not controlled state.
+const invalidClientRowSelectionValueAssignment: BrunoTableClientProps<Order, Columns> =
+  invalidClientRowSelectionValue;
+void invalidClientRowSelectionValueAssignment;
 
 const invalidServerEditing = {
   tableId: "orders",

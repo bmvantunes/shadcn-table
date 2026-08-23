@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
 import { createInMemoryViewServerReact } from "effect-view-server/react/testing";
-import { detectPlatform } from "@tanstack/react-hotkeys";
+import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 
 import {
   BrunoTableActiveFilterCount,
@@ -215,6 +215,30 @@ function serverProps(
 afterEach(async () => cleanup());
 
 describe("BrunoTableServer", () => {
+  test("installs no ordinary Row Selection UI or dormant checkbox surface", async () => {
+    const transport = makeViewport(1);
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_NO_SELECTION")}
+      />,
+    );
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(1));
+    transport.requests[0]!.sink.setRowData(
+      { 0: { id: "order-1", symbol: "AAA", price: 10, desk: "LDN" } },
+      { 0: "order-1" },
+    );
+    await settleBrunoTableBrowserFrames();
+    expect(screen.getByRole("checkbox", { name: /Select (all )?rows?/ }).query()).toBeNull();
+    const grid = screen
+      .getByRole("grid", { name: "Data for TABLE_ID_SERVER_NO_SELECTION" })
+      .element();
+    expect(
+      [...getHotkeyManager().registrations.state.values()].filter(
+        (registration) => registration.target === grid && registration.hotkey === "Mod+A",
+      ),
+    ).toHaveLength(0);
+  });
+
   test("keeps Server condition editing without synthesizing Set Filter facet choices", async () => {
     const transport = makeViewport();
     const screen = await render(

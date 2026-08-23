@@ -263,6 +263,7 @@ describe("compileColumns", () => {
       "COL_ID_A\u00a0B",
       "COL_ID_A\u3000B",
       "COL_ID_BRUNO_TABLE_ROWS",
+      "COL_ID_BRUNO_TABLE_ROW_SELECTION",
       "COL_ID_é",
       "COL_ID_ß",
       "COL_ID_δ",
@@ -286,6 +287,17 @@ describe("compileColumns", () => {
         },
       ]);
     }).toThrow("BrunoTable columnId is reserved for the Rows System Column");
+
+    expect(() => {
+      compileColumns([
+        {
+          columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION",
+          field: "price",
+          headerName: "Selection",
+          valueType: "number",
+        },
+      ]);
+    }).toThrow("BrunoTable columnId is reserved for the Row Selection Column");
 
     expect(() => {
       compileColumns([

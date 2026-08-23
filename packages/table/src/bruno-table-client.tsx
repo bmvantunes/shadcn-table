@@ -33,6 +33,7 @@ import {
   BrunoTableToolbarSpacer,
 } from "./internal/toolbar-capabilities";
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
+import { BrunoTableRowSelectionRuntime } from "./internal/row-selection";
 
 export {
   BrunoTableActiveFilterCount,
@@ -93,6 +94,10 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     return created;
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
+  const rowSelection = useMemo(
+    () => (props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined),
+    [props.rowSelection],
+  );
   const runtimeView = runtime.getView();
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
 
@@ -142,6 +147,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
           toolbar={toolbar}
           rowPipeline={BrunoTableClientRowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
+          rowSelection={rowSelection}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />

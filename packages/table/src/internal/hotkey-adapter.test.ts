@@ -9,6 +9,8 @@ import {
   BRUNO_TABLE_GRID_HOTKEYS,
   BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_ROW_SELECTION_HOTKEYS,
+  BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT,
   brunoTableHotkeyRegistrationBound,
 } from "./hotkey-adapter";
 
@@ -18,6 +20,8 @@ describe("BrunoTable hotkey Adapter contract", () => {
     expect(BRUNO_TABLE_GRID_HOTKEYS).toContain("Mod+ArrowDown");
     expect(BRUNO_TABLE_GRID_HOTKEYS).toContain("Escape");
     expect(BRUNO_TABLE_GRID_HOTKEYS).toContain("Mod+C");
+    expect(BRUNO_TABLE_GRID_HOTKEYS).not.toContain("Mod+A");
+    expect(BRUNO_TABLE_ROW_SELECTION_HOTKEYS).toEqual(["Mod+A"]);
     expect(new Set(BRUNO_TABLE_GRID_HOTKEYS).size).toBe(BRUNO_TABLE_GRID_HOTKEYS.length);
     expect(brunoTableHotkeyRegistrationBound(1, 1)).toBe(
       brunoTableHotkeyRegistrationBound(10_000, 1_000),
@@ -32,6 +36,7 @@ describe("BrunoTable hotkey Adapter contract", () => {
     expect(BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT).toBe(16);
     expect(BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT).toBe(59);
     expect(BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT).toBe(75);
+    expect(BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT).toBe(1);
     expect(BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT).toBe(1);
     expect(brunoTableHotkeyRegistrationBound(0, 0)).toBe(
       BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
@@ -39,6 +44,10 @@ describe("BrunoTable hotkey Adapter contract", () => {
     expect(brunoTableHotkeyRegistrationBound(0, 0, 1)).toBe(
       BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
         BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+    );
+    expect(brunoTableHotkeyRegistrationBound(0, 0, 0, true)).toBe(
+      BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
+        BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT,
     );
   });
 });

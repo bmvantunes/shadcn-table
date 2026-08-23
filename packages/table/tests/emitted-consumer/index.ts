@@ -60,6 +60,10 @@ const emittedReservedColumnIdRejected: Expect<
   Equal<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROWS">, never>
 > = true;
 void emittedReservedColumnIdRejected;
+const emittedSelectionReservedColumnIdRejected: Expect<
+  Equal<BrunoTableColumnId<"COL_ID_BRUNO_TABLE_ROW_SELECTION">, never>
+> = true;
+void emittedSelectionReservedColumnIdRejected;
 
 type Order = {
   readonly id: string;
@@ -132,6 +136,37 @@ const emittedInvalidReservedHelperColumn = [
   BrunoTableNumberColumn(emittedInvalidReservedHelperOptions),
 ] satisfies BrunoTableColumns<Order>;
 void emittedInvalidReservedHelperColumn;
+const emittedRawSelectionReservedColumns = [
+  {
+    columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION",
+    field: "price",
+    headerName: "Selection",
+    valueType: "number",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void BrunoTableClient({
+  tableId: "invalid-emitted-selection-reserved-identity",
+  // @ts-expect-error Emitted raw columns reject the private Row Selection identity.
+  columns: emittedRawSelectionReservedColumns,
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+});
+const emittedInvalidSelectionReservedHelperOptions = {
+  columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION",
+  field: "price",
+  headerName: "Selection",
+} as const;
+const emittedInvalidSelectionReservedHelperColumn = [
+  // @ts-expect-error Emitted helpers reject the private Row Selection identity.
+  BrunoTableNumberColumn(emittedInvalidSelectionReservedHelperOptions),
+] satisfies BrunoTableColumns<Order>;
+void emittedInvalidSelectionReservedHelperColumn;
 
 const columns = [
   {
@@ -157,6 +192,20 @@ const columns = [
     valueGetter: ({ row }) => row.quantity * 2n,
   }),
 ] satisfies BrunoTableColumns<Order>;
+
+void BrunoTableClient({
+  tableId: "invalid-emitted-selection-reserved-initial-order",
+  columns,
+  // @ts-expect-error Emitted declarations never admit the private Row Selection identity in sorting.
+  initialOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" }],
+  getRowId: (row) => row.id,
+  clientSource: {
+    rows: [] as readonly Order[],
+    totalRows: 0,
+    version: 1,
+    status: "ready",
+  },
+});
 
 type Columns = typeof columns;
 
@@ -277,6 +326,22 @@ const emittedPersistedState = {
   columnPinning: { start: ["COL_ID_PRICE"], end: [] },
 } as const satisfies BrunoTablePersistedState<Order, Columns>;
 void emittedPersistedState;
+const emittedInvalidPersistedSelectionWidth = {
+  ...emittedPersistedState,
+  columnWidths: {
+    // @ts-expect-error Emitted declarations keep the private Row Selection width out of preferences.
+    COL_ID_BRUNO_TABLE_ROW_SELECTION: 40,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedInvalidPersistedSelectionWidth;
+const emittedInvalidPersistedSelectionGroupOrder = {
+  ...emittedPersistedState,
+  groupOrderBy: [
+    // @ts-expect-error Emitted declarations keep Row Selection out of grouped sorting.
+    { columnId: "COL_ID_BRUNO_TABLE_ROW_SELECTION", direction: "asc" },
+  ],
+} satisfies BrunoTablePersistedState<Order, Columns>;
+void emittedInvalidPersistedSelectionGroupOrder;
 const emittedPersistedTextSearch = {
   ...emittedPersistedState,
   filters: [

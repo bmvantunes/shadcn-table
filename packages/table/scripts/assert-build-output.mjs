@@ -18,7 +18,17 @@ const keyboardEvidenceModuleCapabilities = new Map([
   ["internal/hotkey-adapter.ts", "adapter"],
   ["internal/hotkey-capture.ts", "capture-adapter"],
 ]);
-const emittedCoreListenerModesByCapability = new Map([["capture-adapter", [true, false]]]);
+const emittedCoreListenerModesByCapability = new Map([
+  [
+    "capture-adapter",
+    [
+      { eventType: "keydown", capture: true },
+      { eventType: "keydown", capture: false },
+      { eventType: "keydown", capture: false },
+      { eventType: "keyup", capture: false },
+    ],
+  ],
+]);
 const expectedEmittedCoreListenerModes = [...keyboardEvidenceModuleCapabilities.values()].flatMap(
   (capability) => emittedCoreListenerModesByCapability.get(capability) ?? [],
 );
@@ -865,6 +875,9 @@ function findImportedBinding(ast, source, importedName) {
 }
 
 function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCaptureModes) {
+  const expectedListeners = expectedCaptureModes.map((candidate) =>
+    typeof candidate === "boolean" ? { eventType: "keydown", capture: candidate } : candidate,
+  );
   const handlerBindings = new Set();
   walkSyntaxTree(ast, (node) => {
     if (
@@ -877,9 +890,9 @@ function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCapture
       handlerBindings.add(node.id.name);
     }
   });
-  if (handlerBindings.size !== expectedCaptureModes.length) {
+  if (handlerBindings.size !== expectedListeners.length) {
     throw new Error(
-      `The emitted package has ${String(handlerBindings.size)} attributed core handlers; expected ${String(expectedCaptureModes.length)}.`,
+      `The emitted package has ${String(handlerBindings.size)} attributed core handlers; expected ${String(expectedListeners.length)}.`,
     );
   }
 
@@ -895,7 +908,7 @@ function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCapture
     const captureArgument = node.arguments[2];
     const capture = captureArgument === undefined ? false : captureArgument.value;
     if (
-      eventType !== "keydown" ||
+      !isKeyboardEventType(eventType) ||
       handler?.type !== "Identifier" ||
       !handlerBindings.has(handler.name) ||
       (capture !== true && capture !== false)
@@ -904,9 +917,12 @@ function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCapture
     }
     const target = emittedListenerTargetKey(node.callee.object);
     if (target === undefined) return;
-    callsByHandler
-      .get(handler.name)
-      [method === "addEventListener" ? "adds" : "removes"].push({ capture, node, target });
+    callsByHandler.get(handler.name)[method === "addEventListener" ? "adds" : "removes"].push({
+      capture,
+      eventType,
+      node,
+      target,
+    });
   });
   const allowedCalls = new Set();
   const actualModes = [];
@@ -917,17 +933,30 @@ function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCapture
       adds.length !== 1 ||
       removes.length !== 1 ||
       added.capture !== removed.capture ||
+      added.eventType !== removed.eventType ||
       added.target !== removed.target
     ) {
       throw new Error("The emitted capture boundary lost its exact add/remove listener lifecycle.");
     }
-    actualModes.push(added.capture);
+    actualModes.push({ eventType: added.eventType, capture: added.capture });
     allowedCalls.add(added.node);
     allowedCalls.add(removed.node);
   }
   if (
-    JSON.stringify(actualModes.toSorted((left, right) => Number(left) - Number(right))) !==
-    JSON.stringify(expectedCaptureModes.toSorted((left, right) => Number(left) - Number(right)))
+    JSON.stringify(
+      actualModes.toSorted((left, right) =>
+        `${left.eventType}:${String(left.capture)}`.localeCompare(
+          `${right.eventType}:${String(right.capture)}`,
+        ),
+      ),
+    ) !==
+    JSON.stringify(
+      expectedListeners.toSorted((left, right) =>
+        `${left.eventType}:${String(left.capture)}`.localeCompare(
+          `${right.eventType}:${String(right.capture)}`,
+        ),
+      ),
+    )
   ) {
     throw new Error("The emitted capture boundary lost its exact add/remove listener lifecycle.");
   }

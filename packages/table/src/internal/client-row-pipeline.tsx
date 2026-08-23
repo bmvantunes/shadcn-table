@@ -100,6 +100,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   tableId,
   columns,
   rowPipelineAdapter,
+  rowSelection,
   children,
   filters,
   filterCollection,
@@ -136,6 +137,7 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     rowsStore.getSnapshot,
     rowsStore.getSnapshot,
   );
+  const sourceRowIds = rowsStore.getSourceRowIdsSnapshot(rows);
   const rowModel = useClientRowIds(
     rows,
     columns,
@@ -166,7 +168,18 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   useLayoutEffect(() => {
     orderStore.publish(nextRowIds, queryGeneration);
     rowPipelineAdapter.publishResultRowCount(nextRowIds.length);
-  }, [nextRowIds, orderStore, queryGeneration, rowPipelineAdapter]);
+    if (sourceRowIds.authoritative) {
+      rowSelection?.reconcile(sourceRowIds.rowIds, nextRowIds, sourceRowIds.token);
+    }
+  }, [
+    invalid,
+    nextRowIds,
+    orderStore,
+    queryGeneration,
+    rowPipelineAdapter,
+    rowSelection,
+    sourceRowIds,
+  ]);
   const orderSnapshot = useSyncExternalStore(
     orderStore.subscribe,
     orderStore.getSnapshot,

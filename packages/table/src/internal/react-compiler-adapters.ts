@@ -15,7 +15,11 @@ import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableColumnLayoutSnapshot } from "./column-management";
 import type { BrunoTableQueryNavigationMode, BrunoTableRuntimeView } from "./grid-runtime";
 import type { BrunoTableNavigationRuntime } from "./navigation";
-import { BrunoTableViewportRuntime, type BrunoTableViewportSnapshot } from "./virtual-viewport";
+import {
+  BRUNO_TABLE_ROW_HEIGHT,
+  BrunoTableViewportRuntime,
+  type BrunoTableViewportSnapshot,
+} from "./virtual-viewport";
 
 import type { BrunoTableLogicalRowSpace } from "./bruno-table-view";
 
@@ -89,6 +93,7 @@ export function BrunoTableViewportAdapterBoundary({
   navigation,
   queryGeneration,
   queryNavigationMode,
+  leadingUtilityWidth = 0,
   children,
 }: {
   readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -97,6 +102,7 @@ export function BrunoTableViewportAdapterBoundary({
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+  readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
   const instanceId = useBrunoTableInstanceId();
@@ -135,7 +141,7 @@ export function BrunoTableViewportAdapterBoundary({
     [logicalColumns],
   );
   const [viewport] = useState(() => {
-    const next = new BrunoTableViewportRuntime();
+    const next = new BrunoTableViewportRuntime(BRUNO_TABLE_ROW_HEIGHT, leadingUtilityWidth);
     next.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
     return next;
   });
@@ -303,10 +309,14 @@ class BrunoTableGridAttachment {
   }
 
   public readonly attach = (element: HTMLDivElement | null): void => {
+    const previousGrid = this.element;
+    const activeElement = previousGrid?.ownerDocument.activeElement;
     if (
       element === null &&
-      document.activeElement !== null &&
-      this.element?.contains(document.activeElement)
+      previousGrid !== null &&
+      activeElement !== undefined &&
+      activeElement !== null &&
+      previousGrid.contains(activeElement)
     ) {
       this.focusHandoff.release();
       this.focusFallback();
@@ -335,6 +345,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   focusFallback,
   focusHandoff,
   defaultLoadingRowCount,
+  leadingUtilityWidth = 0,
   children,
 }: {
   readonly runtime: BrunoTableRuntimeView;
@@ -343,6 +354,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   readonly focusFallback: () => void;
   readonly focusHandoff: BrunoTableFocusHandoff;
   readonly defaultLoadingRowCount: number;
+  readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableLoadingViewportAdapterState) => ReactElement;
 }): ReactElement {
   const columnLayout = useSyncExternalStore(
@@ -355,7 +367,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   const logicalRowCount =
     Number.isSafeInteger(totalRows) && totalRows > 0 ? totalRows : defaultLoadingRowCount;
   const [viewport] = useState(() => {
-    const next = new BrunoTableViewportRuntime(0);
+    const next = new BrunoTableViewportRuntime(0, leadingUtilityWidth);
     next.setLayout(logicalRowCount, columns);
     return next;
   });

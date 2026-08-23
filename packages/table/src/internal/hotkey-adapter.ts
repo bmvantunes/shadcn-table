@@ -1,4 +1,9 @@
-import { detectPlatform, useHotkeys } from "@tanstack/react-hotkeys";
+import {
+  detectPlatform,
+  getKeyStateTracker,
+  useHotkeys,
+  useKeyHold,
+} from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import type {
@@ -11,7 +16,9 @@ import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
 import {
   registerBrunoTableCaptureHotkeys,
+  registerBrunoTableForeignDocumentHeldShift,
   registerBrunoTableForeignDocumentHotkeys,
+  isBrunoTableForeignDocumentShiftHeld,
 } from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
@@ -51,6 +58,7 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
   copy: (event: BrunoTableHotkeyGesture) => void;
+  selectAll?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   resize: (
     event: BrunoTableHotkeyGesture,
     adjustment: "minimum" | "maximum" | -1 | 1,
@@ -80,6 +88,9 @@ function createBrunoTableGridHotkeyBindings(
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
     { hotkey: "Mod+C", onTrigger: commands.copy },
+    ...(commands.selectAll === undefined
+      ? []
+      : ([{ hotkey: "Mod+A", onTrigger: commands.selectAll }] as const)),
     {
       hotkey: "Alt+ArrowLeft",
       onTrigger: (event) => commands.resize(event, -1, 10, true),
@@ -286,6 +297,9 @@ const NOOP_GRID_COMMANDS: BrunoTableGridHotkeyCommands = Object.freeze({
 export const BRUNO_TABLE_GRID_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze(
   createBrunoTableGridHotkeyBindings(NOOP_GRID_COMMANDS).map((binding) => binding.hotkey),
 );
+export const BRUNO_TABLE_ROW_SELECTION_HOTKEYS: readonly RegisterableHotkey[] = Object.freeze([
+  "Mod+A",
+]);
 export const BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_ESCAPE_HOTKEYS.length;
 export const BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT: number =
@@ -297,6 +311,8 @@ export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly Hotkey[] =
 // capture-phase column-gesture Escape definition set.
 export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_GRID_HOTKEYS.length + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length;
+export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
+  BRUNO_TABLE_ROW_SELECTION_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
@@ -349,11 +365,49 @@ export function brunoTableHotkeyRegistrationBound(
   _mountedRows: number,
   _mountedColumns: number,
   activeFilterWorkflows = 0,
+  rowSelection = false,
 ): number {
   return (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
-    activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT
+    activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT +
+    (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0)
   );
+}
+
+/** One table-local bridge initializes TanStack's held-key lifecycle without per-cell subscriptions. */
+export function BrunoTableHeldShiftHotkeyAdapter({
+  owner,
+}: {
+  readonly owner: RefObject<HTMLElement | null>;
+}): null {
+  useKeyHold("Shift");
+  useEffect(() => {
+    const ownerDocument = owner.current?.ownerDocument;
+    if (
+      ownerDocument === undefined ||
+      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
+    ) {
+      return;
+    }
+    return registerBrunoTableForeignDocumentHeldShift(ownerDocument);
+  }, [owner]);
+  return null;
+}
+
+/** Reads TanStack's shared held-key state synchronously for a pointer command. */
+export function isBrunoTableHotkeyHeld(
+  key: "Shift",
+  owner?: Readonly<{ readonly ownerDocument: Document | null }>,
+): boolean {
+  const ownerDocument = owner?.ownerDocument;
+  if (
+    ownerDocument !== undefined &&
+    ownerDocument !== null &&
+    ownerDocument.defaultView !== (typeof window === "undefined" ? undefined : window)
+  ) {
+    return isBrunoTableForeignDocumentShiftHeld(ownerDocument);
+  }
+  return getKeyStateTracker().isKeyHeld(key);
 }
 
 /**
