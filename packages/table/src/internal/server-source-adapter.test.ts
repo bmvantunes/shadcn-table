@@ -1514,6 +1514,49 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(transport.release).toHaveBeenCalledTimes(1);
   });
 
+  it("defers projection until replacement visibility exists for new Column Identities", () => {
+    const transport = makeViewport();
+    const first = compileColumns([columns[0]!]);
+    const second = compileColumns([
+      {
+        columnId: "COL_ID_REPLACEMENT",
+        field: "price",
+        headerName: "Replacement",
+        valueType: "number",
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      first,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+    );
+    adapter.replace(
+      transport.viewport,
+      { ...query, orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }] },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_SYMBOL"],
+      },
+    );
+
+    expect(() => adapter.reconcileColumns(second, undefined)).not.toThrow();
+    adapter.replace(
+      transport.viewport,
+      { ...query, orderBy: [{ columnId: "COL_ID_REPLACEMENT", direction: "asc" }] },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_REPLACEMENT"],
+      },
+    );
+
+    expect(transport.release).toHaveBeenCalledTimes(1);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.getRequest()?.query).toMatchObject({ select: ["price"] });
+  });
+
   it("keeps hidden computed and raw-row presentation dormant during equivalent deliveries", () => {
     const run = (kind: "computed" | "raw-presentation") => {
       const hiddenGetter = vi.fn(() => 1);

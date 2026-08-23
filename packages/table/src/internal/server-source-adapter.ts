@@ -257,11 +257,19 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       quickFilterFields === this.quickFilterFields
         ? this.quickFilterFields
         : snapshotBrunoTableQuickFilterFields(quickFilterFields);
+    const previousVisibleColumnIds = this.active?.inputs.visibleColumnIds;
+    const visibleColumnIds =
+      previousVisibleColumnIds === undefined ||
+      previousVisibleColumnIds.some((columnId) =>
+        columns.some((column) => column.columnId === columnId),
+      )
+        ? previousVisibleColumnIds
+        : undefined;
     const nextProjectionFields = compileBrunoTableServerProjectionFields(
       columns,
       nextQuickFilterFields,
       this.completeRawSelect,
-      this.active?.inputs.visibleColumnIds,
+      visibleColumnIds,
     );
     if (
       columns === this.columns &&
@@ -295,10 +303,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.columns = columns;
     this.quickFilterFields = nextQuickFilterFields;
     this.projectionFields = nextProjectionFields;
-    this.rowEquivalencePlan = compileRowEquivalencePlan(
-      columns,
-      this.active?.inputs.visibleColumnIds,
-    );
+    this.rowEquivalencePlan = compileRowEquivalencePlan(columns, visibleColumnIds);
     this.columnsById = new Map(columns.map((column) => [column.columnId, column]));
     this.queryConfiguration = Object.freeze({
       baselineFilters: filterCollection.filters,

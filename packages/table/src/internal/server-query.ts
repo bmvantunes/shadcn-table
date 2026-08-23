@@ -145,9 +145,9 @@ export function compileBrunoTableServerFacetQuery(
   }
   const where = [...(input.externalFilters ?? [])];
   where.push(
-    ...input.filters
-      .filter((filter) => !filterContainsColumn(filter, columnId))
-      .map((filter) => compileFilter(filter, fieldColumns)),
+    ...selectBrunoTableServerFacetGridFilters(input.filters, columnId).map((filter) =>
+      compileFilter(filter, fieldColumns),
+    ),
   );
   if (input.quickFilter.length > 0 && input.quickFilterFields.length > 0) {
     where.push(
@@ -180,6 +180,13 @@ export function compileBrunoTableServerFacetQuery(
       orderBy,
     }),
   });
+}
+
+export function selectBrunoTableServerFacetGridFilters(
+  filters: readonly unknown[],
+  columnId: string,
+): readonly unknown[] {
+  return filters.filter((filter) => !filterContainsColumn(filter, columnId));
 }
 
 export function columnUsesRawRowPresentation(column: CompiledColumn): boolean {

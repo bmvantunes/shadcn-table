@@ -626,6 +626,42 @@ describe("BrunoTableServer", () => {
     await expect.element(dialog).toBeInTheDocument();
   });
 
+  test("replaces every visible Server Column Identity from the reconciled layout", async () => {
+    const transport = makeViewport();
+    const symbolColumns = [columns[0]] as const satisfies BrunoTableColumns<Row>;
+    const priceColumns = [columns[1]] as const satisfies BrunoTableColumns<Row>;
+    const source = serverProps(transport.viewport, "ready").viewportSource;
+    const screen = await render(
+      <BrunoTableServer
+        tableId="TABLE_ID_SERVER_REPLACE_IDENTITIES"
+        columns={symbolColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SYMBOL", direction: "asc" }]}
+        viewportSource={source}
+      />,
+    );
+
+    await screen.rerender(
+      <BrunoTableServer
+        tableId="TABLE_ID_SERVER_REPLACE_IDENTITIES"
+        columns={priceColumns}
+        initialOrderBy={[{ columnId: "COL_ID_PRICE", direction: "asc" }]}
+        viewportSource={source}
+      />,
+    );
+
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    expect(transport.releases).toHaveBeenCalledTimes(1);
+    expect(transport.requests[1]?.query).toEqual({
+      select: ["price"],
+      where: [],
+      orderBy: [{ field: "price", direction: "asc" }],
+    });
+    await expect.element(screen.getByRole("columnheader", { name: "Price" })).toBeVisible();
+    await expect
+      .element(screen.getByRole("columnheader", { name: "Symbol" }))
+      .not.toBeInTheDocument();
+  });
+
   test("releases an open Server facet exactly once when its capability is disabled or removed", async () => {
     const transport = makeViewport();
     const wholeResult = createBrowserWholeResultSpy();
@@ -741,6 +777,55 @@ describe("BrunoTableServer", () => {
       expect(wholeResult.useWholeResult).not.toHaveBeenCalled();
       expect(wholeResult.subscriptions).toHaveLength(subscriptionCount);
       expect(wholeResult.releases).toHaveLength(releaseCount);
+      await expect.element(dialog).toBeInTheDocument();
+    } finally {
+      removeLifetime();
+    }
+  });
+
+  test("keeps an open Server facet subscription across sorting and its own filter intent", async () => {
+    const transport = makeViewport();
+    const wholeResult = createBrowserWholeResultSpy();
+    let runtime: BrunoTableGridRuntime<Row> | undefined;
+    const removeLifetime = installBrunoTableToolbarLifetimeListener((event) => {
+      if (
+        event.tableId === "TABLE_ID_SERVER" &&
+        event.kind === "runtime-create" &&
+        event.identity instanceof BrunoTableGridRuntime
+      ) {
+        runtime = event.identity;
+      }
+    });
+    try {
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready")}
+          columns={serverFilterColumns}
+          viewportSource={{
+            ...serverProps(transport.viewport, "ready").viewportSource,
+            useWholeResult: wholeResult.useWholeResult,
+          }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
+      const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
+      await vi.waitFor(() => expect(wholeResult.subscriptions).toHaveLength(1));
+
+      expect(
+        runtime?.dispatchGridCommand({
+          type: "column.sort.toggle",
+          columnId: "COL_ID_SYMBOL",
+          multi: false,
+        }),
+      ).toBe(true);
+      await settleBrunoTableBrowserFrames();
+      expect(wholeResult.subscriptions).toHaveLength(1);
+      expect(wholeResult.releases).toHaveLength(0);
+
+      await userEvent.click(dialog.getByRole("button", { name: "Clear All" }));
+      await settleBrunoTableBrowserFrames();
+      expect(wholeResult.subscriptions).toHaveLength(1);
+      expect(wholeResult.releases).toHaveLength(0);
       await expect.element(dialog).toBeInTheDocument();
     } finally {
       removeLifetime();

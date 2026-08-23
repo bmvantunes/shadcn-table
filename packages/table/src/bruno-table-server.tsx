@@ -128,6 +128,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         runtime: runtimeView,
         semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
         source: props.viewportSource,
+        transportIdentity: props.viewportSource.viewport,
       }),
   );
 
@@ -187,6 +188,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       querySnapshot: runtimeView.getQuerySnapshot(),
       runtime: runtimeView,
       semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
+      transportIdentity: props.viewportSource.viewport,
     });
   }, [
     compiledColumns,
@@ -223,6 +225,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         querySnapshot: query,
         runtime: runtimeView,
         semanticIdentity: rowPipelineAdapter.getSemanticIdentity(),
+        transportIdentity: props.viewportSource.viewport,
       });
     };
     const unsubscribeQuery = runtimeView.subscribeQuery(() => replace(false));

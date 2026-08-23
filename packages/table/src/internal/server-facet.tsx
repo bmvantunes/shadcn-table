@@ -15,7 +15,9 @@ import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableQuerySnapshot, BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
 import {
   compileBrunoTableServerFacetQuery,
+  selectBrunoTableServerFacetGridFilters,
   type BrunoTableCompiledServerFacetQuery,
+  type BrunoTableCompiledServerFacetQueryPlan,
 } from "./server-query";
 
 type BrunoTableServerWholeResult = Readonly<{
@@ -25,6 +27,10 @@ type BrunoTableServerWholeResult = Readonly<{
 }>;
 
 type BrunoTableServerFacetContextValue = Readonly<{
+  readonly getFacetPlan: (
+    snapshot: BrunoTableServerFacetSemanticSnapshot,
+    columnId: string,
+  ) => BrunoTableCompiledServerFacetQueryPlan;
   readonly getSnapshot: () => BrunoTableServerFacetSemanticSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
 }>;
@@ -37,10 +43,12 @@ export type BrunoTableServerFacetSemanticSnapshot = Readonly<{
   readonly runtime: BrunoTableRowPipelineRuntimeView;
   readonly semanticIdentity: unknown;
   readonly source: unknown;
+  readonly transportIdentity: unknown;
 }>;
 
 export class BrunoTableServerFacetRuntime {
   readonly #listeners = new Set<() => void>();
+  readonly #plans = new Map<string, StableFacetPlan>();
   #snapshot: BrunoTableServerFacetSemanticSnapshot;
 
   public constructor(snapshot: BrunoTableServerFacetSemanticSnapshot) {
@@ -54,7 +62,57 @@ export class BrunoTableServerFacetRuntime {
     return () => this.#listeners.delete(listener);
   };
 
+  public readonly getFacetPlan = (
+    snapshot: BrunoTableServerFacetSemanticSnapshot,
+    columnId: string,
+  ): BrunoTableCompiledServerFacetQueryPlan => {
+    const filters = selectBrunoTableServerFacetGridFilters(
+      snapshot.querySnapshot.filters,
+      columnId,
+    );
+    const cached = this.#plans.get(columnId);
+    if (
+      cached !== undefined &&
+      Object.is(cached.columns, snapshot.querySnapshot.columns) &&
+      Object.is(cached.routeBy, snapshot.routeBy) &&
+      Object.is(cached.externalFilters, snapshot.externalFilters) &&
+      Object.is(cached.transportIdentity, snapshot.transportIdentity) &&
+      cached.quickFilter === snapshot.querySnapshot.quickFilter &&
+      Object.is(cached.quickFilterFields, snapshot.quickFilterFields) &&
+      sameReferenceArray(cached.filters, filters)
+    ) {
+      return cached.plan;
+    }
+    const plan = compileBrunoTableServerFacetQuery(snapshot.querySnapshot.columns, columnId, {
+      ...(snapshot.routeBy === undefined ? {} : { routeBy: snapshot.routeBy }),
+      ...(snapshot.externalFilters === undefined
+        ? {}
+        : { externalFilters: snapshot.externalFilters }),
+      filters,
+      quickFilter: snapshot.querySnapshot.quickFilter,
+      quickFilterFields: snapshot.quickFilterFields,
+      orderBy: [],
+    });
+    this.#plans.set(
+      columnId,
+      Object.freeze({
+        columns: snapshot.querySnapshot.columns,
+        externalFilters: snapshot.externalFilters,
+        filters,
+        plan,
+        quickFilter: snapshot.querySnapshot.quickFilter,
+        quickFilterFields: snapshot.quickFilterFields,
+        routeBy: snapshot.routeBy,
+        transportIdentity: snapshot.transportIdentity,
+      }),
+    );
+    return plan;
+  };
+
   public reconcile(snapshot: BrunoTableServerFacetSemanticSnapshot): void {
+    if (!Object.is(this.#snapshot.querySnapshot.columns, snapshot.querySnapshot.columns)) {
+      this.#plans.clear();
+    }
     if (
       sameServerFacetQuerySnapshot(this.#snapshot.querySnapshot, snapshot.querySnapshot) &&
       sameServerFacetSource(this.#snapshot.source, snapshot.source) &&
@@ -94,8 +152,7 @@ function sameServerFacetQuerySnapshot(
     Object.is(previous.columns, next.columns) &&
     Object.is(previous.filters, next.filters) &&
     Object.is(previous.filterCollection, next.filterCollection) &&
-    previous.quickFilter === next.quickFilter &&
-    Object.is(previous.orderBy, next.orderBy)
+    previous.quickFilter === next.quickFilter
   );
 }
 
@@ -109,7 +166,11 @@ export function BrunoTableServerFacetProvider({
   readonly runtime: BrunoTableServerFacetRuntime;
 }>): ReactElement {
   const value = useMemo(
-    () => ({ getSnapshot: runtime.getSnapshot, subscribe: runtime.subscribe }),
+    () => ({
+      getFacetPlan: runtime.getFacetPlan,
+      getSnapshot: runtime.getSnapshot,
+      subscribe: runtime.subscribe,
+    }),
     [runtime],
   );
   return (
@@ -146,6 +207,7 @@ export const BrunoTableServerSetFilterFacet: NamedExoticComponent<BrunoTableSetF
     return (
       <BrunoTableResolvedServerSetFilterFacet
         column={coherentColumn}
+        plan={context.getFacetPlan(semanticSnapshot, coherentColumn.columnId)}
         semanticSnapshot={semanticSnapshot}
         querySnapshot={querySnapshot}
       />
@@ -154,27 +216,15 @@ export const BrunoTableServerSetFilterFacet: NamedExoticComponent<BrunoTableSetF
 
 function BrunoTableResolvedServerSetFilterFacet({
   column,
+  plan,
   semanticSnapshot,
   querySnapshot,
 }: Readonly<{
   readonly column: CompiledColumn;
+  readonly plan: BrunoTableCompiledServerFacetQueryPlan;
   readonly semanticSnapshot: BrunoTableServerFacetSemanticSnapshot;
   readonly querySnapshot: BrunoTableQuerySnapshot;
 }>): ReactElement {
-  const plan = useMemo(
-    () =>
-      compileBrunoTableServerFacetQuery(querySnapshot.columns, column.columnId, {
-        ...(semanticSnapshot.routeBy === undefined ? {} : { routeBy: semanticSnapshot.routeBy }),
-        ...(semanticSnapshot.externalFilters === undefined
-          ? {}
-          : { externalFilters: semanticSnapshot.externalFilters }),
-        filters: querySnapshot.filters,
-        quickFilter: querySnapshot.quickFilter,
-        quickFilterFields: semanticSnapshot.quickFilterFields,
-        orderBy: querySnapshot.orderBy,
-      }),
-    [column.columnId, querySnapshot, semanticSnapshot],
-  );
   const result = useBrunoTableServerWholeResult(semanticSnapshot.source, plan.query);
   const expression = querySnapshot.filterCollection.filtersByColumn.get(column.columnId);
   const snapshot = useMemo(
@@ -198,6 +248,24 @@ function BrunoTableResolvedServerSetFilterFacet({
       runtime={semanticSnapshot.runtime}
       snapshot={snapshot}
     />
+  );
+}
+
+type StableFacetPlan = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly externalFilters: readonly unknown[] | undefined;
+  readonly filters: readonly unknown[];
+  readonly plan: BrunoTableCompiledServerFacetQueryPlan;
+  readonly quickFilter: string;
+  readonly quickFilterFields: readonly string[];
+  readonly routeBy: Readonly<Record<string, unknown>> | undefined;
+  readonly transportIdentity: unknown;
+}>;
+
+function sameReferenceArray(previous: readonly unknown[], next: readonly unknown[]): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((value, index) => Object.is(value, next[index]))
   );
 }
 
