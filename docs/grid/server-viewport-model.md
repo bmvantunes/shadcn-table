@@ -65,8 +65,8 @@ Do not require consumers to construct `defineGrid`, `rowModel`, or datasource-se
 
 ## Leased feed routing
 
-This section specifies the issue #17 target contract. The leased-route slice is not shipped yet:
-issue #16 exposes no `routeBy` prop, and the examples below depend on a compatible release resolving
+This section specifies the shipped issue #17 contract. It requires effect-view-server 4.2.6 or
+newer, including the leased-route contract completed by
 [effect-view-server#464](https://github.com/bmvantunes/effect-view-server/issues/464).
 
 effect-view-server leased sources declare one authoritative non-empty Route Field tuple when the source is configured:

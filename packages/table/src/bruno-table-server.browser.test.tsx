@@ -21,6 +21,7 @@ import {
 import type { BrunoTableColumns, BrunoTableQuickFilterFields, BrunoTableValueType } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import { createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
+import { brunoTableTestSemanticQueryKey } from "./internal/server-semantic-key.test-support";
 import {
   installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientColumnFilterTriggerRenderListener,
@@ -176,16 +177,6 @@ type Sink<TRow = Row> = Readonly<{
   ) => void;
 }>;
 
-function browserSemanticQueryKey(candidate: unknown): unknown {
-  return JSON.stringify(candidate, (key, value: unknown) => {
-    if (typeof value === "bigint") return `${value}n`;
-    if (key === "select" && Array.isArray(value)) {
-      return value.toSorted((left, right) => String(left).localeCompare(String(right)));
-    }
-    return value;
-  });
-}
-
 const browserWholeResult = () => ({
   rows: [],
   totalRows: 0,
@@ -198,7 +189,7 @@ function makeViewport(totalRows = 100, publishCount = true) {
   const windows: Array<Readonly<{ readonly firstRow: number; readonly lastRow: number }>> = [];
   const releases = vi.fn();
   const viewport: BrowserViewport = {
-    semanticKey: browserSemanticQueryKey,
+    semanticKey: brunoTableTestSemanticQueryKey,
     replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink }>) {
       requests.push(request);
       if (publishCount) request.sink.setRowCount(totalRows, true);
@@ -305,6 +296,7 @@ describe("BrunoTableServer", () => {
 
   test("presents every live Server facet lifecycle through an accessible status", async () => {
     const cases = [
+      { status: "ready", label: "" },
       { status: "loading", label: "Loading filter values." },
       {
         status: "stale",
@@ -344,9 +336,21 @@ describe("BrunoTableServer", () => {
       );
       await userEvent.click(screen.getByRole("button", { name: "Filter Symbol" }));
       const dialog = screen.getByRole("dialog", { name: "Filter Symbol" });
-      await expect
-        .element(dialog.getByRole("status", { name: "Filter value status" }))
-        .toHaveTextContent(lifecycle.label);
+      const facetStatus = dialog.getByRole("status").nth(0);
+      if (lifecycle.status === "ready") {
+        await expect.element(facetStatus).toBeEmptyDOMElement();
+      } else {
+        await expect.element(facetStatus).toHaveTextContent(lifecycle.label);
+      }
+      if (
+        lifecycle.status === "loading" ||
+        lifecycle.status === "error" ||
+        lifecycle.status === "closed"
+      ) {
+        await expect
+          .element(dialog.getByRole("heading", { name: "No values found" }))
+          .not.toBeInTheDocument();
+      }
       await cleanup();
     }
   });

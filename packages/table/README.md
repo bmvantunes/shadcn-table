@@ -90,8 +90,9 @@ The BigDecimal Value Type keeps canonical text, persisted operands, equality, an
 accepts only effect-view-server-compatible wire-safe values, treats differently scaled
 representations as equal, and never compares by aligning scales through a power of ten. Importing
 `@bruno/table` does not import or require Effect; `effect@4.0.0-rc.111` is an optional peer used
-only by `@bruno/table/effect`. The integration is built against the public, versioned
-`effect-view-server@4.2.4/value-semantics` contract. Admitted cross-bundle wire values are copied
+only by `@bruno/table/effect`. This optional value-type entry point is built against the separate
+public, versioned `effect-view-server@4.2.4/value-semantics` compatibility contract; the Server
+viewport integration described below requires 4.2.6. Admitted cross-bundle wire values are copied
 into owned local BigDecimals and receive opaque source-owned comparison metadata before BrunoTable
 exposes the full Effect value type. That focused runtime is inlined into `@bruno/table/effect`;
 applications do not install effect-view-server merely to use BigDecimal columns. BigDecimal columns

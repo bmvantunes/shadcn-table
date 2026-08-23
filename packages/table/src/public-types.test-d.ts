@@ -1139,6 +1139,11 @@ describe("BrunoTable public types", () => {
       ...serverProps,
       externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
     });
+    // @ts-expect-error inRange bounds preserve one exact bigint operand domain.
+    void BrunoTableServer({
+      ...serverProps,
+      externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
+    });
 
     void BrunoTableClient({
       ...clientProps,

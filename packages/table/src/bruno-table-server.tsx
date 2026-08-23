@@ -124,6 +124,8 @@ function BrunoTableServerInstance<
     [props.quickFilterFields],
   );
 
+  // This declaration must precede the reconciliation effect with the same semantic dependency
+  // superset so React stages the query before synchronous column/runtime publications can fire.
   useLayoutEffect(() => {
     stagingSemanticQueryRef.current = true;
   }, [
@@ -147,11 +149,6 @@ function BrunoTableServerInstance<
   }, [props.viewportSource, rowPipelineAdapter]);
 
   useLayoutEffect(() => {
-    queryInputsRef.current = Object.freeze({
-      routeBy: props.routeBy,
-      externalFilters: props.externalFilters,
-      visibleColumnIds: runtimeView.getColumnLayoutSnapshot().visibleColumnIds,
-    });
     stageBrunoTableServerSemanticQuery(stagingSemanticQueryRef, () => {
       const queryConfiguration = rowPipelineAdapter.reconcileColumns(
         compiledColumns,

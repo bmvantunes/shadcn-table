@@ -6,6 +6,7 @@ import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
 import { compileBrunoTableServerQueryPlan } from "./server-query";
+import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
 
 const referenceFrameBudgetMs = 8.33;
 const virtualRowCount = 1_000_000;
@@ -88,7 +89,7 @@ const adapter = new BrunoTableServerRowPipelineAdapter<Readonly<{ value: number 
   [{ columnId: "COL_ID_VALUE", direction: "asc" }],
 );
 const adapterViewport = {
-  semanticKey: (query: unknown) => JSON.stringify(query),
+  semanticKey: brunoTableTestSemanticQueryKey,
   replace(request: Readonly<{ readonly sink: NonNullable<typeof adapterSink> }>) {
     replaceCalls += 1;
     adapterSink = request.sink;
@@ -180,7 +181,7 @@ const equivalenceAdapter = new BrunoTableServerRowPipelineAdapter<EquivalenceRow
   [{ columnId: "COL_ID_VALUE_0", direction: "asc" }],
 );
 const equivalenceViewport = {
-  semanticKey: (query: unknown) => JSON.stringify(query),
+  semanticKey: brunoTableTestSemanticQueryKey,
   replace(request: Readonly<{ readonly sink: NonNullable<typeof equivalenceSink> }>) {
     equivalenceSink = request.sink;
     return { setWindow: () => undefined, release: () => undefined };

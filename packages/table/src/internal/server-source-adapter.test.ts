@@ -4,6 +4,7 @@ import * as BigDecimal from "effect/BigDecimal";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
+import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
 import { BrunoTableBigDecimalColumn } from "../effect";
 import type { BrunoTableColumns } from "../public-types";
 
@@ -35,16 +36,6 @@ const query = Object.freeze({
 
 const completeRawSelect = ["symbol", "price"] as const;
 
-function semanticQueryKey(candidate: unknown): unknown {
-  return JSON.stringify(candidate, (key, value: unknown) => {
-    if (typeof value === "bigint") return `${value}n`;
-    if (key === "select" && Array.isArray(value)) {
-      return value.toSorted((left, right) => String(left).localeCompare(String(right)));
-    }
-    return value;
-  });
-}
-
 function makeViewport<TRow = Row>() {
   let request:
     | Readonly<{
@@ -61,7 +52,7 @@ function makeViewport<TRow = Row>() {
     | undefined;
   const setWindow = vi.fn();
   const release = vi.fn();
-  const semanticKey = vi.fn(semanticQueryKey);
+  const semanticKey = vi.fn(brunoTableTestSemanticQueryKey);
   const replace = vi.fn((next: NonNullable<typeof request>) => {
     request = next;
     return { setWindow, release };
@@ -574,7 +565,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(() =>
       adapter.replace(
         {
-          semanticKey: semanticQueryKey,
+          semanticKey: brunoTableTestSemanticQueryKey,
           replace(request: Readonly<{ readonly sink: NonNullable<typeof failedSink> }>) {
             failedSink = request.sink;
             request.sink.setRowCount(1, true);
@@ -609,7 +600,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       completeRawSelect,
     );
     const viewport = {
-      semanticKey: semanticQueryKey,
+      semanticKey: brunoTableTestSemanticQueryKey,
       replace: vi.fn(() => ({ release, setWindow: undefined })),
     };
     adapter.reconcileSource({

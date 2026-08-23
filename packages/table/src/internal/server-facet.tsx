@@ -102,10 +102,14 @@ export const BrunoTableServerSetFilterFacet: NamedExoticComponent<BrunoTableSetF
         }),
       [column, expression, plan.countAlias, result.rows],
     );
+    const lifecycle = useMemo(
+      () => ({ status: result.status, message: result.message }),
+      [result.message, result.status],
+    );
     return (
       <BrunoTableSetFilterView
         column={column}
-        lifecycle={{ status: result.status, message: result.message }}
+        lifecycle={lifecycle}
         runtime={context.runtime}
         snapshot={snapshot}
       />

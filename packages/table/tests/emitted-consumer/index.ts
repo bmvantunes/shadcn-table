@@ -287,6 +287,11 @@ BrunoTableServer({
   ...emittedWitnessedServerProps,
   externalFilters: [{ field: "quantity", type: "equals", filter: 1 }],
 });
+// @ts-expect-error emitted inRange bounds preserve one exact bigint operand domain.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  externalFilters: [{ field: "quantity", type: "inRange", filter: 1n, filterTo: 10 }],
+});
 
 const emittedMismatchedServerProps: BrunoTableServerProps<
   Order,

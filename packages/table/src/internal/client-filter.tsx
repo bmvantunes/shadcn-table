@@ -799,16 +799,16 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
           : { type: "column.filter.replace", columnId: column.columnId, filter },
       );
     };
+    const hasCoherentEmptyResult =
+      lifecycle === undefined || lifecycle.status === "ready" || lifecycle.status === "stale";
 
     return (
       <section className="flex flex-col gap-2" aria-labelledby={headingId}>
-        {lifecycle === undefined || lifecycle.status === "ready" ? null : (
-          <p
-            aria-label="Filter value status"
-            className="text-xs text-muted-foreground"
-            role="status"
-          >
-            {serverFacetLifecycleLabel(lifecycle.status, lifecycle.message)}
+        {lifecycle === undefined ? null : (
+          <p className="text-xs text-muted-foreground" role="status">
+            {lifecycle.status === "ready"
+              ? ""
+              : serverFacetLifecycleLabel(lifecycle.status, lifecycle.message)}
           </p>
         )}
         <div className="flex items-center justify-between gap-2">
@@ -860,14 +860,14 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
             setWindowStart(0);
           }}
         />
-        {matchingOptions.length === 0 ? (
+        {matchingOptions.length === 0 && hasCoherentEmptyResult ? (
           <Empty className="min-h-24 p-3" role="status">
             <EmptyHeader>
               <EmptyTitle>No values found</EmptyTitle>
               <EmptyDescription>Try a different search.</EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : (
+        ) : matchingOptions.length > 0 ? (
           <div
             className="flex max-h-56 flex-col gap-1 overflow-y-auto"
             role="group"
@@ -911,7 +911,7 @@ export const BrunoTableSetFilterView: NamedExoticComponent<BrunoTableSetFilterVi
               );
             })}
           </div>
-        )}
+        ) : null}
         {matchingOptions.length <= SET_FILTER_VISIBLE_OPTIONS ? null : (
           <div className="flex items-center justify-between gap-2">
             <Button
