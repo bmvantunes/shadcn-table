@@ -111,6 +111,43 @@ describe("BrunoTableRowSelectionRuntime", () => {
     expect(rowB).not.toHaveBeenCalled();
   });
 
+  it("uses a stable private source token to bypass unchanged source identity enumeration", () => {
+    const rowIds = ["a", "b", "c"];
+    const selection = new BrunoTableRowSelectionRuntime(rowIds);
+    const sourceToken = Object.freeze({});
+    let sourceVisits = 0;
+    const instrumentedSource = new Proxy(rowIds, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^(0|[1-9]\d*)$/u.test(property)) sourceVisits += 1;
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    selection.reconcile(instrumentedSource, rowIds, sourceToken);
+    expect(sourceVisits).toBeGreaterThan(0);
+    sourceVisits = 0;
+
+    selection.reconcile(instrumentedSource, Array.from(rowIds), sourceToken);
+
+    expect(sourceVisits).toBe(0);
+  });
+
+  it("does zero projected work for an already-satisfied Select All command", () => {
+    const selection = new BrunoTableRowSelectionRuntime(["a", "b", "c"]);
+    const header = vi.fn();
+    const row = vi.fn();
+    selection.subscribeHeader(header);
+    selection.subscribeRow("a", row);
+
+    expect(selection.toggleAll(true)).toBe(3);
+    header.mockClear();
+    row.mockClear();
+
+    expect(selection.toggleAll(true)).toBe(0);
+    expect(header).not.toHaveBeenCalled();
+    expect(row).not.toHaveBeenCalled();
+  });
+
   it("clears selection and its anchor before a future grouped projection and restores empty", () => {
     const selection = new BrunoTableRowSelectionRuntime(["a", "b"]);
     selection.toggleRow("a", true, false);

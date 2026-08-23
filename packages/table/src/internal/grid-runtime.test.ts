@@ -4604,6 +4604,32 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(rowsStore.getSnapshot()[0]?.raw).toBe(first);
   });
 
+  it("retains the source Row Identity snapshot across value-only publications", () => {
+    const first = { id: "first", name: "First", note: "initial" } satisfies Row;
+    const second = { id: "second", name: "Second", note: "initial" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([first, second]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    const initialSource = rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot());
+
+    runtime.publish(adapter.publish(source([{ ...first, note: "updated" }, second])));
+
+    expect(rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot()).rowIds).toBe(
+      initialSource.rowIds,
+    );
+    expect(rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot()).token).toBe(
+      initialSource.token,
+    );
+
+    runtime.publish(
+      adapter.publish(source([{ id: "replacement", name: "Replacement", note: "next" }, second])),
+    );
+
+    const revisedSource = rowsStore.getSourceRowIdsSnapshot(rowsStore.getSnapshot());
+    expect(revisedSource.token).not.toBe(initialSource.token);
+    expect(Array.from(revisedSource.rowIds)).toEqual(["replacement", "second"]);
+  });
+
   it("preserves forced row-order evidence when a Client sequence is reused", () => {
     const resident = { id: "first", name: "Resident" } satisfies Row;
     const candidate = { id: "first", name: "Candidate" } satisfies Row;

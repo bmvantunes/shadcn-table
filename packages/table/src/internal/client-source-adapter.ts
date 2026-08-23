@@ -450,6 +450,22 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     const installedCoherent = readRuntimeCoherent();
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+    const emptySourceRowIdsSnapshot = Object.freeze({
+      rowIds: EMPTY_ROWS,
+      token: EMPTY_PERSISTENT_SEQUENCE.token,
+    });
+    const sourceRowIdsByRows = new WeakMap<object, BrunoTableClientSourceRowIdsSnapshot>();
+    const registerSourceRowIds = (
+      rows: readonly BrunoTableClientAdmittedRow[],
+      coherent: ClientCoherentSnapshot<TRow> | undefined,
+    ): void => {
+      const rowIds = coherent?.rowIds ?? EMPTY_PERSISTENT_SEQUENCE;
+      sourceRowIdsByRows.set(
+        rows,
+        Object.freeze({ rowIds: rowIds.asArray(), token: rowIds.token }),
+      );
+    };
+    registerSourceRowIds(snapshot, installedCoherent);
     let evaluatedCoherent = installedCoherent;
     let detector: BrunoTableClientRowOrderChangeDetector | undefined;
     const listeners = new Set<() => void>();
@@ -491,14 +507,17 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         }
       } catch (error) {
         snapshot = nextRows;
+        registerSourceRowIds(snapshot, nextCoherent);
         notifyRowsStoreListeners(listeners, Object.freeze({ value: error }));
         return;
       }
       snapshot = nextRows;
+      registerSourceRowIds(snapshot, nextCoherent);
       notifyRowsStoreListeners(listeners);
     };
     return Object.freeze({
       getSnapshot: () => snapshot,
+      getSourceRowIdsSnapshot: (rows) => sourceRowIdsByRows.get(rows) ?? emptySourceRowIdsSnapshot,
       subscribe: (listener: () => void) => {
         if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
           recordBrunoTableToolbarLifetime({
@@ -512,6 +531,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
           detector ??= createDetector();
           const installedCoherent = readRuntimeCoherent();
           snapshot = installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+          registerSourceRowIds(snapshot, installedCoherent);
           evaluatedCoherent = installedCoherent;
           displayedRowSpace = installedCoherent !== undefined;
           unsubscribeRuntime = runtime.subscribeRowSpace(publish);
@@ -551,7 +571,15 @@ export type BrunoTableClientRowOrderChange = Readonly<{
 
 export type BrunoTableClientRowsStore = Readonly<{
   readonly getSnapshot: () => readonly BrunoTableClientAdmittedRow[];
+  readonly getSourceRowIdsSnapshot: (
+    rows: readonly BrunoTableClientAdmittedRow[],
+  ) => BrunoTableClientSourceRowIdsSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
+}>;
+
+export type BrunoTableClientSourceRowIdsSnapshot = Readonly<{
+  readonly rowIds: readonly BrunoTableRowId[];
+  readonly token: object;
 }>;
 
 export type BrunoTableClientFacetRowsSource = Readonly<{

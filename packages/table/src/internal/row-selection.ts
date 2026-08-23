@@ -57,6 +57,7 @@ export class BrunoTableRowSelectionRuntime {
   private sourceRowIds: readonly string[];
   private projectedRowIds: readonly string[];
   private sourceRowIdSet: ReadonlySet<string>;
+  private sourceSnapshotToken: object | undefined;
   private projectedRowIndex: ReadonlyMap<string, number>;
   private readonly selectedRowIds = new Set<string>();
   private selectedProjectedCount = 0;
@@ -133,21 +134,28 @@ export class BrunoTableRowSelectionRuntime {
     return result;
   };
 
-  public readonly toggleAll = (checked: boolean): void => {
-    if (this.grouped || this.projectedRowIds.length === 0) return;
+  public readonly toggleAll = (checked: boolean): number => {
+    if (this.grouped || this.projectedRowIds.length === 0) return 0;
+    if (checked && this.headerSnapshot.checked) return 0;
     const changed = new Set<string>();
     for (const rowId of this.projectedRowIds) this.setSelected(rowId, checked, changed);
     this.anchorRowId = undefined;
     this.publishSelectionChange(changed);
+    return this.projectedRowIds.length;
   };
 
   public readonly reconcile = (
     sourceRowIds: readonly string[],
     projectedRowIds: readonly string[],
+    sourceSnapshotToken?: object,
   ): void => {
     if (this.grouped) return;
-    const nextSource = stableRowIds(sourceRowIds, this.sourceRowIds);
+    const nextSource =
+      sourceSnapshotToken !== undefined && sourceSnapshotToken === this.sourceSnapshotToken
+        ? this.sourceRowIds
+        : stableRowIds(sourceRowIds, this.sourceRowIds);
     const nextProjection = stableRowIds(projectedRowIds, this.projectedRowIds);
+    this.sourceSnapshotToken = sourceSnapshotToken;
     if (nextSource === this.sourceRowIds && nextProjection === this.projectedRowIds) return;
 
     const nextSourceSet = new Set(nextSource);
@@ -185,6 +193,7 @@ export class BrunoTableRowSelectionRuntime {
     this.sourceRowIds = stableRowIds(rowIds);
     this.projectedRowIds = this.sourceRowIds;
     this.sourceRowIdSet = new Set(this.sourceRowIds);
+    this.sourceSnapshotToken = undefined;
     this.projectedRowIndex = indexRowIds(this.projectedRowIds);
     this.selectedProjectedCount = 0;
     this.anchorRowId = undefined;

@@ -2229,12 +2229,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const header = rowSelection.getHeaderSnapshot();
     if (header.disabled) return;
     event.preventDefault();
-    rowSelection.toggleAll(!header.checked);
+    if (header.checked) return;
+    rowSelection.toggleAll(true);
     const selectedCount = rowSelection.getHeaderSnapshot().selectedCount;
     setAnnouncement(
-      selectedCount === 0
-        ? "All matching rows deselected"
-        : `${String(selectedCount)} matching ${selectedCount === 1 ? "row" : "rows"} selected`,
+      `${String(selectedCount)} matching ${selectedCount === 1 ? "row" : "rows"} selected`,
     );
   };
   useBrunoTableGridHotkeys(gridElement, {

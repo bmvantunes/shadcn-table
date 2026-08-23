@@ -9,6 +9,9 @@ const rowIds = Object.freeze(
 );
 const selection = new BrunoTableRowSelectionRuntime(rowIds);
 const gestureSelection = new BrunoTableRowSelectionRuntime(rowIds);
+const repeatedSelectAllSelection = new BrunoTableRowSelectionRuntime(rowIds);
+const sourceSnapshotToken = Object.freeze({});
+repeatedSelectAllSelection.toggleAll(true);
 let headerNotifications = 0;
 let rowNotifications = 0;
 let gestureHeaderNotifications = 0;
@@ -29,11 +32,13 @@ gestureSelection.subscribeHeader(() => {
 });
 const publicationDurationsMs: number[] = [];
 const gestureDurationsMs: number[] = [];
+const repeatedSelectAllDurationsMs: number[] = [];
 
 describe("BrunoTable Row Selection benchmark (8.33 ms/120 Hz reference)", () => {
   afterAll(() => {
     const p99Ms = percentile99(publicationDurationsMs);
     const gestureP99Ms = percentile99(gestureDurationsMs);
+    const repeatedSelectAllP99Ms = percentile99(repeatedSelectAllDurationsMs);
     process.stdout.write(
       `${JSON.stringify({
         benchmark: "BrunoTable Row Selection",
@@ -44,6 +49,7 @@ describe("BrunoTable Row Selection benchmark (8.33 ms/120 Hz reference)", () => 
         rowNotifications,
         p99Ms,
         gestureP99Ms,
+        repeatedSelectAllP99Ms,
         referenceFrameBudgetMs,
       })}\n`,
     );
@@ -60,13 +66,18 @@ describe("BrunoTable Row Selection benchmark (8.33 ms/120 Hz reference)", () => 
         `Row Selection Select All p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(gestureP99Ms)} ms.`,
       );
     }
+    if (repeatedSelectAllP99Ms > referenceFrameBudgetMs) {
+      throw new Error(
+        `Row Selection repeated Select All p99 exceeded ${String(referenceFrameBudgetMs)} ms: ${String(repeatedSelectAllP99Ms)} ms.`,
+      );
+    }
   });
 
   bench(
     "reconciles 20 Hz-style value publications without selection notifications",
     () => {
       const startedAt = performance.now();
-      selection.reconcile(Array.from(rowIds), Array.from(rowIds));
+      selection.reconcile(Array.from(rowIds), Array.from(rowIds), sourceSnapshotToken);
       publicationDurationsMs.push(performance.now() - startedAt);
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
@@ -87,6 +98,19 @@ describe("BrunoTable Row Selection benchmark (8.33 ms/120 Hz reference)", () => 
       }
       if (gestureRowNotifications !== previousRowNotifications + 256) {
         throw new Error("One Select All gesture did not notify each mounted affected row once.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },
+  );
+
+  bench(
+    "repeats an already-satisfied Select All command with zero projected visits",
+    () => {
+      const startedAt = performance.now();
+      const visitedRows = repeatedSelectAllSelection.toggleAll(true);
+      repeatedSelectAllDurationsMs.push(performance.now() - startedAt);
+      if (visitedRows !== 0) {
+        throw new Error("Repeated Select All visited an already-selected projection.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 10, warmupTime: 0 },

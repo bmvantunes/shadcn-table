@@ -500,12 +500,28 @@ describe("ordinary Client Row Selection", () => {
         "1 matching row selected",
       ),
     );
-    await userEvent.keyboard(selectAllShortcut);
-    await vi.waitFor(() =>
-      expect(grid.element().querySelector<HTMLElement>('[aria-live="polite"]')?.textContent).toBe(
-        "All matching rows deselected",
-      ),
+    const repeatedSelectionRenders = vi.fn();
+    const removeRepeatedSelectionProbe = installBrunoTableRowSelectionRenderListener(
+      "TABLE_ID_ROW_SELECTION_FILTERED",
+      repeatedSelectionRenders,
     );
+    try {
+      grid.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "a",
+          repeat: true,
+          ...(detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+        }),
+      );
+      await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).toBeChecked();
+      expect(repeatedSelectionRenders).not.toHaveBeenCalled();
+    } finally {
+      removeRepeatedSelectionProbe();
+    }
+    await page.getByRole("checkbox", { name: "Select all rows" }).click();
+    await expect.element(page.getByRole("checkbox", { name: "Select all rows" })).not.toBeChecked();
 
     const restoredRows = [{ id: "a", name: "Ada" }, ...nextRows.slice(1)] satisfies readonly Row[];
     await screen.rerender(
