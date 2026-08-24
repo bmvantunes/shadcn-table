@@ -97,22 +97,28 @@ so an ancestor application provider cannot renormalize or disable Table commands
 arbitrate descendant exit at the nearest Table boundary rather than listener registration order.
 Descendant-exit Escape bindings stay table-scoped through an ownership check but register on the
 owning document, after React's delegated bubble phase, so a custom renderer can retain Escape with
-`stopPropagation()`. Active column gestures keep immediate capture-phase cancellation through a
-narrow framework-agnostic Adapter that delegates matching to `@tanstack/hotkeys`. That core Adapter
-also owns the bubble listener used only when the owning document belongs to another DOM realm,
-where the React manager cannot classify the event safely.
+`stopPropagation()`. Active column gestures use the same table-scoped TanStack binding and typed
+cancellation command. BrunoTable does not install a capture listener or foreign-document bridge;
+cross-document and iframe shortcut delivery is unsupported.
 Raw keyboard evidence is admitted only through an explicit build-guard map keyed by exact,
-normalized root-relative module paths. Its current members are `internal/hotkey-adapter.ts`, the
-only capability allowed to import React Hotkeys, and `internal/hotkey-capture.ts`, the only
-capability allowed to import Hotkeys core and own the exact capture and foreign-document bubble
-listeners. Neither may interpret event
-keys or modifiers. The Adapter exposes a private key- and
-modifier-free gesture capability to command owners. Future native editor or IME handling must add
+normalized root-relative module paths. Its only current member is `internal/hotkey-adapter.ts`, the
+only capability allowed to import React Hotkeys. Production code may not import Hotkeys core,
+install keyboard DOM listeners, or maintain handwritten modifier/key-state logic. The Adapter may
+only declare TanStack bindings and translate matched gestures into typed BrunoTable commands. It may
+not interpret event keys or modifiers. Before dispatch, it creates a new private gesture object
+containing only `target`, the captured `defaultPrevented` state, and a bound `preventDefault`; raw
+key and modifier fields do not cross into command owners at runtime. Future native editor or IME handling must add
 its own `native-evidence` capability, limited to component-owned composition evidence, instead of
 weakening this rule or teaching the guard JavaScript binding inference. The emitted guard admits
 only listener evidence structurally attributed to a sanctioned boundary. A future native boundary
 must add its own narrow emitted attribution rule; exact source scanning remains authoritative after
 modules are bundled together.
+
+The same library-ownership rule applies to generic pacing. At React boundaries, debounce,
+throttle, scheduling, and rate-control behavior covered by TanStack Pacer use
+`@tanstack/react-pacer`; BrunoTable retains only table-domain admission and publication policy.
+Do not introduce a handwritten parallel mechanism. If a clear upstream Hotkeys or Pacer bug is
+reproduced, stop and obtain explicit user approval before adding a workaround.
 
 Both public sources expose common lifecycle chrome: total rows, version, status, optional status code, optional message, and an optional Source Retry Capability. The shared view renders this state consistently. The Client Row Pipeline supplies complete rows; the Viewport Row Pipeline supplies the sparse viewport controller and row store. The capability is a source-owned `run` command plus its `pending` state; the shared view may present it for closed or errored sources but never owns reconnect policy or changes lifecycle state in anticipation of the source.
 

@@ -14,24 +14,7 @@ assertReactCompilerStrictness(transformSync);
 class UninspectableWildcardExportError extends Error {}
 // Native editor/input/IME handling may add another narrow module here when that
 // capability ships. Never weaken the global rule or infer keyboard ownership.
-const keyboardEvidenceModuleCapabilities = new Map([
-  ["internal/hotkey-adapter.ts", "adapter"],
-  ["internal/hotkey-capture.ts", "capture-adapter"],
-]);
-const emittedCoreListenerModesByCapability = new Map([
-  [
-    "capture-adapter",
-    [
-      { eventType: "keydown", capture: true },
-      { eventType: "keydown", capture: false },
-      { eventType: "keydown", capture: false },
-      { eventType: "keyup", capture: false },
-    ],
-  ],
-]);
-const expectedEmittedCoreListenerModes = [...keyboardEvidenceModuleCapabilities.values()].flatMap(
-  (capability) => emittedCoreListenerModesByCapability.get(capability) ?? [],
-);
+const keyboardEvidenceModuleCapabilities = new Map([["internal/hotkey-adapter.ts", "adapter"]]);
 
 function normalizeProductionModulePath(sourcePath) {
   return sourcePath.replaceAll("\\", "/").replace(/^\.\/+|\/+$/gu, "");
@@ -50,11 +33,6 @@ for (const [sourcePath, expectedMode] of [
   ["./internal/hotkey-adapter.ts", "adapter"],
   ["nested/internal/hotkey-adapter.ts", "production"],
   ["internal/hotkey-adapter.ts.backup", "production"],
-  ["internal/hotkey-capture.ts", "capture-adapter"],
-  ["internal\\hotkey-capture.ts", "capture-adapter"],
-  ["./internal/hotkey-capture.ts", "capture-adapter"],
-  ["nested/internal/hotkey-capture.ts", "production"],
-  ["internal/hotkey-capture.ts.backup", "production"],
 ]) {
   if (keyboardBoundaryModeForPath(sourcePath) !== expectedMode) {
     throw new Error(`The keyboard boundary misclassified normalized path ${sourcePath}.`);
@@ -315,10 +293,6 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       mode: "adapter",
     },
     {
-      source: `import { useHotkeys } from "@tanstack/react-hotkeys";`,
-      mode: "capture-adapter",
-    },
-    {
       source: `const adapterHandler = <input onKeyDown={(event) => event.isComposing} />;`,
       lang: "tsx",
       mode: "adapter",
@@ -341,7 +315,7 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       "shiftKey",
       "getModifierState",
     ].flatMap((property) =>
-      ["adapter", "capture-adapter", "native-evidence"].flatMap((mode) => [
+      ["adapter", "native-evidence"].flatMap((mode) => [
         {
           source: `function boundary(event: KeyboardEvent) { return event.${property}; }`,
           mode,
@@ -361,9 +335,7 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       mode: "adapter",
     },
     {
-      source: `const captureHandler = <input onKeyDown={() => undefined} />;`,
-      lang: "tsx",
-      mode: "capture-adapter",
+      source: `function pointer(event: MouseEvent | PointerEvent | WheelEvent) { return event.shiftKey || event.ctrlKey; }`,
     },
   ].map(async ({ source, lang = "ts", mode = "production" }) => ({
     ast: await parseAstAsync(source, { lang }),
@@ -376,19 +348,12 @@ const keyboardBoundaryAllowedSmokes = await Promise.all(
       source: `function domain(entry: { key: string }) { const { key } = entry; return entry.key === key; }`,
     },
     {
-      source: `function pointer(event: MouseEvent | PointerEvent | WheelEvent) { return event.shiftKey || event.ctrlKey; }`,
-    },
-    {
       source: `function adapter(event: KeyboardEvent) { return event.isComposing; }`,
       mode: "adapter",
     },
     {
       source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
       mode: "adapter",
-    },
-    {
-      source: `import { createMultiHotkeyHandler } from "@tanstack/hotkeys"; const handler = createMultiHotkeyHandler({ Escape: () => undefined }); window.addEventListener("keydown", handler, true);`,
-      mode: "capture-adapter",
     },
     ...[
       "onKeyDown",
@@ -462,27 +427,7 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
   throw new Error("The emitted package lost the shared React Hotkeys boundary.");
 }
 
-const emittedCaptureFactoryBinding = findImportedBinding(
-  rootRuntimeAst,
-  "@tanstack/hotkeys",
-  "createMultiHotkeyHandler",
-);
-if (emittedCaptureFactoryBinding === undefined) {
-  throw new Error("The emitted package lost the TanStack Hotkeys capture boundary.");
-}
-
-const emittedCaptureListenerCalls = collectEmittedCaptureListenerCalls(
-  rootRuntimeAst,
-  emittedCaptureFactoryBinding,
-  expectedEmittedCoreListenerModes,
-);
-
-assertKeyboardBoundary(
-  rootRuntimeAst,
-  "emitted @bruno/table root",
-  "emitted",
-  emittedCaptureListenerCalls,
-);
+assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
 for (const { sourcePath, ast } of productionModuleAsts) {
   assertKeyboardBoundary(ast, sourcePath, keyboardBoundaryModeForPath(sourcePath));
 }
@@ -491,53 +436,6 @@ for (const { ast, mode } of keyboardBoundaryRejectedSmokes) {
 }
 for (const { ast, mode } of keyboardBoundaryAllowedSmokes) {
   assertKeyboardBoundary(ast, "keyboard boundary allowed smoke fixture", mode);
-}
-
-const emittedCaptureAllowedSmoke = await parseAstAsync(`
-const captureHandler = createMultiHotkeyHandler({ Escape: () => undefined });
-window.addEventListener("keydown", captureHandler, true);
-window.removeEventListener("keydown", captureHandler, true);
-`);
-const emittedCaptureAllowedCalls = collectEmittedCaptureListenerCalls(
-  emittedCaptureAllowedSmoke,
-  "createMultiHotkeyHandler",
-  [true],
-);
-assertKeyboardBoundary(
-  emittedCaptureAllowedSmoke,
-  "emitted capture attribution allowed smoke fixture",
-  "emitted",
-  emittedCaptureAllowedCalls,
-);
-const emittedCaptureRogueSmoke = await parseAstAsync(`
-const captureHandler = createMultiHotkeyHandler({ Escape: () => undefined });
-window.addEventListener("keydown", captureHandler, true);
-window.removeEventListener("keydown", captureHandler, true);
-window.addEventListener("keydown", () => undefined, true);
-`);
-assertKeyboardBoundaryViolationDetected(
-  emittedCaptureRogueSmoke,
-  "emitted",
-  collectEmittedCaptureListenerCalls(emittedCaptureRogueSmoke, "createMultiHotkeyHandler", [true]),
-);
-for (const source of [
-  `
-const captureHandler = createMultiHotkeyHandler({ Escape: () => undefined });
-window.addEventListener("keydown", captureHandler, true);
-window.addEventListener("keydown", captureHandler, true);
-window.removeEventListener("keydown", captureHandler, true);
-`,
-  `
-const captureHandler = createMultiHotkeyHandler({ Escape: () => undefined });
-window.addEventListener("keydown", captureHandler, true);
-otherWindow.removeEventListener("keydown", captureHandler, true);
-`,
-]) {
-  assertEmittedCaptureAttributionViolationDetected(
-    await parseAstAsync(source),
-    "createMultiHotkeyHandler",
-    [true],
-  );
 }
 
 if (
@@ -719,10 +617,22 @@ if (packageJson.dependencies?.["@tanstack/react-hotkeys"] !== "0.10.0") {
   );
 }
 
-if (packageJson.dependencies?.["@tanstack/hotkeys"] !== "0.8.0") {
+const installableDependencySections = ["dependencies", "peerDependencies", "optionalDependencies"];
+const declaresDirectDependency = (name) =>
+  installableDependencySections.some((section) => Object.hasOwn(packageJson[section] ?? {}, name));
+
+if (declaresDirectDependency("@tanstack/hotkeys")) {
+  throw new Error("BrunoTable must not depend directly on TanStack Hotkeys core.");
+}
+
+if (packageJson.dependencies?.["@tanstack/react-pacer"] !== "0.23.0") {
   throw new Error(
-    "The private capture Hotkeys boundary is not pinned to the audited stable v0.8.0 version.",
+    "The private React Pacer boundary is not pinned to the audited stable v0.23.0 version.",
   );
+}
+
+if (declaresDirectDependency("@tanstack/pacer")) {
+  throw new Error("React-bound BrunoTable pacing must not depend directly on TanStack Pacer core.");
 }
 
 if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.7") {
@@ -874,117 +784,7 @@ function findImportedBinding(ast, source, importedName) {
   return undefined;
 }
 
-function collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedCaptureModes) {
-  const expectedListeners = expectedCaptureModes.map((candidate) =>
-    typeof candidate === "boolean" ? { eventType: "keydown", capture: candidate } : candidate,
-  );
-  const handlerBindings = new Set();
-  walkSyntaxTree(ast, (node) => {
-    if (
-      node.type === "VariableDeclarator" &&
-      node.id.type === "Identifier" &&
-      node.init?.type === "CallExpression" &&
-      node.init.callee.type === "Identifier" &&
-      node.init.callee.name === factoryBinding
-    ) {
-      handlerBindings.add(node.id.name);
-    }
-  });
-  if (handlerBindings.size !== expectedListeners.length) {
-    throw new Error(
-      `The emitted package has ${String(handlerBindings.size)} attributed core handlers; expected ${String(expectedListeners.length)}.`,
-    );
-  }
-
-  const callsByHandler = new Map(
-    [...handlerBindings].map((handler) => [handler, { adds: [], removes: [] }]),
-  );
-  walkSyntaxTree(ast, (node) => {
-    if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression") return;
-    const method = memberPropertyName(node.callee);
-    if (method !== "addEventListener" && method !== "removeEventListener") return;
-    const eventType = staticStringValue(node.arguments[0]);
-    const handler = node.arguments[1];
-    const captureArgument = node.arguments[2];
-    const capture = captureArgument === undefined ? false : captureArgument.value;
-    if (
-      !isKeyboardEventType(eventType) ||
-      handler?.type !== "Identifier" ||
-      !handlerBindings.has(handler.name) ||
-      (capture !== true && capture !== false)
-    ) {
-      return;
-    }
-    const target = emittedListenerTargetKey(node.callee.object);
-    if (target === undefined) return;
-    callsByHandler.get(handler.name)[method === "addEventListener" ? "adds" : "removes"].push({
-      capture,
-      eventType,
-      node,
-      target,
-    });
-  });
-  const allowedCalls = new Set();
-  const actualModes = [];
-  for (const { adds, removes } of callsByHandler.values()) {
-    const added = adds[0];
-    const removed = removes[0];
-    if (
-      adds.length !== 1 ||
-      removes.length !== 1 ||
-      added.capture !== removed.capture ||
-      added.eventType !== removed.eventType ||
-      added.target !== removed.target
-    ) {
-      throw new Error("The emitted capture boundary lost its exact add/remove listener lifecycle.");
-    }
-    actualModes.push({ eventType: added.eventType, capture: added.capture });
-    allowedCalls.add(added.node);
-    allowedCalls.add(removed.node);
-  }
-  if (
-    JSON.stringify(
-      actualModes.toSorted((left, right) =>
-        `${left.eventType}:${String(left.capture)}`.localeCompare(
-          `${right.eventType}:${String(right.capture)}`,
-        ),
-      ),
-    ) !==
-    JSON.stringify(
-      expectedListeners.toSorted((left, right) =>
-        `${left.eventType}:${String(left.capture)}`.localeCompare(
-          `${right.eventType}:${String(right.capture)}`,
-        ),
-      ),
-    )
-  ) {
-    throw new Error("The emitted capture boundary lost its exact add/remove listener lifecycle.");
-  }
-  return allowedCalls;
-}
-
-function emittedListenerTargetKey(node) {
-  if (node.type === "Identifier") return `identifier:${node.name}`;
-  if (node.type === "ThisExpression") return "this";
-  if (node.type !== "MemberExpression") return undefined;
-  const object = emittedListenerTargetKey(node.object);
-  const property = memberPropertyName(node);
-  return object === undefined || property === undefined ? undefined : `${object}.${property}`;
-}
-
-function assertEmittedCaptureAttributionViolationDetected(ast, factoryBinding, expectedModes) {
-  try {
-    collectEmittedCaptureListenerCalls(ast, factoryBinding, expectedModes);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("exact add/remove listener lifecycle")) {
-      return;
-    }
-    throw error;
-  }
-  throw new Error("The emitted capture attribution smoke did not detect its invalid lifecycle.");
-}
-
-function assertKeyboardBoundary(ast, label, mode, allowedKeyboardListenerCalls = new Set()) {
+function assertKeyboardBoundary(ast, label, mode) {
   let violation;
   walkSyntaxTree(ast, (node, ancestors) => {
     if (violation !== undefined) return;
@@ -1003,12 +803,7 @@ function assertKeyboardBoundary(ast, label, mode, allowedKeyboardListenerCalls =
           violation = `${listenerMethod} non-static listener event type`;
           return;
         }
-        if (
-          isKeyboardEventType(eventType) &&
-          mode !== "capture-adapter" &&
-          mode !== "native-evidence" &&
-          !allowedKeyboardListenerCalls.has(node)
-        ) {
+        if (isKeyboardEventType(eventType) && mode !== "native-evidence") {
           violation = `${listenerMethod} keyboard listener`;
           return;
         }
@@ -1018,12 +813,8 @@ function assertKeyboardBoundary(ast, label, mode, allowedKeyboardListenerCalls =
       violation = "React Hotkeys module reference outside the approved Adapter boundary";
       return;
     }
-    if (
-      mode !== "capture-adapter" &&
-      mode !== "emitted" &&
-      isTanStackHotkeysCoreModuleReference(node)
-    ) {
-      violation = "TanStack Hotkeys core reference outside the approved capture Adapter boundary";
+    if (isTanStackHotkeysCoreModuleReference(node)) {
+      violation = "TanStack Hotkeys core reference outside React Hotkeys";
       return;
     }
     if (
@@ -1037,7 +828,7 @@ function assertKeyboardBoundary(ast, label, mode, allowedKeyboardListenerCalls =
       return;
     }
     if (
-      (mode === "adapter" || mode === "capture-adapter" || mode === "native-evidence") &&
+      (mode === "adapter" || mode === "native-evidence") &&
       ((node.type === "MemberExpression" &&
         isKeyboardInterpretationProperty(memberPropertyName(node))) ||
         (node.type === "Property" &&
@@ -1049,20 +840,27 @@ function assertKeyboardBoundary(ast, label, mode, allowedKeyboardListenerCalls =
       )} interpretation inside an approved evidence boundary`;
       return;
     }
+    if (
+      mode === "production" &&
+      ((node.type === "MemberExpression" && isRawModifierProperty(memberPropertyName(node))) ||
+        (node.type === "Property" &&
+          parent?.type === "ObjectPattern" &&
+          isRawModifierProperty(propertyName(node))))
+    ) {
+      violation = `manual ${String(
+        node.type === "MemberExpression" ? memberPropertyName(node) : propertyName(node),
+      )} modifier interpretation outside the React Hotkeys Adapter`;
+      return;
+    }
   });
   if (violation !== undefined) {
     throw new Error(`${label} violates the BrunoTable keyboard boundary: ${String(violation)}.`);
   }
 }
 
-function assertKeyboardBoundaryViolationDetected(ast, mode, allowedKeyboardListenerCalls) {
+function assertKeyboardBoundaryViolationDetected(ast, mode) {
   try {
-    assertKeyboardBoundary(
-      ast,
-      "keyboard boundary rejection smoke fixture",
-      mode,
-      allowedKeyboardListenerCalls,
-    );
+    assertKeyboardBoundary(ast, "keyboard boundary rejection smoke fixture", mode);
   } catch (error) {
     if (error instanceof Error && error.message.includes("BrunoTable keyboard boundary")) {
       return;
@@ -1123,6 +921,10 @@ function isKeyboardInterpretationProperty(name) {
     "shiftKey",
     "getModifierState",
   ].includes(name ?? "");
+}
+
+function isRawModifierProperty(name) {
+  return ["ctrlKey", "metaKey", "altKey", "shiftKey", "getModifierState"].includes(name ?? "");
 }
 
 function staticStringValue(node) {

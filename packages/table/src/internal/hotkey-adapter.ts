@@ -6,20 +6,9 @@ import {
 } from "@tanstack/react-hotkeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
-import type {
-  Hotkey,
-  HotkeyCallback,
-  RegisterableHotkey,
-  UseHotkeyDefinition,
-} from "@tanstack/react-hotkeys";
+import type { Hotkey, RegisterableHotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
 import type { BrunoTableNavigationCommand } from "./navigation";
-import {
-  registerBrunoTableCaptureHotkeys,
-  registerBrunoTableForeignDocumentHeldShift,
-  registerBrunoTableForeignDocumentHotkeys,
-  isBrunoTableForeignDocumentShiftHeld,
-} from "./hotkey-capture";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
 // closed Key union. Keep the compatibility assertion at this one Adapter seam.
@@ -28,7 +17,7 @@ export const BRUNO_TABLE_CONTEXT_MENU_HOTKEY = "ContextMenu" as RegisterableHotk
 type BrunoTableHotkeyBinding = Readonly<{
   hotkey: RegisterableHotkey;
   allowInTextInput?: boolean;
-  onTrigger: HotkeyCallback;
+  onTrigger: (event: BrunoTableHotkeyGesture) => void;
 }>;
 
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
@@ -54,6 +43,7 @@ export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
 ] satisfies readonly Hotkey[]);
 
 export type BrunoTableGridHotkeyCommands = Readonly<{
+  documentEscapeActive?: (() => boolean) | undefined;
   escape: (event: BrunoTableHotkeyGesture) => void;
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
@@ -71,9 +61,33 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
     alt: boolean,
     shift: boolean,
   ) => void;
-  navigate: (event: BrunoTableHotkeyGesture, command: BrunoTableNavigationCommand) => void;
-  page: (event: BrunoTableHotkeyGesture, direction: -1 | 1) => void;
+  navigate: (
+    event: BrunoTableHotkeyGesture,
+    command: BrunoTableNavigationCommand,
+    extendCellRange?: boolean,
+  ) => void;
+  page: (event: BrunoTableHotkeyGesture, direction: -1 | 1, extendCellRange?: boolean) => void;
 }>;
+
+type BrunoTableDocumentEscapeRegistration = Readonly<{
+  readonly owner: RefObject<HTMLElement | null>;
+  readonly isActive: () => boolean;
+}>;
+
+const documentEscapeRegistrations = new WeakMap<
+  Document,
+  Set<BrunoTableDocumentEscapeRegistration>
+>();
+
+function activeDocumentEscapeRegistration(
+  document: Document | undefined,
+): BrunoTableDocumentEscapeRegistration | undefined {
+  if (document === undefined) return undefined;
+  for (const registration of documentEscapeRegistrations.get(document) ?? []) {
+    if (registration.isActive()) return registration;
+  }
+  return undefined;
+}
 
 function createBrunoTableGridHotkeyBindings(
   commands: BrunoTableGridHotkeyCommands,
@@ -156,24 +170,24 @@ function createBrunoTableGridHotkeyBindings(
     },
     {
       hotkey: "Shift+ArrowUp",
-      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "up" }),
+      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "up" }, true),
     },
     {
       hotkey: "Shift+ArrowDown",
-      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "down" }),
+      onTrigger: (event) => commands.navigate(event, { type: "step", direction: "down" }, true),
     },
     {
       hotkey: "Shift+ArrowLeft",
       onTrigger: (event) => {
         commands.resize(event, -1, 50);
-        commands.navigate(event, { type: "step", direction: "left" });
+        commands.navigate(event, { type: "step", direction: "left" }, true);
       },
     },
     {
       hotkey: "Shift+ArrowRight",
       onTrigger: (event) => {
         commands.resize(event, 1, 50);
-        commands.navigate(event, { type: "step", direction: "right" });
+        commands.navigate(event, { type: "step", direction: "right" }, true);
       },
     },
     {
@@ -200,24 +214,24 @@ function createBrunoTableGridHotkeyBindings(
     },
     {
       hotkey: "Mod+Shift+ArrowUp",
-      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "start" }),
+      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "start" }, true),
     },
     {
       hotkey: "Mod+Shift+ArrowDown",
-      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "end" }),
+      onTrigger: (event) => commands.navigate(event, { type: "column-edge", edge: "end" }, true),
     },
     {
       hotkey: "Mod+Shift+ArrowLeft",
       onTrigger: (event) => {
         commands.resize(event, -1, 50);
-        commands.navigate(event, { type: "row-edge", edge: "start" });
+        commands.navigate(event, { type: "row-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Mod+Shift+ArrowRight",
       onTrigger: (event) => {
         commands.resize(event, 1, 50);
-        commands.navigate(event, { type: "row-edge", edge: "end" });
+        commands.navigate(event, { type: "row-edge", edge: "end" }, true);
       },
     },
     {
@@ -238,14 +252,14 @@ function createBrunoTableGridHotkeyBindings(
       hotkey: "Shift+Home",
       onTrigger: (event) => {
         commands.resize(event, "minimum", 0);
-        commands.navigate(event, { type: "row-edge", edge: "start" });
+        commands.navigate(event, { type: "row-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Shift+End",
       onTrigger: (event) => {
         commands.resize(event, "maximum", 0);
-        commands.navigate(event, { type: "row-edge", edge: "end" });
+        commands.navigate(event, { type: "row-edge", edge: "end" }, true);
       },
     },
     {
@@ -266,20 +280,20 @@ function createBrunoTableGridHotkeyBindings(
       hotkey: "Mod+Shift+Home",
       onTrigger: (event) => {
         commands.resize(event, "minimum", 0);
-        commands.navigate(event, { type: "grid-edge", edge: "start" });
+        commands.navigate(event, { type: "grid-edge", edge: "start" }, true);
       },
     },
     {
       hotkey: "Mod+Shift+End",
       onTrigger: (event) => {
         commands.resize(event, "maximum", 0);
-        commands.navigate(event, { type: "grid-edge", edge: "end" });
+        commands.navigate(event, { type: "grid-edge", edge: "end" }, true);
       },
     },
     { hotkey: "PageUp", onTrigger: (event) => commands.page(event, -1) },
     { hotkey: "PageDown", onTrigger: (event) => commands.page(event, 1) },
-    { hotkey: "Shift+PageUp", onTrigger: (event) => commands.page(event, -1) },
-    { hotkey: "Shift+PageDown", onTrigger: (event) => commands.page(event, 1) },
+    { hotkey: "Shift+PageUp", onTrigger: (event) => commands.page(event, -1, true) },
+    { hotkey: "Shift+PageDown", onTrigger: (event) => commands.page(event, 1, true) },
   ];
 }
 
@@ -305,12 +319,7 @@ export const BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT: number 
 export const BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_GRID_HOTKEYS.length - BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT;
 export const BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GRID_HOTKEYS.length;
-export const BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS: readonly Hotkey[] =
-  BRUNO_TABLE_ESCAPE_HOTKEYS;
-// One table owns every React registration plus the complete modifier-insensitive
-// capture-phase column-gesture Escape definition set.
-export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number =
-  BRUNO_TABLE_GRID_HOTKEYS.length + BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS.length;
+export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GRID_HOTKEYS.length;
 export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_ROW_SELECTION_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
@@ -374,39 +383,14 @@ export function brunoTableHotkeyRegistrationBound(
   );
 }
 
-/** One table-local bridge initializes TanStack's held-key lifecycle without per-cell subscriptions. */
-export function BrunoTableHeldShiftHotkeyAdapter({
-  owner,
-}: {
-  readonly owner: RefObject<HTMLElement | null>;
-}): null {
+/** Initializes TanStack's shared held-key lifecycle without per-cell subscriptions. */
+export function BrunoTableHeldShiftHotkeyAdapter(): null {
   useKeyHold("Shift");
-  useEffect(() => {
-    const ownerDocument = owner.current?.ownerDocument;
-    if (
-      ownerDocument === undefined ||
-      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
-    ) {
-      return;
-    }
-    return registerBrunoTableForeignDocumentHeldShift(ownerDocument);
-  }, [owner]);
   return null;
 }
 
 /** Reads TanStack's shared held-key state synchronously for a pointer command. */
-export function isBrunoTableHotkeyHeld(
-  key: "Shift",
-  owner?: Readonly<{ readonly ownerDocument: Document | null }>,
-): boolean {
-  const ownerDocument = owner?.ownerDocument;
-  if (
-    ownerDocument !== undefined &&
-    ownerDocument !== null &&
-    ownerDocument.defaultView !== (typeof window === "undefined" ? undefined : window)
-  ) {
-    return isBrunoTableForeignDocumentShiftHeld(ownerDocument);
-  }
+export function isBrunoTableHotkeyHeld(key: "Shift"): boolean {
   return getKeyStateTracker().isKeyHeld(key);
 }
 
@@ -422,9 +406,13 @@ function useBrunoTableHotkeys(
 ): void {
   const definitions: UseHotkeyDefinition[] = bindings.map((binding) => ({
     hotkey: binding.hotkey,
-    callback: (event, context) => {
+    callback: (event) => {
       if (event.isComposing) return;
-      binding.onTrigger(event, context);
+      binding.onTrigger({
+        defaultPrevented: event.defaultPrevented,
+        preventDefault: event.preventDefault.bind(event),
+        target: event.target,
+      });
     },
     options: { ignoreInputs: binding.allowInTextInput !== true },
   }));
@@ -457,28 +445,50 @@ export function useBrunoTableGridHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: BrunoTableGridHotkeyCommands,
 ): void {
-  const ownerDocumentRef = useRef<Document | null>(null);
+  const commandsRef = useRef(commands);
+  const documentEscapeRegistrationRef = useRef<BrunoTableDocumentEscapeRegistration>({
+    owner: target,
+    isActive: () => commandsRef.current.documentEscapeActive?.() === true,
+  });
   const reactDocumentTargetRef = useRef<Document | null>(null);
   useLayoutEffect(() => {
+    commandsRef.current = commands;
+  }, [commands]);
+  useLayoutEffect(() => {
     const ownerDocument = target.current?.ownerDocument ?? null;
-    ownerDocumentRef.current = ownerDocument;
     reactDocumentTargetRef.current =
       ownerDocument?.defaultView === (typeof window === "undefined" ? undefined : window)
         ? ownerDocument
         : null;
-  });
+    const registration = documentEscapeRegistrationRef.current;
+    if (ownerDocument === null || registration === undefined) return;
+    let registrations = documentEscapeRegistrations.get(ownerDocument);
+    if (registrations === undefined) {
+      registrations = new Set();
+      documentEscapeRegistrations.set(ownerDocument, registrations);
+    }
+    registrations.add(registration);
+    return () => {
+      registrations?.delete(registration);
+      if (registrations?.size === 0) documentEscapeRegistrations.delete(ownerDocument);
+    };
+  }, [target]);
   const bindings = createBrunoTableGridHotkeyBindings(commands);
-  const ownerScopedBindings = bindings.map((binding) => ({
+  const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
-    onTrigger: ((event, context) => {
-      if (!ownsBrunoTableHotkeyTarget(target.current, event.target)) return;
-      binding.onTrigger(event, context);
-    }) satisfies HotkeyCallback,
+    onTrigger: (event: BrunoTableHotkeyGesture) => {
+      const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
+      if (index < BRUNO_TABLE_ESCAPE_HOTKEYS.length) {
+        if (event.defaultPrevented) return;
+        const registration = documentEscapeRegistrationRef.current;
+        const activeRegistration = activeDocumentEscapeRegistration(target.current?.ownerDocument);
+        if (activeRegistration !== undefined) {
+          if (activeRegistration !== registration) return;
+        } else if (!ownsTarget) return;
+      } else if (!ownsTarget) return;
+      binding.onTrigger(event);
+    },
   }));
-  const escapeCommandRef = useRef(commands.escape);
-  useEffect(() => {
-    escapeCommandRef.current = commands.escape;
-  }, [commands.escape]);
   const escapeBindings = ownerScopedBindings.slice(0, BRUNO_TABLE_ESCAPE_HOTKEYS.length);
   useBrunoTableHotkeys(
     target,
@@ -491,78 +501,6 @@ export function useBrunoTableGridHotkeys(
     reactDocumentTargetRef as unknown as RefObject<HTMLElement | null>,
     escapeBindings,
     "allow",
-  );
-  const foreignRegistrationRef = useRef<
-    Readonly<{ owner: HTMLElement; cleanup: () => void }> | undefined
-  >(undefined);
-  useEffect(() => {
-    const owner = target.current;
-    const ownerDocument = ownerDocumentRef.current;
-    const previous = foreignRegistrationRef.current;
-    if (previous?.owner === owner) return;
-    previous?.cleanup();
-    foreignRegistrationRef.current = undefined;
-    if (
-      owner === null ||
-      ownerDocument === null ||
-      ownerDocument.defaultView === (typeof window === "undefined" ? undefined : window)
-    ) {
-      return;
-    }
-    const escapeBindings = BRUNO_TABLE_ESCAPE_HOTKEYS.map((hotkey) => ({
-      hotkey,
-      onTrigger: ((event) => {
-        const currentOwner = target.current;
-        if (!ownsBrunoTableHotkeyTarget(currentOwner, event.target)) return;
-        escapeCommandRef.current(event);
-      }) satisfies HotkeyCallback,
-    }));
-    const cleanupDocument = registerBrunoTableForeignDocumentHotkeys(ownerDocument, escapeBindings);
-    foreignRegistrationRef.current = {
-      owner,
-      cleanup: cleanupDocument,
-    };
-  });
-  useEffect(
-    () => () => {
-      foreignRegistrationRef.current?.cleanup();
-      foreignRegistrationRef.current = undefined;
-    },
-    [],
-  );
-}
-
-export function useBrunoTableColumnGestureEscape(
-  target: RefObject<HTMLElement | null>,
-  onTrigger: (event: BrunoTableHotkeyGesture) => void,
-): void {
-  const onTriggerRef = useRef(onTrigger);
-  useEffect(() => {
-    onTriggerRef.current = onTrigger;
-  }, [onTrigger]);
-  const registrationRef = useRef<
-    Readonly<{ ownerWindow: Window; cleanup: () => void }> | undefined
-  >(undefined);
-  useEffect(() => {
-    const ownerWindow = target.current?.ownerDocument.defaultView;
-    const previous = registrationRef.current;
-    if (previous?.ownerWindow === ownerWindow) return;
-    previous?.cleanup();
-    registrationRef.current = undefined;
-    if (ownerWindow === undefined || ownerWindow === null) return;
-    const cleanup = registerBrunoTableCaptureHotkeys(
-      ownerWindow,
-      BRUNO_TABLE_COLUMN_GESTURE_ESCAPE_HOTKEYS,
-      (event) => onTriggerRef.current(event),
-    );
-    registrationRef.current = { ownerWindow, cleanup };
-  });
-  useEffect(
-    () => () => {
-      registrationRef.current?.cleanup();
-      registrationRef.current = undefined;
-    },
-    [],
   );
 }
 

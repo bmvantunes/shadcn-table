@@ -19,6 +19,28 @@ export type BrunoTableNavigationCommand =
   | Readonly<{ readonly type: "column-edge"; readonly edge: "start" | "end" }>
   | Readonly<{ readonly type: "grid-edge"; readonly edge: "start" | "end" }>;
 
+export function isBrunoTableCellRangeNavigationCommandAdmitted(
+  axis: "horizontal" | "vertical" | undefined,
+  command: BrunoTableNavigationCommand,
+  currentBodyRowIndex: number,
+): boolean {
+  if (command.type === "step" && command.direction === "up" && currentBodyRowIndex === 0) {
+    return false;
+  }
+  if (axis === undefined) return command.type !== "grid-edge";
+  if (axis === "horizontal") {
+    return !(
+      command.type === "page" ||
+      command.type === "column-edge" ||
+      (command.type === "step" && (command.direction === "up" || command.direction === "down"))
+    );
+  }
+  return !(
+    command.type === "row-edge" ||
+    (command.type === "step" && (command.direction === "left" || command.direction === "right"))
+  );
+}
+
 type Listener = () => void;
 
 export type BrunoTableNavigationRowSpace = Readonly<{
@@ -215,6 +237,50 @@ export class BrunoTableNavigationRuntime {
     if (!this.columns.some((column) => column.columnId === columnId)) return;
     this.bodyInitializationBlocked = false;
     this.setActive({ region: "header", rowIndex: 0, columnId });
+  };
+
+  public readonly activateBody = (rowIndex: number, rowId: string, columnId: string): boolean => {
+    if (
+      rowIndex < 0 ||
+      rowIndex >= this.rowSpace.totalRows ||
+      !this.columns.some((column) => column.columnId === columnId) ||
+      this.rowSpace.getRowId(rowIndex) !== rowId
+    ) {
+      return false;
+    }
+    this.bodyInitializationBlocked = false;
+    return this.setActive({ region: "body", rowIndex, rowId, columnId });
+  };
+
+  public readonly restoreActiveCell = (activeCell: BrunoTableActiveCell | undefined): void => {
+    if (activeCell === undefined) {
+      this.setActive(undefined);
+      return;
+    }
+    const column = this.columns.find((candidate) => candidate.columnId === activeCell.columnId);
+    if (column === undefined) {
+      this.setActive(undefined);
+      return;
+    }
+    if (activeCell.region === "header") {
+      this.bodyInitializationBlocked = false;
+      this.setActive({ region: "header", rowIndex: 0, columnId: column.columnId });
+      return;
+    }
+    const matchingRowIndex =
+      activeCell.rowId === undefined ? undefined : this.rowSpace.findRowIndex(activeCell.rowId);
+    if (matchingRowIndex === undefined) {
+      this.setActive(undefined);
+      return;
+    }
+    const rowIndex = matchingRowIndex;
+    const rowId = this.rowSpace.getRowId(rowIndex);
+    if (rowId === undefined) {
+      this.setActive(undefined);
+      return;
+    }
+    this.bodyInitializationBlocked = false;
+    this.setActive({ region: "body", rowIndex, rowId, columnId: column.columnId });
   };
 
   public readonly setShape = (

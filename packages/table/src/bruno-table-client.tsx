@@ -34,6 +34,7 @@ import {
 } from "./internal/toolbar-capabilities";
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./internal/row-selection";
+import { BrunoTableCellRangeRuntime } from "./internal/cell-range-clipboard";
 
 export {
   BrunoTableActiveFilterCount,
@@ -98,6 +99,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     () => (props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined),
     [props.rowSelection],
   );
+  const [cellRange] = useState(() => new BrunoTableCellRangeRuntime(tableId));
   const runtimeView = runtime.getView();
   const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
 
@@ -132,6 +134,8 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     [compiledColumns, tableId],
   );
 
+  useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
+
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider
@@ -148,6 +152,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
           rowPipeline={BrunoTableClientRowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
           rowSelection={rowSelection}
+          cellRange={cellRange}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />

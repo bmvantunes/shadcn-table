@@ -21,6 +21,7 @@ import {
 } from "./index";
 import type { BrunoTableColumns, BrunoTableQuickFilterFields, BrunoTableValueType } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { BrunoTableGridRuntime, createBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import { brunoTableTestSemanticQueryKey } from "./internal/server-semantic-key.test-support";
 import {
@@ -300,6 +301,46 @@ function serverProps(
 afterEach(async () => cleanup());
 
 describe("BrunoTableServer", () => {
+  test("uses TanStack held Shift for pointer multi-sort without raw mouse modifiers", async () => {
+    const transport = makeViewport(1);
+    const commands = vi.fn();
+    const removeListener = installBrunoTableGridCommandListener(
+      "TABLE_ID_SERVER_HELD_SHIFT_SORT",
+      commands,
+    );
+    try {
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready", "TABLE_ID_SERVER_HELD_SHIFT_SORT")}
+        />,
+      );
+      const priceSort = screen.getByRole("button", { name: "Sort by Price" });
+
+      await userEvent.keyboard("{Shift>}");
+      priceSort
+        .element()
+        .dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: false }),
+        );
+      await userEvent.keyboard("{/Shift}");
+
+      await expect
+        .element(
+          screen.getByRole("button", {
+            name: "Sort by Price, currently ascending, priority 2",
+          }),
+        )
+        .toBeInTheDocument();
+      expect(commands).toHaveBeenLastCalledWith({
+        type: "column.sort.toggle",
+        columnId: "COL_ID_PRICE",
+        multi: true,
+      });
+    } finally {
+      removeListener();
+    }
+  });
+
   test("installs no ordinary Row Selection UI or dormant checkbox surface", async () => {
     const transport = makeViewport(1);
     const screen = await render(
@@ -1055,6 +1096,33 @@ describe("BrunoTableServer", () => {
       grid.element().dispatchEvent(copyLoaded);
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("AAPL"));
       expect(copyLoaded.defaultPrevented).toBe(true);
+      await expect
+        .element(screen.getByRole("gridcell", { name: "AAPL (LDN)" }))
+        .not.toHaveAttribute("aria-selected");
+      grid.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowDown",
+          shiftKey: true,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "INVALID (NYC)" }).element().id,
+        ),
+      );
+      await expect
+        .element(screen.getByRole("gridcell", { name: "INVALID (NYC)" }))
+        .not.toHaveAttribute("aria-selected");
+      grid.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+          shiftKey: true,
+        }),
+      );
 
       grid
         .element()
@@ -1117,6 +1185,63 @@ describe("BrunoTableServer", () => {
       if (clipboardDescriptor === undefined)
         delete (navigator as { clipboard?: Clipboard }).clipboard;
       else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  test("keeps Shift navigation on Server Active Cell semantics", async () => {
+    const transport = makeViewport(2);
+    const props = serverProps(transport.viewport, "ready");
+    const screen = await render(
+      <BrunoTableServer {...props} viewportSource={{ ...props.viewportSource, totalRows: 2 }} />,
+    );
+    transport.requests[0]?.sink.setRowData(
+      {
+        0: { symbol: "FIRST", price: 1 },
+        1: { symbol: "SECOND", price: 2 },
+      },
+      { 0: "first", 1: "second" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+    grid.element().focus();
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "FIRST" }).element().id,
+      ),
+    );
+
+    await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("columnheader", { name: /Symbol, sorted ascending/ }).element().id,
+      ),
+    );
+
+    const modifier = detectPlatform() === "mac" ? "Meta" : "Control";
+    const assertShiftedMatches = async (
+      start: ReturnType<typeof screen.getByRole>,
+      key: "ArrowUp" | "ArrowDown" | "Home" | "End",
+    ) => {
+      await userEvent.click(start);
+      await userEvent.keyboard(`{${modifier}>}{${key}}{/${modifier}}`);
+      await settleBrunoTableBrowserFrames();
+      const expected = grid.element().getAttribute("aria-activedescendant");
+      await userEvent.click(start);
+      await userEvent.keyboard(`{${modifier}>}{Shift>}{${key}}{/Shift}{/${modifier}}`);
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(expected),
+      );
+    };
+
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "2", exact: true }), "ArrowUp");
+    await assertShiftedMatches(
+      screen.getByRole("gridcell", { name: "1", exact: true }),
+      "ArrowDown",
+    );
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "2", exact: true }), "Home");
+    await assertShiftedMatches(screen.getByRole("gridcell", { name: "FIRST" }), "End");
+    await expect.element(grid).not.toHaveAttribute("aria-multiselectable");
+    for (const cell of screen.getByRole("gridcell").all()) {
+      await expect.element(cell).not.toHaveAttribute("aria-selected");
     }
   });
 

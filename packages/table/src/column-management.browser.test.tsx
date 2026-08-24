@@ -2825,7 +2825,7 @@ describe("BrunoTable column management browser surface", () => {
           pointerId: 10,
         }),
       );
-      window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+      grid.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
       await new Promise((resolve) => requestAnimationFrame(resolve));
       expect(columnOrder()).toEqual(["COL_ID_SCORE", "COL_ID_STATUS", "COL_ID_NAME"]);
       expect(grid.querySelector("[data-bruno-reorder-target]")).toBeNull();
@@ -2834,22 +2834,10 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
-  test("cancels an active column gesture for every modified Escape from a newly focused text control", async () => {
-    const screen = await render(
-      <>
-        <BrunoTableClient<Row, typeof columns> {...tableProps} />
-        <input
-          aria-label="Column gesture focus destination"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") event.stopPropagation();
-          }}
-        />
-      </>,
-    );
+  test("cancels an active column gesture for every modified grid Escape", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const statusHandle = screen.getByRole("button", { name: "Reorder Status" }).element();
-    const destination = screen
-      .getByRole("textbox", { name: "Column gesture focus destination" })
-      .element();
+    const grid = screen.getByRole("grid").element();
     const statusHeader = screen.getByRole("columnheader", { name: /Status/u }).element();
 
     for (let modifiers = 0; modifiers < 16; modifiers += 1) {
@@ -2869,7 +2857,7 @@ describe("BrunoTable column management browser surface", () => {
           pointerId,
         }),
       );
-      destination.focus();
+      grid.focus();
       const escape = new KeyboardEvent("keydown", {
         altKey: (modifiers & 1) !== 0,
         bubbles: true,
@@ -2879,7 +2867,7 @@ describe("BrunoTable column management browser surface", () => {
         metaKey: (modifiers & 4) !== 0,
         shiftKey: (modifiers & 8) !== 0,
       });
-      destination.dispatchEvent(escape);
+      grid.dispatchEvent(escape);
       window.dispatchEvent(
         new PointerEvent("pointerup", {
           bubbles: true,
@@ -2894,7 +2882,7 @@ describe("BrunoTable column management browser surface", () => {
     }
   });
 
-  test("cancels only the active table gesture when two tables share the capture target", async () => {
+  test("cancels only the active table gesture when two tables share the document target", async () => {
     const ownerTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_OWNER";
     const inactiveTableId = "TABLE_ID_COLUMN_GESTURE_CAPTURE_INACTIVE";
     const ownerEvents: ColumnGestureListenerEvent[] = [];
@@ -2908,22 +2896,11 @@ describe("BrunoTable column management browser surface", () => {
       (event) => inactiveEvents.push(event),
     );
     try {
-      const ownerColumns = [
-        columns[0],
-        columns[1],
-        {
-          ...columns[2],
-          cellRenderer: () => <input aria-label="Owner gesture focus destination" />,
-        },
-      ] as const satisfies BrunoTableColumns<Row>;
       const screen = await render(
         <>
-          <BrunoTableClient<Row, typeof ownerColumns>
-            {...tableProps}
-            columns={ownerColumns}
-            tableId={ownerTableId}
-          />
+          <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={ownerTableId} />
           <BrunoTableClient<Row, typeof columns> {...tableProps} tableId={inactiveTableId} />
+          <input aria-label="Outside gesture focus destination" />
         </>,
       );
       const ownerRegion = screen.getByRole("region", { name: ownerTableId, exact: true });
@@ -2935,9 +2912,8 @@ describe("BrunoTable column management browser surface", () => {
       const inactiveHeader = inactiveRegion
         .getByRole("columnheader", { name: /Status/u })
         .element();
-      const destination = ownerRegion
-        .getByRole("textbox", { name: "Owner gesture focus destination" })
-        .first()
+      const destination = screen
+        .getByRole("textbox", { name: "Outside gesture focus destination" })
         .element();
 
       ownerHandle.dispatchEvent(

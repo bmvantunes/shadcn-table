@@ -15,7 +15,7 @@ import type {
   BrunoTableRowPipelineRuntimeView,
 } from "./grid-runtime";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
-import type { BrunoTableRowPipelineProps } from "./bruno-table-view";
+import type { BrunoTableLogicalRowSpace, BrunoTableRowPipelineProps } from "./bruno-table-view";
 import {
   createClientAdmittedQueryProjectionPlan,
   type BrunoTableClientAdmittedRow,
@@ -290,12 +290,7 @@ export class ClientRowOrderStore {
   private readonly listeners = new Set<() => void>();
   private rowIds: readonly string[];
   private snapshot: Readonly<{
-    readonly rowSpace: Readonly<{
-      readonly totalRows: number;
-      readonly getRowId: (index: number) => string | undefined;
-      readonly findRowIndex: (rowId: string) => number | undefined;
-      readonly setRequiredRange: (start: number, end: number) => void;
-    }>;
+    readonly rowSpace: BrunoTableLogicalRowSpace;
     readonly queryGeneration: number;
   }>;
 
@@ -330,11 +325,13 @@ export class ClientRowOrderStore {
 
 function createLogicalRowSpace(rowIds: readonly string[]) {
   const rowIndexById = new Map(rowIds.map((rowId, index) => [rowId, index]));
+  const identitySnapshot = Object.freeze({ rowIds, rowIndexById });
   return Object.freeze({
     totalRows: rowIds.length,
     getRowId: (index: number) => rowIds[index],
     findRowIndex: (rowId: string) => rowIndexById.get(rowId),
     setRequiredRange: (_start: number, _end: number) => undefined,
+    identitySnapshot,
   });
 }
 
