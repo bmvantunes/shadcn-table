@@ -33,7 +33,8 @@ import { snapshotBrunoTableQuickFilterFields } from "./quick-filter";
 import {
   BrunoTableServerViewportStore,
   sanitizeBrunoTableServerViewportWindow,
-  validateBrunoTableServerViewportRowKeys,
+  snapshotBrunoTableServerViewportDelivery,
+  type BrunoTableServerViewportDeliverySnapshot,
   type BrunoTableServerViewportWindow,
 } from "./server-viewport-store";
 import {
@@ -488,19 +489,15 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
           },
           setRowData: (rowsByIndex, rowKeysByIndex) => {
             if (!this.store.isActiveGeneration(activeToken)) return;
-            if (!validateBrunoTableServerViewportRowKeys(rowsByIndex, rowKeysByIndex)) {
+            const delivery = snapshotBrunoTableServerViewportDelivery(rowsByIndex, rowKeysByIndex);
+            if (delivery === undefined) {
               throw new TypeError("BrunoTable Server viewport delivered invalid row/key maps.");
             }
             const admittedRows =
               queryPlan.grouped === undefined
-                ? rowsByIndex
-                : normalizeGroupedRows(
-                    rowsByIndex,
-                    rowKeysByIndex,
-                    queryPlan.grouped,
-                    this.columnsById,
-                  );
-            const accepted = this.store.setRowData(activeToken, admittedRows, rowKeysByIndex);
+                ? delivery
+                : normalizeGroupedRows(delivery, queryPlan.grouped, this.columnsById);
+            const accepted = this.store.setRowDataSnapshot(activeToken, admittedRows);
             if (!accepted && this.store.isActiveGeneration(activeToken)) {
               throw new TypeError("BrunoTable Server viewport delivered invalid row/key maps.");
             }
@@ -794,49 +791,47 @@ function createServerGroupedProjectionPublication<TRow>(
 }
 
 function normalizeGroupedRows<TRow>(
-  rowsByIndex: Readonly<Record<number, TRow>>,
-  rowKeysByIndex: Readonly<Record<number, string>>,
+  delivery: BrunoTableServerViewportDeliverySnapshot<TRow>,
   grouped: BrunoTableCompiledServerGroupedProjection,
   columnsById: ReadonlyMap<string, CompiledColumn>,
-): Readonly<Record<number, TRow>> {
-  const normalized: Record<number, TRow> = {};
-  for (const [rawIndex, input] of Object.entries(rowsByIndex)) {
-    const rowId = rowKeysByIndex[Number(rawIndex)];
-    if (rowId === undefined) continue;
-    const groupKeys = grouped.groupKeys.map(({ columnId, field }) =>
-      readGroupedPresence(input, field, columnsById.get(columnId)),
-    );
-    const values = new Map<string, unknown>();
-    const presences = new Map<string, BrunoTableGroupedPresence>();
-    grouped.groupKeys.forEach(({ columnId }, index) => {
-      const presence = groupKeys[index]!;
-      presences.set(columnId, presence);
-      values.set(columnId, presence._tag === "Present" ? presence.value : undefined);
-    });
-    const rowCount = readRequiredBigInt(input, grouped.rowsAlias);
-    const rowsPresence = Object.freeze({ _tag: "Present" as const, value: rowCount });
-    values.set(BRUNO_TABLE_ROWS_COLUMN_ID, rowCount);
-    presences.set(BRUNO_TABLE_ROWS_COLUMN_ID, rowsPresence);
-    for (const aggregate of grouped.aggregates) {
-      const column = columnsById.get(aggregate.columnId);
-      const presence = readGroupedPresence(
-        input,
-        aggregate.alias,
-        column,
-        aggregate.aggFunc === "countDistinct",
+): BrunoTableServerViewportDeliverySnapshot<TRow> {
+  return Object.freeze(
+    delivery.map(({ index, row: input, rowId }) => {
+      const groupKeys = grouped.groupKeys.map(({ columnId, field }) =>
+        readGroupedPresence(input, field, columnsById.get(columnId)),
       );
-      values.set(aggregate.columnId, presence._tag === "Present" ? presence.value : undefined);
-      presences.set(aggregate.columnId, presence);
-    }
-    normalized[Number(rawIndex)] = Object.freeze({
-      rowId,
-      rowCount,
-      groupKeys: Object.freeze(groupKeys),
-      values,
-      presences,
-    }) as TRow;
-  }
-  return normalized;
+      const values = new Map<string, unknown>();
+      const presences = new Map<string, BrunoTableGroupedPresence>();
+      grouped.groupKeys.forEach(({ columnId }, index) => {
+        const presence = groupKeys[index]!;
+        presences.set(columnId, presence);
+        values.set(columnId, presence._tag === "Present" ? presence.value : undefined);
+      });
+      const rowCount = readRequiredBigInt(input, grouped.rowsAlias);
+      const rowsPresence = Object.freeze({ _tag: "Present" as const, value: rowCount });
+      values.set(BRUNO_TABLE_ROWS_COLUMN_ID, rowCount);
+      presences.set(BRUNO_TABLE_ROWS_COLUMN_ID, rowsPresence);
+      for (const aggregate of grouped.aggregates) {
+        const column = columnsById.get(aggregate.columnId);
+        const presence = readGroupedPresence(
+          input,
+          aggregate.alias,
+          column,
+          aggregate.aggFunc === "countDistinct",
+        );
+        values.set(aggregate.columnId, presence._tag === "Present" ? presence.value : undefined);
+        presences.set(aggregate.columnId, presence);
+      }
+      const row = Object.freeze({
+        rowId,
+        rowCount,
+        groupKeys: Object.freeze(groupKeys),
+        values,
+        presences,
+      }) as TRow;
+      return Object.freeze({ index, row, rowId });
+    }),
+  );
 }
 
 function readGroupedPresence(

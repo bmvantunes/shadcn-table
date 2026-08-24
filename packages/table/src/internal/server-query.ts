@@ -1,4 +1,5 @@
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
+import { BRUNO_TABLE_ROWS_COLUMN_ID } from "./client-grouping";
 
 export type BrunoTableServerQueryInput = Readonly<{
   readonly routeBy?: Readonly<Record<string, unknown>>;
@@ -247,7 +248,7 @@ function compileGroupedQueryPlan(
     throw new TypeError("BrunoTable Server grouped sorting requires a non-empty orderBy query.");
   }
   const orderBy = groupedOrderBy.map((order) => {
-    if (order.columnId === "COL_ID_BRUNO_TABLE_ROWS") {
+    if (order.columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
       return Object.freeze({ aggregate: rowsAlias, direction: order.direction });
     }
     const field = groupFieldsByColumn.get(order.columnId);

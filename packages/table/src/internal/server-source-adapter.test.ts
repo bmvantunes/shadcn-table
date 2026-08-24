@@ -150,12 +150,23 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(groupedPlan.orderBy).toEqual([{ aggregate: maxAlias, direction: "desc" }]);
 
     request.sink.setRowCount(1, true);
+    let authoritativeKeyReads = 0;
+    const authoritativeKeys = {} as Record<number, string>;
+    Object.defineProperty(authoritativeKeys, "0", {
+      enumerable: true,
+      get: () =>
+        authoritativeKeyReads++ === 0 ? "authoritative-group-key" : "unvalidated-group-key",
+    });
     request.sink.setRowData(
       { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 20 } },
-      { 0: "authoritative-group-key" },
+      authoritativeKeys,
     );
     const publication = adapter.getPublication();
+    expect(authoritativeKeyReads).toBe(1);
     expect(publication.rowSpace?.getRowId(0)).toBe("authoritative-group-key");
+    expect(publication.rowSpace?.getRow("authoritative-group-key")).toMatchObject({
+      rowId: "authoritative-group-key",
+    });
     expect(publication.rowSpace?.getCellValue("authoritative-group-key", "COL_ID_DESK")).toBe(
       "Rates",
     );

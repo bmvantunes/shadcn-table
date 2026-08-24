@@ -102,6 +102,23 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.getSnapshot().rowSpace.loadedRows).toBe(0);
   });
 
+  it("admits the exact authoritative key snapshot validated from an accessor-backed map", () => {
+    const store = new BrunoTableServerViewportStore<Row>();
+    const generation = store.beginGeneration({ firstRow: 0, lastRow: 0 });
+    let reads = 0;
+    const rowKeysByIndex = {} as Record<number, string>;
+    Object.defineProperty(rowKeysByIndex, "0", {
+      enumerable: true,
+      get: () => (reads++ === 0 ? "validated-key" : "unvalidated-key"),
+    });
+
+    expect(
+      store.setRowData(generation, { 0: { symbol: "AAPL", price: 240 } }, rowKeysByIndex),
+    ).toBe(true);
+    expect(reads).toBe(1);
+    expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("validated-key");
+  });
+
   it("does not let setRowCount retention hints bridge semantic generations", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const first = store.beginGeneration({ firstRow: 0, lastRow: 9 });
