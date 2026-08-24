@@ -13,7 +13,7 @@ import {
   BrunoTableView,
 } from "./internal/bruno-table-view";
 import {
-  acquireBrunoTableClientProjectionStore,
+  BrunoTableClientProjectionStore,
   BrunoTableClientRowPipeline,
 } from "./internal/client-row-pipeline";
 import {
@@ -119,10 +119,14 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
-  const [projectionStore] = useState(() =>
-    acquireBrunoTableClientProjectionStore(runtimeView, rowPipelineAdapter, rowSelection),
+  const [projectionStore] = useState(
+    () => new BrunoTableClientProjectionStore(runtimeView, rowPipelineAdapter, rowSelection),
   );
-  projectionStore.setRowSelection(rowSelection);
+
+  useLayoutEffect(() => {
+    projectionStore.setRowSelection(rowSelection);
+  }, [projectionStore, rowSelection]);
+  useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
 
   useLayoutEffect(() => {
     const previouslyEnabled = previousRowSelectionEnabled.current;
@@ -201,8 +205,6 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
-  useLayoutEffect(() => () => projectionStore.release(), [projectionStore]);
-
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider

@@ -78,6 +78,7 @@ export type BrunoTableGridPreferences = Readonly<{
   readonly orderBy: BrunoTableOrderBy;
   readonly groupBy: readonly string[];
   readonly groupOrderBy: BrunoTableOrderBy;
+  readonly hasDurableGroupOrderByIntent: boolean;
   readonly rowsWidth?: number;
   readonly columnLayout: BrunoTableColumnLayoutState;
 }>;
@@ -116,6 +117,7 @@ export function createBrunoTableGridPreferences(
           ? [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const }]
           : [],
       ),
+      hasDurableGroupOrderByIntent: false,
       columnLayout: createBrunoTableColumnLayout(input.columns),
     });
   }
@@ -140,7 +142,7 @@ export function createBrunoTableGridPreferences(
   });
   const groupBy =
     input.grouping === true ? sanitizeGroupBy(persisted["groupBy"], input.columns) : [];
-  const groupOrderBy =
+  const sanitizedGroupOrderBy =
     input.grouping === true
       ? sanitizeGroupOrderBy(
           persisted["groupOrderBy"],
@@ -148,7 +150,7 @@ export function createBrunoTableGridPreferences(
           input.columns,
           getBrunoTableColumnLayoutSnapshot(columnLayout).visibleColumnIds,
         )
-      : [];
+      : { orderBy: [], hasSurvivor: false };
   const rowsWidth =
     input.grouping === true
       ? decodeRowsWidth(
@@ -162,14 +164,15 @@ export function createBrunoTableGridPreferences(
     filterCollection,
     orderBy,
     groupBy: Object.freeze(groupBy),
-    groupOrderBy: Object.freeze(groupOrderBy),
+    groupOrderBy: Object.freeze(sanitizedGroupOrderBy.orderBy),
+    hasDurableGroupOrderByIntent: sanitizedGroupOrderBy.hasSurvivor,
     ...(rowsWidth === undefined ? {} : { rowsWidth }),
     columnLayout,
   });
 }
 
 export function createBrunoTablePersistedState(
-  preferences: Omit<BrunoTableGridPreferences, "filterCollection">,
+  preferences: Omit<BrunoTableGridPreferences, "filterCollection" | "hasDurableGroupOrderByIntent">,
 ): Readonly<Record<string, BrunoTableJsonValue>> {
   const layout = getBrunoTableColumnLayoutSnapshot(preferences.columnLayout);
   const visible = new Set(layout.visibleColumnIds);
@@ -231,7 +234,7 @@ function sanitizeGroupOrderBy(
   groupBy: readonly string[],
   columns: readonly CompiledColumn[],
   visibleColumnIds: readonly string[],
-): BrunoTableOrderBy {
+): Readonly<{ readonly orderBy: BrunoTableOrderBy; readonly hasSurvivor: boolean }> {
   const visible = new Set(visibleColumnIds);
   const admitted = new Set<string>(["COL_ID_BRUNO_TABLE_ROWS", ...groupBy]);
   if (groupBy.length === 0) {
@@ -270,13 +273,16 @@ function sanitizeGroupOrderBy(
       result.push({ columnId, direction });
     }
   }
-  return Object.freeze(
-    result.length === 0
-      ? groupBy.length === 0
-        ? [Object.freeze({ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const })]
-        : groupBy.map((columnId) => Object.freeze({ columnId, direction: "asc" as const }))
-      : result.map((order) => Object.freeze(order)),
-  );
+  return Object.freeze({
+    orderBy: Object.freeze(
+      result.length === 0
+        ? groupBy.length === 0
+          ? [Object.freeze({ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const })]
+          : groupBy.map((columnId) => Object.freeze({ columnId, direction: "asc" as const }))
+        : result.map((order) => Object.freeze(order)),
+    ),
+    hasSurvivor: result.length > 0,
+  });
 }
 
 function decodeRowsWidth(

@@ -734,6 +734,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly tableId: string;
   private readonly groupingPermitted: boolean;
   private groupingEnabled: boolean;
+  private hasDurableGroupOrderByIntent: boolean;
   private readonly beforeGroupingChange: ((entering: boolean) => void) | undefined;
   private groupRowsWidth: number;
   private rowsWidth: number | undefined;
@@ -785,6 +786,8 @@ export class BrunoTableGridRuntime<TRow> {
       grouping: this.groupingPermitted,
     });
     this.filterCollection = restoredPreferences.filterCollection;
+    this.hasDurableGroupOrderByIntent =
+      restoredPreferences.hasDurableGroupOrderByIntent || restoredPreferences.groupBy.length > 0;
     this.getOnPersistChange = preferencesOptions.getOnPersistChange ?? (() => undefined);
     this.rowsWidth = restoredPreferences.rowsWidth;
     this.query = createQuerySnapshot(
@@ -1824,14 +1827,19 @@ export class BrunoTableGridRuntime<TRow> {
       next = Object.freeze(mutable);
     }
     const nextOrderBy =
-      next.length === 0
-        ? this.query.groupOrderBy
-        : reconcileGroupedOrderBy(
-            this.query.groupOrderBy,
-            next,
-            this.columns,
-            this.columnLayoutSnapshot.visibleColumnIds,
-          );
+      current.length === 0 && next.length > 0 && !this.hasDurableGroupOrderByIntent
+        ? Object.freeze(
+            next.map((columnId) => Object.freeze({ columnId, direction: "asc" as const })),
+          )
+        : next.length === 0
+          ? this.query.groupOrderBy
+          : reconcileGroupedOrderBy(
+              this.query.groupOrderBy,
+              next,
+              this.columns,
+              this.columnLayoutSnapshot.visibleColumnIds,
+            );
+    if (next.length > 0) this.hasDurableGroupOrderByIntent = true;
     this.publishGroupingQuery(next, nextOrderBy);
     return true;
   };

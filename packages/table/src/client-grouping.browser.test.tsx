@@ -716,12 +716,12 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(
         sortPanel.getByRole("button", {
-          name: "Toggle Orders direction, currently ascending",
+          name: "Toggle Desk direction, currently ascending",
         }),
       )
       .toBeInTheDocument();
     await userEvent.click(sortPanel.getByRole("combobox", { name: "Add sort column" }));
-    await expect.element(page.getByRole("option", { name: "Desk" })).toBeInTheDocument();
+    await expect.element(page.getByRole("option", { name: "Orders" })).toBeInTheDocument();
   });
 
   test("restores exact durable order and pinning while Rows keeps persisted width across live presentation", async () => {
@@ -835,15 +835,15 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await chooseGroup("Desk");
     await expect
       .element(page.getByRole("row").nth(1).getByRole("gridcell").first())
-      .toHaveTextContent("Beta");
-    await userEvent.click(page.getByRole("button", { name: /Sort by Rows/u }));
-    await expect
-      .element(page.getByRole("row").nth(1).getByRole("gridcell").first())
       .toHaveTextContent("Alpha");
     await userEvent.click(page.getByRole("button", { name: /Sort by Rows/u }));
     await expect
       .element(page.getByRole("row").nth(1).getByRole("gridcell").first())
       .toHaveTextContent("Beta");
+    await userEvent.click(page.getByRole("button", { name: /Sort by Rows/u }));
+    await expect
+      .element(page.getByRole("row").nth(1).getByRole("gridcell").first())
+      .toHaveTextContent("Alpha");
 
     page
       .getByRole("button", { name: /Sort by Maximum quantity/u })
@@ -920,7 +920,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
     const rowsSort = page
       .getByRole("dialog", { name: "Sort rows" })
-      .getByRole("button", { name: "Toggle Rows direction, currently ascending" });
+      .getByRole("button", { name: "Toggle Desk direction, currently ascending" });
     const rowsSortElement = rowsSort.element();
     rowsSortElement.focus();
     await userEvent.keyboard("{Enter}");
@@ -1025,8 +1025,14 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.keyboard("{Escape}");
     await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
     const sortPanel = page.getByRole("dialog", { name: "Sort rows" });
+    await expect
+      .element(
+        sortPanel.getByRole("button", {
+          name: "Toggle Desk direction, currently ascending",
+        }),
+      )
+      .toBeInTheDocument();
     await userEvent.click(sortPanel.getByRole("combobox", { name: "Add sort column" }));
-    await expect.element(page.getByRole("option", { name: "Desk" })).toBeInTheDocument();
     await expect.element(page.getByRole("option", { name: "Maximum price" })).toBeInTheDocument();
   });
 
@@ -1227,10 +1233,10 @@ describe("BrunoTableClient grouping and aggregation", () => {
         0,
       );
       await expect
-        .element(page.getByRole("gridcell", { name: "Beta (1)" }))
+        .element(page.getByRole("gridcell", { name: "Alpha (2)" }))
         .toHaveAttribute("aria-selected", "true");
       await expect
-        .element(page.getByRole("gridcell", { name: "1", exact: true }))
+        .element(page.getByRole("gridcell", { name: "2", exact: true }))
         .not.toHaveAttribute("aria-selected");
 
       grid.element().focus();
@@ -1238,7 +1244,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
       await userEvent.keyboard(
         detectPlatform() === "mac" ? "{Meta>}c{/Meta}" : "{Control>}c{/Control}",
       );
-      await vi.waitFor(() => expect(writes).toEqual(["Beta\t1"]));
+      await vi.waitFor(() => expect(writes).toEqual(["Alpha\t2"]));
     } finally {
       if (clipboardDescriptor === undefined) {
         delete (navigator as { clipboard?: Clipboard }).clipboard;

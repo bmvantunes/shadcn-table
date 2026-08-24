@@ -121,15 +121,6 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
     props.runtime.getInstalledClientProjectionSnapshot,
     props.runtime.getInstalledClientProjectionSnapshot,
   );
-  const [projectionStore] = useState(() =>
-    acquireBrunoTableClientProjectionStore(
-      props.runtime,
-      props.rowPipelineAdapter,
-      props.rowSelection,
-    ),
-  );
-  projectionStore.setRowSelection(props.rowSelection);
-  useLayoutEffect(() => () => projectionStore.release(), [projectionStore]);
   if (installedProjection !== undefined) {
     return props.children(
       installedProjection.kind === "invalid"
@@ -356,13 +347,13 @@ export class BrunoTableClientProjectionPlanCompiler {
 export class BrunoTableClientProjectionStore {
   private coordinator: BrunoTableClientProjectionCoordinator | undefined;
   private readonly defaultGroupRowsColumn = compileBrunoTableGroupRowsColumn(undefined);
-  private references = 0;
+  private activation = 0;
   private reconciling = false;
   private reconcileRequested = false;
   private rowSelection: ClientResolvedRowOrderProps["rowSelection"];
-  private readonly unsubscribeProjectionInput: () => void;
-  private readonly unsubscribeQuery: () => void;
-  private readonly unsubscribeColumnStructure: () => void;
+  private unsubscribeProjectionInput: (() => void) | undefined;
+  private unsubscribeQuery: (() => void) | undefined;
+  private unsubscribeColumnStructure: (() => void) | undefined;
 
   public constructor(
     private readonly runtime: BrunoTableRowPipelineRuntimeView,
@@ -371,24 +362,27 @@ export class BrunoTableClientProjectionStore {
     private readonly planCompiler: BrunoTableClientProjectionPlanCompiler = new BrunoTableClientProjectionPlanCompiler(),
   ) {
     this.rowSelection = rowSelection;
+    this.requestReconcile();
+  }
+
+  public activate(): () => void {
+    const activation = ++this.activation;
+    this.unsubscribeProjectionInput?.();
+    this.unsubscribeQuery?.();
+    this.unsubscribeColumnStructure?.();
     this.unsubscribeProjectionInput = this.adapter.subscribeProjectionInput(this.requestReconcile);
     this.unsubscribeQuery = this.runtime.subscribeQuery(this.requestReconcile);
     this.unsubscribeColumnStructure = this.runtime.subscribeColumnStructure(this.requestReconcile);
     this.requestReconcile();
-  }
-
-  public retain(): this {
-    this.references += 1;
-    return this;
-  }
-
-  public release(): void {
-    this.references -= 1;
-    if (this.references > 0) return;
-    this.unsubscribeProjectionInput();
-    this.unsubscribeQuery();
-    this.unsubscribeColumnStructure();
-    CLIENT_PROJECTION_STORES.delete(this.adapter);
+    return () => {
+      if (this.activation !== activation) return;
+      this.unsubscribeProjectionInput?.();
+      this.unsubscribeQuery?.();
+      this.unsubscribeColumnStructure?.();
+      this.unsubscribeProjectionInput = undefined;
+      this.unsubscribeQuery = undefined;
+      this.unsubscribeColumnStructure = undefined;
+    };
   }
 
   public setRowSelection(rowSelection: ClientResolvedRowOrderProps["rowSelection"]): void {
@@ -615,26 +609,6 @@ function sameStrings(current: readonly string[], expected: readonly string[]): b
   return sameReferences(current, expected);
 }
 
-const CLIENT_PROJECTION_STORES = new WeakMap<
-  BrunoTableClientRowPipelineAdapterView,
-  BrunoTableClientProjectionStore
->();
-
-export function acquireBrunoTableClientProjectionStore(
-  runtime: BrunoTableRowPipelineRuntimeView,
-  adapter: BrunoTableClientRowPipelineAdapterView,
-  rowSelection: ClientResolvedRowOrderProps["rowSelection"],
-): BrunoTableClientProjectionStore {
-  const existing = CLIENT_PROJECTION_STORES.get(adapter);
-  if (existing !== undefined) {
-    existing.setRowSelection(rowSelection);
-    return existing.retain();
-  }
-  const created = new BrunoTableClientProjectionStore(runtime, adapter, rowSelection).retain();
-  CLIENT_PROJECTION_STORES.set(adapter, created);
-  return created;
-}
-
 export function deriveClientProjectionRowModel(
   rows: readonly BrunoTableClientAdmittedRow[],
   configuration: ClientProjectionConfiguration,
@@ -820,6 +794,9 @@ function createClientProjectionCandidate(
       readValue: (column) => row.values.read(row.raw, row.rowId, row.rowIndex, column),
     })),
     columns: input.columns,
+    participatingAggregateColumnIds: new Set(
+      input.rowModel.visibleColumns.map((column) => column.columnId),
+    ),
     groupBy: input.groupBy,
     groupOrderBy: input.groupOrderBy,
     ...(input.previousGroupedProjection === undefined

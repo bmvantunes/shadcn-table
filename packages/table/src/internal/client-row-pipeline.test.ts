@@ -57,6 +57,190 @@ describe("ClientRowOrderStore", () => {
 });
 
 describe("grouped Client projection planning", () => {
+  it("subscribes only while the table-local projection owner is committed", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    type Row = Readonly<{ id: string; group: string }>;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      { rows: [{ id: "one", group: "A" }], totalRows: 1, version: 1, status: "ready" },
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_COMMITTED_PROJECTION_OWNER",
+      { grouping: true },
+    );
+    const view = runtime.getView();
+    const projectionUnsubscribe = vi.fn();
+    const queryUnsubscribe = vi.fn();
+    const structureUnsubscribe = vi.fn();
+    const subscribeProjectionInput = adapter.subscribeProjectionInput.bind(adapter);
+    const projectionSubscribe = vi
+      .spyOn(adapter, "subscribeProjectionInput")
+      .mockImplementation((listener) => {
+        const unsubscribe = subscribeProjectionInput(listener);
+        return () => {
+          projectionUnsubscribe();
+          unsubscribe();
+        };
+      });
+    const querySubscribe = vi.fn((listener) => {
+      const unsubscribe = view.subscribeQuery(listener);
+      return () => {
+        queryUnsubscribe();
+        unsubscribe();
+      };
+    });
+    const structureSubscribe = vi.fn((listener) => {
+      const unsubscribe = view.subscribeColumnStructure(listener);
+      return () => {
+        structureUnsubscribe();
+        unsubscribe();
+      };
+    });
+    const monitoredView = {
+      ...view,
+      subscribeQuery: querySubscribe,
+      subscribeColumnStructure: structureSubscribe,
+    } satisfies typeof view;
+
+    const abandoned = new BrunoTableClientProjectionStore(monitoredView, adapter, undefined);
+    expect(view.getInstalledClientProjectionSnapshot()).toBeUndefined();
+    expect(projectionSubscribe).not.toHaveBeenCalled();
+    expect(querySubscribe).not.toHaveBeenCalled();
+    expect(structureSubscribe).not.toHaveBeenCalled();
+    void abandoned;
+
+    const committed = new BrunoTableClientProjectionStore(monitoredView, adapter, undefined);
+    const deactivate = committed.activate();
+    expect(projectionSubscribe).toHaveBeenCalledOnce();
+    expect(querySubscribe).toHaveBeenCalledOnce();
+    expect(structureSubscribe).toHaveBeenCalledOnce();
+    deactivate();
+    expect(projectionUnsubscribe).toHaveBeenCalledOnce();
+    expect(queryUnsubscribe).toHaveBeenCalledOnce();
+    expect(structureUnsubscribe).toHaveBeenCalledOnce();
+
+    const projectGroupedRows = vi.spyOn(adapter, "projectGroupedRows");
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
+    expect(projectGroupedRows).not.toHaveBeenCalled();
+    expect(view.getInstalledClientProjectionSnapshot()).toBeUndefined();
+
+    const deactivateAgain = committed.activate();
+    expect(projectGroupedRows).toHaveBeenCalledOnce();
+    expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("grouped");
+    deactivateAgain();
+    expect(projectionUnsubscribe).toHaveBeenCalledTimes(2);
+    expect(queryUnsubscribe).toHaveBeenCalledTimes(2);
+    expect(structureUnsubscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps hidden aggregates out of the real projection-store execution plan", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_HIDDEN_TOTAL",
+        field: "amount",
+        headerName: "Hidden total",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+    type Row = Readonly<{ id: string; group: string; amount: bigint }>;
+    let hiddenReads = 0;
+    const createRow = (version: number): Row => {
+      const row = { id: `row-${String(version)}`, group: "A" } as {
+        id: string;
+        group: string;
+        amount: bigint;
+      };
+      Object.defineProperty(row, "amount", {
+        enumerable: true,
+        get: () => {
+          hiddenReads += 1;
+          throw new Error("A hidden aggregate must never execute.");
+        },
+      });
+      return row;
+    };
+    const source = (version: number) => ({
+      rows: [createRow(version)],
+      totalRows: 1,
+      version,
+      status: "ready" as const,
+    });
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source(1),
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_HIDDEN_AGGREGATE_EXECUTION",
+      { grouping: true },
+    );
+    const view = runtime.getView();
+    view.dispatchGridCommand({
+      type: "column.visibility.commit",
+      columnId: "COL_ID_HIDDEN_TOTAL",
+      visible: false,
+    });
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined);
+    const deactivate = store.activate();
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
+    expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("grouped");
+    expect(hiddenReads).toBe(0);
+
+    const rowId = view.getInstalledClientProjectionSnapshot()?.rowIds[0];
+    expect(rowId).toBeDefined();
+    const rowNotifications = vi.fn();
+    const cellNotifications = vi.fn();
+    const structuralNotifications = vi.fn();
+    const unsubscribeRow = view.subscribeRow(rowId!, rowNotifications);
+    const unsubscribeCell = view.subscribeCell(rowId!, "COL_ID_GROUP", cellNotifications);
+    const unsubscribeStructural = view.subscribeInstalledClientProjection(structuralNotifications);
+    adapter.reconcile(source(2), (row: Row) => row.id, columns);
+    adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
+    expect(hiddenReads).toBe(0);
+    expect(rowNotifications).not.toHaveBeenCalled();
+    expect(cellNotifications).not.toHaveBeenCalled();
+    expect(structuralNotifications).not.toHaveBeenCalled();
+
+    view.dispatchGridCommand({
+      type: "column.visibility.commit",
+      columnId: "COL_ID_HIDDEN_TOTAL",
+      visible: true,
+    });
+    expect(hiddenReads).toBeGreaterThan(0);
+    expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("invalid");
+    unsubscribeRow();
+    unsubscribeCell();
+    unsubscribeStructural();
+    deactivate();
+  });
+
   it.each(["stale", "closed", "error"] as const)(
     "retains the compatible ready grouped epoch when a %s aggregate candidate fails",
     (status) => {
@@ -156,7 +340,8 @@ describe("grouped Client projection planning", () => {
         { grouping: true },
       );
       const view = runtime.getView();
-      const store = new BrunoTableClientProjectionStore(view, adapter, undefined).retain();
+      const store = new BrunoTableClientProjectionStore(view, adapter, undefined);
+      const deactivate = store.activate();
       view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
       const readyProjection = view.getInstalledClientProjectionSnapshot();
       expect(readyProjection?.kind).toBe("grouped");
@@ -259,7 +444,7 @@ describe("grouped Client projection planning", () => {
         kind: "available",
         value: { minorUnits: 3n },
       });
-      store.release();
+      deactivate();
     },
   );
 
@@ -307,12 +492,8 @@ describe("grouped Client projection planning", () => {
     );
     const view = runtime.getView();
     const planCompiler = new BrunoTableClientProjectionPlanCompiler();
-    const store = new BrunoTableClientProjectionStore(
-      view,
-      adapter,
-      undefined,
-      planCompiler,
-    ).retain();
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined, planCompiler);
+    const deactivate = store.activate();
     view.dispatchGridCommand({
       type: "column.resize.commit",
       columnId: "COL_ID_GROUP",
@@ -344,7 +525,7 @@ describe("grouped Client projection planning", () => {
       );
       expect(planCompiler.getCompilationDiagnosticSnapshot()).toEqual(initialCompilations);
     }
-    store.release();
+    deactivate();
   });
 
   it("derives and installs one candidate for one column-configuration transition", () => {
@@ -380,7 +561,8 @@ describe("grouped Client projection planning", () => {
       { grouping: true },
     );
     const view = runtime.getView();
-    const store = new BrunoTableClientProjectionStore(view, adapter, undefined).retain();
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined);
+    const deactivate = store.activate();
     view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
     const projectGroupedRows = vi.spyOn(adapter, "projectGroupedRows");
     const queryNotifications = vi.fn();
@@ -415,7 +597,7 @@ describe("grouped Client projection planning", () => {
     expect(view.getInstalledClientProjectionSnapshot()?.columns[0]?.headerName).toBe(
       "Renamed Group",
     );
-    store.release();
+    deactivate();
   });
 
   it("does not execute dormant ordinary sorting while deriving grouped source rows", () => {

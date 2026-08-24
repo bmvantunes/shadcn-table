@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { BrunoTableAggregateAlgebra } from "../public-types";
 import type { BrunoTableValueType } from "../public-types";
@@ -152,6 +152,57 @@ function value(
 }
 
 describe("Client flat grouping", () => {
+  it("never reads or executes hidden non-participating aggregates", () => {
+    const hiddenAggregateRead = vi.fn(() => {
+      throw new Error("Hidden aggregate must remain dormant.");
+    });
+    const participatingColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "region",
+        headerName: "Region",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_HIDDEN_TOTAL",
+        field: "quantity",
+        headerName: "Hidden total",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+    const rows: readonly BrunoTableClientGroupingInputRow[] = [
+      {
+        raw: { region: "EU", quantity: 1n },
+        rowId: "row-1",
+        rowIndex: 0,
+        readValue: (column) =>
+          column.columnId === "COL_ID_HIDDEN_TOTAL" ? hiddenAggregateRead() : "EU",
+      },
+    ];
+
+    const hidden = deriveBrunoTableClientGroupedProjection({
+      rows,
+      columns: participatingColumns,
+      participatingAggregateColumnIds: new Set(["COL_ID_GROUP"]),
+      groupBy: ["COL_ID_GROUP"],
+      groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    });
+    expect(hidden.kind).toBe("ready");
+    expect(hiddenAggregateRead).not.toHaveBeenCalled();
+
+    const visible = deriveBrunoTableClientGroupedProjection({
+      rows,
+      columns: participatingColumns,
+      participatingAggregateColumnIds: new Set(["COL_ID_HIDDEN_TOTAL"]),
+      groupBy: ["COL_ID_GROUP"],
+      groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    });
+    expect(visible.kind).toBe("invalid");
+    expect(hiddenAggregateRead).toHaveBeenCalledOnce();
+  });
+
   it("derives multi-key flat groups, exact Rows, and same-field aggregates in one pass", () => {
     const huge = 10n ** 80n;
     const projection = deriveBrunoTableClientGroupedProjection({

@@ -352,7 +352,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(runtime.getView().getQuerySnapshot()).toMatchObject({
       orderBy: [{ columnId: "COL_ID_NAME", direction: "desc" }],
       groupBy: ["COL_ID_NAME"],
-      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
+      groupOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
     });
     expect(persisted.at(-1)?.["columnWidths"]).not.toHaveProperty("COL_ID_BRUNO_TABLE_ROWS");
     expect(
@@ -375,7 +375,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(transitions).toEqual(["before:true", "query", "query", "query"]);
     expect(runtime.getView().getQuerySnapshot()).toMatchObject({
       orderBy: [{ columnId: "COL_ID_NAME", direction: "desc" }],
-      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" }],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
     });
     expect(
       runtime.getView().dispatchGridCommand({

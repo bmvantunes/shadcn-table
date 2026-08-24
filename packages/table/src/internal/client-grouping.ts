@@ -97,6 +97,7 @@ export function deriveBrunoTableClientGroupedProjection(
   input: Readonly<{
     readonly rows: readonly BrunoTableClientGroupingInputRow[];
     readonly columns: readonly CompiledColumn[];
+    readonly participatingAggregateColumnIds?: ReadonlySet<string>;
     readonly groupBy: readonly string[];
     readonly groupOrderBy: GroupOrderBy;
     readonly previous?: BrunoTableClientGroupedProjection;
@@ -127,7 +128,9 @@ export function deriveBrunoTableClientGroupedProjection(
       (column): column is CompiledFieldColumn =>
         column.kind === "field" &&
         column.aggFunc !== undefined &&
-        !activeGroupIds.has(column.columnId),
+        !activeGroupIds.has(column.columnId) &&
+        (input.participatingAggregateColumnIds === undefined ||
+          input.participatingAggregateColumnIds.has(column.columnId)),
     );
     const groups = new Map<string, MutableGroup>();
     for (const row of input.rows) {
