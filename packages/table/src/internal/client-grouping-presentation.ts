@@ -144,15 +144,15 @@ function createGroupedColumns(
       ? [createRoleColumn(column, "groupKey", compileCountDistinctSemantics)]
       : [];
   });
-  const visible = new Set(input.visibleColumnIds);
-  const aggregates = input.columns.flatMap((column) =>
-    column.kind === "field" &&
-    column.aggFunc !== undefined &&
-    !active.has(column.columnId) &&
-    visible.has(column.columnId)
+  const aggregates = input.visibleColumnIds.flatMap((columnId) => {
+    const column = byId.get(columnId);
+    return column !== undefined &&
+      column.kind === "field" &&
+      column.aggFunc !== undefined &&
+      !active.has(column.columnId)
       ? [createRoleColumn(column, "aggregate", compileCountDistinctSemantics)]
-      : [],
-  );
+      : [];
+  });
   return Object.freeze([
     ...keys,
     createRowsColumn(

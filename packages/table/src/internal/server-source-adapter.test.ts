@@ -68,6 +68,316 @@ function makeViewport<TRow = Row>() {
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("installs authoritative grouped keys and decodes private aliases by Column Identity", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_MIN_PRICE",
+        field: "price",
+        headerName: "Minimum",
+        valueType: "number",
+        aggFunc: "min",
+      },
+      {
+        columnId: "COL_ID_MAX_PRICE",
+        field: "price",
+        headerName: "Maximum",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 2,
+      version: 1,
+      status: "ready",
+    });
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      groupedColumns,
+      adapter.getQueryConfiguration(),
+      "TABLE_ID_GROUPED_SERVER_PUBLICATIONS",
+      { grouping: true },
+    );
+    const runtimeView = runtime.getView();
+    adapter.subscribePublication(() => runtimeView.publishRowPipeline(adapter.getPublication()));
+    const groupingNotifications = vi.fn();
+    const projectionNotifications = vi.fn();
+    runtimeView.subscribeInstalledGroupingStructure(groupingNotifications);
+    runtimeView.subscribeInstalledClientProjection(projectionNotifications);
+    adapter.replace(
+      transport.viewport,
+      {
+        ...query,
+        groupBy: ["COL_ID_DESK"],
+        groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "desc" }],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      },
+      {
+        routeBy: undefined,
+        externalFilters: undefined,
+        visibleColumnIds: ["COL_ID_DESK", "COL_ID_MIN_PRICE", "COL_ID_MAX_PRICE"],
+      },
+    );
+
+    const request = transport.getRequest()!;
+    const groupedPlan = request.query as {
+      readonly groupBy: readonly string[];
+      readonly aggregates: Readonly<Record<string, { readonly aggFunc: string }>>;
+      readonly orderBy: readonly { readonly aggregate?: string }[];
+    };
+    const aliases = Object.keys(groupedPlan.aggregates);
+    const rowsAlias = aliases.find((alias) => groupedPlan.aggregates[alias]!.aggFunc === "count")!;
+    const minAlias = aliases.find((alias) => groupedPlan.aggregates[alias]!.aggFunc === "min")!;
+    const maxAlias = aliases.find((alias) => groupedPlan.aggregates[alias]!.aggFunc === "max")!;
+    expect(groupedPlan.groupBy).toEqual(["desk"]);
+    expect(minAlias).not.toBe(maxAlias);
+    expect(groupedPlan.orderBy).toEqual([{ aggregate: maxAlias, direction: "desc" }]);
+
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 20 } },
+      { 0: "authoritative-group-key" },
+    );
+    const publication = adapter.getPublication();
+    expect(publication.rowSpace?.getRowId(0)).toBe("authoritative-group-key");
+    expect(publication.rowSpace?.getCellValue("authoritative-group-key", "COL_ID_DESK")).toBe(
+      "Rates",
+    );
+    expect(
+      publication.rowSpace?.getCellValue("authoritative-group-key", "COL_ID_BRUNO_TABLE_ROWS"),
+    ).toBe(3n);
+    expect(publication.rowSpace?.getCellValue("authoritative-group-key", "COL_ID_MIN_PRICE")).toBe(
+      10,
+    );
+    expect(publication.rowSpace?.getCellValue("authoritative-group-key", "COL_ID_MAX_PRICE")).toBe(
+      20,
+    );
+    expect(publication.clientProjection).toMatchObject({
+      kind: "grouped",
+      groupBy: ["COL_ID_DESK"],
+    });
+    const retained = publication.rowSpace?.getRow("authoritative-group-key");
+    groupingNotifications.mockClear();
+    projectionNotifications.mockClear();
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 20 } },
+      { 0: "authoritative-group-key" },
+    );
+    expect(adapter.getPublication().rowSpace?.getRow("authoritative-group-key")).toBe(retained);
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 21 } },
+      { 0: "authoritative-group-key" },
+    );
+    expect(adapter.getPublication().rowSpace?.getRow("authoritative-group-key")).not.toBe(retained);
+    expect(
+      adapter
+        .getPublication()
+        .rowSpace?.getCellValue("authoritative-group-key", "COL_ID_MAX_PRICE"),
+    ).toBe(21);
+    const groupedRow = { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 21 };
+    expect(() => request.sink.setRowData({ 0: groupedRow }, {})).toThrow("invalid row/key maps");
+    expect(() => request.sink.setRowData({}, { 0: "extra-key" })).toThrow("invalid row/key maps");
+    expect(() =>
+      request.sink.setRowData(
+        { 0: groupedRow, 1: groupedRow },
+        { 0: "duplicate-key", 1: "duplicate-key" },
+      ),
+    ).toThrow("invalid row/key maps");
+    expect(() => request.sink.setRowData({ 0: groupedRow }, { 0: "" })).toThrow(
+      "invalid row/key maps",
+    );
+    expect(adapter.getPublication().rowSpace?.getRowId(0)).toBe("authoritative-group-key");
+    request.sink.setRowData({ 0: groupedRow }, { 0: "moved-authoritative-group-key" });
+    expect(groupingNotifications).not.toHaveBeenCalled();
+    expect(projectionNotifications).not.toHaveBeenCalled();
+  });
+
+  it("owns one clean generation across raw, ordered grouped, reordered, and raw projections", () => {
+    const transitionColumns = compileColumns([
+      {
+        columnId: "COL_ID_REGION",
+        field: "region",
+        headerName: "Region",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      transitionColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_REGION", direction: "asc" }],
+      ["region", "desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["region", "desk", "price"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const replace = (groupBy: readonly string[], groupOrderBy: typeof query.orderBy): void =>
+      adapter.replace(transport.viewport, {
+        ...query,
+        orderBy: [{ columnId: "COL_ID_REGION", direction: "asc" }],
+        groupBy,
+        groupOrderBy,
+      });
+
+    replace([], []);
+    const rawSink = transport.getRequest()!.sink;
+    rawSink.setRowCount(1, true);
+    rawSink.setRowData({ 0: { region: "EMEA", desk: "Rates", price: 10 } }, { 0: "raw-1" });
+    expect(adapter.getPublication().rowSpace?.getRowId(0)).toBe("raw-1");
+
+    replace(["COL_ID_REGION"], [{ columnId: "COL_ID_REGION", direction: "asc" }]);
+    const singleSink = transport.getRequest()!.sink;
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(adapter.getPublication().clientProjection).toMatchObject({
+      groupBy: ["COL_ID_REGION"],
+    });
+
+    replace(["COL_ID_REGION", "COL_ID_DESK"], [{ columnId: "COL_ID_REGION", direction: "asc" }]);
+    const multiSink = transport.getRequest()!.sink;
+    replace(["COL_ID_DESK", "COL_ID_REGION"], [{ columnId: "COL_ID_DESK", direction: "asc" }]);
+    const reorderedSink = transport.getRequest()!.sink;
+    replace(["COL_ID_DESK"], [{ columnId: "COL_ID_DESK", direction: "asc" }]);
+    const finalGroupedSink = transport.getRequest()!.sink;
+    replace([], []);
+
+    expect(transport.replace).toHaveBeenCalledTimes(6);
+    expect(transport.release).toHaveBeenCalledTimes(5);
+    expect(adapter.getPublication().clientProjection).toBeNull();
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+
+    for (const [index, releasedSink] of [
+      rawSink,
+      singleSink,
+      multiSink,
+      reorderedSink,
+      finalGroupedSink,
+    ].entries()) {
+      releasedSink.setRowCount(1, true);
+      releasedSink.setRowData(
+        { 0: { region: `LATE-${String(index)}` } },
+        { 0: `late-${String(index)}` },
+      );
+    }
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+  });
+
+  it("preserves exact bigint, optional, and Effect BigDecimal grouped result domains", () => {
+    type ExactRow = Readonly<{
+      desk: string | null;
+      quantity: bigint;
+      amount: BigDecimal.BigDecimal;
+    }>;
+    const exactColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_AMOUNT",
+        field: "amount",
+        headerName: "Average amount",
+        aggFunc: "avg",
+      }),
+    ] satisfies BrunoTableColumns<ExactRow>);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      exactColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "quantity", "amount"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "quantity", "amount"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+    });
+    const request = transport.getRequest()!;
+    const groupedQuery = request.query as {
+      readonly aggregates: Readonly<Record<string, { readonly aggFunc: string }>>;
+    };
+    const aliases = Object.keys(groupedQuery.aggregates);
+    const rowsAlias = aliases.find((alias) => groupedQuery.aggregates[alias]!.aggFunc === "count")!;
+    const quantityAlias = aliases.find(
+      (alias) => groupedQuery.aggregates[alias]!.aggFunc === "sum",
+    )!;
+    const amountAlias = aliases.find((alias) => groupedQuery.aggregates[alias]!.aggFunc === "avg")!;
+    const amount = BigDecimal.fromStringUnsafe("12.3400");
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData(
+      {
+        0: {
+          desk: null,
+          [rowsAlias]: 2n,
+          [quantityAlias]: 9007199254740993n,
+          [amountAlias]: amount,
+        },
+      },
+      { 0: "exact-group" },
+    );
+
+    const rowSpace = adapter.getPublication().rowSpace!;
+    expect(rowSpace.getCellValue("exact-group", "COL_ID_DESK")).toBeNull();
+    expect(rowSpace.getCellValue("exact-group", "COL_ID_QUANTITY")).toBe(9007199254740993n);
+    const admittedAmount = rowSpace.getCellValue("exact-group", "COL_ID_AMOUNT");
+    expect(BigDecimal.isBigDecimal(admittedAmount)).toBe(true);
+    expect(BigDecimal.format(admittedAmount as BigDecimal.BigDecimal)).toBe("12.34");
+  });
+
   it("keeps bigint semantic keys distinct from numeric-looking strings", () => {
     expect(brunoTableTestSemanticQueryKey({ filter: 1n })).not.toBe(
       brunoTableTestSemanticQueryKey({ filter: "1n" }),

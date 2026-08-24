@@ -376,7 +376,7 @@ const columns = [
     valueType: "bigint",
     valueGetter: ({ row }) => row.quantity * 2n,
   }),
-] satisfies BrunoTableColumns<Order>;
+] as const satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
 
@@ -450,7 +450,7 @@ describe("BrunoTableServer viewport row witness", () => {
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       viewportSource: orderViewportSource,
       onPersistChange: (state) =>
-        expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, false>>(),
+        expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, true>>(),
     } as const satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
     void BrunoTableServer(matchingProps);
 
@@ -948,20 +948,67 @@ const groupedClientProps = {
 } satisfies BrunoTableClientProps<Order, typeof rawGroupedColumns>;
 void groupedClientProps;
 
-const serverWithClientGroupingConfiguration = {
-  tableId: "TABLE_ID_INVALID_SERVER_GROUPING",
+const serverWithGroupingConfiguration = {
+  tableId: "TABLE_ID_SERVER_GROUPING",
   columns: rawGroupedColumns,
   initialOrderBy: [{ columnId: "COL_ID_GROUP_SYMBOL", direction: "asc" }],
   viewportSource: orderViewportSource,
   groupRowsColumn,
 } as const;
-// @ts-expect-error Server grouping is outside the Client-only issue #20 capability.
-const invalidServerGroupingConfiguration: BrunoTableServerProps<
+const validServerGroupingConfiguration: BrunoTableServerProps<
   Order,
   typeof rawGroupedColumns,
   typeof orderViewportSource.viewport
-> = serverWithClientGroupingConfiguration;
-void invalidServerGroupingConfiguration;
+> = serverWithGroupingConfiguration;
+void validServerGroupingConfiguration;
+const clientOnlyNumberArithmetic = exactMoneyValueType as unknown as BrunoTableValueType<
+  number,
+  "numeric",
+  "bigdecimal",
+  { readonly sum: "self" }
+>;
+const clientOnlyServerAggregateColumns = [
+  {
+    columnId: "COL_ID_CLIENT_ONLY_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_CLIENT_ONLY_PRICE_SUM",
+    field: "price",
+    headerName: "Client-only price sum",
+    valueType: clientOnlyNumberArithmetic,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const invalidClientArithmeticServerProps = {
+  tableId: "TABLE_ID_INVALID_SERVER_ARITHMETIC",
+  columns: clientOnlyServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_CLIENT_ONLY_GROUP", direction: "asc" }],
+  viewportSource: orderViewportSource,
+} as const;
+// @ts-expect-error Server arithmetic must use effect-view-server's exact result Value Types.
+const rejectedClientArithmeticServerProps: BrunoTableServerProps<
+  Order,
+  typeof clientOnlyServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = invalidClientArithmeticServerProps;
+void rejectedClientArithmeticServerProps;
+const widenedClientOnlyServerAggregateColumns: readonly (typeof clientOnlyServerAggregateColumns)[number][] =
+  clientOnlyServerAggregateColumns;
+const widenedClientOnlyServerProps = {
+  ...invalidClientArithmeticServerProps,
+  columns: widenedClientOnlyServerAggregateColumns,
+} as const;
+// @ts-expect-error Widening an unsupported arithmetic column must not bypass Server admission.
+const rejectedWidenedClientArithmeticServerProps: BrunoTableServerProps<
+  Order,
+  typeof widenedClientOnlyServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = widenedClientOnlyServerProps;
+void rejectedWidenedClientArithmeticServerProps;
 const groupedPersistedPreferences = {
   version: 1,
   tableId: "TABLE_ID_GROUPED_PREFERENCES",

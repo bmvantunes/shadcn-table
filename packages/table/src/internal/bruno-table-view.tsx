@@ -442,7 +442,9 @@ export type BrunoTableLogicalRowSpace = Readonly<{
         readonly rowIndexById: ReadonlyMap<string, number>;
       }>
     | undefined;
-  readonly missingRowIdentityBehavior?: "clear-conflicting-active-cell";
+  readonly missingRowIdentityBehavior?:
+    | "clear-conflicting-active-cell"
+    | "fallback-to-display-index";
 }>;
 
 function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TAdapter>({
@@ -1265,7 +1267,20 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       runtime.getInstalledClientProjectionSnapshot,
       runtime.getInstalledClientProjectionSnapshot,
     );
-    const installedRowSpace = installedProjection?.rowSpace ?? rowSpace;
+    const authoritativeRowSpace =
+      installedProjection?.rowSpaceAuthority === "pipeline"
+        ? rowSpace
+        : (installedProjection?.rowSpace ?? rowSpace);
+    const installedRowSpace = useMemo(
+      () =>
+        installedProjection?.kind === "grouped"
+          ? Object.freeze({
+              ...authoritativeRowSpace,
+              missingRowIdentityBehavior: "fallback-to-display-index" as const,
+            })
+          : authoritativeRowSpace,
+      [authoritativeRowSpace, installedProjection?.kind],
+    );
     const installedColumns = installedProjection?.columns ?? columns;
     const installedQueryGeneration = installedProjection?.queryGeneration ?? queryGeneration;
     const installedQueryNavigationMode =

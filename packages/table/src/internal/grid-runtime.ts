@@ -244,6 +244,8 @@ type BrunoTableInstalledClientProjectionBase = Readonly<{
     readonly findRowIndex: (rowId: string) => number | undefined;
     readonly setRequiredRange: (start: number, end: number) => void;
   }>;
+  /** Server projections keep sparse rowspace authority in their dedicated pipeline subscription. */
+  readonly rowSpaceAuthority?: "pipeline";
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   /** Stable semantic/layout revision for the installed presentation columns. */

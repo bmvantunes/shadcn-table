@@ -163,7 +163,7 @@ export class BrunoTableServerViewportStore<TRow> {
     if (generation !== this.generation) return false;
     const rowEntries = Object.entries(rowsByIndex);
     const keyEntries = Object.entries(rowKeysByIndex);
-    if (rowEntries.length !== keyEntries.length) return false;
+    if (!validateBrunoTableServerViewportRowKeys(rowsByIndex, rowKeysByIndex)) return false;
 
     const admitted: Array<
       Readonly<{ readonly index: number; readonly row: TRow; readonly rowId: string }>
@@ -174,19 +174,15 @@ export class BrunoTableServerViewportStore<TRow> {
       const index = parseAbsoluteIndex(rawIndex);
       if (index === undefined || indexes.has(index)) return false;
       if (this.authoritativeTotalRows && index >= this.snapshot.rowSpace.totalRows) return false;
-      if (!Object.prototype.hasOwnProperty.call(rowKeysByIndex, rawIndex)) return false;
       const rowId = rowKeysByIndex[index];
-      if (typeof rowId !== "string" || rowId.length === 0 || rowIds.has(rowId)) return false;
+      if (rowId === undefined || rowIds.has(rowId)) return false;
       indexes.add(index);
       rowIds.add(rowId);
       if (index >= this.requiredWindow.firstRow && index <= this.requiredWindow.lastRow) {
         admitted.push(Object.freeze({ index, row, rowId }));
       }
     }
-    for (const [rawIndex] of keyEntries) {
-      const index = parseAbsoluteIndex(rawIndex);
-      if (index === undefined || !indexes.has(index)) return false;
-    }
+    for (const [rawIndex] of keyEntries) if (!indexes.has(Number(rawIndex))) return false;
     if (admitted.length === 0) return true;
 
     const previousRowsById = this.rowsById;
@@ -289,6 +285,31 @@ export class BrunoTableServerViewportStore<TRow> {
     });
     notify(this.listeners);
   }
+}
+
+export function validateBrunoTableServerViewportRowKeys<TRow>(
+  rowsByIndex: Readonly<Record<number, TRow>>,
+  rowKeysByIndex: Readonly<Record<number, string>>,
+): boolean {
+  const rowEntries = Object.entries(rowsByIndex);
+  const keyEntries = Object.entries(rowKeysByIndex);
+  if (rowEntries.length !== keyEntries.length) return false;
+  const indexes = new Set<number>();
+  const rowIds = new Set<string>();
+  for (const [rawIndex] of rowEntries) {
+    const index = parseAbsoluteIndex(rawIndex);
+    if (index === undefined || indexes.has(index)) return false;
+    if (!Object.prototype.hasOwnProperty.call(rowKeysByIndex, rawIndex)) return false;
+    const rowId = rowKeysByIndex[index];
+    if (typeof rowId !== "string" || rowId.length === 0 || rowIds.has(rowId)) return false;
+    indexes.add(index);
+    rowIds.add(rowId);
+  }
+  for (const [rawIndex] of keyEntries) {
+    const index = parseAbsoluteIndex(rawIndex);
+    if (index === undefined || !indexes.has(index)) return false;
+  }
+  return true;
 }
 
 export function sanitizeBrunoTableServerViewportWindow(

@@ -960,6 +960,31 @@ export type BrunoTableColumnIdentityGuard<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = [InvalidColumnIdentity<TColumns[number]>] extends [never] ? unknown : never;
 
+type InvalidServerAggregateColumn<TColumns extends readonly unknown[]> =
+  TColumns[number] extends infer TColumn
+    ? TColumn extends { readonly aggFunc: infer TAggFunc; readonly valueType: infer TValueType }
+      ? TAggFunc extends "sum"
+        ? TValueType extends "bigint" | { readonly codecId: "@bruno/table/effect/bigdecimal" }
+          ? never
+          : TColumn
+        : TAggFunc extends "avg"
+          ? TValueType extends { readonly codecId: "@bruno/table/effect/bigdecimal" }
+            ? never
+            : TColumn
+          : never
+      : never
+    : never;
+
+/** @internal Restricts Server arithmetic to effect-view-server's exact result domains. */
+export type BrunoTableServerAggregateGuard<TColumns extends readonly unknown[]> =
+  ColumnIdPattern extends (
+    TColumns[number] extends { readonly columnId: infer TColumnId } ? TColumnId : never
+  )
+    ? unknown
+    : [InvalidServerAggregateColumn<TColumns>] extends [never]
+      ? unknown
+      : never;
+
 export type BrunoTableColumnIdOf<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = TColumns[number]["columnId"];
@@ -1530,8 +1555,10 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
-  BrunoTableReadOnlyCapability & {
+> = Omit<ComponentCommonProps<TRow, TColumns, true>, "initialOrderBy"> &
+  BrunoTableReadOnlyCapability &
+  BrunoTableGroupingCapability<TRow, TColumns> & {
+    readonly columns: TColumns & BrunoTableServerAggregateGuard<NoInfer<TColumns>>;
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     /** Server row identity is supplied authoritatively by the Viewport Source. */
     readonly getRowId?: never;
@@ -1548,7 +1575,6 @@ export type BrunoTableServerProps<
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly editable?: never;
-    readonly groupRowsColumn?: never;
     readonly rowSelection?: never;
     readonly rangeSelection?: never;
     readonly onPaste?: never;

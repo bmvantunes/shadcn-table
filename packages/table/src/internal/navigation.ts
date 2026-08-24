@@ -48,7 +48,9 @@ export type BrunoTableNavigationRowSpace = Readonly<{
   readonly totalRows: number;
   readonly getRowId: (index: number) => string | undefined;
   readonly findRowIndex: (rowId: string) => number | undefined;
-  readonly missingRowIdentityBehavior?: "clear-conflicting-active-cell";
+  readonly missingRowIdentityBehavior?:
+    | "clear-conflicting-active-cell"
+    | "fallback-to-display-index";
 }>;
 
 const EMPTY_ROW_SPACE: BrunoTableNavigationRowSpace = Object.freeze({
@@ -425,8 +427,9 @@ export class BrunoTableNavigationRuntime {
       this.activeCell?.region === "body" &&
       this.activeCell.rowId !== undefined &&
       matchingRowIndex === undefined &&
+      this.activeCell.rowIndex < rowSpace.totalRows &&
       activeSlotRowId === undefined &&
-      rowSpace.missingRowIdentityBehavior === "clear-conflicting-active-cell"
+      rowSpace.missingRowIdentityBehavior !== undefined
         ? this.activeCell.rowId
         : undefined;
     this.setActive({

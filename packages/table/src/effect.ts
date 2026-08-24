@@ -201,7 +201,7 @@ export const BrunoTableBigDecimalValueType: BrunoTableValueType<
   "numeric",
   "bigdecimal",
   BigDecimalAggregateResults
-> = Object.freeze({
+> & { readonly codecId: typeof codecId } = Object.freeze({
   codecId,
   codecVersion,
   filterFamily: "numeric",

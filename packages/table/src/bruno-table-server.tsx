@@ -42,6 +42,8 @@ import {
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { snapshotBrunoTableQuickFilterFields } from "./internal/quick-filter";
 import { useBrunoTableServerFacetHookSource } from "./internal/react-compiler-adapters";
+import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
+import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
 export {
   BrunoTableActiveFilterCount,
@@ -76,6 +78,10 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
+  const groupRowsColumn = useMemo(
+    () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
+    [props.groupRowsColumn],
+  );
   const [rowPipelineAdapter] = useState(
     () =>
       new BrunoTableServerRowPipelineAdapter<TRow>(
@@ -84,6 +90,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         props.initialFilters,
         props.initialOrderBy,
         props.viewportSource.completeRawSelect,
+        groupRowsColumn,
       ),
   );
   const [runtime] = useState(() => {
@@ -93,7 +100,11 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       compiledColumns,
       rowPipelineAdapter.getQueryConfiguration(),
       tableId,
-      { initialPersistedState: props.initialPersistedState },
+      {
+        initialPersistedState: props.initialPersistedState,
+        grouping: true,
+        groupRowsWidth: groupRowsColumn.width,
+      },
     );
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableToolbarLifetime({ tableId, kind: "runtime-create", identity: created });
@@ -108,7 +119,15 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
   });
   const stagingSemanticQueryRef = useRef(false);
-  const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
+  const gridOwnedControls = useMemo(
+    () => (
+      <>
+        <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
+        <BrunoTableActiveFilters />
+      </>
+    ),
+    [compiledColumns, runtimeView],
+  );
   const quickFilterFields = useMemo(
     () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
     [props.quickFilterFields],
@@ -163,8 +182,14 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       const queryConfiguration = rowPipelineAdapter.reconcileColumns(
         compiledColumns,
         props.quickFilterFields,
+        groupRowsColumn,
       );
-      runtime.reconcile(rowPipelineAdapter.getPublication(), compiledColumns, queryConfiguration);
+      runtime.reconcile(
+        rowPipelineAdapter.getPublication(),
+        compiledColumns,
+        queryConfiguration,
+        groupRowsColumn.width,
+      );
     });
     const queryInputs = Object.freeze({
       routeBy: props.routeBy,
@@ -192,6 +217,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     });
   }, [
     compiledColumns,
+    groupRowsColumn,
     facetSource,
     facetRuntime,
     props.externalFilters,
@@ -241,7 +267,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     runtime.setOnPersistChange(
       notify === undefined
         ? undefined
-        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, false>),
+        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
     );
   }, [props.onPersistChange, runtime]);
 

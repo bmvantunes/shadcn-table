@@ -54,6 +54,9 @@ const emittedFilters = [
 ] satisfies BrunoTableFilterExpressions<EmittedPriceRow, typeof emittedColumns>;
 void emittedFilters;
 void BrunoTableBigDecimalValueType;
+const emittedServerAggregateCodecWitness: "@bruno/table/effect/bigdecimal" =
+  BrunoTableBigDecimalValueType.codecId;
+void emittedServerAggregateCodecWitness;
 
 const invalidEmittedFilters: BrunoTableFilterExpressions<EmittedPriceRow, typeof emittedColumns> = [
   // @ts-expect-error Emitted BigDecimal filters reject JavaScript numbers.

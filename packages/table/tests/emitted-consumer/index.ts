@@ -708,7 +708,7 @@ const emittedWitnessedServerProps = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
   onPersistChange: (state) => {
-    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, false>>> =
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, true>>> =
       true;
     void exactState;
   },
@@ -1795,18 +1795,71 @@ const invalidServerEditing = {
   editable: true,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
-const emittedServerWithClientGroupingConfiguration = {
+const emittedServerWithGroupingConfiguration = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
-  groupRowsColumn: { headerName: "Rows" },
+  groupRowsColumn: {
+    headerName: "Orders",
+    width: 144,
+    valueFormatter: ({ columnId, value }) => {
+      const exactColumnId: "COL_ID_BRUNO_TABLE_ROWS" = columnId;
+      const exactValue: bigint = value;
+      return `${exactColumnId}:${exactValue.toString()}`;
+    },
+  },
+} as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+void emittedServerWithGroupingConfiguration;
+const emittedClientOnlyNumberArithmetic =
+  emittedExactMoneyValueType as unknown as BrunoTableValueType<
+    number,
+    "numeric",
+    "bigdecimal",
+    { readonly sum: "self" }
+  >;
+const emittedClientOnlyServerAggregateColumns = [
+  {
+    columnId: "COL_ID_EMITTED_CLIENT_ONLY_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_EMITTED_CLIENT_ONLY_SUM",
+    field: "price",
+    headerName: "Client-only sum",
+    valueType: emittedClientOnlyNumberArithmetic,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const emittedServerWithClientOnlyArithmetic = {
+  tableId: "orders-client-only-arithmetic",
+  columns: emittedClientOnlyServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_EMITTED_CLIENT_ONLY_GROUP", direction: "asc" }],
+  viewportSource: source,
 } as const;
-
-// @ts-expect-error emitted Server props reject Client groupRowsColumn for non-fresh objects.
-const invalidEmittedServerGrouping: BrunoTableServerProps<Order, Columns, typeof source.viewport> =
-  emittedServerWithClientGroupingConfiguration;
-void invalidEmittedServerGrouping;
+// @ts-expect-error Emitted Server arithmetic preserves source-owned exact result domains.
+const invalidEmittedServerClientOnlyArithmetic: BrunoTableServerProps<
+  Order,
+  typeof emittedClientOnlyServerAggregateColumns,
+  typeof source.viewport
+> = emittedServerWithClientOnlyArithmetic;
+void invalidEmittedServerClientOnlyArithmetic;
+const widenedEmittedClientOnlyServerAggregateColumns: readonly (typeof emittedClientOnlyServerAggregateColumns)[number][] =
+  emittedClientOnlyServerAggregateColumns;
+const widenedEmittedClientOnlyServerProps = {
+  ...emittedServerWithClientOnlyArithmetic,
+  columns: widenedEmittedClientOnlyServerAggregateColumns,
+} as const;
+// @ts-expect-error Emitted widened columns cannot bypass Server arithmetic admission.
+const invalidWidenedEmittedServerClientOnlyArithmetic: BrunoTableServerProps<
+  Order,
+  typeof widenedEmittedClientOnlyServerAggregateColumns,
+  typeof source.viewport
+> = widenedEmittedClientOnlyServerProps;
+void invalidWidenedEmittedServerClientOnlyArithmetic;
 
 const editablePropsWithGrouping = {
   ...editableProps,
