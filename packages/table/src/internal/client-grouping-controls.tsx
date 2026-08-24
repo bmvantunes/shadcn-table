@@ -9,6 +9,7 @@ import {
 import {
   memo,
   useCallback,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -32,10 +33,10 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
     columns,
     runtime,
   }: BrunoTableClientGroupByProps): ReactElement | null {
-    const query = useSyncExternalStore(
-      runtime.subscribeQuery,
-      runtime.getQuerySnapshot,
-      runtime.getQuerySnapshot,
+    const groupBy = useSyncExternalStore(
+      runtime.subscribeGroupBy,
+      runtime.getGroupBySnapshot,
+      runtime.getGroupBySnapshot,
     );
     const eligible = columns.filter((column) => column.kind === "field" && column.groupBy);
     const region = useRef<HTMLDivElement>(null);
@@ -45,6 +46,7 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
     const pendingFocus = useRef<Readonly<{ readonly columnId?: string }> | undefined>(undefined);
     const [addGroupOpen, setAddGroupOpen] = useState(false);
     const [announcement, setAnnouncement] = useState("");
+    const reorderHelpId = useId();
     const registerGroupChip = useCallback(
       (columnId: string, element: HTMLButtonElement | null): void => {
         if (element === null) groupChips.current.delete(columnId);
@@ -55,9 +57,9 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
     const groupingFocusOwner = useMemo(
       () => ({
         prepareRemoval: (columnId: string): (() => void) => {
-          const index = query.groupBy.indexOf(columnId);
+          const index = groupBy.indexOf(columnId);
           if (index < 0) return () => undefined;
-          const nextColumnId = query.groupBy[index + 1] ?? query.groupBy[index - 1];
+          const nextColumnId = groupBy[index + 1] ?? groupBy[index - 1];
           const intent =
             nextColumnId === undefined
               ? Object.freeze({})
@@ -68,7 +70,7 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
           };
         },
       }),
-      [query.groupBy],
+      [groupBy],
     );
     useLayoutEffect(
       () => registerBrunoTableGroupingFocusOwner(runtime, groupingFocusOwner),
@@ -83,14 +85,14 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
           ? addGroupTrigger.current
           : groupChips.current.get(target.columnId);
       element?.focus({ preventScroll: true });
-    }, [query.groupBy]);
+    }, [groupBy]);
     useLayoutEffect(() => {
       if (addGroupOpen || !addGroupFocusIntent.current) return;
       addGroupFocusIntent.current = false;
       addGroupTrigger.current?.focus({ preventScroll: true });
     }, [addGroupOpen]);
     if (eligible.length === 0) return null;
-    const active = new Set(query.groupBy);
+    const active = new Set(groupBy);
     const inactive = eligible.filter((column) => !active.has(column.columnId));
     return (
       <div ref={region} aria-label="Group By" className="flex min-w-0 flex-col gap-1" role="region">
@@ -104,7 +106,7 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
             addGroupFocusIntent.current = true;
             if (runtime.dispatchGridCommand({ type: "grouping.add", columnId })) {
               setAnnouncement(
-                `${headerName(columns, columnId)} added at position ${String(query.groupBy.length + 1)}`,
+                `${headerName(columns, columnId)} added at position ${String(groupBy.length + 1)}`,
               );
             } else {
               addGroupFocusIntent.current = false;
@@ -128,18 +130,19 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
           </SelectContent>
         </Select>
         <ol aria-label="Active groups" className="flex flex-wrap gap-1" role="list">
-          {query.groupBy.map((columnId, index) => (
+          {groupBy.map((columnId, index) => (
             <li key={columnId} className="inline-flex items-center rounded-md border px-1">
               <BrunoTableClientGroupChip
                 columnId={columnId}
-                count={query.groupBy.length}
+                count={groupBy.length}
+                descriptionId={reorderHelpId}
                 index={index}
                 name={headerName(columns, columnId)}
                 register={registerGroupChip}
                 runtime={runtime}
                 onMoved={(target) => {
                   setAnnouncement(
-                    `${headerName(columns, columnId)} moved to position ${String(target + 1)} of ${String(query.groupBy.length)}`,
+                    `${headerName(columns, columnId)} moved to position ${String(target + 1)} of ${String(groupBy.length)}`,
                   );
                 }}
               />
@@ -150,10 +153,13 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
                 variant="ghost"
                 onClick={() => {
                   if (!runtime.dispatchGridCommand({ type: "grouping.remove", columnId })) return;
-                  const nextColumnId = query.groupBy[index + 1] ?? query.groupBy[index - 1];
+                  const nextColumnId = groupBy[index + 1] ?? groupBy[index - 1];
                   pendingFocus.current =
                     nextColumnId === undefined ? Object.freeze({}) : { columnId: nextColumnId };
-                  setAnnouncement(`${headerName(columns, columnId)} removed from Group By`);
+                  const remaining = groupBy.length - 1;
+                  setAnnouncement(
+                    `${headerName(columns, columnId)} removed from Group By, ${String(remaining)} ${remaining === 1 ? "group" : "groups"} remaining`,
+                  );
                 }}
               >
                 <span aria-hidden="true">×</span>
@@ -161,6 +167,9 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
             </li>
           ))}
         </ol>
+        <p id={reorderHelpId} className="text-xs text-muted-foreground" role="note">
+          Reorder a group with Alt+Left Arrow or Alt+Right Arrow while its chip is focused.
+        </p>
         <span aria-live="polite" className="sr-only" role="status">
           {announcement}
         </span>
@@ -172,6 +181,7 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
 type BrunoTableClientGroupChipProps = Readonly<{
   readonly columnId: string;
   readonly count: number;
+  readonly descriptionId: string;
   readonly index: number;
   readonly name: string;
   readonly onMoved: (targetIndex: number) => void;
@@ -183,6 +193,7 @@ const BrunoTableClientGroupChip: NamedExoticComponent<BrunoTableClientGroupChipP
   function BrunoTableClientGroupChip({
     columnId,
     count,
+    descriptionId,
     index,
     name,
     onMoved,
@@ -206,6 +217,7 @@ const BrunoTableClientGroupChip: NamedExoticComponent<BrunoTableClientGroupChipP
       <Button
         ref={chip}
         aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+        aria-describedby={descriptionId}
         aria-label={`${name}, position ${String(index + 1)} of ${String(count)}`}
         size="xs"
         type="button"

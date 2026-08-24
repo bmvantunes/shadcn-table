@@ -4,7 +4,7 @@ import type {
   BrunoTableSourceStatus,
 } from "../public-types";
 import type {
-  BrunoTableInvalidCellValue,
+  BrunoTableClientProjectionInvalid,
   BrunoTableQuerySnapshot,
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
@@ -469,7 +469,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly rejectQueryRows = (
     rows: readonly BrunoTableClientAdmittedRow[],
-    invalid: BrunoTableInvalidCellValue["invalid"],
+    invalid: BrunoTableClientProjectionInvalid,
   ): BrunoTableRowPipelinePublication<TRow> | undefined => {
     const rejectedCoherent = this.coherent;
     if (rejectedCoherent?.admittedRows.asArray() !== rows || !retainsPreviousRows(this.source)) {
@@ -1135,7 +1135,7 @@ function createPublication<TRow>(
   fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
   valueCache: ClientCanonicalValueCache,
-  queryRejection?: BrunoTableInvalidCellValue["invalid"],
+  queryRejection?: BrunoTableClientProjectionInvalid,
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =

@@ -868,15 +868,36 @@ type BrunoTableAggregatePresentation<TAggFunc, TValue, TColumnId> = {
 };
 ```
 
-The owning callback's `columnId`, `value`, and `aggFunc` remain literal and exact. Column-level
-presentation callbacks deliberately do not receive sibling Group Key evidence: a plain array
-checked with `satisfies BrunoTableColumns<TRow>` cannot contextually reference its own eventual
+The owning callback's `columnId`, `value`, and `aggFunc` remain literal and exact when the definition
+crosses one of BrunoTable's global typed Column Helpers. Ordinary raw Field Columns still remain
+plain objects in the same single array checked with `satisfies BrunoTableColumns<TRow>`. A raw
+inline grouped callback remains usable with the honest broad `BrunoTableColumnId` context, but a
+callback that claims its sibling's exact identity is rejected. TypeScript contextually checks the
+already-instantiated one-generic array target before it sees an arbitrary sibling `columnId`
+literal, so it cannot bind that literal back into the callback parameter without a value-level
+inference boundary. Substituting `never` would misrepresent the runtime contract, while a row-bound
+array factory would violate the helper-first API. Column-level presentation callbacks also deliberately do not
+receive sibling Group Key evidence: the plain array cannot contextually reference its own eventual
 sibling tuple without circular inference. Publishing a row-wide approximation would admit
 non-groupable fields, while accepting a consumer-supplied tuple would let the callback claim
 columns that the Table does not own. Code outside the array that already has `typeof columns` may
 use `BrunoTableGroupKeyValues<TRow, typeof columns>` where an exact groupable Column Identity union
 is required. A future table-bound presentation seam may expose that evidence after it can bind the
 actual tuple.
+
+TypeScript also cannot existentially correlate helper provenance retained by object spread with a
+later replacement of that object's structural identity or value domain. Column Helpers therefore
+attach one BrunoTable-private enumerable symbol containing an immutable snapshot of the exact
+`columnId`, `field` or `fields` tuple, runtime `valueType` identity, and own `groupBy`/`aggFunc`
+capabilities. Ordinary spread preserves that symbol. Column normalization validates the visible
+structural evidence against the snapshot before compiling or exposing any callback and rejects a
+mismatch as a deterministic configuration error. Helper-owned semantic callback presence and
+function identity are sealed in the same evidence: grouped and ordinary formatters, conditional
+classes, renderers, edit policies, and computed getters must be supplied to the helper itself and
+cannot be added, removed, or replaced afterward by object spread. Safe cosmetic and layout options
+such as header text, static classes, width, and pinning remain customizable by spread. Raw columns
+carry no provenance requirement, and the private evidence is never copied into compiled columns,
+queries, persisted preferences, or public runtime snapshots.
 
 A Group Key Cell's `value` retains the exact field value type, but its presentation context intentionally omits `row: TRow` because the cell identifies a complete group rather than one representative source row. Without an override, BrunoTable formats it through the field's compiled Value Type presentation.
 

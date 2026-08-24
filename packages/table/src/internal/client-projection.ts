@@ -1,6 +1,6 @@
 import type { CompiledColumn } from "./compile-columns";
 import type {
-  BrunoTableInvalidCellValue,
+  BrunoTableClientProjectionInvalid,
   BrunoTableQueryNavigationMode,
   BrunoTableRowPipelinePublication,
 } from "./grid-runtime";
@@ -39,7 +39,7 @@ export type BrunoTableClientProjectionSnapshot =
   | (BrunoTableClientProjectionBase &
       Readonly<{
         readonly kind: "invalid";
-        readonly invalid: BrunoTableInvalidCellValue["invalid"];
+        readonly invalid: BrunoTableClientProjectionInvalid;
       }>);
 
 type WithoutEpoch<T> = T extends unknown ? Omit<T, "epoch"> : never;
@@ -149,7 +149,7 @@ export function createBrunoTableInvalidProjectionCandidate(
     readonly publication: BrunoTableRowPipelinePublication<unknown>;
     readonly queryGeneration: number;
     readonly queryNavigationMode: BrunoTableQueryNavigationMode;
-    readonly invalid: BrunoTableInvalidCellValue["invalid"];
+    readonly invalid: BrunoTableClientProjectionInvalid;
   }>,
 ): BrunoTableClientProjectionCandidate {
   return Object.freeze({

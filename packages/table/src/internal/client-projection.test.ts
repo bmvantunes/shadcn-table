@@ -50,6 +50,59 @@ const columns = compileColumns([
 ]);
 
 describe("grouped presentation compilation", () => {
+  it("preserves Missing and Present nullish evidence in Rows callbacks", () => {
+    const callback = vi.fn(
+      (_input: Readonly<{ readonly groupKeys: readonly Readonly<Record<string, unknown>>[] }>) =>
+        "Rows",
+    );
+    const presentationColumns = compileColumns([
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const groupedColumns = createBrunoTableGroupedColumns({
+      columns: presentationColumns,
+      visibleColumnIds: ["COL_ID_OPTIONAL"],
+      groupBy: ["COL_ID_OPTIONAL"],
+      rowsColumn: compileBrunoTableGroupRowsColumn({ valueFormatter: callback }),
+    });
+    const rowsColumn = groupedColumns.find(
+      ({ columnId }) => columnId === BRUNO_TABLE_ROWS_COLUMN_ID,
+    );
+    const format = (presence: BrunoTableClientGroupedRow["groupKeys"][number]) =>
+      Reflect.apply(rowsColumn?.valueFormatter as (...parameters: never[]) => unknown, undefined, [
+        {
+          row: {
+            rowId: "group",
+            rowCount: 1n,
+            groupKeys: Object.freeze([presence]),
+            values: new Map(),
+            presences: new Map(),
+          } satisfies BrunoTableClientGroupedRow,
+          value: 1n,
+        },
+      ]);
+
+    format(Object.freeze({ _tag: "Missing" as const }));
+    format(Object.freeze({ _tag: "Present" as const, value: undefined }));
+    format(Object.freeze({ _tag: "Present" as const, value: null }));
+
+    expect(callback.mock.calls.map(([input]) => input.groupKeys[0])).toEqual([
+      { columnId: "COL_ID_OPTIONAL", field: "optional", _tag: "Missing" },
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        _tag: "Present",
+        value: undefined,
+      },
+      { columnId: "COL_ID_OPTIONAL", field: "optional", _tag: "Present", value: null },
+    ]);
+  });
+
   it("reuses one table-scoped compiled presentation plan for value-only publications", () => {
     const compiler = new BrunoTableGroupedPresentationCompiler();
     const rowsColumn = compileBrunoTableGroupRowsColumn(undefined);

@@ -1,4 +1,5 @@
 import type { BrunoTableAggFunc, BrunoTableColumnId } from "../public-types";
+import { getBrunoTableColumnHelperProvenanceMismatch } from "./column-helper-provenance";
 import {
   compileColumnValueSemantics,
   ValueSemanticsConfigurationError,
@@ -66,6 +67,20 @@ export function compileColumns(columns: readonly unknown[]): readonly CompiledCo
 function compileColumn(candidate: unknown, index: number, seen: Set<string>): CompiledColumn {
   if (!isRuntimeColumnDefinition(candidate)) {
     throw new ColumnConfigurationError(`BrunoTable column at index ${index} must be an object.`);
+  }
+
+  const provenanceMismatch = getBrunoTableColumnHelperProvenanceMismatch(candidate);
+  if (provenanceMismatch !== undefined) {
+    const columnIdDescriptor = Object.getOwnPropertyDescriptor(candidate, "columnId");
+    const diagnosticColumnId =
+      columnIdDescriptor !== undefined &&
+      "value" in columnIdDescriptor &&
+      typeof columnIdDescriptor.value === "string"
+        ? columnIdDescriptor.value
+        : `at index ${String(index)}`;
+    throw new ColumnConfigurationError(
+      `BrunoTable Column Helper structural evidence does not match ${provenanceMismatch}: ${diagnosticColumnId}`,
+    );
   }
 
   const hasField = Object.hasOwn(candidate, "field");

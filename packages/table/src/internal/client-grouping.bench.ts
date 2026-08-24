@@ -119,7 +119,7 @@ describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () =
     "derives 2,000 rows with two keys and four participating aggregates",
     () => {
       const projection = derive(baseRows);
-      if (projection.kind !== "ready") throw new Error(projection.message);
+      if (projection.kind !== "ready") throw new Error(projection.invalid.message);
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );
@@ -137,7 +137,7 @@ describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () =
         ...liveRows.slice(rowIndex + 1),
       ]);
       const projection = derive(nextRows, livePrevious);
-      if (projection.kind !== "ready") throw new Error(projection.message);
+      if (projection.kind !== "ready") throw new Error(projection.invalid.message);
       liveRows = nextRows;
       livePrevious = projection;
     },
@@ -159,7 +159,7 @@ describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () =
       const startedAt = performance.now();
       const projection = derive(nextRows, diagnosticPrevious);
       diagnosticSamples.push(performance.now() - startedAt);
-      if (projection.kind !== "ready") throw new Error(projection.message);
+      if (projection.kind !== "ready") throw new Error(projection.invalid.message);
       diagnosticRows = nextRows;
       diagnosticPrevious = projection;
       if (!diagnosticPrinted && diagnosticSamples.length >= 100) {

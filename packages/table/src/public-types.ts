@@ -6,6 +6,8 @@ import type {
 } from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
+import type { BrunoTableColumnHelperProvenanceCarrier } from "./internal/column-helper-provenance";
+
 type ColumnIdFirstCharacter =
   | "_"
   | "0"
@@ -208,7 +210,7 @@ export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
   TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
-  TAggregateResults extends BrunoTableAggregateResults = {},
+  TAggregateResults extends BrunoTableAggregateResults = never,
 > = {
   readonly codecId: string;
   readonly codecVersion: number;
@@ -228,10 +230,55 @@ export type BrunoTableValueType<
   readonly formatDisplay: (this: void, value: TValue) => string;
   readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
   readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
-} & AggregateAlgebraRequirement<TValue, TAggregateResults> &
-  ([keyof TAggregateResults] extends [never]
-    ? { readonly aggregateResults?: TAggregateResults }
-    : { readonly aggregateResults: TAggregateResults });
+} & ([TAggregateResults] extends [never]
+  ? InferredAggregateCapability<TValue>
+  : AggregateAlgebraRequirement<TValue, TAggregateResults> &
+      ([keyof TAggregateResults] extends [never]
+        ? { readonly aggregateResults?: TAggregateResults }
+        : { readonly aggregateResults: TAggregateResults }));
+
+type NonArithmeticAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly sum?: never;
+  readonly avg?: never;
+}>;
+
+type SumAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly sum: "self";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly avg?: never;
+}>;
+
+type AverageAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly sum?: "self";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly avg: "self";
+}>;
+
+type InferredAggregateCapability<TValue> =
+  | {
+      readonly aggregateResults?: never;
+      readonly aggregateAlgebra?: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: NonArithmeticAggregateResults;
+      readonly aggregateAlgebra?: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: SumAggregateResults;
+      readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: AverageAggregateResults;
+      readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue> &
+        Required<Pick<BrunoTableAggregateAlgebra<TValue>, "divideByCount">>;
+    };
 
 type AggregateAlgebraRequirement<
   TValue,
@@ -319,14 +366,17 @@ type AggregateCallback<
   TResult,
 > = (parameters: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId, TField>) => TResult;
 
+export type BrunoTableGroupKeyPresence<TValue> =
+  | Readonly<{ readonly _tag: "Missing" }>
+  | Readonly<{ readonly _tag: "Present"; readonly value: TValue }>;
+
 type RowGroupKeyValue<TRow> = {
   readonly [TField in FieldKey<TRow>]: [NonNullish<TRow[TField]>] extends [never]
     ? never
     : {
         readonly columnId: BrunoTableColumnId;
         readonly field: TField;
-        readonly value: TRow[TField];
-      };
+      } & BrunoTableGroupKeyPresence<TRow[TField]>;
 }[FieldKey<TRow>];
 
 type DefinedGroupKeyValue<
@@ -341,8 +391,7 @@ type DefinedGroupKeyValue<
     ? {
         readonly columnId: TColumnId;
         readonly field: TField;
-        readonly value: TRow[TField];
-      }
+      } & BrunoTableGroupKeyPresence<TRow[TField]>
     : never
   : never;
 
@@ -839,42 +888,31 @@ export function BrunoTableComputedColumn(options: Readonly<Record<string, unknow
   return { ...options, [computedColumnMarker]: true };
 }
 
-type GroupedPresentationCallbackKey =
-  | "groupKeyValueFormatter"
-  | "groupKeyCellClassName"
-  | "groupKeyCellRenderer"
-  | "aggregateValueFormatter"
-  | "aggregateCellClassName"
-  | "aggregateCellRenderer";
+type HelperGroupedPresentationCallbacks = Readonly<{
+  groupKeyValueFormatter?: unknown;
+  groupKeyCellClassName?: unknown;
+  groupKeyCellRenderer?: unknown;
+  aggregateValueFormatter?: unknown;
+  aggregateCellClassName?: unknown;
+  aggregateCellRenderer?: unknown;
+}>;
 
-type GroupedCallbackParameterGuard<TParameters> = TParameters extends object
-  ? Omit<TParameters, "columnId"> & { readonly columnId: never }
-  : TParameters;
-
-type ContextualGroupedCallback<TValue> = TValue extends (
-  parameters: infer TParameters,
-) => infer TResult
-  ? { bivarianceHack(parameters: TParameters): TResult }["bivarianceHack"] &
-      ((parameters: GroupedCallbackParameterGuard<TParameters>) => TResult)
-  : TValue;
-
-type ContextualizeGroupedPresentationCallbacks<TColumn> = TColumn extends unknown
-  ? {
-      readonly [TKey in keyof TColumn]: TKey extends GroupedPresentationCallbackKey
-        ? ContextualGroupedCallback<TColumn[TKey]>
-        : TColumn[TKey];
-    }
-  : never;
+/** @internal Exact helper output recognized by the plain BrunoTable column-array boundary. */
+export type BrunoTableColumnHelperOutput<TColumn, _TCallbacks = TColumn> = TColumn &
+  BrunoTableColumnHelperProvenanceCarrier;
 
 type Column<TRow> =
-  | ContextualizeGroupedPresentationCallbacks<FieldColumns<TRow>>
-  | AnyComputedColumn<TRow>;
+  | FieldColumns<TRow>
+  | AnyComputedColumn<TRow>
+  | ({ readonly columnId: BrunoTableColumnId } & HelperGroupedPresentationCallbacks &
+      BrunoTableColumnHelperProvenanceCarrier);
 
 /**
  * A plain column array intended to be used with `satisfies`.
  *
- * No helper call is required, so literal column identities and computed getter return types remain
- * available from the consumer's `typeof columns`.
+ * Ordinary raw Field Columns require no helper. Inline grouped callbacks receive the honest broad
+ * Column Identity context; exact grouped callbacks use one of BrunoTable's global typed Column
+ * Helpers so their owning literal identity remains exact.
  */
 export type BrunoTableColumns<TRow> = readonly Column<TRow>[];
 

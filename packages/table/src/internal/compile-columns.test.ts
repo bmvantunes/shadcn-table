@@ -1,9 +1,213 @@
 import { describe, expect, it } from "vitest";
 
-import { BrunoTableSelectColumn } from "../column-helpers";
+import {
+  BrunoTableNumberColumn,
+  BrunoTableSelectColumn,
+  BrunoTableTextColumn,
+} from "../column-helpers";
+import type { BrunoTableColumns } from "../public-types";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
 
 describe("compileColumns", () => {
+  it("rejects mutated helper structural evidence before compiling presentation callbacks", () => {
+    const callback = () => "helper-owned";
+    const [helperColumn] = [
+      BrunoTableTextColumn({
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        groupBy: true,
+        headerName: "Symbol",
+        groupKeyValueFormatter: callback,
+      }),
+    ] satisfies BrunoTableColumns<{ readonly symbol: string; readonly status: string }>;
+    const originalHelperColumn = helperColumn!;
+    const customized = { ...originalHelperColumn, headerName: "Customized symbol", width: 180 };
+
+    const [compiled] = compileColumns([customized]);
+
+    expect(compiled?.kind === "field" ? compiled.groupKeyValueFormatter : undefined).toBe(callback);
+    expect(Object.getOwnPropertySymbols(customized)).toHaveLength(1);
+    expect(
+      Object.prototype.propertyIsEnumerable.call(
+        customized,
+        Object.getOwnPropertySymbols(customized)[0]!,
+      ),
+    ).toBe(true);
+    expect(Object.getOwnPropertySymbols(compiled ?? {})).toHaveLength(0);
+    expect(JSON.stringify(customized)).not.toContain("provenance");
+
+    let replacementReads = 0;
+    const changedCallback = Object.defineProperty(
+      { ...originalHelperColumn },
+      "groupKeyValueFormatter",
+      {
+        enumerable: true,
+        get() {
+          replacementReads += 1;
+          return () => "replacement";
+        },
+      },
+    );
+    expect(() => compileColumns([changedCallback])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match groupKeyValueFormatter: COL_ID_SYMBOL",
+      ),
+    );
+    expect(replacementReads).toBe(0);
+    const { groupKeyValueFormatter: _removedCallback, ...withoutCallback } = originalHelperColumn;
+    expect(() => compileColumns([withoutCallback])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match groupKeyValueFormatter: COL_ID_SYMBOL",
+      ),
+    );
+
+    const [helperWithoutGroupedCallback] = [
+      BrunoTableTextColumn({
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        groupBy: true,
+        headerName: "Status",
+      }),
+    ] satisfies BrunoTableColumns<{ readonly symbol: string; readonly status: string }>;
+    expect(() =>
+      compileColumns([{ ...helperWithoutGroupedCallback, groupKeyValueFormatter: callback }]),
+    ).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match groupKeyValueFormatter: COL_ID_STATUS",
+      ),
+    );
+
+    const [plainHelper] = [
+      BrunoTableTextColumn({
+        columnId: "COL_ID_PLAIN",
+        field: "status",
+        headerName: "Plain",
+      }),
+    ] satisfies BrunoTableColumns<{ readonly status: string }>;
+    const sealedPropertyKeys = [
+      "valueGetter",
+      "valueFormatter",
+      "cellClassName",
+      "cellRenderer",
+      "isEditable",
+      "groupKeyValueFormatter",
+      "groupKeyCellClassName",
+      "groupKeyCellRenderer",
+      "aggregateValueFormatter",
+      "aggregateCellClassName",
+      "aggregateCellRenderer",
+      "groupBy",
+      "aggFunc",
+    ] as const;
+    for (const key of sealedPropertyKeys) {
+      let getterReads = 0;
+      const accessorAddition = Object.defineProperty({ ...plainHelper! }, key, {
+        enumerable: true,
+        get() {
+          getterReads += 1;
+          return key === "groupBy" ? true : key === "aggFunc" ? "max" : callback;
+        },
+      });
+      expect(() => compileColumns([accessorAddition])).toThrowError(
+        new ColumnConfigurationError(
+          `BrunoTable Column Helper structural evidence does not match ${key}: COL_ID_PLAIN`,
+        ),
+      );
+      expect(getterReads).toBe(0);
+    }
+
+    let callbackReads = 0;
+    const changedIdentity = Object.defineProperty(
+      { ...originalHelperColumn, columnId: "COL_ID_CHANGED_SYMBOL" },
+      "groupKeyValueFormatter",
+      {
+        enumerable: true,
+        get() {
+          callbackReads += 1;
+          return callback;
+        },
+      },
+    );
+    expect(() => compileColumns([changedIdentity])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match columnId: COL_ID_CHANGED_SYMBOL",
+      ),
+    );
+    expect(callbackReads).toBe(0);
+    expect(() => compileColumns([{ ...originalHelperColumn, groupBy: false }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match groupBy: COL_ID_SYMBOL",
+      ),
+    );
+    expect(() => compileColumns([{ ...originalHelperColumn, field: "status" }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match field: COL_ID_SYMBOL",
+      ),
+    );
+    expect(() => compileColumns([{ ...originalHelperColumn, valueType: "number" }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match valueType: COL_ID_SYMBOL",
+      ),
+    );
+
+    const [aggregate] = [
+      BrunoTableNumberColumn({
+        columnId: "COL_ID_MAX_PRICE",
+        field: "price",
+        headerName: "Maximum price",
+        aggFunc: "max",
+        aggregateValueFormatter: ({ value }) => value.toFixed(2),
+      }),
+    ] satisfies BrunoTableColumns<{ readonly price: number }>;
+    const originalAggregate = aggregate!;
+    let aggregateCallbackReads = 0;
+    const changedAggregate = Object.defineProperty(
+      { ...originalAggregate, aggFunc: "countDistinct" },
+      "aggregateValueFormatter",
+      {
+        enumerable: true,
+        get() {
+          aggregateCallbackReads += 1;
+          return originalAggregate.aggregateValueFormatter;
+        },
+      },
+    );
+    expect(() => compileColumns([changedAggregate])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match aggFunc: COL_ID_MAX_PRICE",
+      ),
+    );
+    expect(aggregateCallbackReads).toBe(0);
+
+    const [computed] = [
+      BrunoTableNumberColumn({
+        columnId: "COL_ID_NOTIONAL",
+        fields: ["price", "quantity"],
+        headerName: "Notional",
+        valueGetter: ({ row }) => row.price * row.quantity,
+      }),
+    ] satisfies BrunoTableColumns<{
+      readonly price: number;
+      readonly quantity: number;
+    }>;
+    expect(() => compileColumns([{ ...computed, fields: ["price"] }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match fields: COL_ID_NOTIONAL",
+      ),
+    );
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_RAW",
+          field: "changed",
+          headerName: "Raw",
+          valueType: "text",
+        },
+      ]),
+    ).not.toThrow();
+  });
+
   it("compiles immutable field and computed representations once", () => {
     const valueGetter = ({ row }: { row: { price: number; quantity: number } }) =>
       row.price * row.quantity;

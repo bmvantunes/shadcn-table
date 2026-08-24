@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { ReactNode } from "react";
 
@@ -76,7 +76,9 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     [props.groupRowsColumn],
   );
   const [rowSelectionRuntime] = useState(() => new BrunoTableRowSelectionRuntime([]));
-  const rowSelection = props.rowSelection === true ? rowSelectionRuntime : undefined;
+  const rowSelectionEnabled = props.rowSelection === true;
+  const rowSelection = rowSelectionEnabled ? rowSelectionRuntime : undefined;
+  const previousRowSelectionEnabled = useRef(rowSelectionEnabled);
   const [cellRange] = useState(() => new BrunoTableCellRangeRuntime(tableId));
   const [rowPipelineAdapter] = useState(
     () =>
@@ -121,6 +123,22 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     acquireBrunoTableClientProjectionStore(runtimeView, rowPipelineAdapter, rowSelection),
   );
   projectionStore.setRowSelection(rowSelection);
+
+  useLayoutEffect(() => {
+    const previouslyEnabled = previousRowSelectionEnabled.current;
+    previousRowSelectionEnabled.current = rowSelectionEnabled;
+    if (previouslyEnabled && !rowSelectionEnabled) {
+      rowSelectionRuntime.enterGroupedProjection();
+      return;
+    }
+    if (!previouslyEnabled && rowSelectionEnabled) {
+      const projectionInput = rowPipelineAdapter.getProjectionInputSnapshot();
+      const installedProjection = runtime.getInstalledClientProjectionSnapshot();
+      if (installedProjection?.kind === "raw" && projectionInput.sourceRowIds.authoritative) {
+        rowSelectionRuntime.leaveGroupedProjection(projectionInput.sourceRowIds.rowIds);
+      }
+    }
+  }, [rowPipelineAdapter, rowSelectionEnabled, rowSelectionRuntime, runtime]);
   const gridOwnedControls = useMemo(
     () => (
       <>

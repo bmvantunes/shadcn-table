@@ -20,7 +20,8 @@ const accountEncodePersisted = vi.fn((value: Readonly<{ readonly address: string
 const accountValueType: BrunoTableValueType<
   Readonly<{ readonly address: string }>,
   "equality",
-  "text"
+  "text",
+  {}
 > = Object.freeze({
   codecId: "test/account",
   codecVersion: 3,
@@ -53,7 +54,7 @@ function isStringArray(input: unknown): input is string[] {
   return Array.isArray(input) && input.every((value) => typeof value === "string");
 }
 
-const stringTupleValueType: BrunoTableValueType<readonly string[], "equality", "text"> =
+const stringTupleValueType: BrunoTableValueType<readonly string[], "equality", "text", {}> =
   Object.freeze({
     codecId: "test/string-tuple",
     codecVersion: 1,

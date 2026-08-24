@@ -11,12 +11,14 @@ import {
   BrunoTableToolbar,
 } from "./index";
 import { BrunoTableBigDecimalColumn } from "./effect";
+import { BrunoTableAggregateAlgebra } from "./public-types";
 import type { BrunoTableColumns, BrunoTablePersistedState } from "./public-types";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import {
   installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientGridSurfaceRenderListenerForTable,
   installBrunoTableClientRowOrderPlanningListener,
+  installBrunoTableClientSortPanelRenderListenerForTable,
 } from "./internal/render-instrumentation";
 
 type GroupRow = Readonly<{
@@ -118,6 +120,128 @@ afterEach(async () => {
 });
 
 describe("BrunoTableClient grouping and aggregation", () => {
+  test("retains a coherent grouped epoch through a stale aggregate failure and recovers atomically", async () => {
+    type Credit = Readonly<{ readonly units: bigint }>;
+    type CreditRow = Readonly<{
+      readonly id: string;
+      readonly group: string;
+      readonly credit: Credit;
+    }>;
+    let rejectAggregate = false;
+    const creditColumns = [
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_CREDIT",
+        field: "credit",
+        headerName: "Credit",
+        valueType: {
+          codecId: "test/browser-credit",
+          codecVersion: 1,
+          filterFamily: "numeric",
+          editorFamily: "text",
+          cellAlign: "end",
+          editorLayout: "inline",
+          defaultWidth: 120,
+          aggregateResults: { avg: "self" },
+          aggregateAlgebra: BrunoTableAggregateAlgebra<Credit>({
+            add: (left, right) => ({ units: left.units + right.units }),
+            divideByCount: (total, count) => {
+              if (rejectAggregate) throw new Error("hostile aggregate");
+              return { units: total.units / count };
+            },
+          }),
+          decodeRuntime: (input: unknown) =>
+            typeof input === "object" &&
+            input !== null &&
+            "units" in input &&
+            typeof input.units === "bigint"
+              ? { _tag: "Success" as const, value: input as Credit }
+              : { _tag: "Failure" as const, message: "Expected Credit." },
+          equivalent: (left: Credit, right: Credit) => left.units === right.units,
+          compare: (left: Credit, right: Credit) =>
+            left.units === right.units ? 0 : left.units < right.units ? -1 : 1,
+          formatCanonicalText: (value: Credit) => value.units.toString(),
+          parseCanonicalText: (text: string) => ({
+            _tag: "Success" as const,
+            value: { units: BigInt(text) },
+          }),
+          formatDisplay: (value: Credit) => value.units.toString(),
+          encodePersisted: (value: Credit) => value.units.toString(),
+          decodePersisted: (input: unknown) =>
+            typeof input === "string"
+              ? { _tag: "Success" as const, value: { units: BigInt(input) } }
+              : { _tag: "Failure" as const, message: "Expected persisted Credit." },
+        },
+        aggFunc: "avg",
+        aggregateValueFormatter: ({ value }: { readonly value: Credit }) =>
+          `${value.units.toString()} credits`,
+      },
+    ] satisfies BrunoTableColumns<CreditRow>;
+    const initialRows: readonly CreditRow[] = [
+      { id: "one", group: "A", credit: { units: 1n } },
+      { id: "two", group: "A", credit: { units: 2n } },
+    ];
+    const renderTable = (
+      sourceRows: readonly CreditRow[],
+      version: number,
+      status: "ready" | "stale",
+    ) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_AGGREGATE_FALLBACK"
+        columns={creditColumns}
+        initialOrderBy={[{ columnId: "COL_ID_GROUP", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: sourceRows,
+          totalRows: sourceRows.length,
+          version,
+          status,
+          ...(status === "stale" ? { message: "Retaining the prior grouped result" } : {}),
+        }}
+      />
+    );
+    const screen = await render(renderTable(initialRows, 1, "ready"));
+    await chooseGroup("Group");
+    await expect.element(page.getByRole("gridcell", { name: "1 credits" })).toBeInTheDocument();
+
+    rejectAggregate = true;
+    const rejectedRows: readonly CreditRow[] = [
+      initialRows[0]!,
+      { id: "two", group: "A", credit: { units: 4n } },
+    ];
+    await screen.rerender(renderTable(rejectedRows, 2, "stale"));
+    await expect.element(page.getByRole("gridcell", { name: "1 credits" })).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Retaining the prior grouped result");
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Grouped result, column COL_ID_CREDIT");
+
+    rejectAggregate = false;
+    const recoveredRows: readonly CreditRow[] = [
+      initialRows[0]!,
+      { id: "two", group: "A", credit: { units: 5n } },
+    ];
+    await screen.rerender(renderTable(recoveredRows, 3, "ready"));
+    await expect.element(page.getByRole("gridcell", { name: "3 credits" })).toBeInTheDocument();
+
+    rejectAggregate = true;
+    await screen.rerender(renderTable(rejectedRows, 4, "ready"));
+    await expect
+      .element(page.getByRole("grid", { name: "Data for TABLE_ID_GROUPED_AGGREGATE_FALLBACK" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Grouped result, column COL_ID_CREDIT");
+  });
+
   test("groups the filtered resident result and exposes accessible add, remove, and reorder commands", async () => {
     await render(
       <BrunoTableClient
@@ -156,7 +280,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     const groupRegion = page.getByRole("region", { name: "Group By" });
     const addGroup = groupRegion.getByRole("combobox", { name: "Add Group" });
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
-    await userEvent.click(page.getByRole("menuitem", { name: "Add to Group By" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Group by Desk" }));
     await expectCommittedProjection(["Desk", "Orders", "Quantity", "Maximum price"]);
     expect(document.activeElement).not.toBe(page.getByRole("grid").element());
     expect(activeGridCellText()).toBe("Alpha (1)");
@@ -165,6 +289,18 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect.element(page.getByRole("gridcell", { name: "Alpha (1)" })).toBeInTheDocument();
     await expect.element(page.getByRole("gridcell", { name: "3 units" })).toBeInTheDocument();
     expect(page.getByRole("gridcell", { name: "1", exact: true }).all()).toHaveLength(2);
+    const reorderInstructions = groupRegion.getByRole("note");
+    await expect.element(reorderInstructions).toBeVisible();
+    await expect
+      .element(reorderInstructions)
+      .toHaveTextContent(
+        "Reorder a group with Alt+Left Arrow or Alt+Right Arrow while its chip is focused.",
+      );
+    await expect
+      .element(groupRegion.getByRole("button", { name: /Desk, position 1 of 1/u }))
+      .toHaveAccessibleDescription(
+        "Reorder a group with Alt+Left Arrow or Alt+Right Arrow while its chip is focused.",
+      );
 
     const grid = page.getByRole("grid");
     grid.element().focus();
@@ -228,11 +364,14 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(groupRegion.getByRole("button", { name: /Desk, position 1 of 1/u }))
       .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Region removed from Group By, 1 group remaining");
 
     grid.element().focus();
     await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
-    await userEvent.click(page.getByRole("menuitem", { name: "Remove from Group By" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Remove Desk from grouping" }));
     await expectCommittedProjection(["Desk", "Region", "Quantity", "Maximum price"]);
     await vi.waitFor(() => expect(document.activeElement).toBe(addGroup.element()));
     expect(activeGridCellText()).toBe("Alpha");
@@ -402,7 +541,19 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.click(page.getByRole("checkbox", { name: "Select row 1", exact: true }));
     await screen.rerender(renderTable(undefined));
     await screen.rerender(renderTable(true));
-    await userEvent.click(page.getByRole("checkbox", { name: "Select row 2", exact: true }));
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select row 1", exact: true }))
+      .not.toBeChecked();
+
+    await page
+      .getByRole("checkbox", { name: "Select row 2", exact: true })
+      .click({ modifiers: ["Shift"] });
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select row 1", exact: true }))
+      .not.toBeChecked();
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select row 2", exact: true }))
+      .toBeChecked();
 
     await chooseGroup("Desk");
     await userEvent.click(page.getByRole("button", { name: "Remove Desk from Group By" }));
@@ -634,9 +785,18 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("columnheader", { name: /Trades/u }))
       .toHaveAccessibleName(/width 180 pixels/u);
+    await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
+    await expect
+      .element(
+        page.getByRole("dialog", { name: "Sort rows" }).getByRole("button", {
+          name: "Toggle Trades direction, currently descending",
+        }),
+      )
+      .toBeInTheDocument();
+    await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
 
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
-    await userEvent.click(page.getByRole("menuitem", { name: "Remove from Group By" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Remove Desk from grouping" }));
     await settleBrunoTableBrowserFrames();
     expect(readCommittedHeaderProjection()).toEqual([
       "Maximum price",
@@ -1085,6 +1245,48 @@ describe("BrunoTableClient grouping and aggregation", () => {
       } else {
         Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
       }
+    }
+  });
+
+  test("keeps the idle Sort Panel out of grouped membership and order publications", async () => {
+    const sortPanelCommits = vi.fn();
+    const removeListener = installBrunoTableClientSortPanelRenderListenerForTable(
+      "TABLE_ID_GROUPED_SORT_PANEL_ISOLATION",
+      sortPanelCommits,
+    );
+    try {
+      const renderTable = (sourceRows: readonly GroupRow[], version: number) => (
+        <BrunoTableClient
+          tableId="TABLE_ID_GROUPED_SORT_PANEL_ISOLATION"
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={{
+            rows: sourceRows,
+            totalRows: sourceRows.length,
+            version,
+            status: "ready",
+          }}
+          groupRowsColumn={{ headerName: "Orders" }}
+        />
+      );
+      const screen = await render(renderTable(rows, 1));
+      await chooseGroup("Desk");
+      await settleBrunoTableBrowserFrames();
+      const commitsAfterGrouping = sortPanelCommits.mock.calls.length;
+      expect(commitsAfterGrouping).toBeGreaterThan(0);
+
+      await screen.rerender(
+        renderTable([{ ...rows[2]!, desk: "Alpha", quantity: 7n }, rows[1]!, rows[0]!], 2),
+      );
+      await settleBrunoTableBrowserFrames();
+
+      expect(sortPanelCommits).toHaveBeenCalledTimes(commitsAfterGrouping);
+      await expect
+        .element(page.getByRole("button", { name: "Sort rows, 1 active" }))
+        .toBeInTheDocument();
+    } finally {
+      removeListener();
     }
   });
 });

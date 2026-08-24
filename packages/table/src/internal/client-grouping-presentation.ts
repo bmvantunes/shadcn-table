@@ -225,11 +225,18 @@ function createRowsColumn(
           return column?.kind !== "field" || presence === undefined
             ? []
             : [
-                Object.freeze({
-                  columnId: column.columnId,
-                  field: column.field,
-                  value: presence._tag === "Present" ? presence.value : undefined,
-                }),
+                presence._tag === "Missing"
+                  ? Object.freeze({
+                      columnId: column.columnId,
+                      field: column.field,
+                      _tag: "Missing" as const,
+                    })
+                  : Object.freeze({
+                      columnId: column.columnId,
+                      field: column.field,
+                      _tag: "Present" as const,
+                      value: presence.value,
+                    }),
               ];
         }),
       );

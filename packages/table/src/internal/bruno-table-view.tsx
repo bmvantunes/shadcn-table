@@ -427,7 +427,7 @@ export type BrunoTableRowPipelineSnapshot =
       readonly columns: readonly CompiledColumn[];
       readonly invalid: Extract<
         BrunoTableChromeSnapshot["invalid"],
-        { readonly kind: "invalid-value" }
+        { readonly kind: "invalid-value" | "invalid-group" }
       >;
     }>;
 
@@ -575,10 +575,10 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
     runtime.getColumnStructureSnapshot,
     runtime.getColumnStructureSnapshot,
   );
-  const installedProjection = useSyncExternalStore(
-    runtime.subscribeInstalledClientProjection,
-    runtime.getInstalledClientProjectionSnapshot,
-    runtime.getInstalledClientProjectionSnapshot,
+  const rowsHeaderName = useSyncExternalStore(
+    runtime.subscribeInstalledRowsPresentation,
+    runtime.getInstalledRowsHeaderNameSnapshot,
+    runtime.getInstalledRowsHeaderNameSnapshot,
   );
   const [open, setOpen] = useState(false);
   const sortPanelRootRef = useRef<HTMLDivElement>(null);
@@ -628,9 +628,6 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
   );
   if (sortableColumns.length === 0) return null;
   const activeIds = new Set(orderBy.map((sort) => sort.columnId));
-  const rowsHeaderName =
-    installedProjection?.columns.find((column) => column.columnId === "COL_ID_BRUNO_TABLE_ROWS")
-      ?.headerName ?? "Rows";
   const eligibleColumns = [
     ...sortableColumns.filter((column) => !activeIds.has(column.columnId)),
     ...(query.groupBy.length > 0 && !activeIds.has("COL_ID_BRUNO_TABLE_ROWS")
@@ -880,13 +877,17 @@ function SourceLifecycle({ runtime, focusFallback }: RuntimeProps) {
     );
   }
   if (
-    chrome.invalid?.kind === "invalid-value" &&
+    (chrome.invalid?.kind === "invalid-value" || chrome.invalid?.kind === "invalid-group") &&
     chrome.status !== "closed" &&
     chrome.status !== "error"
   ) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>Invalid source value</AlertTitle>
+        <AlertTitle>
+          {chrome.invalid.kind === "invalid-group"
+            ? "Invalid grouped result"
+            : "Invalid source value"}
+        </AlertTitle>
         <AlertDescription>{invalidSourceDetails(chrome.invalid)}</AlertDescription>
       </Alert>
     );
@@ -1149,6 +1150,9 @@ function emptyDescription(chrome: BrunoTableChromeSnapshot): string | undefined 
 function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): string | undefined {
   if (invalid?.kind === "invalid-value") {
     return `Source row ${String(invalid.rowIndex + 1)}, column ${invalid.columnId}: ${invalid.message}`;
+  }
+  if (invalid?.kind === "invalid-group") {
+    return `Grouped result, column ${invalid.columnId}: ${invalid.message}`;
   }
   return invalid?.kind === "invalid-status"
     ? `Unsupported source status: ${invalid.receivedStatus}.`
@@ -3951,7 +3955,9 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
               );
             }}
           >
-            {groupingActive ? "Remove from Group By" : "Add to Group By"}
+            {groupingActive
+              ? `Remove ${column.headerName} from grouping`
+              : `Group by ${column.headerName}`}
           </DropdownMenuItem>
         </DropdownMenuGroup>
       ) : null}

@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 
 import type { ReactNode } from "react";
 
+import { attachBrunoTableColumnHelperProvenance } from "./internal/column-helper-provenance";
 import { BrunoTableAggregateAlgebra, BrunoTableComputedColumn } from "./public-types";
 
 import type {
@@ -16,6 +17,7 @@ import type {
   BrunoTableAggregateResults,
   BrunoTableCellAlign,
   BrunoTableColumnId,
+  BrunoTableColumnHelperOutput,
   BrunoTableColumnIdentityInput,
   BrunoTableComputedColumnDefinition,
   BrunoTableComputedColumnDependencies,
@@ -430,11 +432,10 @@ type EffectiveFieldPresetDefaults<TDefaults, TOptions> = EffectiveAggregateDefau
   TOptions
 >;
 
-type BigDecimalPresetResult<TDefaults, TOptions, TColumn> = Merge<
-  Merge<BigDecimalBuiltInDefaults, TDefaults>,
-  TOptions
-> &
-  TColumn;
+type BigDecimalPresetResult<TDefaults, TOptions, TColumn> = BrunoTableColumnHelperOutput<
+  Merge<Merge<BigDecimalBuiltInDefaults, TDefaults>, TOptions> & TColumn,
+  Merge<TDefaults, TOptions>
+>;
 
 type UnreplacedPresetKeys<TDefaults, TOptions, TKeys extends PropertyKey> = Exclude<
   Extract<keyof TDefaults, TKeys>,
@@ -463,8 +464,10 @@ type BigDecimalPresetFieldCompatibility<TRow, TField extends keyof TRow, TDefaul
           : unknown
     : never;
 
-type BigDecimalHelperResult<TOptions, TColumn> = Merge<BigDecimalBuiltInDefaults, TOptions> &
-  TColumn;
+type BigDecimalHelperResult<TOptions, TColumn> = BrunoTableColumnHelperOutput<
+  Merge<BigDecimalBuiltInDefaults, TOptions> & TColumn,
+  TOptions
+>;
 
 type BrunoTableBigDecimalColumnPreset<TDefaults extends BrunoTableBigDecimalColumnPresetDefaults> =
   {
@@ -805,13 +808,13 @@ function mergeColumnOptions(
     ...options,
   };
   validateCapabilityCombination(merged);
-  if (!isComputed) return merged;
+  if (!isComputed) return attachBrunoTableColumnHelperProvenance(merged);
 
   const computed: unknown = Reflect.apply(BrunoTableComputedColumn, undefined, [merged]);
   if (!isRecord(computed)) {
     throw new TypeError("BrunoTable BigDecimal computed-column construction failed.");
   }
-  return computed;
+  return attachBrunoTableColumnHelperProvenance(computed);
 }
 
 function snapshotPresetDefaults(input: unknown): RuntimeColumnOptions {

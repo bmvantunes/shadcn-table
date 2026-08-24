@@ -54,6 +54,7 @@ export type {
   BrunoTableNoGroupingCapability,
   BrunoTableJsonValue,
   BrunoTableGroupKeyCellParams,
+  BrunoTableGroupKeyPresence,
   BrunoTableGroupRowsColumnOptions,
   BrunoTableGroupingCapability,
   BrunoTableGroupableColumnId,

@@ -9,7 +9,7 @@ import {
   deriveBrunoTableClientGroupedProjection,
   type BrunoTableClientGroupingInputRow,
 } from "./internal/client-grouping";
-import { compileColumns } from "./internal/compile-columns";
+import { ColumnConfigurationError, compileColumns } from "./internal/compile-columns";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileClientFilterCollection } from "./internal/grid-query";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
@@ -21,6 +21,23 @@ import {
 const decimal = BigDecimal.fromStringUnsafe;
 
 describe("Effect BigDecimal Value Type", () => {
+  it("rejects a spread-mutated helper Value Type before compiling the optional adapter column", () => {
+    const [helperColumn] = [
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_EXACT_AMOUNT",
+        field: "amount",
+        headerName: "Exact amount",
+        aggFunc: "sum",
+      }),
+    ] satisfies BrunoTableColumns<{ readonly amount: BigDecimal.BigDecimal }>;
+
+    expect(() => compileColumns([{ ...helperColumn, valueType: "number" }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match valueType: COL_ID_EXACT_AMOUNT",
+      ),
+    );
+  });
+
   it("executes exact grouped sum and default-precision average through the optional adapter", () => {
     type DecimalRow = Readonly<{
       readonly id: string;

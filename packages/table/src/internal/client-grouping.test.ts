@@ -602,7 +602,16 @@ describe("Client flat grouping", () => {
           groupOrderBy: [{ columnId: "COL_ID_REGION", direction: "asc" }],
         }),
         scenario.name,
-      ).toMatchObject({ kind: "invalid", columnId: "COL_ID_BAD_AGGREGATE" });
+      ).toMatchObject({
+        kind: "invalid",
+        invalid: scenario.name.startsWith("add")
+          ? {
+              kind: "source-row",
+              rowIndex: 1,
+              columnId: "COL_ID_BAD_AGGREGATE",
+            }
+          : { kind: "group", columnId: "COL_ID_BAD_AGGREGATE" },
+      });
     }
 
     const admittedInputs = new WeakSet(rows.map((row) => (row.raw as Order).money as object));
@@ -635,7 +644,14 @@ describe("Client flat grouping", () => {
         groupBy: ["COL_ID_REGION"],
         groupOrderBy: [{ columnId: "COL_ID_REGION", direction: "asc" }],
       }),
-    ).toMatchObject({ kind: "invalid", columnId: "COL_ID_DECODER_THROW" });
+    ).toMatchObject({
+      kind: "invalid",
+      invalid: {
+        kind: "source-row",
+        rowIndex: 1,
+        columnId: "COL_ID_DECODER_THROW",
+      },
+    });
   });
 
   it("reuses unchanged grouped rows and the complete row collection across value-only publications", () => {

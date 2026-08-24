@@ -39,8 +39,18 @@ export type BrunoTableClientGroupedProjection =
   | Readonly<{
       readonly kind: "invalid";
       readonly groupBy: readonly string[];
-      readonly columnId: string;
-      readonly message: string;
+      readonly invalid:
+        | Readonly<{
+            readonly kind: "source-row";
+            readonly rowIndex: number;
+            readonly columnId: string;
+            readonly message: string;
+          }>
+        | Readonly<{
+            readonly kind: "group";
+            readonly columnId: string;
+            readonly message: string;
+          }>;
     }>;
 
 type AggregateState =
@@ -101,12 +111,12 @@ export function deriveBrunoTableClientGroupedProjection(
     for (const columnId of input.groupBy) {
       const column = columnsById.get(columnId);
       if (column?.kind !== "field" || !column.groupBy) {
-        return invalid(groupBy, columnId, "Grouping requires an eligible Field Column.");
+        return invalidGroup(groupBy, columnId, "Grouping requires an eligible Field Column.");
       }
       groupColumns.push(column);
     }
     if (groupColumns.length === 0) {
-      return invalid(
+      return invalidGroup(
         groupBy,
         BRUNO_TABLE_ROWS_COLUMN_ID,
         "Grouping requires at least one Group Key.",
@@ -139,7 +149,9 @@ export function deriveBrunoTableClientGroupedProjection(
       group.rowCount += 1n;
       for (const state of group.aggregates.values()) {
         const failure = updateAggregate(state, readPresence(row, state.column));
-        if (failure !== undefined) return invalid(groupBy, state.column.columnId, failure);
+        if (failure !== undefined) {
+          return invalidSourceRow(groupBy, row.rowIndex, state.column.columnId, failure);
+        }
       }
     }
     const materialized = Array.from(groups.values(), (group) =>
@@ -174,9 +186,11 @@ export function deriveBrunoTableClientGroupedProjection(
     });
   } catch (error) {
     if (error instanceof GroupingAggregateError) {
-      return invalid(groupBy, error.columnId, error.message);
+      return error.rowIndex === undefined
+        ? invalidGroup(groupBy, error.columnId, error.message)
+        : invalidSourceRow(groupBy, error.rowIndex, error.columnId, error.message);
     }
-    return invalid(
+    return invalidGroup(
       groupBy,
       BRUNO_TABLE_ROWS_COLUMN_ID,
       error instanceof Error ? error.message : "Grouped projection derivation failed.",
@@ -195,7 +209,7 @@ function readPresence(
   if (descriptor === undefined || !descriptor.enumerable) return MISSING;
   const value = row.readValue(column);
   if (isBrunoTableInvalidCellValue(value)) {
-    throw new GroupingAggregateError(column.columnId, value.invalid.message);
+    throw new GroupingAggregateError(column.columnId, value.invalid.message, row.rowIndex);
   }
   const normalizedValue = column.valueType === "number" && Object.is(value, -0) ? 0 : value;
   return Object.freeze({ _tag: "Present", value: normalizedValue });
@@ -451,15 +465,33 @@ class GroupingAggregateError extends Error {
   public constructor(
     public readonly columnId: string,
     message: string,
+    public readonly rowIndex?: number,
   ) {
     super(message);
   }
 }
 
-function invalid(
+function invalidGroup(
   groupBy: readonly string[],
   columnId: string,
   message: string,
 ): BrunoTableClientGroupedProjection {
-  return Object.freeze({ kind: "invalid", groupBy, columnId, message });
+  return Object.freeze({
+    kind: "invalid",
+    groupBy,
+    invalid: Object.freeze({ kind: "group", columnId, message }),
+  });
+}
+
+function invalidSourceRow(
+  groupBy: readonly string[],
+  rowIndex: number,
+  columnId: string,
+  message: string,
+): BrunoTableClientGroupedProjection {
+  return Object.freeze({
+    kind: "invalid",
+    groupBy,
+    invalid: Object.freeze({ kind: "source-row", rowIndex, columnId, message }),
+  });
 }
