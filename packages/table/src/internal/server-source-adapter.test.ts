@@ -68,6 +68,46 @@ function makeViewport<TRow = Row>() {
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("does not infer grouped rows from a legitimate raw values Map field", () => {
+    type RawMapRow = Readonly<{
+      readonly symbol: string;
+      readonly values: ReadonlyMap<string, unknown>;
+    }>;
+    const rawColumns = compileColumns([
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+      },
+    ]);
+    const transport = makeViewport<RawMapRow>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<RawMapRow>(
+      rawColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      ["symbol", "values"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["symbol", "values"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const values = new Map([["COL_ID_SYMBOL", "WRONG"]]);
+    const first = { symbol: "AAPL", values } as const;
+    transport.getRequest()!.sink.setRowData({ 0: first }, { 0: "raw-map" });
+
+    expect(adapter.getPublication().rowSpace?.getCellValue("raw-map", "COL_ID_SYMBOL")).toBe(
+      "AAPL",
+    );
+    transport.getRequest()!.sink.setRowData({ 0: { symbol: "AAPL", values } }, { 0: "raw-map" });
+    expect(adapter.getPublication().rowSpace?.getRow("raw-map")).toBe(first);
+  });
+
   it("installs authoritative grouped keys and decodes private aliases by Column Identity", () => {
     const groupedColumns = compileColumns([
       {
@@ -219,6 +259,79 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(projectionNotifications).not.toHaveBeenCalled();
   });
 
+  it("updates grouped key and aggregate widths without replacing the source generation", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+    };
+    adapter.replace(transport.viewport, groupedQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_DESK", "COL_ID_PRICE"],
+      presentationColumns: groupedColumns,
+    });
+    const resizedColumns = Object.freeze(
+      groupedColumns.map((column) =>
+        Object.freeze({
+          ...column,
+          semantics: Object.freeze({
+            ...column.semantics,
+            width: column.columnId === "COL_ID_DESK" ? 231 : 287,
+          }),
+        }),
+      ),
+    );
+    adapter.replace(transport.viewport, groupedQuery, {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_DESK", "COL_ID_PRICE"],
+      presentationColumns: resizedColumns,
+    });
+
+    expect(transport.replace).toHaveBeenCalledOnce();
+    expect(transport.release).not.toHaveBeenCalled();
+    const projection = adapter.getPublication().clientProjection;
+    expect(projection?.kind).toBe("grouped");
+    expect(projection?.columns.map((column) => [column.columnId, column.semantics.width])).toEqual([
+      ["COL_ID_DESK", 231],
+      ["COL_ID_BRUNO_TABLE_ROWS", 96],
+      ["COL_ID_PRICE", 287],
+    ]);
+  });
+
   it("owns one clean generation across raw, ordered grouped, reordered, and raw projections", () => {
     const transitionColumns = compileColumns([
       {
@@ -306,6 +419,152 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       );
     }
     expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+  });
+
+  it("replaces one generation when ordered Group Column Identities reorder over one field", () => {
+    const sameFieldColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK_PRIMARY",
+        field: "desk",
+        headerName: "Primary desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_DESK_SECONDARY",
+        field: "desk",
+        headerName: "Secondary desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      sameFieldColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+      ["desk"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+      groupBy: ["COL_ID_DESK_PRIMARY", "COL_ID_DESK_SECONDARY"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+      navigationMode: "projection-reset",
+    });
+    const firstQuery = transport.getRequest()!.query;
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+      groupBy: ["COL_ID_DESK_SECONDARY", "COL_ID_DESK_PRIMARY"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK_SECONDARY", direction: "asc" }],
+      navigationMode: "projection-reset",
+    });
+
+    expect(transport.getRequest()!.query).toEqual(firstQuery);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().clientProjection).toMatchObject({
+      groupBy: ["COL_ID_DESK_SECONDARY", "COL_ID_DESK_PRIMARY"],
+      queryNavigationMode: "projection-reset",
+    });
+  });
+
+  it("starts a clean grouped generation when decoder authority changes under one source query", () => {
+    type DecodedDesk = Readonly<{ readonly raw: string; readonly revision: "old" | "new" }>;
+    const valueType = (revision: DecodedDesk["revision"]) => ({
+      codecId: "test/grouped-decoder",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: { raw: input, revision } satisfies DecodedDesk } as const)
+          : ({ _tag: "Failure", message: "Expected desk text." } as const),
+      equivalent: (left: DecodedDesk, right: DecodedDesk) =>
+        left.raw === right.raw && left.revision === right.revision,
+      compare: (left: DecodedDesk, right: DecodedDesk) => left.raw.localeCompare(right.raw),
+      formatCanonicalText: (value: DecodedDesk) => value.raw,
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { raw: text, revision } satisfies DecodedDesk }) as const,
+      formatDisplay: (value: DecodedDesk) => `${value.revision}:${value.raw}`,
+      encodePersisted: (value: DecodedDesk) => value.raw,
+      decodePersisted: (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: { raw: input, revision } satisfies DecodedDesk } as const)
+          : ({ _tag: "Failure", message: "Expected persisted desk text." } as const),
+    });
+    const createColumns = (revision: DecodedDesk["revision"]) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_DESK",
+          field: "desk",
+          headerName: "Desk",
+          valueType: valueType(revision),
+          groupBy: true,
+        },
+      ] as never);
+    const initialColumns = createColumns("old");
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      initialColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+    };
+    adapter.replace(transport.viewport, groupedQuery);
+    const firstRequest = transport.getRequest()!;
+    const rowsAlias = Object.entries(
+      (firstRequest.query as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+    ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+    firstRequest.sink.setRowCount(1, true);
+    firstRequest.sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "rates" });
+    expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_DESK")).toEqual({
+      raw: "Rates",
+      revision: "old",
+    });
+
+    const nextColumns = createColumns("new");
+    adapter.reconcileColumns(nextColumns, undefined);
+    adapter.replace(transport.viewport, groupedQuery);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    firstRequest.sink.setRowData({ 0: { desk: "LATE", [rowsAlias]: 1n } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace?.getRow("late")).toBeUndefined();
+
+    transport
+      .getRequest()!
+      .sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "rates" });
+    expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_DESK")).toEqual({
+      raw: "Rates",
+      revision: "new",
+    });
   });
 
   it("preserves exact bigint, optional, and Effect BigDecimal grouped result domains", () => {
@@ -1516,6 +1775,136 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
 
     run(false);
     run(true);
+  });
+
+  it("retains grouped equivalent values only when no active role callback can observe them", () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    const tokenType = {
+      codecId: "test/grouped-callback-token",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      aggregateResults: { min: "self" as const },
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) => left.id === right.id,
+      compare: (left: Token, right: Token) => left.id - right.id,
+      formatCanonicalText: (value: Token) => String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay: (value: Token) => String(value.id),
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    };
+    const run = (observer: "none" | "role" | "rows"): void => {
+      const tokenColumns = compileColumns([
+        {
+          columnId: "COL_ID_KEY",
+          field: "key",
+          headerName: "Key",
+          valueType: tokenType,
+          groupBy: true,
+          ...(observer === "role"
+            ? {
+                groupKeyValueFormatter: ({ value }: { readonly value: Token }) => value.label,
+              }
+            : {}),
+        },
+        {
+          columnId: "COL_ID_AGGREGATE",
+          field: "aggregate",
+          headerName: "Aggregate",
+          valueType: tokenType,
+          aggFunc: "min",
+          ...(observer === "role"
+            ? {
+                aggregateCellRenderer: ({ value }: { readonly value: Token }) => value.label,
+              }
+            : {}),
+        },
+      ] as never);
+      const transport = makeViewport<Record<string, unknown>>();
+      const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+        tokenColumns,
+        undefined,
+        [],
+        [{ columnId: "COL_ID_KEY", direction: "asc" }],
+        ["key", "aggregate"],
+        observer === "rows"
+          ? {
+              valueFormatter: ({
+                groupKeys,
+              }: {
+                readonly groupKeys: readonly Readonly<{
+                  readonly _tag: "Present";
+                  readonly value: Token;
+                }>[];
+              }) => groupKeys[0]?.value.label ?? "missing",
+            }
+          : undefined,
+      );
+      adapter.reconcileSource({
+        viewport: transport.viewport,
+        completeRawSelect: ["key", "aggregate"],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      });
+      adapter.replace(transport.viewport, {
+        ...query,
+        orderBy: [{ columnId: "COL_ID_KEY", direction: "asc" }],
+        groupBy: ["COL_ID_KEY"],
+        groupOrderBy: [{ columnId: "COL_ID_KEY", direction: "asc" }],
+      });
+      const request = transport.getRequest()!;
+      const aggregates = (
+        request.query as {
+          aggregates: Record<string, { aggFunc: string }>;
+        }
+      ).aggregates;
+      const rowsAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const aggregateAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "min",
+      )![0];
+      request.sink.setRowData(
+        {
+          0: {
+            key: { id: 1, label: "OLD KEY" },
+            [rowsAlias]: 1n,
+            [aggregateAlias]: { id: 2, label: "OLD AGGREGATE" },
+          },
+        },
+        { 0: "group" },
+      );
+      const previous = adapter.getPublication().rowSpace?.getRow("group");
+      request.sink.setRowData(
+        {
+          0: {
+            key: { id: 1, label: "NEW KEY" },
+            [rowsAlias]: 1n,
+            [aggregateAlias]: { id: 2, label: "NEW AGGREGATE" },
+          },
+        },
+        { 0: "group" },
+      );
+      const next = adapter.getPublication().rowSpace?.getRow("group");
+      if (observer === "role" || observer === "rows") expect(next).not.toBe(previous);
+      else expect(next).toBe(previous);
+    };
+
+    run("none");
+    run("role");
+    run("rows");
   });
 
   it("never publishes a new source envelope with old-generation rows", () => {

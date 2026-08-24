@@ -18,7 +18,7 @@ import {
   BrunoTableQuickFilter,
   renderBrunoTableServerColumnFilter,
 } from "./internal/client-filter-controls";
-import { compileColumns } from "./internal/compile-columns";
+import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { BrunoTableServerRowPipeline } from "./internal/server-row-pipeline";
 import {
@@ -106,6 +106,18 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         groupRowsWidth: groupRowsColumn.width,
       },
     );
+    const createdView = created.getView();
+    const initialColumnStructure = createdView.getColumnStructureSnapshot();
+    rowPipelineAdapter.stageProjection(createdView.getQuerySnapshot(), {
+      routeBy: props.routeBy,
+      externalFilters: props.externalFilters,
+      visibleColumnIds: initialColumnStructure.visibleColumnIds,
+      presentationColumns: installServerPresentationWidths(
+        compiledColumns,
+        initialColumnStructure.allColumns,
+      ),
+    });
+    createdView.publishRowPipeline(rowPipelineAdapter.getPublication());
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableToolbarLifetime({ tableId, kind: "runtime-create", identity: created });
     }
@@ -113,10 +125,15 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  const compiledColumnsRef = useRef(compiledColumns);
   const queryInputsRef = useRef<BrunoTableServerQueryInputs>({
     routeBy: props.routeBy,
     externalFilters: props.externalFilters,
     visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+    presentationColumns: installServerPresentationWidths(
+      compiledColumns,
+      runtimeView.getColumnStructureSnapshot().allColumns,
+    ),
   });
   const stagingSemanticQueryRef = useRef(false);
   const gridOwnedControls = useMemo(
@@ -178,6 +195,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   }, [props.viewportSource, rowPipelineAdapter]);
 
   useLayoutEffect(() => {
+    compiledColumnsRef.current = compiledColumns;
     stageBrunoTableServerSemanticQuery(stagingSemanticQueryRef, () => {
       const queryConfiguration = rowPipelineAdapter.reconcileColumns(
         compiledColumns,
@@ -195,6 +213,10 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       routeBy: props.routeBy,
       externalFilters: props.externalFilters,
       visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+      presentationColumns: installServerPresentationWidths(
+        compiledColumns,
+        runtimeView.getColumnStructureSnapshot().allColumns,
+      ),
     });
     queryInputsRef.current = queryInputs;
     facetInputsRef.current = {
@@ -238,6 +260,10 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       const queryInputs = Object.freeze({
         ...queryInputsRef.current,
         visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+        presentationColumns: installServerPresentationWidths(
+          compiledColumnsRef.current,
+          runtimeView.getColumnStructureSnapshot().allColumns,
+        ),
       });
       queryInputsRef.current = queryInputs;
       rowPipelineAdapter.replace(
@@ -317,6 +343,24 @@ function stageBrunoTableServerSemanticQuery(
   } finally {
     staging.current = false;
   }
+}
+
+function installServerPresentationWidths(
+  columns: readonly CompiledColumn[],
+  layoutColumns: readonly CompiledColumn[],
+): readonly CompiledColumn[] {
+  const layoutById = new Map(layoutColumns.map((column) => [column.columnId, column]));
+  let changed = false;
+  const installed = columns.map((column) => {
+    const width = layoutById.get(column.columnId)?.semantics.width;
+    if (width === undefined || width === column.semantics.width) return column;
+    changed = true;
+    return Object.freeze({
+      ...column,
+      semantics: Object.freeze({ ...column.semantics, width }),
+    });
+  });
+  return changed ? Object.freeze(installed) : columns;
 }
 
 function requireBrunoTableId(tableId: unknown): string {

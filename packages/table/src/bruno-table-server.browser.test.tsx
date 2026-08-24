@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
-import { StrictMode, useEffect } from "react";
+import { act, StrictMode, useEffect, type ReactNode } from "react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { Effect, Schema } from "effect";
 import * as BigDecimal from "effect/BigDecimal";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
@@ -406,6 +408,92 @@ function serverProps(
 afterEach(async () => cleanup());
 
 describe("BrunoTableServer", () => {
+  test("hydrates one restored grouped projection without a raw-shape mismatch", async () => {
+    const transport = makeViewport(1, false);
+    const tableId = "TABLE_ID_SERVER_GROUPED_HYDRATION";
+    const persisted = {
+      version: 1 as const,
+      tableId,
+      filters: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      columnOrder: ["COL_ID_DESK", "COL_ID_SYMBOL_GROUP", "COL_ID_MAX_PRICE", "COL_ID_MIN_PRICE"],
+      columnVisibility: {},
+      columnWidths: { COL_ID_DESK: 211, COL_ID_MAX_PRICE: 277 },
+      columnPinning: { start: [] as const, end: [] as const },
+    } as const;
+    const table = (
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        tableId={tableId}
+        columns={serverGroupingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        initialPersistedState={persisted}
+      />
+    );
+    const host = document.createElement("div");
+    host.innerHTML = renderToString(table);
+    document.body.append(host);
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    let root: Root | undefined;
+    const recoverable = vi.fn();
+    try {
+      expect(transport.requests).toHaveLength(0);
+      await expect
+        .element(page.getByRole("gridcell", { name: "Loading Desk" }).first())
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Loading Rows" }).first())
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("gridcell", { name: "Loading Maximum" }).first())
+        .toBeVisible();
+      expect(page.getByRole("gridcell", { name: "Loading Symbol group" }).query()).toBeNull();
+      await act(async () => {
+        root = hydrateRoot(host, table, { onRecoverableError: recoverable });
+      });
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(1));
+      expect(transport.requests[0]!.query).toMatchObject({ groupBy: ["desk"] });
+      expect(recoverable).not.toHaveBeenCalled();
+      const request = transport.requests[0]!;
+      const aggregates = (
+        request.query as {
+          aggregates: Record<string, { aggFunc: string }>;
+        }
+      ).aggregates;
+      const rowsAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const minAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "min",
+      )![0];
+      const maxAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "max",
+      )![0];
+      await act(async () => {
+        request.sink.setRowCount(1, true);
+        request.sink.setRowData(
+          { 0: { desk: "Rates", [rowsAlias]: 2n, [minAlias]: 10, [maxAlias]: 20 } },
+          { 0: "rates" },
+        );
+      });
+      await expect.element(page.getByRole("gridcell", { name: "Desk Rates" })).toBeVisible();
+    } finally {
+      await act(async () => root?.unmount());
+      if (previousActEnvironment === undefined) {
+        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+      } else {
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
+      host.remove();
+    }
+  });
+
   test("groups through one semantic generation and presents authoritative keyed aggregates", async () => {
     const transport = makeViewport(2, false);
     const base = serverProps(transport.viewport, "ready");
@@ -568,6 +656,183 @@ describe("BrunoTableServer", () => {
     expect(transport.releases).toHaveBeenCalledTimes(1);
   });
 
+  test("publishes callback-observable grouped value changes without waking structure surfaces", async () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    type TokenRow = Readonly<{ readonly key: Token; readonly aggregate: Token }>;
+    const tokenType = {
+      codecId: "browser/grouped-callback-token",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      aggregateResults: { min: "self" as const },
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) => left.id === right.id,
+      compare: (left: Token, right: Token) =>
+        left.id === right.id ? 0 : left.id < right.id ? -1 : 1,
+      formatCanonicalText: (value: Token) => String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay: (value: Token) => String(value.id),
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    } satisfies BrunoTableValueType<Token>;
+    const callbackColumns = [
+      {
+        columnId: "COL_ID_KEY",
+        field: "key",
+        headerName: "Key",
+        valueType: tokenType,
+        groupBy: true,
+        groupKeyValueFormatter: ({ value }) => `Key ${value.label}`,
+      },
+      {
+        columnId: "COL_ID_AGGREGATE",
+        field: "aggregate",
+        headerName: "Aggregate",
+        valueType: tokenType,
+        aggFunc: "min",
+        aggregateCellRenderer: ({ value }) => `Aggregate ${value.label}`,
+      },
+    ] as const satisfies BrunoTableColumns<TokenRow>;
+    const tableId = "TABLE_ID_SERVER_GROUPED_CALLBACK_VALUES";
+    const transport = makeViewport(1, false);
+    const CallbackServerTable = BrunoTableServer as unknown as (props: {
+      readonly tableId: string;
+      readonly columns: readonly unknown[];
+      readonly initialOrderBy: readonly unknown[];
+      readonly groupRowsColumn?: unknown;
+      readonly viewportSource: unknown;
+    }) => ReactNode;
+    const screen = await render(
+      <CallbackServerTable
+        tableId={tableId}
+        columns={callbackColumns}
+        initialOrderBy={[{ columnId: "COL_ID_KEY", direction: "asc" }]}
+        groupRowsColumn={{
+          valueFormatter: ({
+            groupKeys,
+          }: {
+            readonly groupKeys: readonly Readonly<{
+              readonly _tag: "Present";
+              readonly value: Token;
+            }>[];
+          }) => `Rows ${groupKeys[0]?.value.label ?? "missing"}`,
+        }}
+        viewportSource={{
+          viewport: transport.viewport,
+          useWholeResult: browserWholeResult,
+          completeRawSelect: ["key", "aggregate"],
+          totalRows: 1,
+          version: 1,
+          status: "ready",
+        }}
+      />,
+    );
+    const groupRegion = screen.getByRole("region", { name: "Group By" });
+    await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+    await userEvent.click(screen.getByRole("option", { name: "Key", exact: true }));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    const request = transport.requests[1]!;
+    const aggregates = (
+      request.query as {
+        aggregates: Record<string, { aggFunc: string }>;
+      }
+    ).aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const aggregateAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "min",
+    )![0];
+    const sink = request.sink as unknown as Sink<Record<string, unknown>>;
+    const keyOld = { id: 1, label: "OLD" } as const;
+    const keyNew = { id: 1, label: "NEW" } as const;
+    const aggregateOld = { id: 2, label: "OLD" } as const;
+    const aggregateNew = { id: 2, label: "NEW" } as const;
+    sink.setRowCount(1, true);
+    sink.setRowData(
+      {
+        0: {
+          key: keyOld,
+          [rowsAlias]: 1n,
+          [aggregateAlias]: aggregateOld,
+        },
+      },
+      { 0: "callback-group" },
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "Key OLD" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "Aggregate OLD" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "Rows OLD" })).toBeVisible();
+    const surfaceRenders = vi.fn();
+    const headerRenders = vi.fn();
+    const cellRenders = vi.fn();
+    const restoreSurface = installBrunoTableClientGridSurfaceRenderListenerForTable(
+      tableId,
+      surfaceRenders,
+    );
+    const restoreHeader = installBrunoTableClientHeaderRenderListenerForTable(
+      tableId,
+      headerRenders,
+    );
+    const restoreCells = installBrunoTableClientCellRenderListenerForTable(tableId, cellRenders);
+    try {
+      sink.setRowData(
+        {
+          0: {
+            key: keyNew,
+            [rowsAlias]: 1n,
+            [aggregateAlias]: aggregateOld,
+          },
+        },
+        { 0: "callback-group" },
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "Key NEW" })).toBeVisible();
+      await expect.element(screen.getByRole("gridcell", { name: "Rows NEW" })).toBeVisible();
+      expect(surfaceRenders).not.toHaveBeenCalled();
+      expect(headerRenders).not.toHaveBeenCalled();
+      expect(cellRenders.mock.calls).toEqual(
+        expect.arrayContaining([
+          ["callback-group", "COL_ID_KEY"],
+          ["callback-group", "COL_ID_BRUNO_TABLE_ROWS"],
+        ]),
+      );
+      expect(cellRenders.mock.calls).not.toContainEqual(["callback-group", "COL_ID_AGGREGATE"]);
+
+      cellRenders.mockClear();
+      sink.setRowData(
+        {
+          0: {
+            key: keyNew,
+            [rowsAlias]: 1n,
+            [aggregateAlias]: aggregateNew,
+          },
+        },
+        { 0: "callback-group" },
+      );
+      await expect.element(screen.getByRole("gridcell", { name: "Aggregate NEW" })).toBeVisible();
+      expect(cellRenders.mock.calls).toContainEqual(["callback-group", "COL_ID_AGGREGATE"]);
+      expect(cellRenders.mock.calls).not.toContainEqual(["callback-group", "COL_ID_KEY"]);
+      expect(cellRenders.mock.calls).not.toContainEqual([
+        "callback-group",
+        "COL_ID_BRUNO_TABLE_ROWS",
+      ]);
+      expect(transport.requests).toHaveLength(2);
+    } finally {
+      restoreCells();
+      restoreHeader();
+      restoreSurface();
+    }
+  });
+
   test("performs one generation for Server multi-group add, reorder, remove, and raw transitions", async () => {
     const transport = makeViewport(1, false);
     const screen = await render(
@@ -608,6 +873,81 @@ describe("BrunoTableServer", () => {
     await vi.waitFor(() => expect(transport.requests).toHaveLength(6));
     expect(transport.requests[5]!.query).not.toHaveProperty("groupBy");
     expect(transport.releases).toHaveBeenCalledTimes(5);
+  });
+
+  test("resets Active Cell for a same-field ordered Group Column Identity reorder", async () => {
+    const sameFieldColumns = [
+      {
+        columnId: "COL_ID_DESK_PRIMARY",
+        field: "desk",
+        headerName: "Primary desk",
+        valueType: "text",
+        groupBy: true,
+        groupKeyValueFormatter: ({ value }: { readonly value: string }) => `Primary ${value}`,
+      },
+      {
+        columnId: "COL_ID_DESK_SECONDARY",
+        field: "desk",
+        headerName: "Secondary desk",
+        valueType: "text",
+        groupBy: true,
+        groupKeyValueFormatter: ({ value }: { readonly value: string }) => `Secondary ${value}`,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const tableId = "TABLE_ID_SERVER_SAME_FIELD_GROUP_REORDER";
+    const transport = makeViewport(1, false);
+    const screen = await render(
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        tableId={tableId}
+        columns={sameFieldColumns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }]}
+      />,
+    );
+    const groupRegion = screen.getByRole("region", { name: "Group By" });
+    const addGroup = groupRegion.getByRole("combobox", { name: "Add Group" });
+    await userEvent.click(addGroup);
+    await userEvent.click(screen.getByRole("option", { name: "Primary desk", exact: true }));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    await userEvent.click(addGroup);
+    await userEvent.click(screen.getByRole("option", { name: "Secondary desk", exact: true }));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
+    const request = transport.requests[2]!;
+    const aggregates = (
+      request.query as {
+        aggregates: Record<string, { aggFunc: string }>;
+      }
+    ).aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "same-field-group" });
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Primary Rates" }).element().id,
+      ),
+    );
+    const sourceQueryBeforeReorder = request.query;
+    groupRegion
+      .getByRole("button", { name: /Secondary desk, position 2 of 2/u })
+      .element()
+      .focus();
+    await userEvent.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(4));
+    expect(transport.requests[3]!.query).toEqual(sourceQueryBeforeReorder);
+    expect(transport.releases).toHaveBeenCalledTimes(3);
+    transport.requests[3]!.sink.setRowCount(1, true);
+    transport.requests[3]!.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 1n } },
+      { 0: "same-field-group" },
+    );
+    await vi.waitFor(() =>
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "Secondary Rates" }).element().id,
+      ),
+    );
   });
 
   test("preserves grouped layout and reconciles same-generation authoritative identities", async () => {
@@ -673,6 +1013,21 @@ describe("BrunoTableServer", () => {
     await expect
       .element(screen.getByRole("separator", { name: "Resize Maximum" }))
       .toHaveAttribute("aria-valuenow", "130");
+    expect(
+      screen
+        .getByRole("columnheader", { name: /Maximum/u })
+        .element()
+        .getBoundingClientRect().width,
+    ).toBeCloseTo(130, 0);
+    screen.getByRole("button", { name: "Column menu for Desk" }).element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Increase width" }));
+    await expect
+      .element(screen.getByRole("separator", { name: "Resize Desk" }))
+      .toHaveAttribute("aria-valuenow", "170");
+    expect(
+      screen.getByRole("columnheader", { name: /Desk/u }).element().getBoundingClientRect().width,
+    ).toBeCloseTo(170, 0);
     screen.getByRole("button", { name: "Column menu for Maximum" }).element().focus();
     await userEvent.keyboard("{Enter}");
     await userEvent.click(screen.getByRole("menuitemradio", { name: "Pin to logical end" }));
@@ -758,6 +1113,18 @@ describe("BrunoTableServer", () => {
       "aria-colindex",
       "3",
     );
+    await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+    await userEvent.click(screen.getByRole("option", { name: "Desk", exact: true }));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(6));
+    expect(
+      screen.getByRole("columnheader", { name: /Desk/u }).element().getBoundingClientRect().width,
+    ).toBeCloseTo(170, 0);
+    expect(
+      screen
+        .getByRole("columnheader", { name: /Maximum/u })
+        .element()
+        .getBoundingClientRect().width,
+    ).toBeCloseTo(130, 0);
   });
 
   test("copies one immutable grouped Server Active Cell", async () => {

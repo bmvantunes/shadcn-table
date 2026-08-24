@@ -29,6 +29,7 @@ type RuntimeValueTypeDescriptor = {
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: RuntimeAggregateAlgebra;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly decodeRuntimeAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -49,6 +50,8 @@ export type CompiledColumnValueSemantics = {
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  /** Stable private authority used to invalidate decoded Server projections. */
+  readonly decodeRuntimeAuthority: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -193,6 +196,7 @@ export function compileColumnValueSemantics(
       ? {}
       : { aggregateAlgebra: compileAggregateAlgebra(descriptor) }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
+    decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
     formatCanonicalText: (value) => descriptor.formatCanonicalText(value),
@@ -204,7 +208,7 @@ export function compileColumnValueSemantics(
     encodePersistedCandidate: (value) => descriptor.encodePersisted(value),
     encodePersisted: (value) => validateJsonValue(descriptor.encodePersisted(value)),
     decodePersisted: (input) => descriptor.decodePersisted(input),
-  });
+  } satisfies CompiledColumnValueSemantics);
 }
 
 const BRUNO_TABLE_NUMBER_DISPLAY_LOCALE = "en-US";
@@ -285,6 +289,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     aggregateResults,
     ...(aggregateAlgebra === undefined ? {} : { aggregateAlgebra }),
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
+    decodeRuntimeAuthority: decodeRuntimeFunction,
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
     compare: (left, right) =>

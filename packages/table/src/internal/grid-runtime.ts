@@ -39,6 +39,10 @@ import {
   recordBrunoTableColumnFilterSubscriptionEvent,
 } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
+import {
+  isBrunoTableServerGroupedRow,
+  type BrunoTableServerGroupedRowSnapshot,
+} from "./server-grouped-row";
 import { isBrunoTableQuickFilterTextWithinLimit } from "./quick-filter";
 import {
   applyBrunoTableSortingCommand,
@@ -2895,6 +2899,15 @@ function sameRowCellSnapshot(
 ): boolean {
   if (previous.kind !== next.kind || previous.column !== next.column) return false;
   if (previous.kind === "unavailable" || next.kind === "unavailable") return true;
+  const previousServerGrouped = isBrunoTableServerGroupedRow(previous.row);
+  const nextServerGrouped = isBrunoTableServerGroupedRow(next.row);
+  if (previousServerGrouped || nextServerGrouped) {
+    return (
+      previousServerGrouped &&
+      nextServerGrouped &&
+      sameServerGroupedCellDependency(previous.row, next.row, next.column)
+    );
+  }
   const previousGroupedRowCount = groupedRowCount(previous);
   const nextGroupedRowCount = groupedRowCount(next);
   if (previousGroupedRowCount !== undefined || nextGroupedRowCount !== undefined) {
@@ -2906,6 +2919,41 @@ function sameRowCellSnapshot(
   return (
     previous.row === next.row && sameAvailableCellValue(previous.value, next.value, next.column)
   );
+}
+
+function sameServerGroupedCellDependency(
+  previous: BrunoTableServerGroupedRowSnapshot,
+  next: BrunoTableServerGroupedRowSnapshot,
+  column: CompiledColumn | undefined,
+): boolean {
+  if (previous.rowCount !== next.rowCount || column === undefined) return false;
+  if (column.columnId === "COL_ID_BRUNO_TABLE_ROWS") {
+    return sameExactGroupedPresences(previous.groupKeys, next.groupKeys);
+  }
+  return sameExactGroupedPresence(
+    previous.presences.get(column.columnId),
+    next.presences.get(column.columnId),
+  );
+}
+
+function sameExactGroupedPresences(
+  previous: BrunoTableServerGroupedRowSnapshot["groupKeys"],
+  next: BrunoTableServerGroupedRowSnapshot["groupKeys"],
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((presence, index) => sameExactGroupedPresence(presence, next[index]))
+  );
+}
+
+function sameExactGroupedPresence(
+  previous: BrunoTableServerGroupedRowSnapshot["groupKeys"][number] | undefined,
+  next: BrunoTableServerGroupedRowSnapshot["groupKeys"][number] | undefined,
+): boolean {
+  if (previous?._tag !== next?._tag) return false;
+  return previous?._tag !== "Present" || next?._tag !== "Present"
+    ? true
+    : Object.is(previous.value, next.value);
 }
 
 function groupedRowCount(snapshot: BrunoTableRowCellSnapshot): bigint | undefined {
