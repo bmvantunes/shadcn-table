@@ -146,7 +146,7 @@ export function deriveBrunoTableClientGroupedProjection(
       materializeGroup(group, groupColumns),
     );
     const sorted = materialized.toSorted((left, right) =>
-      compareGroups(left, right, input.groupOrderBy, columnsById),
+      compareGroups(left, right, input.groupOrderBy, columnsById, activeGroupIds),
     );
     const previousProjection = input.previous?.kind === "ready" ? input.previous : undefined;
     const previousRows =
@@ -155,7 +155,8 @@ export function deriveBrunoTableClientGroupedProjection(
         : new Map(previousProjection.rows.map((row) => [row.rowId, row]));
     const candidateRows = sorted.map((entry) => {
       const previous = previousRows?.get(entry.row.rowId);
-      return previous !== undefined && sameGroupedRow(previous, entry.row, columnsById)
+      return previous !== undefined &&
+        sameGroupedRow(previous, entry.row, columnsById, activeGroupIds)
         ? previous
         : entry.row;
     });
@@ -196,7 +197,8 @@ function readPresence(
   if (isBrunoTableInvalidCellValue(value)) {
     throw new GroupingAggregateError(column.columnId, value.invalid.message);
   }
-  return Object.freeze({ _tag: "Present", value });
+  const normalizedValue = column.valueType === "number" && Object.is(value, -0) ? 0 : value;
+  return Object.freeze({ _tag: "Present", value: normalizedValue });
 }
 
 function groupIdentity(
@@ -335,6 +337,7 @@ function sameGroupedRow(
   previous: BrunoTableClientGroupedRow,
   next: BrunoTableClientGroupedRow,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  activeGroupIds: ReadonlySet<string>,
 ): boolean {
   if (previous.rowCount !== next.rowCount || previous.presences.size !== next.presences.size) {
     return false;
@@ -350,7 +353,8 @@ function sameGroupedRow(
     const column = columnsById.get(columnId);
     if (column === undefined) return false;
     try {
-      if (!resultSemantics(column).equivalent(previousPresence.value, nextPresence.value)) {
+      const semantics = activeGroupIds.has(columnId) ? column.semantics : resultSemantics(column);
+      if (!semantics.equivalent(previousPresence.value, nextPresence.value)) {
         return false;
       }
     } catch {
@@ -390,6 +394,7 @@ function compareGroups(
   right: MaterializedGroup,
   orderBy: GroupOrderBy,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  activeGroupIds: ReadonlySet<string>,
 ): number {
   for (const order of orderBy) {
     const leftValue = left.presences.get(order.columnId) ?? MISSING;
@@ -400,7 +405,11 @@ function compareGroups(
     } else {
       const column = columnsById.get(order.columnId);
       if (column?.kind !== "field") continue;
-      comparison = comparePresenceWithSemantics(leftValue, rightValue, resultSemantics(column));
+      comparison = comparePresenceWithSemantics(
+        leftValue,
+        rightValue,
+        activeGroupIds.has(column.columnId) ? column.semantics : resultSemantics(column),
+      );
     }
     if (comparison !== 0) return order.direction === "asc" ? comparison : -comparison;
   }

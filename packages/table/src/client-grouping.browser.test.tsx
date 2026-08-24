@@ -4,7 +4,12 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
-import { BrunoTableClient } from "./index";
+import {
+  BrunoTableClient,
+  BrunoTableFilterControl,
+  BrunoTableQuickFilter,
+  BrunoTableToolbar,
+} from "./index";
 import { BrunoTableBigDecimalColumn } from "./effect";
 import type { BrunoTableColumns, BrunoTablePersistedState } from "./public-types";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
@@ -229,6 +234,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Remove from Group By" }));
     await expectCommittedProjection(["Desk", "Region", "Quantity", "Maximum price"]);
+    await vi.waitFor(() => expect(document.activeElement).toBe(addGroup.element()));
     expect(activeGridCellText()).toBe("Alpha");
     await expect.element(page.getByRole("columnheader", { name: /Region/u })).toBeInTheDocument();
     await expect
@@ -286,6 +292,127 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect.element(page.getByRole("gridcell", { name: "5 new-max" })).toBeInTheDocument();
     expect(page.getByRole("grid").element()).toBe(grid);
     expect(page.getByRole("gridcell", { name: "5 old-sum" }).all()).toHaveLength(0);
+  });
+
+  test("keeps grouping coordination alive across ready, loading, and ready", async () => {
+    const renderTable = (
+      source: Readonly<{
+        readonly rows: readonly GroupRow[];
+        readonly totalRows: number;
+        readonly version: number;
+        readonly status: "ready" | "loading";
+      }>,
+    ) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_LIFECYCLE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={source}
+      />
+    );
+    const screen = await render(
+      renderTable({ rows, totalRows: rows.length, version: 1, status: "ready" }),
+    );
+    await chooseGroup("Desk");
+    await expect.element(page.getByRole("gridcell", { name: "Alpha (2)" })).toBeInTheDocument();
+
+    await screen.rerender(
+      renderTable({ rows: [], totalRows: rows.length, version: 2, status: "loading" }),
+    );
+    await expect
+      .element(page.getByRole("grid", { name: "Loading table rows" }))
+      .toBeInTheDocument();
+
+    const recoveredRows = Object.freeze([
+      ...rows,
+      { id: "4", desk: "Alpha", region: "North", quantity: 7n, price: 8 },
+    ]);
+    await screen.rerender(
+      renderTable({
+        rows: recoveredRows,
+        totalRows: recoveredRows.length,
+        version: 3,
+        status: "ready",
+      }),
+    );
+
+    await expect.element(page.getByRole("gridcell", { name: "Alpha (3)" })).toBeInTheDocument();
+    await expect.element(page.getByRole("gridcell", { name: "12 units" })).toBeInTheDocument();
+  });
+
+  test("restores grouping while initially loading and installs the first ready projection", async () => {
+    const tableId = "TABLE_ID_GROUPED_INITIAL_LOADING";
+    const persisted = {
+      version: 1 as const,
+      tableId,
+      filters: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const }],
+      columnOrder: ["COL_ID_DESK", "COL_ID_REGION", "COL_ID_QUANTITY", "COL_ID_PRICE"],
+      columnVisibility: {
+        COL_ID_DESK: true,
+        COL_ID_REGION: true,
+        COL_ID_QUANTITY: true,
+        COL_ID_PRICE: true,
+      },
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    } satisfies BrunoTablePersistedState<GroupRow, typeof columns, true>;
+    const renderTable = (status: "loading" | "ready", version: number) => (
+      <BrunoTableClient
+        tableId={tableId}
+        columns={columns}
+        initialPersistedState={persisted}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: status === "ready" ? rows : [],
+          totalRows: rows.length,
+          version,
+          status,
+        }}
+      />
+    );
+    const screen = await render(renderTable("loading", 1));
+    await expect
+      .element(page.getByRole("grid", { name: "Loading table rows" }))
+      .toBeInTheDocument();
+
+    await screen.rerender(renderTable("ready", 2));
+
+    await expect.element(page.getByRole("gridcell", { name: "Alpha (2)" })).toBeInTheDocument();
+    expect(page.getByRole("gridcell", { name: "5 units" }).all()).toHaveLength(2);
+    expect(readCommittedHeaderProjection()).toEqual(["Desk", "Rows", "Quantity", "Maximum price"]);
+  });
+
+  test("clears the current row-selection capability after it is toggled", async () => {
+    const renderTable = (rowSelection: true | undefined) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_SELECTION_TOGGLE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        {...(rowSelection === true ? { rowSelection } : {})}
+      />
+    );
+    const screen = await render(renderTable(true));
+    await userEvent.click(page.getByRole("checkbox", { name: "Select row 1", exact: true }));
+    await screen.rerender(renderTable(undefined));
+    await screen.rerender(renderTable(true));
+    await userEvent.click(page.getByRole("checkbox", { name: "Select row 2", exact: true }));
+
+    await chooseGroup("Desk");
+    await userEvent.click(page.getByRole("button", { name: "Remove Desk from Group By" }));
+
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select row 1", exact: true }))
+      .not.toBeChecked();
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select row 2", exact: true }))
+      .not.toBeChecked();
   });
 
   test("atomically removes an active key when live column definitions revoke eligibility", async () => {
@@ -415,7 +542,9 @@ describe("BrunoTableClient grouping and aggregation", () => {
       .element(page.getByRole("menuitemcheckbox", { name: "Maximum price" }))
       .toBeInTheDocument();
     expect(page.getByRole("menuitemcheckbox", { name: "Desk" }).all()).toHaveLength(0);
-    expect(page.getByRole("menuitemcheckbox", { name: "Region" }).all()).toHaveLength(0);
+    await expect
+      .element(page.getByRole("menuitemcheckbox", { name: "Region" }))
+      .toBeInTheDocument();
     expect(page.getByRole("menuitem", { name: "Reset", exact: true }).all()).toHaveLength(0);
     expect(page.getByRole("menuitem", { name: "Increase width" }).all()).toHaveLength(0);
     await userEvent.keyboard("{Escape}");
@@ -568,6 +697,177 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("row").nth(1).getByRole("gridcell").first())
       .toHaveTextContent("Beta");
+  });
+
+  test("resets grouped Active and vertical scroll after user sort and Quick Filter commits", async () => {
+    const manyRows = Object.freeze(
+      Array.from(
+        { length: 100 },
+        (_unused, index): GroupRow => ({
+          id: `query-row-${String(index)}`,
+          desk: `Group ${String(index).padStart(3, "0")}`,
+          region: index % 2 === 0 ? "East" : "West",
+          quantity: BigInt(index + 1),
+          price: index,
+        }),
+      ),
+    );
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_QUERY_ACTIVE_RESET"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: manyRows,
+          totalRows: manyRows.length,
+          version: 1,
+          status: "ready",
+        }}
+        quickFilterFields={["desk"]}
+      >
+        <BrunoTableToolbar>
+          <BrunoTableQuickFilter />
+          <BrunoTableFilterControl<GroupRow, typeof columns> ownership="grid">
+            {(commands) => (
+              <button
+                type="button"
+                onClick={() =>
+                  commands.replace({
+                    columnId: "COL_ID_QUANTITY",
+                    type: "equals",
+                    filter: 50n,
+                  })
+                }
+              >
+                Show quantity 50
+              </button>
+            )}
+          </BrunoTableFilterControl>
+        </BrunoTableToolbar>
+      </BrunoTableClient>,
+    );
+    await chooseGroup("Desk");
+    const grid = page.getByRole("grid");
+    grid.element().focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(activeGridCellText()).toBe("Group 002 (1)");
+    grid.element().scrollTop = 720;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().scrollTop).toBeGreaterThan(0);
+
+    await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
+    const rowsSort = page
+      .getByRole("dialog", { name: "Sort rows" })
+      .getByRole("button", { name: "Toggle Rows direction, currently ascending" });
+    const rowsSortElement = rowsSort.element();
+    rowsSortElement.focus();
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => {
+      const firstCell = page.getByRole("row").nth(1).getByRole("gridcell").first().element();
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(firstCell.id);
+      expect(grid.element().scrollTop).toBe(0);
+      expect(document.activeElement).toBe(rowsSortElement);
+    });
+    await userEvent.keyboard("{Escape}");
+
+    grid.element().focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(grid.element().getAttribute("aria-activedescendant")).not.toBe(
+      page.getByRole("row").nth(1).getByRole("gridcell").first().element().id,
+    );
+    grid.element().scrollTop = 720;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().scrollTop).toBeGreaterThan(0);
+
+    const quickFilter = page.getByRole("searchbox", { name: "Quick Filter" });
+    await userEvent.fill(quickFilter, "Group");
+    await vi.waitFor(() => {
+      const firstCell = page.getByRole("row").nth(1).getByRole("gridcell").first().element();
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(firstCell.id);
+      expect(grid.element().scrollTop).toBe(0);
+      expect(document.activeElement).toBe(quickFilter.element());
+    });
+
+    grid.element().focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    grid.element().scrollTop = 720;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().scrollTop).toBeGreaterThan(0);
+
+    const quantityFilter = page.getByRole("button", { name: "Show quantity 50" });
+    await userEvent.click(quantityFilter);
+    await vi.waitFor(() => {
+      const firstCell = page.getByRole("row").nth(1).getByRole("gridcell").first().element();
+      expect(firstCell.textContent?.trim()).toBe("Group 049 (1)");
+      expect(grid.element().getAttribute("aria-activedescendant")).toBe(firstCell.id);
+      expect(grid.element().scrollTop).toBe(0);
+      expect(document.activeElement).toBe(quantityFilter.element());
+    });
+  });
+
+  test("admits disabled raw sort columns only while they participate in grouping", async () => {
+    const disabledGroupedSortColumns = [
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+        enableSorting: false,
+      },
+      {
+        columnId: "COL_ID_REGION",
+        field: "region",
+        headerName: "Region",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Maximum price",
+        valueType: "number",
+        aggFunc: "max",
+        enableSorting: false,
+      },
+    ] satisfies BrunoTableColumns<GroupRow>;
+    await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_DISABLED_SORT_CAPABILITY"
+        columns={disabledGroupedSortColumns}
+        initialOrderBy={[{ columnId: "COL_ID_REGION", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      />,
+    );
+
+    expect(page.getByRole("button", { name: "Sort by Desk", exact: true }).all()).toHaveLength(0);
+    expect(
+      page.getByRole("button", { name: "Sort by Maximum price", exact: true }).all(),
+    ).toHaveLength(0);
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
+    expect(page.getByRole("menuitem", { name: "Sort by Desk" }).all()).toHaveLength(0);
+    await userEvent.keyboard("{Escape}");
+
+    await chooseGroup("Desk");
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
+    await expect.element(page.getByRole("menuitem", { name: "Sort by Desk" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
+    const sortPanel = page.getByRole("dialog", { name: "Sort rows" });
+    await userEvent.click(sortPanel.getByRole("combobox", { name: "Add sort column" }));
+    await expect.element(page.getByRole("option", { name: "Desk" })).toBeInTheDocument();
+    await expect.element(page.getByRole("option", { name: "Maximum price" })).toBeInTheDocument();
   });
 
   test("keeps the grouped viewport structural identity and isolates a value-only live update", async () => {

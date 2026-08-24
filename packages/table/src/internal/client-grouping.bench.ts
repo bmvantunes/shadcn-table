@@ -107,7 +107,10 @@ function percentile99(samples: readonly number[]): number {
 }
 
 describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () => {
-  let previous = derive(baseRows);
+  let livePrevious = derive(baseRows);
+  let diagnosticPrevious = derive(baseRows);
+  let liveRows = baseRows;
+  let diagnosticRows = baseRows;
   let liveIteration = 0;
   const diagnosticSamples: number[] = [];
   let diagnosticPrinted = false;
@@ -125,17 +128,18 @@ describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () =
     "reconciles a one-row live update through the complete grouped result",
     () => {
       const rowIndex = liveIteration++ % residentRowCount;
-      const original = baseRows[rowIndex]!;
+      const original = liveRows[rowIndex]!;
       const raw = original.raw as BenchmarkRow;
       const changed = createInputRow(rowIndex, { ...raw, amount: raw.amount + 1n });
       const nextRows = Object.freeze([
-        ...baseRows.slice(0, rowIndex),
+        ...liveRows.slice(0, rowIndex),
         changed,
-        ...baseRows.slice(rowIndex + 1),
+        ...liveRows.slice(rowIndex + 1),
       ]);
-      const projection = derive(nextRows, previous);
+      const projection = derive(nextRows, livePrevious);
       if (projection.kind !== "ready") throw new Error(projection.message);
-      previous = projection;
+      liveRows = nextRows;
+      livePrevious = projection;
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );
@@ -144,19 +148,20 @@ describe("BrunoTable Client grouping benchmark (8.33 ms/120 Hz reference)", () =
     "diagnostic p99 for complete grouped live derivation (8.33 ms reference)",
     () => {
       const rowIndex = diagnosticSamples.length % residentRowCount;
-      const original = baseRows[rowIndex]!;
+      const original = diagnosticRows[rowIndex]!;
       const raw = original.raw as BenchmarkRow;
       const changed = createInputRow(rowIndex, { ...raw, amount: raw.amount + 1n });
       const nextRows = Object.freeze([
-        ...baseRows.slice(0, rowIndex),
+        ...diagnosticRows.slice(0, rowIndex),
         changed,
-        ...baseRows.slice(rowIndex + 1),
+        ...diagnosticRows.slice(rowIndex + 1),
       ]);
       const startedAt = performance.now();
-      const projection = derive(nextRows, previous);
+      const projection = derive(nextRows, diagnosticPrevious);
       diagnosticSamples.push(performance.now() - startedAt);
       if (projection.kind !== "ready") throw new Error(projection.message);
-      previous = projection;
+      diagnosticRows = nextRows;
+      diagnosticPrevious = projection;
       if (!diagnosticPrinted && diagnosticSamples.length >= 100) {
         diagnosticPrinted = true;
         const p99Ms = percentile99(diagnosticSamples);

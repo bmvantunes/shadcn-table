@@ -1,10 +1,21 @@
 import type { BrunoTableColumnId } from "../public-types";
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
 import { BRUNO_TABLE_ROWS_COLUMN_ID, type BrunoTableClientGroupedRow } from "./client-grouping";
+import { BRUNO_TABLE_MAX_COLUMN_WIDTH, BRUNO_TABLE_MIN_COLUMN_WIDTH } from "./column-management";
 import { captureBrunoTablePlainRecord } from "./untrusted-input";
 import { compileColumnValueSemantics } from "./value-semantics";
 
 type RuntimeCallback = (...parameters: never[]) => unknown;
+
+const COUNT_DISTINCT_PRESENTATION_SEMANTICS = compileColumnValueSemantics("bigint", {});
+
+export type BrunoTableGroupedPresentationInput = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly visibleColumnIds: readonly string[];
+  readonly groupBy: readonly string[];
+  readonly rowsColumn: BrunoTableCompiledGroupRowsColumn;
+  readonly persistedRowsWidth?: number;
+}>;
 
 export type BrunoTableCompiledGroupRowsColumn = Readonly<{
   readonly headerName: string;
@@ -32,7 +43,12 @@ export function compileBrunoTableGroupRowsColumn(
     throw new TypeError("BrunoTable groupRowsColumn headerName must be non-empty.");
   }
   const width = record?.["width"] ?? 96;
-  if (typeof width !== "number" || !Number.isFinite(width) || width < 32 || width > 1_000) {
+  if (
+    typeof width !== "number" ||
+    !Number.isFinite(width) ||
+    width < BRUNO_TABLE_MIN_COLUMN_WIDTH ||
+    width > BRUNO_TABLE_MAX_COLUMN_WIDTH
+  ) {
     throw new TypeError("BrunoTable groupRowsColumn width must be between 32 and 1000.");
   }
   const valueFormatter = optionalFunction(record?.["valueFormatter"], "valueFormatter");
@@ -57,13 +73,43 @@ export function compileBrunoTableGroupRowsColumn(
 }
 
 export function createBrunoTableGroupedColumns(
-  input: Readonly<{
-    readonly columns: readonly CompiledColumn[];
-    readonly visibleColumnIds: readonly string[];
-    readonly groupBy: readonly string[];
-    readonly rowsColumn: BrunoTableCompiledGroupRowsColumn;
-    readonly persistedRowsWidth?: number;
-  }>,
+  input: BrunoTableGroupedPresentationInput,
+): readonly CompiledColumn[] {
+  return new BrunoTableGroupedPresentationCompiler().compile(input);
+}
+
+export class BrunoTableGroupedPresentationCompiler {
+  private input: BrunoTableGroupedPresentationInput | undefined;
+  private output: readonly CompiledColumn[] | undefined;
+  private rowsSemantics:
+    | Readonly<{ readonly width: number; readonly value: CompiledFieldColumn["semantics"] }>
+    | undefined;
+
+  public compile(input: BrunoTableGroupedPresentationInput): readonly CompiledColumn[] {
+    if (this.input !== undefined && samePresentationInput(this.input, input)) {
+      return this.output as readonly CompiledColumn[];
+    }
+    const output = createGroupedColumns(input, (width) => this.compileRowsSemantics(width));
+    this.input = Object.freeze({
+      ...input,
+      visibleColumnIds: Object.freeze(Array.from(input.visibleColumnIds)),
+      groupBy: Object.freeze(Array.from(input.groupBy)),
+    });
+    this.output = output;
+    return output;
+  }
+
+  private compileRowsSemantics(width: number): CompiledFieldColumn["semantics"] {
+    if (this.rowsSemantics?.width === width) return this.rowsSemantics.value;
+    const value = compileColumnValueSemantics("bigint", { width });
+    this.rowsSemantics = Object.freeze({ width, value });
+    return value;
+  }
+}
+
+function createGroupedColumns(
+  input: BrunoTableGroupedPresentationInput,
+  compileRowsSemantics: (width: number) => CompiledFieldColumn["semantics"],
 ): readonly CompiledColumn[] {
   const byId = new Map<string, CompiledColumn>(
     input.columns.map((column) => [column.columnId, column]),
@@ -84,7 +130,13 @@ export function createBrunoTableGroupedColumns(
   );
   return Object.freeze([
     ...keys,
-    createRowsColumn(input.rowsColumn, input.persistedRowsWidth, input.groupBy, byId),
+    createRowsColumn(
+      input.rowsColumn,
+      input.persistedRowsWidth,
+      input.groupBy,
+      byId,
+      compileRowsSemantics,
+    ),
     ...aggregates,
   ]);
 }
@@ -94,9 +146,7 @@ function createRoleColumn(
   role: "groupKey" | "aggregate",
 ): CompiledColumn {
   const aggregateIsBigInt = role === "aggregate" && column.aggFunc === "countDistinct";
-  const semantics = aggregateIsBigInt
-    ? compileColumnValueSemantics("bigint", {})
-    : column.semantics;
+  const semantics = aggregateIsBigInt ? COUNT_DISTINCT_PRESENTATION_SEMANTICS : column.semantics;
   const formatter =
     role === "groupKey" ? column.groupKeyValueFormatter : column.aggregateValueFormatter;
   const className =
@@ -157,9 +207,10 @@ function createRowsColumn(
   persistedWidth: number | undefined,
   groupBy: readonly string[],
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  compileRowsSemantics: (width: number) => CompiledFieldColumn["semantics"],
 ): CompiledColumn {
   const width = persistedWidth ?? options.width;
-  const semantics = compileColumnValueSemantics("bigint", { width });
+  const semantics = compileRowsSemantics(width);
   const wrap = (callback: RuntimeCallback): RuntimeCallback =>
     ((input: Readonly<{ readonly row: unknown; readonly value: unknown }>) => {
       const row = asGroupedRow(input.row, BRUNO_TABLE_ROWS_COLUMN_ID, "rows");
@@ -206,6 +257,26 @@ function createRowsColumn(
         }),
     ...(options.cellRenderer === undefined ? {} : { cellRenderer: wrap(options.cellRenderer) }),
   });
+}
+
+function samePresentationInput(
+  previous: BrunoTableGroupedPresentationInput,
+  next: BrunoTableGroupedPresentationInput,
+): boolean {
+  return (
+    previous.columns === next.columns &&
+    previous.rowsColumn === next.rowsColumn &&
+    previous.persistedRowsWidth === next.persistedRowsWidth &&
+    sameStrings(previous.visibleColumnIds, next.visibleColumnIds) &&
+    sameStrings(previous.groupBy, next.groupBy)
+  );
+}
+
+function sameStrings(previous: readonly string[], next: readonly string[]): boolean {
+  return (
+    previous === next ||
+    (previous.length === next.length && previous.every((value, index) => value === next[index]))
+  );
 }
 
 function asGroupedRow(

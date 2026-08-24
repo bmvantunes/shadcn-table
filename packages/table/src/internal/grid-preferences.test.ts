@@ -1336,7 +1336,8 @@ describe("Grid Preferences", () => {
           { columnId: "COL_ID_UNKNOWN", direction: "asc" },
           { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" },
           { columnId: "COL_ID_QUANTITY", direction: "asc" },
-          { columnId: "COL_ID_SCORE", direction: "sideways" },
+          { columnId: "COL_ID_SCORE", direction: "asc" },
+          { columnId: "COL_ID_DESK", direction: "sideways" },
         ],
         columnOrder: ["COL_ID_DESK", "COL_ID_QUANTITY", "COL_ID_SCORE"],
         columnVisibility: { COL_ID_SCORE: false },
@@ -1359,6 +1360,120 @@ describe("Grid Preferences", () => {
       ],
       columnWidths: { COL_ID_BRUNO_TABLE_ROWS: 333 },
     });
+  });
+
+  it("snapshots hostile persisted grouping entries without invoking accessors", () => {
+    const groupingColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "name",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    let groupByGetterReads = 0;
+    const hostileGroupBy = ["COL_ID_DESK"];
+    Object.defineProperty(hostileGroupBy, 0, {
+      enumerable: true,
+      get: () => {
+        groupByGetterReads += 1;
+        return "COL_ID_DESK";
+      },
+    });
+    let orderGetterReads = 0;
+    const hostileOrder = Object.create(null);
+    Object.defineProperties(hostileOrder, {
+      columnId: {
+        enumerable: true,
+        get: () => {
+          orderGetterReads += 1;
+          return "COL_ID_DESK";
+        },
+      },
+      direction: { enumerable: true, value: "desc" },
+    });
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_HOSTILE_GROUPING",
+      columns: groupingColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      grouping: true,
+      initialPersistedState: {
+        version: 1,
+        tableId: "TABLE_ID_HOSTILE_GROUPING",
+        filters: [],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+        groupBy: hostileGroupBy,
+        groupOrderBy: [hostileOrder],
+        columnOrder: ["COL_ID_DESK"],
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+
+    expect(groupByGetterReads).toBe(0);
+    expect(orderGetterReads).toBe(0);
+    expect(restored.groupBy).toEqual([]);
+    expect(restored.groupOrderBy).toEqual([
+      { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" },
+    ]);
+  });
+
+  it("rejects over-budget persisted grouping arrays before reading their entries", () => {
+    const groupingColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "name",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    let entryReads = 0;
+    const overBudgetGroupBy = Array.from({ length: 16_385 });
+    const overBudgetGroupOrderBy = Array.from({ length: 16_385 });
+    Object.defineProperty(overBudgetGroupBy, 0, {
+      enumerable: true,
+      get: () => {
+        entryReads += 1;
+        return "COL_ID_DESK";
+      },
+    });
+    Object.defineProperty(overBudgetGroupOrderBy, 0, {
+      enumerable: true,
+      get: () => {
+        entryReads += 1;
+        return { columnId: "COL_ID_DESK", direction: "desc" };
+      },
+    });
+
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_OVER_BUDGET_GROUPING",
+      columns: groupingColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      grouping: true,
+      initialPersistedState: {
+        version: 1,
+        tableId: "TABLE_ID_OVER_BUDGET_GROUPING",
+        filters: [],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+        groupBy: overBudgetGroupBy,
+        groupOrderBy: overBudgetGroupOrderBy,
+        columnOrder: ["COL_ID_DESK"],
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+
+    expect(entryReads).toBe(0);
+    expect(restored.groupBy).toEqual([]);
+    expect(restored.groupOrderBy).toEqual([
+      { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" },
+    ]);
   });
 
   it("restores a mandatory grouped sort over the active key when persisted intent sanitizes empty", () => {

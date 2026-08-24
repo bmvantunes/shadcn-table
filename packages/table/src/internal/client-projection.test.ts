@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { compileColumns } from "./compile-columns";
+import { compileColumns, type CompiledColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_ROWS_COLUMN_ID,
   type BrunoTableClientGroupedProjection,
   type BrunoTableClientGroupedRow,
 } from "./client-grouping";
 import {
+  BrunoTableGroupedPresentationCompiler,
   compileBrunoTableGroupRowsColumn,
   createBrunoTableGroupedColumns,
 } from "./client-grouping-presentation";
@@ -48,7 +49,121 @@ const columns = compileColumns([
   },
 ]);
 
+describe("grouped presentation compilation", () => {
+  it("reuses one table-scoped compiled presentation plan for value-only publications", () => {
+    const compiler = new BrunoTableGroupedPresentationCompiler();
+    const rowsColumn = compileBrunoTableGroupRowsColumn(undefined);
+    const input = {
+      columns,
+      visibleColumnIds: columns.map(({ columnId }) => columnId),
+      groupBy: ["COL_ID_DESK"],
+      rowsColumn,
+      persistedRowsWidth: 137,
+    } as const;
+
+    const first = compiler.compile(input);
+    const second = compiler.compile({
+      ...input,
+      visibleColumnIds: Array.from(input.visibleColumnIds),
+      groupBy: Array.from(input.groupBy),
+    });
+
+    expect(second).toBe(first);
+    expect(second.every((column, index) => column === first[index])).toBe(true);
+  });
+
+  it("reuses exact result semantics across equivalent projection candidates", () => {
+    const presentationColumns = compileColumns([
+      {
+        columnId: "COL_ID_KEY",
+        field: "desk",
+        headerName: "Key",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_DISTINCT",
+        field: "region",
+        headerName: "Distinct",
+        valueType: "text",
+        aggFunc: "countDistinct",
+      },
+    ]);
+    const input = {
+      columns: presentationColumns,
+      visibleColumnIds: presentationColumns.map(({ columnId }) => columnId),
+      groupBy: ["COL_ID_KEY"],
+      rowsColumn: compileBrunoTableGroupRowsColumn(undefined),
+      persistedRowsWidth: 137,
+    } as const;
+    const compiler = new BrunoTableGroupedPresentationCompiler();
+    const first = compiler.compile(input);
+    const second = compiler.compile(input);
+
+    expect(first.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics).toBe(
+      second.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics,
+    );
+    expect(first.find(({ columnId }) => columnId === BRUNO_TABLE_ROWS_COLUMN_ID)?.semantics).toBe(
+      second.find(({ columnId }) => columnId === BRUNO_TABLE_ROWS_COLUMN_ID)?.semantics,
+    );
+  });
+});
+
 describe("BrunoTableClientProjectionCoordinator", () => {
+  it("publishes one installed grouping structure epoch and ignores value or order-only rows", () => {
+    const initial = rawCandidate(0, ["raw-a"]);
+    const runtime = createRuntime(initial.publication);
+    const view = runtime.getView();
+    const coordinator = new BrunoTableClientProjectionCoordinator(initial);
+    const listener = vi.fn();
+    view.subscribeInstalledGroupingStructure(listener);
+    expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
+      layoutKey: JSON.stringify(["raw", []]),
+      groupBy: [],
+    });
+    const deferred = groupedCandidate(
+      1,
+      ["COL_ID_DESK"],
+      [groupedRow("group-a", 1n), groupedRow("group-b", 2n)],
+    );
+
+    expect(listener).not.toHaveBeenCalled();
+    coordinator.commit(deferred, view.publishRowPipeline);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
+      layoutKey: JSON.stringify(["grouped", ["COL_ID_DESK"]]),
+      groupBy: ["COL_ID_DESK"],
+    });
+
+    coordinator.commit(invalidCandidate(2, ["COL_ID_DESK"]), view.publishRowPipeline);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
+      layoutKey: JSON.stringify(["invalid", ["COL_ID_DESK"]]),
+      groupBy: ["COL_ID_DESK"],
+    });
+    coordinator.commit(deferred, view.publishRowPipeline);
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    for (let value = 3n; value <= 22n; value += 1n) {
+      const rows =
+        value % 2n === 0n
+          ? [groupedRow("group-a", value), groupedRow("group-b", 2n)]
+          : [groupedRow("group-b", 2n), groupedRow("group-a", value)];
+      coordinator.commit(
+        groupedCandidate(1, ["COL_ID_DESK"], rows, new Set(["group-a"])),
+        view.publishRowPipeline,
+      );
+    }
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    coordinator.commit(rawCandidate(3, ["raw-a"]), view.publishRowPipeline);
+    expect(listener).toHaveBeenCalledTimes(4);
+    expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
+      layoutKey: JSON.stringify(["raw", []]),
+      groupBy: [],
+    });
+  });
+
   it("atomically installs one wholly coherent structural epoch per accepted transition", () => {
     const initial = rawCandidate(0, ["raw-a", "raw-b"]);
     const runtime = createRuntime(initial.publication);
@@ -106,10 +221,16 @@ describe("BrunoTableClientProjectionCoordinator", () => {
     const coordinator = new BrunoTableClientProjectionCoordinator(initial);
     coordinator.commit(initial, view.publishRowPipeline);
     const installed = view.getInstalledClientProjectionSnapshot();
+    expect(installed).toBeDefined();
+    expect(installed?.kind).toBe("grouped");
     const structuralListener = vi.fn();
+    const changedRowListener = vi.fn();
+    const unchangedRowListener = vi.fn();
     const changedCellListener = vi.fn();
     const unchangedCellListener = vi.fn();
     view.subscribeInstalledClientProjection(structuralListener);
+    view.subscribeRow("group-a", changedRowListener);
+    view.subscribeRow("group-b", unchangedRowListener);
     view.subscribeCell("group-a", "COL_ID_QUANTITY", changedCellListener);
     view.subscribeCell("group-b", "COL_ID_QUANTITY", unchangedCellListener);
 
@@ -128,12 +249,87 @@ describe("BrunoTableClientProjectionCoordinator", () => {
     expect(runtime.getView()).toBe(view);
     expect(view.getInstalledClientProjectionSnapshot()).toBe(installed);
     expect(structuralListener).not.toHaveBeenCalled();
+    expect(changedRowListener).toHaveBeenCalledTimes(20);
+    expect(unchangedRowListener).not.toHaveBeenCalled();
     expect(changedCellListener).toHaveBeenCalledTimes(20);
     expect(unchangedCellListener).not.toHaveBeenCalled();
     expect(view.getCellSnapshot("group-a", "COL_ID_QUANTITY")).toMatchObject({
       kind: "available",
       value: 21n,
     });
+  });
+
+  it("invalidates fine subscribers when presentation semantics change without a layout change", () => {
+    const initial = groupedCandidate(
+      1,
+      ["COL_ID_DESK"],
+      [groupedRow("group-a", 5n)],
+      undefined,
+      columns,
+      "sum-presentation",
+    );
+    const runtime = createRuntime(publication([]));
+    const view = runtime.getView();
+    const coordinator = new BrunoTableClientProjectionCoordinator(initial);
+    coordinator.commit(initial, view.publishRowPipeline);
+    const cellListener = vi.fn();
+    const rowCellListener = vi.fn();
+    view.subscribeCell("group-a", "COL_ID_QUANTITY", cellListener);
+    view.subscribeRowCell("group-a", "COL_ID_QUANTITY", rowCellListener);
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_REGION",
+        field: "region",
+        headerName: "Region",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Maximum quantity",
+        valueType: "bigint",
+        aggFunc: "max",
+      },
+    ]);
+
+    coordinator.commit(
+      groupedCandidate(
+        1,
+        ["COL_ID_DESK"],
+        [groupedRow("group-a", 5n)],
+        new Set(),
+        replacementColumns,
+        "max-presentation",
+      ),
+      (candidatePublication) =>
+        view.reconcileClientProjection(
+          candidatePublication,
+          replacementColumns,
+          {
+            baselineFilters: [],
+            baselineOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+          },
+          96,
+        ),
+    );
+
+    expect(view.getInstalledClientProjectionSnapshot()?.presentationKey).toBe("max-presentation");
+    expect(view.getCellSnapshot("group-a", "COL_ID_QUANTITY").column?.headerName).toBe(
+      "Maximum quantity",
+    );
+    expect(cellListener).toHaveBeenCalledOnce();
+    expect(rowCellListener).toHaveBeenCalledOnce();
+    expect(view.getCellSnapshot("group-a", "COL_ID_QUANTITY").column?.headerName).toBe(
+      "Maximum quantity",
+    );
   });
 
   it("keeps the old epoch visible until commit and does not roll back on listener failure", () => {
@@ -272,6 +468,8 @@ function groupedCandidate(
   groupBy: readonly string[],
   rows: readonly BrunoTableClientGroupedRow[],
   changedRowIds?: ReadonlySet<string>,
+  sourceColumns: readonly CompiledColumn[] = columns,
+  presentationKey?: string,
 ): BrunoTableClientProjectionCandidate {
   const rowIds = Object.freeze(rows.map(({ rowId }) => rowId));
   const projection: Extract<BrunoTableClientGroupedProjection, { readonly kind: "ready" }> =
@@ -282,14 +480,15 @@ function groupedCandidate(
       rowIds,
     });
   const groupedColumns = createBrunoTableGroupedColumns({
-    columns,
-    visibleColumnIds: columns.map(({ columnId }) => columnId),
+    columns: sourceColumns,
+    visibleColumnIds: sourceColumns.map(({ columnId }) => columnId),
     groupBy,
     rowsColumn: compileBrunoTableGroupRowsColumn(undefined),
   });
   return createBrunoTableGroupedProjectionCandidate({
     projection,
     columns: groupedColumns,
+    ...(presentationKey === undefined ? {} : { presentationKey }),
     publication: publication(rowIds, rows, changedRowIds),
     queryGeneration: generation,
     queryNavigationMode: "projection-reset",

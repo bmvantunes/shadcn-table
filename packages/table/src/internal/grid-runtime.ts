@@ -6,6 +6,8 @@ import type {
 } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
 import {
+  BRUNO_TABLE_MAX_COLUMN_WIDTH,
+  BRUNO_TABLE_MIN_COLUMN_WIDTH,
   applyBrunoTableGridCommand,
   getBrunoTableColumnWidthBounds,
   getBrunoTableColumnLayoutSnapshot,
@@ -240,6 +242,11 @@ export type BrunoTableInstalledClientProjectionSnapshot =
         readonly invalid: BrunoTableInvalidCellValue["invalid"];
       }>);
 
+export type BrunoTableInstalledGroupingStructureSnapshot = Readonly<{
+  readonly layoutKey: string;
+  readonly groupBy: readonly string[];
+}>;
+
 type WithoutClientProjectionEpoch<T> = T extends unknown ? Omit<T, "epoch"> : never;
 type BrunoTableClientProjectionPublication =
   WithoutClientProjectionEpoch<BrunoTableInstalledClientProjectionSnapshot>;
@@ -250,6 +257,8 @@ export type BrunoTableRuntimeView = {
     | BrunoTableInstalledClientProjectionSnapshot
     | undefined;
   readonly subscribeInstalledClientProjection: (listener: Listener) => () => void;
+  readonly getInstalledGroupingStructureSnapshot: () => BrunoTableInstalledGroupingStructureSnapshot;
+  readonly subscribeInstalledGroupingStructure: (listener: Listener) => () => void;
   readonly getChromeSnapshot: () => BrunoTableChromeSnapshot;
   readonly getSourceSnapshot: () => BrunoTableSourceSnapshot;
   readonly getSourceVersionSnapshot: () => BrunoTableSourceVersionSnapshot;
@@ -573,6 +582,11 @@ export type BrunoTableRowCellSnapshot =
 const PENDING_CELL_SNAPSHOT_LIMIT = 4_096;
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 const EMPTY_GROUPING: readonly never[] = Object.freeze([]);
+const RAW_INSTALLED_GROUPING_STRUCTURE: BrunoTableInstalledGroupingStructureSnapshot =
+  Object.freeze({
+    layoutKey: BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY,
+    groupBy: EMPTY_GROUPING,
+  });
 
 type QueryTransition = Readonly<{
   readonly filterChanged: boolean;
@@ -667,6 +681,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly columnLayoutListeners = new Set<Listener>();
   private readonly columnStructureListeners = new Set<Listener>();
   private readonly installedClientProjectionListeners = new Set<Listener>();
+  private readonly installedGroupingStructureListeners = new Set<Listener>();
   private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
   private readonly queuedPublications: (QueuedPublication<TRow> | undefined)[] = [];
   private publishing = false;
@@ -680,6 +695,7 @@ export class BrunoTableGridRuntime<TRow> {
   private columnsById: ReadonlyMap<string, CompiledColumn>;
   private presentationColumnsById: ReadonlyMap<string, CompiledColumn>;
   private installedClientProjection: BrunoTableInstalledClientProjectionSnapshot | undefined;
+  private installedGroupingStructure = RAW_INSTALLED_GROUPING_STRUCTURE;
   private baselineFilters: readonly unknown[];
   private baselineFilterCollection: BrunoTableClientFilterCollection;
   private baselineOrderBy: BrunoTableOrderBy;
@@ -746,7 +762,7 @@ export class BrunoTableGridRuntime<TRow> {
       initialFilters: this.baselineFilters,
       initialOrderBy: this.baselineOrderBy,
       initialPersistedState: preferencesOptions.initialPersistedState,
-      grouping: this.groupingEnabled,
+      grouping: this.groupingPermitted,
     });
     this.filterCollection = restoredPreferences.filterCollection;
     this.getOnPersistChange = preferencesOptions.getOnPersistChange ?? (() => undefined);
@@ -804,6 +820,8 @@ export class BrunoTableGridRuntime<TRow> {
       this.view = Object.freeze({
         getInstalledClientProjectionSnapshot: this.getInstalledClientProjectionSnapshot,
         subscribeInstalledClientProjection: this.subscribeInstalledClientProjection,
+        getInstalledGroupingStructureSnapshot: this.getInstalledGroupingStructureSnapshot,
+        subscribeInstalledGroupingStructure: this.subscribeInstalledGroupingStructure,
         getChromeSnapshot: this.getChromeSnapshot,
         getSourceSnapshot: this.getSourceSnapshot,
         getSourceVersionSnapshot: this.getSourceVersionSnapshot,
@@ -986,11 +1004,20 @@ export class BrunoTableGridRuntime<TRow> {
       ? this.stageColumns(columns, queryConfiguration, groupRowsWidth)
       : undefined;
     const next = this.createState(publication);
+    const previousClientProjection = this.installedClientProjection;
     const nextClientProjection = stabilizeInstalledClientProjection(
-      this.installedClientProjection,
+      previousClientProjection,
       publication.clientProjection,
     );
-    const clientProjectionChanged = nextClientProjection !== this.installedClientProjection;
+    const clientProjectionChanged = nextClientProjection !== previousClientProjection;
+    const previousGroupingStructure = this.installedGroupingStructure;
+    const nextGroupingStructure = stabilizeInstalledGroupingStructure(
+      previousGroupingStructure,
+      nextClientProjection,
+    );
+    const groupingStructureChanged = nextGroupingStructure !== previousGroupingStructure;
+    const clientProjectionLayoutChanged =
+      previousClientProjection?.layoutKey !== nextClientProjection?.layoutKey;
 
     if (configuration !== undefined) {
       if (!sameStringArray(this.query.groupBy, configuration.query.groupBy)) {
@@ -1021,6 +1048,7 @@ export class BrunoTableGridRuntime<TRow> {
     const installed = stabilizeRuntimeState(previous, next);
     this.state = installed;
     this.installedClientProjection = nextClientProjection;
+    this.installedGroupingStructure = nextGroupingStructure;
     this.presentationColumnsById =
       nextClientProjection === undefined
         ? this.columnsById
@@ -1048,16 +1076,22 @@ export class BrunoTableGridRuntime<TRow> {
     const projectionError = clientProjectionChanged
       ? notify(this.installedClientProjectionListeners)
       : undefined;
+    const groupingStructureError = groupingStructureChanged
+      ? notify(this.installedGroupingStructureListeners)
+      : undefined;
     const commitError = this.commitState(
       previous,
       installed,
       configuration === undefined ? publication.changedRowIds : undefined,
-      clientProjectionChanged,
+      clientProjectionLayoutChanged,
     );
     const firstError = firstNotificationFailure(
       firstNotificationFailure(
-        firstNotificationFailure(configurationError, transitionError),
-        projectionError,
+        firstNotificationFailure(
+          firstNotificationFailure(configurationError, transitionError),
+          projectionError,
+        ),
+        groupingStructureError,
       ),
       commitError,
     );
@@ -1138,6 +1172,12 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeInstalledClientProjection = (listener: Listener): (() => void) =>
     subscribe(this.installedClientProjectionListeners, listener);
+
+  public readonly getInstalledGroupingStructureSnapshot =
+    (): BrunoTableInstalledGroupingStructureSnapshot => this.installedGroupingStructure;
+
+  public readonly subscribeInstalledGroupingStructure = (listener: Listener): (() => void) =>
+    subscribe(this.installedGroupingStructureListeners, listener);
 
   public readonly getSourceSnapshot = (): BrunoTableSourceSnapshot => this.state.source;
 
@@ -1549,7 +1589,7 @@ export class BrunoTableGridRuntime<TRow> {
           command,
         );
         if (nextGroupOrderBy !== this.query.groupOrderBy) {
-          this.publishGroupingQuery(this.query.groupBy, nextGroupOrderBy);
+          this.publishGroupingQuery(this.query.groupBy, nextGroupOrderBy, "reset");
         }
         return true;
       }
@@ -1610,11 +1650,7 @@ export class BrunoTableGridRuntime<TRow> {
       }
       if (command.type === "column.visibility.commit") {
         const column = this.columnsById.get(command.columnId);
-        if (
-          column?.kind !== "field" ||
-          column.aggFunc === undefined ||
-          this.query.groupBy.includes(command.columnId)
-        ) {
+        if (column === undefined || this.query.groupBy.includes(command.columnId)) {
           return false;
         }
       }
@@ -1640,7 +1676,10 @@ export class BrunoTableGridRuntime<TRow> {
       ) {
         return false;
       }
-      this.rowsWidth = Math.min(1_000, Math.max(32, command.width));
+      this.rowsWidth = Math.min(
+        BRUNO_TABLE_MAX_COLUMN_WIDTH,
+        Math.max(BRUNO_TABLE_MIN_COLUMN_WIDTH, command.width),
+      );
       this.publishRowsWidth();
       return true;
     }
@@ -1735,6 +1774,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly publishGroupingQuery = (
     groupBy: readonly string[],
     groupOrderBy: BrunoTableOrderBy,
+    navigationMode?: BrunoTableQueryNavigationMode,
   ): void => {
     const previousActiveSortCount = this.getActiveSortCountSnapshot();
     const tupleChanged = !sameStringArray(this.query.groupBy, groupBy);
@@ -1746,7 +1786,7 @@ export class BrunoTableGridRuntime<TRow> {
       this.query.quickFilter,
       this.query.orderBy,
       this.query.generation + 1,
-      tupleChanged ? "projection-reset" : "reconcile",
+      navigationMode ?? (tupleChanged ? "projection-reset" : "reconcile"),
       groupBy,
       groupOrderBy,
       this.rowsWidth,
@@ -1956,7 +1996,7 @@ export class BrunoTableGridRuntime<TRow> {
           );
     const groupingEnabled =
       this.groupingPermitted && columns.some((column) => column.kind === "field" && column.groupBy);
-    const nextGroupOrderBy = groupingEnabled
+    const nextGroupOrderBy = this.groupingPermitted
       ? reconcileGroupedOrderBy(
           this.query.groupOrderBy,
           nextGroupBy,
@@ -1967,7 +2007,8 @@ export class BrunoTableGridRuntime<TRow> {
     const groupingTupleChanged = !sameStringArray(this.query.groupBy, nextGroupBy);
     const groupingSortChanged = !sameOrderBy(this.query.groupOrderBy, nextGroupOrderBy);
     const groupingChanged = groupingTupleChanged || groupingSortChanged;
-    const rowsWidth = groupingEnabled ? this.rowsWidth : undefined;
+    const rowsWidth = this.rowsWidth;
+    const queryRowsWidth = groupingEnabled ? rowsWidth : undefined;
     const query = createQuerySnapshot(
       columns,
       nextFilterCollection,
@@ -1983,7 +2024,7 @@ export class BrunoTableGridRuntime<TRow> {
         : this.query.navigationMode,
       Object.freeze(nextGroupBy),
       nextGroupOrderBy,
-      rowsWidth,
+      queryRowsWidth,
     );
     const columnCommands = createColumnCommandSnapshots(
       columns,
@@ -2073,7 +2114,7 @@ export class BrunoTableGridRuntime<TRow> {
         quickFilter,
         orderBy,
         this.query.generation + 1,
-        sortingChanged ? "clear" : this.query.groupBy.length > 0 ? "reconcile" : "reset",
+        sortingChanged ? "clear" : "reset",
         this.query.groupBy,
         this.query.groupOrderBy,
         this.rowsWidth,
@@ -2405,6 +2446,7 @@ export class BrunoTableGridRuntime<TRow> {
         }
         if (previousSnapshot.column !== nextSnapshot.column) {
           this.installCellSnapshot(rowId, columnId, nextSnapshot);
+          firstError = firstNotificationFailure(firstError, notify(listeners));
           continue;
         }
         if (sameCellSnapshot(previousSnapshot, nextSnapshot)) continue;
@@ -2943,8 +2985,9 @@ function createColumnCommandSnapshots(
     );
     const next = Object.freeze({
       sortable:
-        column.enableSorting !== false &&
-        (query.groupBy.length === 0 || groupedSortable.has(column.columnId)),
+        query.groupBy.length > 0
+          ? groupedSortable.has(column.columnId)
+          : column.enableSorting !== false,
       ...(sort === undefined ? {} : { sortDirection: sort.direction, sortPriority: sortIndex + 1 }),
       filterActive: activeFilterColumnIds.has(column.columnId),
       filterBaselineAvailable: baselineFilterColumnIds.has(column.columnId),
@@ -2978,8 +3021,8 @@ function createColumnCommandSnapshots(
         filterBaselineAvailable: false,
         visible: true,
         width: query.rowsWidth ?? groupRowsWidth,
-        minWidth: 32,
-        maxWidth: 1_000,
+        minWidth: BRUNO_TABLE_MIN_COLUMN_WIDTH,
+        maxWidth: BRUNO_TABLE_MAX_COLUMN_WIDTH,
       }),
     );
   }
@@ -3060,6 +3103,8 @@ function activeQuerySemanticsChanged(
   query: BrunoTableQuerySnapshot,
 ): boolean {
   const activeColumnIds = new Set(query.orderBy.map((sort) => sort.columnId));
+  for (const sort of query.groupOrderBy) activeColumnIds.add(sort.columnId);
+  for (const columnId of query.groupBy) activeColumnIds.add(columnId);
   for (const columnId of query.filterCollection.columnIds) activeColumnIds.add(columnId);
   for (const columnId of activeColumnIds) {
     const previous = previousColumns.find((column) => column.columnId === columnId);
@@ -3198,7 +3243,9 @@ function sameQuerySemantics(previous: CompiledColumn, next: CompiledColumn): boo
   ) {
     return false;
   }
-  if (previous.kind === "field" && next.kind === "field") return previous.field === next.field;
+  if (previous.kind === "field" && next.kind === "field") {
+    return previous.field === next.field && previous.aggFunc === next.aggFunc;
+  }
   if (previous.kind === "computed" && next.kind === "computed") {
     return (
       previous.valueGetter === next.valueGetter &&
@@ -3239,6 +3286,18 @@ function stabilizeInstalledClientProjection(
     return previous;
   }
   return Object.freeze({ ...candidate, epoch: (previous?.epoch ?? -1) + 1 });
+}
+
+function stabilizeInstalledGroupingStructure(
+  previous: BrunoTableInstalledGroupingStructureSnapshot,
+  projection: BrunoTableInstalledClientProjectionSnapshot | undefined,
+): BrunoTableInstalledGroupingStructureSnapshot {
+  const layoutKey = projection?.layoutKey ?? BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY;
+  const groupBy = projection?.groupBy ?? EMPTY_GROUPING;
+  if (previous.layoutKey === layoutKey && sameStringArray(previous.groupBy, groupBy)) {
+    return previous;
+  }
+  return Object.freeze({ layoutKey, groupBy });
 }
 
 function sameInvalidClientProjection(

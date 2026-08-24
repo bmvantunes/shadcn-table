@@ -468,7 +468,7 @@ Persisted state must be:
 
 Persisted filters, both sort contexts, grouping, and layouts refer to `columnId`, never directly to backend fields or aggregate aliases. Server Adapters translate valid restored state through current column definitions immediately before issuing a query.
 
-Rows participates only in the persisted column-width map. A committed user resize is keyed by `COL_ID_BRUNO_TABLE_ROWS`, wins over the `groupRowsColumn.width` baseline, remains dormant while grouping is inactive, and is restored when grouping resumes. Sanitization retains that width while current definitions still provide grouping capability and otherwise drops it. The reserved identity never enters persisted column order, visibility, or pinning.
+Rows participates only in the persisted column-width map. A committed user resize is keyed by `COL_ID_BRUNO_TABLE_ROWS`, wins over the `groupRowsColumn.width` baseline, remains dormant while grouping is inactive or temporarily unavailable in replacement definitions, and is restored when grouping resumes. Editable and otherwise grouping-disallowed instances drop it at the capability boundary. The reserved identity never enters persisted column order, visibility, or pinning.
 
 The persisted column-width map is sparse durable intent: it contains only committed user resize overrides, never definition-provided baseline widths. A valid restored override remains committed even when it currently equals the compiled baseline, so a later definition replacement cannot erase the user's intent.
 

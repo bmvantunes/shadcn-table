@@ -163,6 +163,14 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     queryConfiguration: BrunoTableQueryConfiguration,
     notify = true,
   ): void => {
+    if (
+      this.projectionInput.publication === this.publication &&
+      this.projectionInput.columns === columns &&
+      this.projectionInput.queryConfiguration === queryConfiguration &&
+      this.projectionInput.groupRowsColumn === this.groupRowsColumn
+    ) {
+      return;
+    }
     this.projectionInputEpoch += 1;
     this.projectionInput = createProjectionInputSnapshot(
       this.projectionInputEpoch,
@@ -272,7 +280,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly getFacetRowsSnapshot = (
     rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
   ): BrunoTableClientFacetRowsSnapshot => {
-    const coherent = asClientCoherent(rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const sourceRowSpace = isClientGroupedRowSpace(rowSpace)
+      ? this.publication.rowSpace
+      : (rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const coherent = asClientCoherent(sourceRowSpace);
     const sequence = coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
     return Object.freeze({
       rows: sequence.asArray(),

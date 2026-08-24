@@ -100,17 +100,9 @@ export function createBrunoTableRawProjectionCandidate(
 ): BrunoTableClientProjectionCandidate {
   const rowIds = freezeRowIds(input.rowIds);
   const rowSpace = createClientLogicalRowSpace(rowIds);
-  const authority = Object.freeze({
-    layoutKey: projectionLayoutKey("raw", EMPTY_GROUP_BY),
-    columns: input.columns,
-    publication: input.publication,
-    rowSpace,
-    queryGeneration: input.queryGeneration,
-    queryNavigationMode: input.queryNavigationMode,
-  });
   return Object.freeze({
     kind: "raw" as const,
-    layoutKey: authority.layoutKey,
+    layoutKey: projectionLayoutKey("raw", EMPTY_GROUP_BY),
     groupBy: EMPTY_GROUP_BY,
     columns: input.columns,
     presentationKey: input.presentationKey ?? `raw:${String(input.queryGeneration)}`,
@@ -134,17 +126,9 @@ export function createBrunoTableGroupedProjectionCandidate(
 ): BrunoTableClientProjectionCandidate {
   const rowIds = freezeRowIds(input.projection.rowIds);
   const rowSpace = createClientLogicalRowSpace(rowIds);
-  const authority = Object.freeze({
-    layoutKey: projectionLayoutKey("grouped", input.projection.groupBy),
-    columns: input.columns,
-    publication: input.publication,
-    rowSpace,
-    queryGeneration: input.queryGeneration,
-    queryNavigationMode: input.queryNavigationMode,
-  });
   return Object.freeze({
     kind: "grouped" as const,
-    layoutKey: authority.layoutKey,
+    layoutKey: projectionLayoutKey("grouped", input.projection.groupBy),
     groupBy: input.projection.groupBy,
     columns: input.columns,
     presentationKey: input.presentationKey ?? `grouped:${String(input.queryGeneration)}`,
@@ -168,17 +152,9 @@ export function createBrunoTableInvalidProjectionCandidate(
     readonly invalid: BrunoTableInvalidCellValue["invalid"];
   }>,
 ): BrunoTableClientProjectionCandidate {
-  const authority = Object.freeze({
-    layoutKey: projectionLayoutKey("invalid", input.groupBy),
-    columns: input.columns,
-    publication: input.publication,
-    rowSpace: EMPTY_ROW_SPACE,
-    queryGeneration: input.queryGeneration,
-    queryNavigationMode: input.queryNavigationMode,
-  });
   return Object.freeze({
     kind: "invalid" as const,
-    layoutKey: authority.layoutKey,
+    layoutKey: projectionLayoutKey("invalid", input.groupBy),
     groupBy: Object.freeze(Array.from(input.groupBy)),
     columns: input.columns,
     presentationKey: input.presentationKey ?? `invalid:${String(input.queryGeneration)}`,
@@ -227,7 +203,6 @@ function sameProjection(
       installed.queryGeneration === candidate.queryGeneration &&
       installed.queryNavigationMode === candidate.queryNavigationMode &&
       installed.publication === candidate.publication &&
-      installed.publication.hasCoherentRows === candidate.publication.hasCoherentRows &&
       sameStrings(installed.groupBy, candidate.groupBy)
     );
   }

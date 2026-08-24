@@ -147,6 +147,7 @@ export function BrunoTableViewportAdapterBoundary({
   rowSpace,
   runtime,
   columns,
+  projectionKind,
   navigation,
   queryGeneration,
   queryNavigationMode,
@@ -157,6 +158,7 @@ export function BrunoTableViewportAdapterBoundary({
   readonly rowSpace: BrunoTableLogicalRowSpace;
   readonly runtime: BrunoTableRuntimeView;
   readonly columns: readonly CompiledColumn[];
+  readonly projectionKind: "raw" | "grouped" | "invalid";
   readonly navigation: BrunoTableNavigationRuntime;
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
@@ -186,10 +188,7 @@ export function BrunoTableViewportAdapterBoundary({
     [columnLayout.allColumns],
   );
   const logicalColumns = useMemo(() => {
-    const groupedProjection = installedColumns.some(
-      (column) => column.columnId === "COL_ID_BRUNO_TABLE_ROWS",
-    );
-    return groupedProjection
+    return projectionKind === "grouped"
       ? installedColumns
       : Object.freeze(
           installedColumns.flatMap((column) => {
@@ -197,7 +196,7 @@ export function BrunoTableViewportAdapterBoundary({
             return [layoutColumnsById.get(column.columnId) ?? column];
           }),
         );
-  }, [installedColumns, layoutColumnsById, visibleColumnIds]);
+  }, [installedColumns, layoutColumnsById, projectionKind, visibleColumnIds]);
   const logicalColumnLayoutSignature = useMemo(
     () =>
       JSON.stringify(

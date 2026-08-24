@@ -172,10 +172,8 @@ export function useClientRowIds(
     );
 
   let rowModel: ReturnType<typeof table.getRowModel> | undefined;
-  let filteredRows: readonly BrunoTableClientAdmittedRow[] = EMPTY_FILTERED_ROWS;
   let invalid: BrunoTableInvalidCellValue["invalid"] | undefined;
   try {
-    filteredRows = Object.freeze(table.getFilteredRowModel().rows.map((row) => row.original));
     rowModel = table.getRowModel();
   } catch (error) {
     if (!(error instanceof ClientInvalidValueError)) throw error;
@@ -183,7 +181,7 @@ export function useClientRowIds(
   }
   const rowIds = rowModel === undefined ? EMPTY_ROW_IDS : stableRowIds(rowModel);
   return invalid === undefined
-    ? Object.freeze({ kind: "ready" as const, columns: logicalColumns, rowIds, filteredRows })
+    ? Object.freeze({ kind: "ready" as const, columns: logicalColumns, rowIds })
     : Object.freeze({ kind: "invalid" as const, columns: logicalColumns, invalid });
 }
 
@@ -192,7 +190,6 @@ export type BrunoTableClientRowModelResult =
       readonly kind: "ready";
       readonly columns: readonly CompiledColumn[];
       readonly rowIds: readonly string[];
-      readonly filteredRows: readonly BrunoTableClientAdmittedRow[];
     }>
   | Readonly<{
       readonly kind: "invalid";
@@ -293,7 +290,6 @@ function readCanonicalValue(row: AdapterRow, column: CompiledColumn, tableId: st
 }
 
 const EMPTY_ROW_IDS: readonly never[] = Object.freeze([]);
-const EMPTY_FILTERED_ROWS: readonly never[] = Object.freeze([]);
 const EMPTY_QUICK_FILTER_FIELDS: readonly string[] = Object.freeze([]);
 const ROW_IDS_BY_MODEL = new WeakMap<object, readonly string[]>();
 const LOGICAL_COLUMNS_BY_REQUEST = new WeakMap<

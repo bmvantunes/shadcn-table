@@ -12,7 +12,10 @@ import {
   BrunoTableToolbarStore,
   BrunoTableView,
 } from "./internal/bruno-table-view";
-import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import {
+  acquireBrunoTableClientProjectionStore,
+  BrunoTableClientRowPipeline,
+} from "./internal/client-row-pipeline";
 import {
   BrunoTableClientFilterProvider,
   BrunoTableActiveFilters,
@@ -72,10 +75,8 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
     [props.groupRowsColumn],
   );
-  const rowSelection = useMemo(
-    () => (props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined),
-    [props.rowSelection],
-  );
+  const [rowSelectionRuntime] = useState(() => new BrunoTableRowSelectionRuntime([]));
+  const rowSelection = props.rowSelection === true ? rowSelectionRuntime : undefined;
   const [cellRange] = useState(() => new BrunoTableCellRangeRuntime(tableId));
   const [rowPipelineAdapter] = useState(
     () =>
@@ -101,7 +102,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
         groupRowsWidth: groupRowsColumn.width,
         beforeGroupingChange: (entering) => {
           cellRange.clear();
-          if (entering) rowSelection?.enterGroupedProjection();
+          if (entering) rowSelectionRuntime.enterGroupedProjection();
         },
       },
     );
@@ -116,6 +117,10 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  const [projectionStore] = useState(() =>
+    acquireBrunoTableClientProjectionStore(runtimeView, rowPipelineAdapter, rowSelection),
+  );
+  projectionStore.setRowSelection(rowSelection);
   const gridOwnedControls = useMemo(
     () => (
       <>
@@ -178,6 +183,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
+  useLayoutEffect(() => () => projectionStore.release(), [projectionStore]);
 
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>

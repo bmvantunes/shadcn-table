@@ -68,6 +68,7 @@ import type {
 } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
+import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
 import {
   type BrunoTableHotkeyGesture,
   isBrunoTableHotkeyWorkflowOwner,
@@ -618,10 +619,12 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
   const activeGroups = new Set(query.groupBy);
   const sortableColumns = columns.filter(
     (column) =>
-      column.enableSorting !== false &&
-      (query.groupBy.length === 0 ||
-        activeGroups.has(column.columnId) ||
-        (column.kind === "field" && column.aggFunc !== undefined && visible.has(column.columnId))),
+      (query.groupBy.length === 0 && column.enableSorting !== false) ||
+      (query.groupBy.length > 0 &&
+        (activeGroups.has(column.columnId) ||
+          (column.kind === "field" &&
+            column.aggFunc !== undefined &&
+            visible.has(column.columnId)))),
   );
   if (sortableColumns.length === 0) return null;
   const activeIds = new Set(orderBy.map((sort) => sort.columnId));
@@ -1260,6 +1263,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
         columns={installedColumns}
         leadingUtilityWidth={projectedRowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH}
         navigation={navigation}
+        projectionKind={installedProjection?.kind ?? "raw"}
         queryGeneration={installedQueryGeneration}
         queryNavigationMode={installedQueryNavigationMode}
         onCommittedNavigationChange={reconcileRangeAnchorAfterCommittedNavigation}
@@ -3123,6 +3127,12 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
     [columnId, runtime],
   );
   const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const groupingStructure = useSyncExternalStore(
+    runtime.subscribeInstalledGroupingStructure,
+    runtime.getInstalledGroupingStructureSnapshot,
+    runtime.getInstalledGroupingStructureSnapshot,
+  );
+  const groupBy = groupingStructure.groupBy;
   const menuTriggerId = headerDomId(instanceId, tableId, `${columnId}-menu-proxy`);
   const attachMenuHotkeyWorkflow = useBrunoTableHotkeyWorkflowAction(() => {
     if (column !== undefined) {
@@ -3166,6 +3176,7 @@ const ActiveHeaderMenuProxy = memo(function ActiveHeaderMenuProxy({
               column={column}
               command={command}
               direction={menuDirection}
+              groupBy={groupBy}
               openHeaderFilter={openHeaderFilterFromMenu}
               preventMenuFinalFocus
               renderColumnFilter={renderColumnFilter}
@@ -3567,6 +3578,12 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
     [column.columnId, runtime],
   );
   const command = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const groupingStructure = useSyncExternalStore(
+    runtime.subscribeInstalledGroupingStructure,
+    runtime.getInstalledGroupingStructureSnapshot,
+    runtime.getInstalledGroupingStructureSnapshot,
+  );
+  const groupBy = groupingStructure.groupBy;
   const presentation = headerSortPresentation(column.headerName, command);
   const sortLabel =
     command.sortDirection === undefined
@@ -3673,7 +3690,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           </Button>
         ) : null}
       </div>
-      {runtime.getQuerySnapshot().groupBy.length === 0 ? (
+      {groupBy.length === 0 ? (
         <button
           aria-label={`Reorder ${column.headerName}`}
           className="inline-flex size-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing"
@@ -3715,6 +3732,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
               column={column}
               command={command}
               direction={menuDirection}
+              groupBy={groupBy}
               openHeaderFilter={openHeaderFilterFromMenu}
               renderColumnFilter={renderColumnFilter}
               restoreColumnFocus={restoreColumnFocus}
@@ -3724,11 +3742,11 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           ) : null}
         </DropdownMenu>
       </DirectionProvider>
-      {runtime.getQuerySnapshot().groupBy.length === 0 ||
+      {groupBy.length === 0 ||
       column.columnId === "COL_ID_BRUNO_TABLE_ROWS" ||
       (column.kind === "field" &&
         column.aggFunc !== undefined &&
-        !runtime.getQuerySnapshot().groupBy.includes(column.columnId)) ? (
+        !groupBy.includes(column.columnId)) ? (
         <span
           aria-label={`Resize ${column.headerName}`}
           aria-orientation="vertical"
@@ -3782,6 +3800,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   column,
   command,
   direction,
+  groupBy,
   openHeaderFilter,
   preventMenuFinalFocus = false,
   renderColumnFilter,
@@ -3795,6 +3814,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   readonly column: CompiledColumn;
   readonly command: BrunoTableColumnCommandSnapshot;
   readonly direction: "ltr" | "rtl";
+  readonly groupBy: readonly string[];
   readonly openHeaderFilter: (columnId: string) => void;
   readonly preventMenuFinalFocus?: boolean;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
@@ -3861,7 +3881,6 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
     if (!dispatch({ type: "column.resize.commit", columnId: column.columnId, width })) return;
     announce(`${column.headerName} width ${String(width)} pixels`);
   };
-  const groupBy = runtime.getQuerySnapshot().groupBy;
   const grouped = groupBy.length > 0;
   const groupingEligible =
     runtime.getGroupingEnabledSnapshot() && column.kind === "field" && column.groupBy;
@@ -3872,9 +3891,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   const visibilityColumns = grouped
     ? allColumns.filter(
         (candidate) =>
-          candidate.kind === "field" &&
-          candidate.aggFunc !== undefined &&
-          !groupBy.includes(candidate.columnId),
+          candidate.columnId !== "COL_ID_BRUNO_TABLE_ROWS" && !groupBy.includes(candidate.columnId),
       )
     : allColumns;
   return (
@@ -3916,11 +3933,17 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           <DropdownMenuLabel>Group</DropdownMenuLabel>
           <DropdownMenuItem
             onClick={() => {
+              const cancelGroupingFocus = groupingActive
+                ? prepareBrunoTableGroupingRemovalFocus(runtime, column.columnId)
+                : () => undefined;
               const accepted = runtime.dispatchGridCommand({
                 type: groupingActive ? "grouping.remove" : "grouping.add",
                 columnId: column.columnId,
               });
-              if (!accepted) return;
+              if (!accepted) {
+                cancelGroupingFocus();
+                return;
+              }
               announce(
                 groupingActive
                   ? `${column.headerName} removed from Group By`
@@ -4079,32 +4102,29 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           <DropdownMenuSubContent>
             <DropdownMenuItem
               onClick={() => {
-                dispatch({ type: "column.reset.order" });
-                announce("Column order reset");
+                if (dispatch({ type: "column.reset.order" })) announce("Column order reset");
               }}
             >
               Reset order
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
-                dispatch({ type: "column.reset.widths" });
-                announce("Column widths reset");
+                if (dispatch({ type: "column.reset.widths" })) announce("Column widths reset");
               }}
             >
               Reset widths
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
-                dispatch({ type: "column.reset.visibility" });
-                announce("Column visibility reset");
+                if (dispatch({ type: "column.reset.visibility" }))
+                  announce("Column visibility reset");
               }}
             >
               Reset visibility
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
-                dispatch({ type: "column.reset.pinning" });
-                announce("Column pinning reset");
+                if (dispatch({ type: "column.reset.pinning" })) announce("Column pinning reset");
               }}
             >
               Reset pinning
@@ -4112,8 +4132,8 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => {
-                dispatch({ type: "column.reset.layout" });
-                announce("Complete column layout reset");
+                if (dispatch({ type: "column.reset.layout" }))
+                  announce("Complete column layout reset");
               }}
             >
               Reset complete layout
@@ -4701,22 +4721,25 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
   const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot) : undefined;
+  const presentationColumn = snapshot.column;
   const row = rowSnapshot?.row;
-  const unavailable = rowAware
-    ? rowSnapshot?.kind === "unavailable"
-    : cellSnapshot?.kind === "unavailable";
+  const unavailable =
+    presentationColumn === undefined ||
+    (rowAware ? rowSnapshot?.kind === "unavailable" : cellSnapshot?.kind === "unavailable");
   const rowMissing = rowAware
     ? row === undefined
     : cellSnapshot?.kind === "available" && !cellSnapshot.rowPresent;
   const value = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
   const className =
-    invalid || unavailable || rowMissing ? undefined : resolveCellClassName(column, row, value);
+    invalid || unavailable || rowMissing || presentationColumn === undefined
+      ? undefined
+      : resolveCellClassName(presentationColumn, row, value);
   const content =
-    unavailable || rowMissing ? null : invalid ? (
+    unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
       <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
     ) : (
-      resolveCellContent(column, row, value)
+      resolveCellContent(presentationColumn, row, value)
     );
   const id =
     instanceId === undefined || tableId === undefined || columnIndex === undefined
@@ -4728,7 +4751,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     maxHeight: ROW_HEIGHT,
     overflow: "hidden",
     padding: 0,
-    textAlign: column.semantics.cellAlign,
+    textAlign: presentationColumn?.semantics.cellAlign,
     transform: `var(${brunoTableColumnCssVariable("transform", column.columnId)}, none)`,
     width: `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
   };
@@ -4742,7 +4765,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
         width: "100%",
       }}
     >
-      {rowMissing || invalid || column.cellRenderer === undefined ? (
+      {rowMissing || invalid || presentationColumn?.cellRenderer === undefined ? (
         content
       ) : (
         <NonTabbableCellContent>{content}</NonTabbableCellContent>

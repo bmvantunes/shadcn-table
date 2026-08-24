@@ -958,6 +958,22 @@ type NarrowEmittedGroupParams = BrunoTableGroupKeyCellParams<string, "COL_ID_NAR
 
 const narrowEmittedGroupFormatter = (_params: NarrowEmittedGroupParams) => "symbol";
 
+const rawEmittedNarrowGroupedColumn = [
+  {
+    columnId: "COL_ID_NARROW_GROUP",
+    field: "symbol",
+    headerName: "Narrow raw group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: narrowEmittedGroupFormatter,
+  },
+] as const;
+
+// @ts-expect-error Emitted raw columns reject callbacks requiring sibling Group Key evidence.
+const invalidRawEmittedNarrowGroupedColumn: BrunoTableColumns<Order> =
+  rawEmittedNarrowGroupedColumn;
+void invalidRawEmittedNarrowGroupedColumn;
+
 BrunoTableTextColumn({
   columnId: "COL_ID_NARROW_GROUP",
   // @ts-expect-error Emitted helpers reject callbacks that require unavailable sibling evidence.
@@ -1516,6 +1532,19 @@ const invalidServerEditing = {
   // @ts-expect-error emitted Server props forbid editing.
   editable: true,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+
+const emittedServerWithClientGroupingConfiguration = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  viewportSource: source,
+  groupRowsColumn: { headerName: "Rows" },
+} as const;
+
+// @ts-expect-error emitted Server props reject Client groupRowsColumn for non-fresh objects.
+const invalidEmittedServerGrouping: BrunoTableServerProps<Order, Columns, typeof source.viewport> =
+  emittedServerWithClientGroupingConfiguration;
+void invalidEmittedServerGrouping;
 
 const editablePropsWithGrouping = {
   ...editableProps,

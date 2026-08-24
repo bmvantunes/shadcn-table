@@ -209,7 +209,8 @@ export function createBrunoTablePersistedState(
 }
 
 function sanitizeGroupBy(input: unknown, columns: readonly CompiledColumn[]): string[] {
-  if (!Array.isArray(input)) return [];
+  const entries = captureDenseArray(input, BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES);
+  if (entries === undefined) return [];
   const eligible = new Set<string>(
     columns.flatMap((column) =>
       column.kind === "field" && column.groupBy ? [column.columnId] : [],
@@ -217,7 +218,7 @@ function sanitizeGroupBy(input: unknown, columns: readonly CompiledColumn[]): st
   );
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const value of input) {
+  for (const value of entries) {
     if (typeof value !== "string" || !eligible.has(value) || seen.has(value)) continue;
     seen.add(value);
     result.push(value);
@@ -250,19 +251,13 @@ function sanitizeGroupOrderBy(
   }
   const result: { columnId: string; direction: "asc" | "desc" }[] = [];
   const seen = new Set<string>();
-  if (Array.isArray(input)) {
-    for (const candidate of input) {
-      if (
-        typeof candidate !== "object" ||
-        candidate === null ||
-        Array.isArray(candidate) ||
-        !Object.hasOwn(candidate, "columnId") ||
-        !Object.hasOwn(candidate, "direction")
-      ) {
-        continue;
-      }
-      const columnId = Reflect.get(candidate, "columnId");
-      const direction = Reflect.get(candidate, "direction");
+  const entries = captureDenseArray(input, BRUNO_TABLE_CLIENT_FILTER_MAX_INPUT_ENTRIES);
+  if (entries !== undefined) {
+    for (const candidate of entries) {
+      const record = captureBrunoTablePlainRecord(candidate, ["columnId", "direction"]);
+      if (record === undefined) continue;
+      const columnId = record["columnId"];
+      const direction = record["direction"];
       if (
         typeof columnId !== "string" ||
         !admitted.has(columnId) ||

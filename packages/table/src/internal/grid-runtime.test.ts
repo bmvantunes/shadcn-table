@@ -202,9 +202,17 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
         headerName: "Amount",
         valueType: "bigint",
         aggFunc: "sum",
+        enableSorting: false,
+      },
+      {
+        columnId: "COL_ID_PLAIN",
+        field: "note",
+        headerName: "Plain dormant column",
+        valueType: "text",
       },
     ]);
-    const initialSource = source([{ id: "first", name: "Ada", amount: 2n } as Row]);
+    const initialRows = [{ id: "first", name: "Ada", amount: 2n }];
+    const initialSource = source(initialRows);
     const adapter = new BrunoTableClientRowPipelineAdapter(
       initialSource,
       (row: Row) => row.id,
@@ -309,9 +317,17 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
         headerName: "Amount",
         valueType: "bigint",
         aggFunc: "sum",
+        enableSorting: false,
+      },
+      {
+        columnId: "COL_ID_PLAIN",
+        field: "note",
+        headerName: "Plain dormant column",
+        valueType: "text",
       },
     ]);
-    const sourceValue = source([{ id: "first", name: "Ada", amount: 2n } as Row]);
+    const sourceRows = [{ id: "first", name: "Ada", amount: 2n }];
+    const sourceValue = source(sourceRows);
     const adapter = new BrunoTableClientRowPipelineAdapter(
       sourceValue,
       (row: Row) => row.id,
@@ -332,11 +348,28 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     );
     runtime.getView().subscribeQuery(() => transitions.push("query"));
     runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" });
+    expect(runtime.getView().getColumnCommandSnapshot("COL_ID_AMOUNT").sortable).toBe(true);
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.visibility.commit",
+        columnId: "COL_ID_NAME",
+        visible: false,
+      }),
+    ).toBe(false);
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.visibility.commit",
+        columnId: "COL_ID_PLAIN",
+        visible: false,
+      }),
+    ).toBe(true);
+    expect(runtime.getView().getColumnCommandSnapshot("COL_ID_PLAIN").visible).toBe(false);
     runtime.getView().dispatchGridCommand({
       type: "column.sort.toggle",
       columnId: "COL_ID_AMOUNT",
       multi: false,
     });
+    expect(runtime.getView().getQuerySnapshot().navigationMode).toBe("reset");
     expect(runtime.getView().getQuerySnapshot().groupOrderBy).toEqual([
       { columnId: "COL_ID_AMOUNT", direction: "asc" },
     ]);
@@ -358,7 +391,14 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
         headerName: "Name",
         valueType: "text",
       },
-      groupedColumns[1],
+      {
+        columnId: "COL_ID_AMOUNT",
+        field: "amount",
+        headerName: "Amount",
+        valueType: "bigint",
+        aggFunc: "sum",
+        enableSorting: false,
+      },
     ]);
     runtime.reconcile(
       adapter.configure((row: Row) => row.id, replacementColumns),
@@ -382,7 +422,13 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       },
     ]);
     const groupingColumns = compileColumns([
-      { ...initialColumns[0]!, groupBy: true },
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        groupBy: true,
+      },
       {
         columnId: "COL_ID_NOTE",
         field: "note",
@@ -417,6 +463,11 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" }),
     ).toBe(true);
     expect(runtime.getView().getColumnCommandSnapshot("COL_ID_BRUNO_TABLE_ROWS").width).toBe(144);
+    runtime.getView().dispatchGridCommand({
+      type: "column.resize.commit",
+      columnId: "COL_ID_BRUNO_TABLE_ROWS",
+      width: 173,
+    });
 
     const staged = runtime
       .getView()
@@ -428,7 +479,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(staged.query).toMatchObject({
       columns: initialColumns,
       groupBy: [],
-      groupOrderBy: [],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
       navigationMode: "projection-reset",
     });
     expect(staged.query.rowsWidth).toBeUndefined();
@@ -441,12 +492,23 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     );
     expect(runtime.getView().getQuerySnapshot()).toMatchObject({
       groupBy: [],
-      groupOrderBy: [],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
     });
     expect(runtime.getView().getQuerySnapshot().rowsWidth).toBeUndefined();
     expect(
       runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" }),
     ).toBe(false);
+
+    runtime.reconcile(
+      adapter.configure((row: Row) => row.id, groupingColumns),
+      groupingColumns,
+      adapter.getQueryConfiguration(groupingColumns),
+      144,
+    );
+    expect(
+      runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" }),
+    ).toBe(true);
+    expect(runtime.getView().getColumnCommandSnapshot("COL_ID_BRUNO_TABLE_ROWS").width).toBe(173);
   });
 
   it("reconciles Active navigation for grouped filters and publishes the effective sort count", () => {
@@ -499,11 +561,55 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       columnId: "COL_ID_NAME",
       filter: { columnId: "COL_ID_NAME", type: "equals", filter: "Ada" },
     });
-    expect(runtime.getView().getQuerySnapshot().navigationMode).toBe("reconcile");
+    expect(runtime.getView().getQuerySnapshot().navigationMode).toBe("reset");
 
     runtime.getView().dispatchGridCommand({ type: "grouping.remove", columnId: "COL_ID_NAME" });
     expect(runtime.getView().getActiveSortCountSnapshot()).toBe(1);
     expect(counts.at(-1)).toBe(1);
+  });
+
+  it("correlates dormant grouped sorting with the read-only Client persistence capability", () => {
+    const clientPersist = vi.fn();
+    const serverPersist = vi.fn();
+    const createPersistenceSubject = (grouping: boolean, persist: typeof clientPersist) => {
+      const adapter = new BrunoTableClientRowPipelineAdapter(
+        source([{ id: "first", name: "Ada" }]),
+        (row: Row) => row.id,
+        runtimeColumns,
+        undefined,
+        [{ columnId: "COL_ID_NAME", direction: "asc" }],
+      );
+      return new BrunoTableGridRuntime(
+        adapter.getPublication(),
+        runtimeColumns,
+        adapter.getQueryConfiguration(runtimeColumns),
+        `TABLE_ID_PERSISTENCE_CAPABILITY_${String(grouping)}`,
+        { grouping, getOnPersistChange: () => persist },
+      ).getView();
+    };
+    const client = createPersistenceSubject(true, clientPersist);
+    const server = createPersistenceSubject(false, serverPersist);
+
+    client.dispatchGridCommand({
+      type: "column.resize.commit",
+      columnId: "COL_ID_NAME",
+      width: 201,
+    });
+    server.dispatchGridCommand({
+      type: "column.resize.commit",
+      columnId: "COL_ID_NAME",
+      width: 201,
+    });
+
+    expect(clientPersist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupBy: [],
+        groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
+      }),
+    );
+    expect(serverPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ groupBy: [], groupOrderBy: [] }),
+    );
   });
 });
 
@@ -2061,6 +2167,25 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(loadingInput.rows).toEqual([]);
     expect(loadingInput.sourceRowIds.authoritative).toBe(false);
     expect(readyInput.rows).toHaveLength(1);
+  });
+
+  it("does not republish an unchanged grouped projection input", () => {
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada" }]),
+      (candidate) => candidate.id,
+      runtimeColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const configuration = adapter.getQueryConfiguration(runtimeColumns);
+    const initial = adapter.getProjectionInputSnapshot();
+    const listener = vi.fn();
+    adapter.subscribeProjectionInput(listener);
+
+    adapter.publishProjectionInput(runtimeColumns, configuration);
+
+    expect(adapter.getProjectionInputSnapshot()).toBe(initial);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("constructs a row-order detector only after subscription and reuses it", () => {
@@ -4741,6 +4866,36 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(events).toEqual(["Outer:Outer", "Newest:Newest"]);
   });
 
+  it("keeps grouped facets on the displayed raw source publication", () => {
+    const facetColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        enableSetFilter: true,
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Raw facet" }]),
+      (row: Row) => row.id,
+      facetColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const groupedRowSpace = Object.freeze({
+      brunoTableClientGrouped: true as const,
+    }) as unknown as Parameters<typeof adapter.getFacetRowsSnapshot>[0];
+
+    expect(
+      adapter.getFacetRowsSnapshot(groupedRowSpace).rows.map((row) => (row.raw as Row).name),
+    ).toEqual(["Raw facet"]);
+
+    adapter.publish(source([], "loading", { totalRows: 1 }));
+    expect(adapter.getFacetRowsSnapshot(groupedRowSpace).rows).toEqual([]);
+  });
+
   it("inherits queued configuration for later ordinary publications", () => {
     const replacementColumns = compileColumns([
       {
@@ -5685,7 +5840,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
         adapter.getQueryConfiguration(replacementColumns),
       ),
     ).toThrow(readFailure);
-    expect(events).toEqual(["read:first", "notify:first", "read:second"]);
+    expect(events).toEqual(["read:first", "notify:first", "read:second", "notify:second"]);
     expect(view.getRowCellSnapshot("first", "COL_ID_NAME").kind).toBe("unavailable");
     expect(view.getCellSnapshot("second", "COL_ID_NAME")).toMatchObject({
       kind: "available",

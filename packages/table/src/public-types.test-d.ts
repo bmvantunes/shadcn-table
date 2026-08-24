@@ -731,7 +731,7 @@ const serverWithClientGroupingConfiguration = {
 const invalidServerGroupingConfiguration: BrunoTableServerProps<
   Order,
   typeof rawGroupedColumns,
-  typeof orderViewportSource
+  typeof orderViewportSource.viewport
 > = serverWithClientGroupingConfiguration;
 void invalidServerGroupingConfiguration;
 const groupedPersistedPreferences = {
@@ -771,6 +771,22 @@ type UnsafelyNarrowGroupedCallbackParams = BrunoTableGroupKeyCellParams<
 > & { readonly groupKeys: OnlySymbolGroupEvidence };
 
 const unsafelyNarrowGroupedCallback = (_params: UnsafelyNarrowGroupedCallbackParams) => "symbol";
+
+const rawColumnWithUnsafelyNarrowGroupedCallback = [
+  {
+    columnId: "COL_ID_GROUP_SYMBOL",
+    field: "symbol",
+    headerName: "Unsafe raw symbol group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: unsafelyNarrowGroupedCallback,
+  },
+] as const;
+
+// @ts-expect-error Raw columns cannot require sibling Group Key evidence.
+const invalidRawNarrowGroupedCallback: BrunoTableColumns<Order> =
+  rawColumnWithUnsafelyNarrowGroupedCallback;
+void invalidRawNarrowGroupedCallback;
 
 BrunoTableTextColumn({
   columnId: "COL_ID_UNSAFE_GROUP_SYMBOL",

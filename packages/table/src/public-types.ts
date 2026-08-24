@@ -847,10 +847,15 @@ type GroupedPresentationCallbackKey =
   | "aggregateCellClassName"
   | "aggregateCellRenderer";
 
+type GroupedCallbackParameterGuard<TParameters> = TParameters extends object
+  ? Omit<TParameters, "columnId"> & { readonly columnId: never }
+  : TParameters;
+
 type ContextualGroupedCallback<TValue> = TValue extends (
   parameters: infer TParameters,
 ) => infer TResult
-  ? { bivarianceHack(parameters: TParameters): TResult }["bivarianceHack"]
+  ? { bivarianceHack(parameters: TParameters): TResult }["bivarianceHack"] &
+      ((parameters: GroupedCallbackParameterGuard<TParameters>) => TResult)
   : TValue;
 
 type ContextualizeGroupedPresentationCallbacks<TColumn> = TColumn extends unknown
@@ -1474,6 +1479,7 @@ export type BrunoTableServerProps<
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly editable?: never;
+    readonly groupRowsColumn?: never;
     readonly rowSelection?: never;
     readonly rangeSelection?: never;
     readonly onPaste?: never;

@@ -6,11 +6,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@bruno/shadcn/select";
-import { memo, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableRowPipelineRuntimeView } from "./grid-runtime";
+import { registerBrunoTableGroupingFocusOwner } from "./client-grouping-focus";
 import { useBrunoTableGroupByHotkeys } from "./hotkey-adapter";
 
 type BrunoTableClientGroupByProps = Readonly<{
@@ -36,6 +45,35 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
     const pendingFocus = useRef<Readonly<{ readonly columnId?: string }> | undefined>(undefined);
     const [addGroupOpen, setAddGroupOpen] = useState(false);
     const [announcement, setAnnouncement] = useState("");
+    const registerGroupChip = useCallback(
+      (columnId: string, element: HTMLButtonElement | null): void => {
+        if (element === null) groupChips.current.delete(columnId);
+        else groupChips.current.set(columnId, element);
+      },
+      [],
+    );
+    const groupingFocusOwner = useMemo(
+      () => ({
+        prepareRemoval: (columnId: string): (() => void) => {
+          const index = query.groupBy.indexOf(columnId);
+          if (index < 0) return () => undefined;
+          const nextColumnId = query.groupBy[index + 1] ?? query.groupBy[index - 1];
+          const intent =
+            nextColumnId === undefined
+              ? Object.freeze({})
+              : Object.freeze({ columnId: nextColumnId });
+          pendingFocus.current = intent;
+          return () => {
+            if (pendingFocus.current === intent) pendingFocus.current = undefined;
+          };
+        },
+      }),
+      [query.groupBy],
+    );
+    useLayoutEffect(
+      () => registerBrunoTableGroupingFocusOwner(runtime, groupingFocusOwner),
+      [groupingFocusOwner, runtime],
+    );
     useLayoutEffect(() => {
       const target = pendingFocus.current;
       if (target === undefined) return;
@@ -97,10 +135,7 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
                 count={query.groupBy.length}
                 index={index}
                 name={headerName(columns, columnId)}
-                register={(element) => {
-                  if (element === null) groupChips.current.delete(columnId);
-                  else groupChips.current.set(columnId, element);
-                }}
+                register={registerGroupChip}
                 runtime={runtime}
                 onMoved={(target) => {
                   setAnnouncement(
@@ -140,7 +175,7 @@ type BrunoTableClientGroupChipProps = Readonly<{
   readonly index: number;
   readonly name: string;
   readonly onMoved: (targetIndex: number) => void;
-  readonly register: (element: HTMLButtonElement | null) => void;
+  readonly register: (columnId: string, element: HTMLButtonElement | null) => void;
   readonly runtime: BrunoTableRowPipelineRuntimeView;
 }>;
 
@@ -156,9 +191,9 @@ const BrunoTableClientGroupChip: NamedExoticComponent<BrunoTableClientGroupChipP
   }: BrunoTableClientGroupChipProps): ReactElement {
     const chip = useRef<HTMLButtonElement>(null);
     useLayoutEffect(() => {
-      register(chip.current);
-      return () => register(null);
-    }, [register]);
+      register(columnId, chip.current);
+      return () => register(columnId, null);
+    }, [columnId, register]);
     useBrunoTableGroupByHotkeys(chip, (direction) => {
       const target = index + direction;
       if (target < 0 || target >= count) return false;

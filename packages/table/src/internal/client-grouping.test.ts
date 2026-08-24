@@ -162,7 +162,7 @@ describe("Client flat grouping", () => {
             region: "EU",
             status: "open",
             quantity: huge,
-            price: 0,
+            price: -0,
             money: { minorUnits: 10n },
           },
           0,
@@ -173,7 +173,7 @@ describe("Client flat grouping", () => {
             region: "EU",
             status: "open",
             quantity: 7n,
-            price: -0,
+            price: 0,
             money: { minorUnits: 20n },
           },
           1,
@@ -201,6 +201,7 @@ describe("Client flat grouping", () => {
     expect(value(projection, 0, "COL_ID_QUANTITY_SUM")).toBe(huge + 7n);
     expect(value(projection, 0, "COL_ID_QUANTITY_MAX")).toBe(huge);
     expect(Object.is(value(projection, 0, "COL_ID_PRICE_MIN"), -0)).toBe(false);
+    expect(Object.is(value(projection, 0, "COL_ID_PRICE_MIN"), 0)).toBe(true);
     expect(value(projection, 0, "COL_ID_MONEY_SUM")).toEqual({ minorUnits: 30n });
     expect(value(projection, 0, "COL_ID_MONEY_AVG")).toEqual({ minorUnits: 15n });
     expect(value(projection, 0, "COL_ID_MONEY_DISTINCT")).toBe(2n);
@@ -467,6 +468,54 @@ describe("Client flat grouping", () => {
     });
     expect(equivalent.kind).toBe("ready");
     if (equivalent.kind === "ready") expect(equivalent.rows).toBe(first.rows);
+  });
+
+  it("sorts an active countDistinct-capable key through its field semantics", () => {
+    const groupedMoneyColumns = compileColumns([
+      {
+        columnId: "COL_ID_MONEY_KEY",
+        field: "money",
+        headerName: "Money key",
+        valueType: moneyValueType,
+        groupBy: true,
+        aggFunc: "countDistinct",
+      },
+    ]);
+    const rows = [2n, 1n].map((minorUnits, index) =>
+      inputRow(
+        {
+          id: String(index),
+          region: "EU",
+          status: "open",
+          quantity: 1n,
+          price: 1,
+          money: { minorUnits },
+        },
+        index,
+      ),
+    );
+    const projection = deriveBrunoTableClientGroupedProjection({
+      rows,
+      columns: groupedMoneyColumns,
+      groupBy: ["COL_ID_MONEY_KEY"],
+      groupOrderBy: [{ columnId: "COL_ID_MONEY_KEY", direction: "asc" }],
+    });
+    expect(projection.kind).toBe("ready");
+    if (projection.kind === "ready") {
+      expect(projection.rows.map((row) => row.values.get("COL_ID_MONEY_KEY"))).toEqual([
+        { minorUnits: 1n },
+        { minorUnits: 2n },
+      ]);
+      const equivalent = deriveBrunoTableClientGroupedProjection({
+        rows,
+        columns: groupedMoneyColumns,
+        groupBy: ["COL_ID_MONEY_KEY"],
+        groupOrderBy: [{ columnId: "COL_ID_MONEY_KEY", direction: "asc" }],
+        previous: projection,
+      });
+      expect(equivalent.kind).toBe("ready");
+      if (equivalent.kind === "ready") expect(equivalent.rows).toBe(projection.rows);
+    }
   });
 
   it("turns hostile algebra execution and decoded results into deterministic invalid projections", () => {
