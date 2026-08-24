@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { ReactNode } from "react";
 
@@ -12,7 +12,10 @@ import {
   BrunoTableToolbarStore,
   BrunoTableView,
 } from "./internal/bruno-table-view";
-import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import {
+  BrunoTableClientProjectionStore,
+  BrunoTableClientRowPipeline,
+} from "./internal/client-row-pipeline";
 import {
   BrunoTableClientFilterProvider,
   BrunoTableActiveFilters,
@@ -35,6 +38,8 @@ import {
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./internal/row-selection";
 import { BrunoTableCellRangeRuntime } from "./internal/cell-range-clipboard";
+import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
+import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
 export {
   BrunoTableActiveFilterCount,
@@ -66,6 +71,41 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
+  const normalizedGroupRowsColumn = useMemo(
+    () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
+    [props.groupRowsColumn],
+  );
+  const {
+    cellClassName: groupRowsCellClassName,
+    cellRenderer: groupRowsCellRenderer,
+    headerName: groupRowsHeaderName,
+    valueFormatter: groupRowsValueFormatter,
+    width: groupRowsWidth,
+  } = normalizedGroupRowsColumn;
+  const groupRowsColumn = useMemo(
+    () =>
+      Object.freeze({
+        headerName: groupRowsHeaderName,
+        width: groupRowsWidth,
+        ...(groupRowsValueFormatter === undefined
+          ? {}
+          : { valueFormatter: groupRowsValueFormatter }),
+        ...(groupRowsCellRenderer === undefined ? {} : { cellRenderer: groupRowsCellRenderer }),
+        ...(groupRowsCellClassName === undefined ? {} : { cellClassName: groupRowsCellClassName }),
+      }),
+    [
+      groupRowsCellClassName,
+      groupRowsCellRenderer,
+      groupRowsHeaderName,
+      groupRowsValueFormatter,
+      groupRowsWidth,
+    ],
+  );
+  const [rowSelectionRuntime] = useState(() => new BrunoTableRowSelectionRuntime([]));
+  const rowSelectionEnabled = props.rowSelection === true;
+  const rowSelection = rowSelectionEnabled ? rowSelectionRuntime : undefined;
+  const previousRowSelectionEnabled = useRef(rowSelectionEnabled);
+  const [cellRange] = useState(() => new BrunoTableCellRangeRuntime(tableId));
   const [rowPipelineAdapter] = useState(
     () =>
       new BrunoTableClientRowPipelineAdapter(
@@ -75,6 +115,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
         props.initialFilters,
         props.initialOrderBy,
         props.quickFilterFields,
+        groupRowsColumn,
       ),
   );
   const [runtime] = useState(() => {
@@ -83,7 +124,15 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
       compiledColumns,
       rowPipelineAdapter.getQueryConfiguration(compiledColumns),
       tableId,
-      { initialPersistedState: props.initialPersistedState },
+      {
+        initialPersistedState: props.initialPersistedState,
+        grouping: true,
+        groupRowsWidth: groupRowsColumn.width,
+        beforeGroupingChange: (entering) => {
+          cellRange.clear();
+          if (entering) rowSelectionRuntime.enterGroupedProjection();
+        },
+      },
     );
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableToolbarLifetime({
@@ -95,30 +144,78 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     return created;
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
-  const rowSelection = useMemo(
-    () => (props.rowSelection === true ? new BrunoTableRowSelectionRuntime([]) : undefined),
-    [props.rowSelection],
-  );
-  const [cellRange] = useState(() => new BrunoTableCellRangeRuntime(tableId));
   const runtimeView = runtime.getView();
-  const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
+  const [projectionStore] = useState(
+    () => new BrunoTableClientProjectionStore(runtimeView, rowPipelineAdapter, rowSelection),
+  );
+
+  useLayoutEffect(() => {
+    projectionStore.setRowSelection(rowSelection);
+  }, [projectionStore, rowSelection]);
+  useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
+
+  useLayoutEffect(() => {
+    const previouslyEnabled = previousRowSelectionEnabled.current;
+    previousRowSelectionEnabled.current = rowSelectionEnabled;
+    if (previouslyEnabled && !rowSelectionEnabled) {
+      rowSelectionRuntime.enterGroupedProjection();
+      return;
+    }
+    if (!previouslyEnabled && rowSelectionEnabled) {
+      const projectionInput = rowPipelineAdapter.getProjectionInputSnapshot();
+      if (runtime.getGroupBySnapshot().length === 0) {
+        rowSelectionRuntime.leaveGroupedProjection(
+          projectionInput.sourceRowIds.authoritative ? projectionInput.sourceRowIds.rowIds : [],
+        );
+      }
+    }
+  }, [rowPipelineAdapter, rowSelectionEnabled, rowSelectionRuntime, runtime]);
+  const gridOwnedControls = useMemo(
+    () => (
+      <>
+        <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
+        <BrunoTableActiveFilters />
+      </>
+    ),
+    [compiledColumns, runtimeView],
+  );
 
   useLayoutEffect(() => {
     const publication = rowPipelineAdapter.reconcile(
       props.clientSource,
       props.getRowId,
       compiledColumns,
+      groupRowsColumn,
     );
     const queryConfiguration = rowPipelineAdapter.getQueryConfiguration(compiledColumns);
-    runtime.reconcile(publication, compiledColumns, queryConfiguration);
-  }, [compiledColumns, props.clientSource, props.getRowId, rowPipelineAdapter, runtime]);
+    const installedProjection = runtime.getInstalledClientProjectionSnapshot();
+    const groupingProjectionActive =
+      runtime.getQuerySnapshot().groupBy.length > 0 ||
+      installedProjection?.kind === "grouped" ||
+      installedProjection?.kind === "invalid";
+    rowPipelineAdapter.publishProjectionInput(
+      compiledColumns,
+      queryConfiguration,
+      groupingProjectionActive,
+    );
+    if (!groupingProjectionActive) {
+      runtime.reconcile(publication, compiledColumns, queryConfiguration, groupRowsColumn.width);
+    }
+  }, [
+    compiledColumns,
+    groupRowsColumn,
+    props.clientSource,
+    props.getRowId,
+    rowPipelineAdapter,
+    runtime,
+  ]);
 
   useLayoutEffect(() => {
     const notify = props.onPersistChange;
     runtime.setOnPersistChange(
       notify === undefined
         ? undefined
-        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns>),
+        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
     );
   }, [props.onPersistChange, runtime]);
 
@@ -135,7 +232,6 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
-
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider

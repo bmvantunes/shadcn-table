@@ -12,6 +12,7 @@ import {
   BrunoTableClient,
   BrunoTableActiveFilterCount,
   BrunoTableActiveSortCount,
+  BrunoTableAggregateAlgebra,
   BrunoTableComputedColumn,
   BrunoTableFilterControl,
   BrunoTableLoadedRowCount,
@@ -23,6 +24,8 @@ import {
   BrunoTableTextColumn,
   BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
+  type BrunoTableAggregateAlgebra as BrunoTableAggregateAlgebraType,
+  type BrunoTableAggregateResults,
   type BrunoTableClientProps,
   type BrunoTableCommonProps,
   type BrunoTableColumnField,
@@ -38,6 +41,8 @@ import {
   type BrunoTableQuickFilterField,
   type BrunoTableQuickFilterFields,
   type BrunoTableGroupKeyCellParams,
+  type BrunoTableGroupKeyPresence,
+  type BrunoTableGroupRowsColumnOptions,
   type BrunoTableSaveCellChange,
   type BrunoTableSaveChangeSet,
   type BrunoTableServerProps,
@@ -53,6 +58,115 @@ type Equal<TLeft, TRight> =
     : false;
 
 type Expect<TValue extends true> = TValue;
+
+type ExactMoney = Readonly<{ readonly minorUnits: bigint }>;
+const emittedExactMoneyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
+  add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+  divideByCount: (total, count) => ({ minorUnits: total.minorUnits / count }),
+});
+const emittedExactMoneyAlgebraType: BrunoTableAggregateAlgebraType<ExactMoney> =
+  emittedExactMoneyAlgebra;
+void emittedExactMoneyAlgebraType;
+
+const emittedExactMoneyValueType = {
+  codecId: "emitted/exact-money",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  aggregateResults: { sum: "self", avg: "self" },
+  aggregateAlgebra: emittedExactMoneyAlgebra,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "object" && input !== null && "minorUnits" in input
+      ? { _tag: "Success" as const, value: input as ExactMoney }
+      : { _tag: "Failure" as const, message: "Expected exact money." },
+  equivalent: (left: ExactMoney, right: ExactMoney) => left.minorUnits === right.minorUnits,
+  compare: (left: ExactMoney, right: ExactMoney) =>
+    left.minorUnits === right.minorUnits ? 0 : left.minorUnits < right.minorUnits ? -1 : 1,
+  formatCanonicalText: (value: ExactMoney) => value.minorUnits.toString(),
+  parseCanonicalText: (text: string) => ({
+    _tag: "Success" as const,
+    value: { minorUnits: BigInt(text) },
+  }),
+  formatDisplay: (value: ExactMoney) => value.minorUnits.toString(),
+  encodePersisted: (value: ExactMoney) => value.minorUnits.toString(),
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? { _tag: "Success" as const, value: { minorUnits: BigInt(input) } }
+      : { _tag: "Failure" as const, message: "Expected persisted exact money." },
+} satisfies BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly sum: "self"; readonly avg: "self" }
+>;
+void emittedExactMoneyValueType;
+
+const emittedAddOnlyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
+  add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+});
+const emittedAverageWithoutDivision = {
+  ...emittedExactMoneyValueType,
+  aggregateResults: { avg: "self" as const },
+  aggregateAlgebra: emittedAddOnlyAlgebra,
+};
+// @ts-expect-error Advertising avg requires exact addition and division by bigint count.
+const emittedInvalidAverageWithoutDivision: BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly avg: "self" }
+> = emittedAverageWithoutDivision;
+void emittedInvalidAverageWithoutDivision;
+
+const {
+  aggregateResults: emittedAggregateResults,
+  aggregateAlgebra: emittedAggregateAlgebra,
+  ...emittedExactMoneyValueTypeBase
+} = emittedExactMoneyValueType;
+void emittedAggregateResults;
+void emittedAggregateAlgebra;
+const emittedNonArithmeticSingleGeneric = {
+  ...emittedExactMoneyValueTypeBase,
+  aggregateResults: { countDistinct: "bigint", min: "self", max: "self" } as const,
+} satisfies BrunoTableValueType<ExactMoney>;
+void emittedNonArithmeticSingleGeneric;
+const emittedArithmeticSingleGeneric = {
+  ...emittedExactMoneyValueTypeBase,
+  aggregateResults: { sum: "self", avg: "self" } as const,
+  aggregateAlgebra: emittedExactMoneyAlgebra,
+} satisfies BrunoTableValueType<ExactMoney>;
+void emittedArithmeticSingleGeneric;
+const emittedSingleGenericSumWithoutAlgebra = {
+  ...emittedExactMoneyValueTypeBase,
+  aggregateResults: { sum: "self" as const },
+};
+// @ts-expect-error Emitted single-generic Value Types require exact addition for sum.
+const emittedInvalidSingleGenericSum: BrunoTableValueType<ExactMoney> =
+  emittedSingleGenericSumWithoutAlgebra;
+void emittedInvalidSingleGenericSum;
+const emittedSingleGenericAverageWithoutDivision = {
+  ...emittedExactMoneyValueTypeBase,
+  aggregateResults: { avg: "self" as const },
+  aggregateAlgebra: emittedAddOnlyAlgebra,
+};
+// @ts-expect-error Emitted single-generic Value Types require exact division for avg.
+const emittedInvalidSingleGenericAverage: BrunoTableValueType<ExactMoney> =
+  emittedSingleGenericAverageWithoutDivision;
+void emittedInvalidSingleGenericAverage;
+
+const emittedInvalidAggregateResultPair = {
+  // @ts-expect-error countDistinct always produces bigint.
+  countDistinct: "self",
+} satisfies BrunoTableAggregateResults;
+void emittedInvalidAggregateResultPair;
+
+BrunoTableAggregateAlgebra<ExactMoney>({
+  // @ts-expect-error Exact arithmetic cannot return a different domain.
+  add: (left, right): bigint => left.minorUnits + right.minorUnits,
+});
 
 const emittedWhitespaceColumnIdRejected: Expect<Equal<BrunoTableColumnId<"COL_ID_A B">, never>> =
   true;
@@ -77,6 +191,353 @@ type Order = {
   readonly multiplier: number;
   readonly hiddenLabel: string;
 };
+
+const emittedHelperGroupedColumns = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_EMITTED_HELPER_GROUP",
+    field: "symbol",
+    headerName: "Emitted helper group",
+    groupBy: true,
+    groupKeyValueFormatter: ({ columnId, field, value }) => {
+      const exactColumnId: "COL_ID_EMITTED_HELPER_GROUP" = columnId;
+      const exactField: "symbol" = field;
+      const exactValue: string = value;
+      return `${exactColumnId}:${exactField}:${exactValue}`;
+    },
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_EMITTED_HELPER_MAX",
+    field: "price",
+    headerName: "Emitted helper maximum",
+    aggFunc: "max",
+    aggregateValueFormatter: ({ columnId, field, value }) => {
+      const exactColumnId: "COL_ID_EMITTED_HELPER_MAX" = columnId;
+      const exactField: "price" = field;
+      const exactValue: number = value;
+      return `${exactColumnId}:${exactField}:${exactValue.toFixed(2)}`;
+    },
+  }),
+  {
+    columnId: "COL_ID_EMITTED_RAW_STATUS",
+    field: "status",
+    headerName: "Emitted raw status",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Order>;
+void emittedHelperGroupedColumns;
+
+type EmittedHostileGroupParams = BrunoTableGroupKeyCellParams<
+  string,
+  "COL_ID_EMITTED_HOSTILE_GROUP",
+  "symbol"
+> & { readonly groupKeys: readonly [{ readonly columnId: "COL_ID_EMITTED_RAW_STATUS" }] };
+const emittedHostileGroupFormatter = (_parameters: EmittedHostileGroupParams) => "hostile";
+const emittedHostileGroupOptions = {
+  columnId: "COL_ID_EMITTED_HOSTILE_GROUP",
+  field: "symbol",
+  headerName: "Emitted hostile group",
+  groupBy: true,
+  groupKeyValueFormatter: emittedHostileGroupFormatter,
+} as const;
+// @ts-expect-error Emitted helper callbacks reject sibling Group Key evidence.
+BrunoTableTextColumn(emittedHostileGroupOptions);
+
+const emittedSpreadHelperGroupedSource = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_EMITTED_HELPER_GROUP",
+    field: "symbol",
+    headerName: "Emitted helper group",
+    groupBy: true,
+    groupKeyValueFormatter: ({ value }) => value,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
+  }),
+] satisfies BrunoTableColumns<Order>;
+const emittedValidSpreadHelperColumns = [
+  { ...emittedSpreadHelperGroupedSource[0]! },
+] satisfies BrunoTableColumns<Order>;
+void emittedValidSpreadHelperColumns;
+const emittedReplacedSpreadHelperColumns = [
+  {
+    ...emittedSpreadHelperGroupedSource[0]!,
+    groupKeyValueFormatter: ({
+      columnId,
+      value,
+    }: BrunoTableGroupKeyCellParams<string, "COL_ID_EMITTED_HELPER_GROUP", "symbol">) => {
+      const exactColumnId: "COL_ID_EMITTED_HELPER_GROUP" = columnId;
+      const exactValue: string = value;
+      void exactColumnId;
+      return exactValue;
+    },
+  },
+] satisfies BrunoTableColumns<Order>;
+void emittedReplacedSpreadHelperColumns;
+
+type EmittedIncompatibleHelperRow = Readonly<{ readonly unrelated: string }>;
+const emittedCrossRowHelperColumns = [emittedSpreadHelperGroupedSource[0]!];
+// @ts-expect-error Emitted helper provenance remains tied to the helper's inferred row type.
+const emittedInvalidCrossRowHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossRowHelperColumns;
+type EmittedIncompatibleHelperValueRow = Readonly<{ readonly symbol: number }>;
+// @ts-expect-error Emitted helper provenance retains the source field value domain.
+const emittedInvalidCrossValueHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperValueRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossValueHelperColumns;
+type EmittedIncompatibleHelperSiblingRow = Readonly<{ readonly symbol: string }>;
+// @ts-expect-error Emitted helper raw callbacks retain their inferred sibling-row evidence.
+const emittedInvalidCrossSiblingHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperSiblingRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossSiblingHelperColumns;
+type EmittedIncompatibleHelperWidenedRow = Omit<Order, "symbol"> &
+  Readonly<{ readonly symbol: string | number }>;
+// @ts-expect-error Emitted helper provenance is invariant in the inferred row value domain.
+const emittedInvalidWidenedHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperWidenedRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidWidenedHelperColumns;
+const emittedComputedHelperForOrder = BrunoTableTextColumn({
+  columnId: "COL_ID_EMITTED_COMPUTED_HELPER_SYMBOL",
+  fields: ["symbol"] as const,
+  headerName: "Computed symbol",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "symbol"> }) => row.symbol,
+});
+const emittedInvalidComputedHelperDependencies: BrunoTableColumns<EmittedIncompatibleHelperValueRow> =
+  [
+    // @ts-expect-error Emitted computed helper dependencies retain exact source value domains.
+    emittedComputedHelperForOrder,
+  ];
+void emittedInvalidComputedHelperDependencies;
+
+const emittedHostileSpreadHelperGroupedColumns = [
+  {
+    ...emittedSpreadHelperGroupedSource[0]!,
+    groupKeyValueFormatter: emittedHostileGroupFormatter,
+  },
+];
+const emittedUnsupportedHostileSpreadHelperColumns: BrunoTableColumns<Order> =
+  emittedHostileSpreadHelperGroupedColumns;
+void emittedUnsupportedHostileSpreadHelperColumns;
+
+const emittedChangedIdentitySpreadHelperColumns = [
+  {
+    ...emittedSpreadHelperGroupedSource[0]!,
+    columnId: "COL_ID_EMITTED_CHANGED_HELPER_GROUP",
+    groupKeyValueFormatter: ({ value }: { readonly value: string }) => value,
+  } as const,
+] as const satisfies BrunoTableColumns<Order>;
+void emittedChangedIdentitySpreadHelperColumns;
+
+const emittedChangedDomainSpreadHelperColumns = [
+  {
+    ...emittedSpreadHelperGroupedSource[0]!,
+    field: "status",
+    valueType: "text",
+    groupKeyValueFormatter: ({ value }: { readonly value: string }) => value,
+  } as const,
+] as const satisfies BrunoTableColumns<Order>;
+void emittedChangedDomainSpreadHelperColumns;
+
+const emittedUnsupportedInlineFormatter = (
+  parameters: BrunoTableGroupKeyCellParams<string, "COL_ID_EMITTED_INLINE_GROUP", "symbol">,
+) => parameters.value;
+const emittedRawInlineGroupedPresentation = [
+  {
+    columnId: "COL_ID_EMITTED_INLINE_GROUP",
+    field: "symbol",
+    headerName: "Emitted inline group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: emittedUnsupportedInlineFormatter,
+  },
+] as const;
+// @ts-expect-error Emitted raw inline grouped callbacks must use a global Column Helper.
+const emittedInvalidRawInlineGroupedPresentation: BrunoTableColumns<Order> =
+  emittedRawInlineGroupedPresentation;
+void emittedInvalidRawInlineGroupedPresentation;
+
+const emittedHonestRawInlineGroupedPresentation = [
+  {
+    columnId: "COL_ID_EMITTED_INLINE_BROAD_GROUP",
+    field: "symbol",
+    headerName: "Emitted inline broad group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: ({ columnId, value }) => {
+      const broadColumnId: BrunoTableColumnId = columnId;
+      // @ts-expect-error Emitted raw inline callbacks cannot claim their sibling literal identity.
+      const exactColumnId: "COL_ID_EMITTED_INLINE_BROAD_GROUP" = columnId;
+      void broadColumnId;
+      void exactColumnId;
+      return value;
+    },
+  },
+] satisfies BrunoTableColumns<Order>;
+void emittedHonestRawInlineGroupedPresentation;
+
+type EmittedOptionalGroupRow = Readonly<{ readonly optional?: string | null }>;
+type EmittedExactGroupPresence = Expect<
+  Equal<
+    BrunoTableGroupKeyPresence<string | null | undefined>,
+    | Readonly<{ readonly _tag: "Missing" }>
+    | Readonly<{
+        readonly _tag: "Present";
+        readonly value: string | null | undefined;
+      }>
+  >
+>;
+const emittedExactGroupPresence: EmittedExactGroupPresence = true;
+void emittedExactGroupPresence;
+const emittedOptionalGroupColumns = [
+  {
+    columnId: "COL_ID_EMITTED_OPTIONAL",
+    field: "optional",
+    headerName: "Emitted optional",
+    valueType: "text",
+    groupBy: true,
+  },
+] as const satisfies BrunoTableColumns<EmittedOptionalGroupRow>;
+const emittedExactRowsPresenceCallbacks = {
+  valueFormatter: ({ groupKeys }) => {
+    const key = groupKeys[0];
+    if (key?._tag === "Present") {
+      const exactColumnId: "COL_ID_EMITTED_OPTIONAL" = key.columnId;
+      const exactField: "optional" = key.field;
+      const exactValue: string | null | undefined = key.value;
+      return `${exactColumnId}:${exactField}:${String(exactValue)}`;
+    }
+    if (key?._tag === "Missing") {
+      // @ts-expect-error Missing evidence does not fabricate a value.
+      void key.value;
+    }
+    return "Missing";
+  },
+} satisfies BrunoTableGroupRowsColumnOptions<
+  EmittedOptionalGroupRow,
+  typeof emittedOptionalGroupColumns
+>;
+void emittedExactRowsPresenceCallbacks;
+
+const emittedBuiltInAggregateMatrix = [
+  {
+    columnId: "COL_ID_TEXT_DISTINCT",
+    field: "symbol",
+    headerName: "Text distinct",
+    valueType: "text",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_TEXT_MIN",
+    field: "symbol",
+    headerName: "Text min",
+    valueType: "text",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_TEXT_MAX",
+    field: "symbol",
+    headerName: "Text max",
+    valueType: "text",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_DISTINCT",
+    field: "active",
+    headerName: "Boolean distinct",
+    valueType: "boolean",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MIN",
+    field: "active",
+    headerName: "Boolean min",
+    valueType: "boolean",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MAX",
+    field: "active",
+    headerName: "Boolean max",
+    valueType: "boolean",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_NUMBER_DISTINCT",
+    field: "price",
+    headerName: "Number distinct",
+    valueType: "number",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MIN",
+    field: "price",
+    headerName: "Number min",
+    valueType: "number",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MAX",
+    field: "price",
+    headerName: "Number max",
+    valueType: "number",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BIGINT_DISTINCT",
+    field: "quantity",
+    headerName: "Bigint distinct",
+    valueType: "bigint",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BIGINT_SUM",
+    field: "quantity",
+    headerName: "Bigint sum",
+    valueType: "bigint",
+    aggFunc: "sum",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MIN",
+    field: "quantity",
+    headerName: "Bigint min",
+    valueType: "bigint",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MAX",
+    field: "quantity",
+    headerName: "Bigint max",
+    valueType: "bigint",
+    aggFunc: "max",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void emittedBuiltInAggregateMatrix;
+
+const emittedForbiddenBuiltInAggregates = [
+  // @ts-expect-error Emitted declarations reject Client number sum.
+  {
+    columnId: "COL_ID_NUMBER_SUM",
+    field: "price",
+    headerName: "Number sum",
+    valueType: "number",
+    aggFunc: "sum",
+  },
+  // @ts-expect-error Emitted declarations reject Client number average.
+  {
+    columnId: "COL_ID_NUMBER_AVG",
+    field: "price",
+    headerName: "Number average",
+    valueType: "number",
+    aggFunc: "avg",
+  },
+  // @ts-expect-error Emitted declarations reject Client bigint average.
+  {
+    columnId: "COL_ID_BIGINT_AVG",
+    field: "quantity",
+    headerName: "Bigint average",
+    valueType: "bigint",
+    aggFunc: "avg",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void emittedForbiddenBuiltInAggregates;
 
 const emittedServerConfig = defineViewServerConfig({
   topics: {
@@ -246,6 +707,11 @@ const emittedWitnessedServerProps = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
+  onPersistChange: (state) => {
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, false>>> =
+      true;
+    void exactState;
+  },
 } as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 BrunoTableServer(emittedWitnessedServerProps);
 BrunoTableServer({
@@ -505,7 +971,7 @@ const emittedPersistedState = {
   filters: [],
   orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
   groupBy: [],
-  groupOrderBy: [],
+  groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
   columnOrder: ["COL_ID_PRICE", "COL_ID_SYMBOL", "COL_ID_DOUBLE_QUANTITY"],
   columnVisibility: { COL_ID_SYMBOL: true },
   columnWidths: { COL_ID_PRICE: 222 },
@@ -579,11 +1045,31 @@ const emittedPersistedProps = {
   ...emittedClientProps,
   initialPersistedState: emittedPersistedState,
   onPersistChange: (state) => {
-    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns>>> = true;
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, true>>> =
+      true;
     void exactState;
   },
 } satisfies BrunoTableClientProps<Order, Columns>;
 void emittedPersistedProps;
+const emittedNonGroupingPersistedState = {
+  ...emittedPersistedState,
+  groupOrderBy: [],
+} as const satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedNonGroupingPersistedState;
+const emittedInvalidNonGroupingGroupBy = {
+  ...emittedNonGroupingPersistedState,
+  // @ts-expect-error Emitted non-grouping persistence rejects Group By intent.
+  groupBy: ["COL_ID_SYMBOL"],
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedInvalidNonGroupingGroupBy;
+const emittedInvalidNonGroupingRowsWidth = {
+  ...emittedNonGroupingPersistedState,
+  columnWidths: {
+    // @ts-expect-error Emitted non-grouping persistence rejects the Rows width.
+    COL_ID_BRUNO_TABLE_ROWS: 144,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedInvalidNonGroupingRowsWidth;
 const emittedQuickFields = [
   "symbol",
   "hiddenLabel",
@@ -733,6 +1219,22 @@ type NarrowEmittedGroupParams = BrunoTableGroupKeyCellParams<string, "COL_ID_NAR
 };
 
 const narrowEmittedGroupFormatter = (_params: NarrowEmittedGroupParams) => "symbol";
+
+const rawEmittedNarrowGroupedColumn = [
+  {
+    columnId: "COL_ID_NARROW_GROUP",
+    field: "symbol",
+    headerName: "Narrow raw group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: narrowEmittedGroupFormatter,
+  },
+] as const;
+
+// @ts-expect-error Emitted raw columns reject callbacks requiring sibling Group Key evidence.
+const invalidRawEmittedNarrowGroupedColumn: BrunoTableColumns<Order> =
+  rawEmittedNarrowGroupedColumn;
+void invalidRawEmittedNarrowGroupedColumn;
 
 BrunoTableTextColumn({
   columnId: "COL_ID_NARROW_GROUP",
@@ -1293,6 +1795,19 @@ const invalidServerEditing = {
   editable: true,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
+const emittedServerWithClientGroupingConfiguration = {
+  tableId: "orders",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  viewportSource: source,
+  groupRowsColumn: { headerName: "Rows" },
+} as const;
+
+// @ts-expect-error emitted Server props reject Client groupRowsColumn for non-fresh objects.
+const invalidEmittedServerGrouping: BrunoTableServerProps<Order, Columns, typeof source.viewport> =
+  emittedServerWithClientGroupingConfiguration;
+void invalidEmittedServerGrouping;
+
 const editablePropsWithGrouping = {
   ...editableProps,
   groupRowsColumn: { headerName: "Rows" },
@@ -1428,10 +1943,10 @@ const invalidDefaultTextMatchNone = [
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
 const invalidSetFilterCapability = [
+  // @ts-expect-error emitted declarations reject Set Filter when filtering is disabled.
   {
     columnId: "COL_ID_SYMBOL",
     enableFilter: false,
-    // @ts-expect-error emitted declarations reject Set Filter when filtering is disabled.
     enableSetFilter: true,
     field: "symbol",
     headerName: "Symbol",
@@ -1514,7 +2029,6 @@ const invalidComputedDependency = [
 ] satisfies BrunoTableColumns<Order>;
 
 const invalidNumberHelperField = [
-  // @ts-expect-error the rejected helper result cannot enter the emitted typed column tuple.
   BrunoTableNumberColumn({
     columnId: "COL_ID_SYMBOL",
     // @ts-expect-error emitted Number helper rejects a string field.
@@ -1575,12 +2089,12 @@ const narrowPriceFormatter = ({
 }) => `${row.secret}:${value}`;
 
 const invalidNarrowPresentationCallback = [
+  // @ts-expect-error emitted presentation callbacks reject narrower row annotations.
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
     valueType: "number",
-    // @ts-expect-error emitted presentation callbacks reject narrower row annotations.
     valueFormatter: narrowPriceFormatter,
   },
 ] satisfies BrunoTableColumns<Order>;
@@ -1624,7 +2138,6 @@ const invalidCustomComputedDependency = [
 ] satisfies BrunoTableColumns<AmountRow>;
 
 const invalidIncompleteSelectDomain = [
-  // @ts-expect-error the rejected Select helper cannot enter the emitted typed column tuple.
   BrunoTableSelectColumn({
     columnId: "COL_ID_STATUS",
     // @ts-expect-error emitted Select options must cover the exact field domain.

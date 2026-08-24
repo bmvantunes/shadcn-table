@@ -4,7 +4,7 @@ import type {
   BrunoTableSourceStatus,
 } from "../public-types";
 import type {
-  BrunoTableInvalidCellValue,
+  BrunoTableClientProjectionInvalid,
   BrunoTableQuerySnapshot,
   BrunoTableQueryConfiguration,
   BrunoTableRowPipelinePublication,
@@ -31,6 +31,8 @@ import {
   snapshotBrunoTableSourceStatusCode,
 } from "./source-lifecycle";
 import { recordBrunoTableToolbarLifetime } from "./toolbar-instrumentation";
+import type { BrunoTableClientGroupedRow } from "./client-grouping";
+import type { BrunoTableCompiledGroupRowsColumn } from "./client-grouping-presentation";
 
 // Keep configuration snapshot work bounded even when a hostile Proxy changes array length.
 // The public Quick Filter contract documents this limit alongside its tuple type.
@@ -66,7 +68,9 @@ export function installBrunoTableClientValueCachePruneListener(
 }
 
 export class BrunoTableClientRowPipelineAdapter<TRow> {
+  private groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined;
   private readonly resultRowCountListeners = new Set<() => void>();
+  private readonly projectionInputListeners = new Set<() => void>();
   private resultRowCount = 0;
   private resultRowCountInitialized = false;
   private observedRows: TRow[] | undefined;
@@ -82,6 +86,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private sourceColumns: readonly CompiledColumn[];
   private queryColumns: readonly CompiledColumn[];
   private queryConfiguration: BrunoTableQueryConfiguration;
+  private projectionInput: BrunoTableClientProjectionInputSnapshot;
+  private projectionInputEpoch = 0;
   private queryFallbackActive = false;
   private lifecycleFallbackCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private queryRejected:
@@ -99,7 +105,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     initialFilters: readonly unknown[] | undefined,
     initialOrderBy: ClientOrderBy | undefined,
     quickFilterFields?: readonly string[],
+    groupRowsColumn?: BrunoTableCompiledGroupRowsColumn,
   ) {
+    this.groupRowsColumn = groupRowsColumn;
     this.initialFilterCollection = compileClientFilterCollection(initialFilters, columns, {
       rejectOverBudget: true,
     });
@@ -131,9 +139,81 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       baselineOrderBy: this.initialOrderBy,
       quickFilterFields: this.quickFilterFields,
     });
+    this.projectionInput = createProjectionInputSnapshot(
+      this.projectionInputEpoch,
+      this.publication,
+      columns,
+      this.queryConfiguration,
+      groupRowsColumn,
+    );
   }
 
   public readonly getPublication = (): BrunoTableRowPipelinePublication<TRow> => this.publication;
+
+  public readonly getProjectionInputSnapshot = (): BrunoTableClientProjectionInputSnapshot =>
+    this.projectionInput;
+
+  public readonly subscribeProjectionInput = (listener: () => void): (() => void) => {
+    this.projectionInputListeners.add(listener);
+    return () => this.projectionInputListeners.delete(listener);
+  };
+
+  public readonly publishProjectionInput = (
+    columns: readonly CompiledColumn[],
+    queryConfiguration: BrunoTableQueryConfiguration,
+    notify = true,
+  ): void => {
+    if (
+      this.projectionInput.publication === this.publication &&
+      this.projectionInput.columns === columns &&
+      this.projectionInput.queryConfiguration === queryConfiguration &&
+      this.projectionInput.groupRowsColumn === this.groupRowsColumn
+    ) {
+      return;
+    }
+    this.projectionInputEpoch += 1;
+    this.projectionInput = createProjectionInputSnapshot(
+      this.projectionInputEpoch,
+      this.publication,
+      columns,
+      queryConfiguration,
+      this.groupRowsColumn,
+    );
+    if (notify) notifyRowsStoreListeners(this.projectionInputListeners);
+  };
+
+  public readonly projectGroupedRows = (
+    rows: readonly BrunoTableClientGroupedRow[],
+    changedRowIds: ReadonlySet<string>,
+    sourceAuthoritative: boolean,
+  ): BrunoTableRowPipelinePublication<unknown> => {
+    if (!sourceAuthoritative) {
+      return Object.freeze({ ...this.publication, changedRowIds });
+    }
+    const rowIndexById = new Map(rows.map((row, index) => [row.rowId, index]));
+    const rowsById = new Map(rows.map((row) => [row.rowId, row]));
+    const rowSpace = Object.freeze({
+      brunoTableClientGrouped: true as const,
+      totalRows: rows.length,
+      loadedRows: rows.length,
+      getRowId: (index: number) => rows[index]?.rowId,
+      getRow: (rowId: BrunoTableRowId) => rowsById.get(rowId),
+      getCellValue: (rowId: BrunoTableRowId, columnId: string) =>
+        rowsById.get(rowId)?.values.get(columnId),
+      findRowIndex: (rowId: BrunoTableRowId) => rowIndexById.get(rowId),
+      setRequiredRange: (_start: number, _end: number) => undefined,
+    });
+    return Object.freeze({
+      ...this.publication,
+      totalRows: rows.length,
+      rowSpace,
+      changedRowIds,
+      hasCoherentRows: true,
+    });
+  };
+
+  public readonly projectUngroupedRows = (): BrunoTableRowPipelinePublication<unknown> =>
+    this.publication as BrunoTableRowPipelinePublication<unknown>;
 
   public readonly getResultRowCountSnapshot = (): number => this.resultRowCount;
 
@@ -200,7 +280,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly getFacetRowsSnapshot = (
     rowSpace: BrunoTableRowSpaceSnapshot<unknown> | undefined,
   ): BrunoTableClientFacetRowsSnapshot => {
-    const coherent = asClientCoherent(rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const sourceRowSpace = isClientGroupedRowSpace(rowSpace)
+      ? this.publication.rowSpace
+      : (rowSpace as BrunoTableRowSpaceSnapshot<TRow> | undefined);
+    const coherent = asClientCoherent(sourceRowSpace);
     const sequence = coherent?.admittedRows ?? EMPTY_PERSISTENT_SEQUENCE;
     return Object.freeze({
       rows: sequence.asArray(),
@@ -241,7 +324,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     source: BrunoTableClientSource<TRow>,
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
+    groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined = this.groupRowsColumn,
   ): BrunoTableRowPipelinePublication<TRow> => {
+    this.groupRowsColumn = groupRowsColumn;
     const sourceSnapshot = snapshotSource(source, this.source, this.observedRows);
     const queryRejected = this.queryRejected;
     const retainedSourceInvalid = retainedSourceInvalidSnapshot(sourceSnapshot);
@@ -384,7 +469,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly rejectQueryRows = (
     rows: readonly BrunoTableClientAdmittedRow[],
-    invalid: BrunoTableInvalidCellValue["invalid"],
+    invalid: BrunoTableClientProjectionInvalid,
   ): BrunoTableRowPipelinePublication<TRow> | undefined => {
     const rejectedCoherent = this.coherent;
     if (rejectedCoherent?.admittedRows.asArray() !== rows || !retainsPreviousRows(this.source)) {
@@ -447,10 +532,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
     tableId = "",
   ): BrunoTableClientRowsStore => {
-    const readRuntimeCoherent = () =>
-      asClientCoherent(
-        runtime.getRowSpaceSnapshot() as BrunoTableRowSpaceSnapshot<TRow> | undefined,
-      );
+    const readRuntimeRowSpace = () =>
+      runtime.getRowSpaceSnapshot() as BrunoTableRowSpaceSnapshot<TRow> | undefined;
+    const readRuntimeCoherent = () => asClientCoherent(readRuntimeRowSpace());
     const installedCoherent = readRuntimeCoherent();
     let snapshot: readonly BrunoTableClientAdmittedRow[] =
       installedCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
@@ -482,6 +566,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     let unsubscribeRuntime: (() => void) | undefined;
     let displayedRowSpace = installedCoherent !== undefined;
     const publish = () => {
+      if (isClientGroupedRowSpace(readRuntimeRowSpace())) return;
       const previousRows = snapshot;
       const nextCoherent = readRuntimeCoherent();
       const nextRows = nextCoherent?.admittedRows.asArray() ?? EMPTY_ROWS;
@@ -572,6 +657,16 @@ export type BrunoTableClientRowOrderChangeDetector = (
   nextRows: readonly BrunoTableClientAdmittedRow[],
   change: BrunoTableClientRowOrderChange,
 ) => boolean;
+
+export type BrunoTableClientProjectionInputSnapshot = Readonly<{
+  readonly epoch: number;
+  readonly publication: BrunoTableRowPipelinePublication<unknown>;
+  readonly rows: readonly BrunoTableClientAdmittedRow[];
+  readonly sourceRowIds: BrunoTableClientSourceRowIdsSnapshot;
+  readonly columns: readonly CompiledColumn[];
+  readonly queryConfiguration: BrunoTableQueryConfiguration;
+  readonly groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined;
+}>;
 
 export type BrunoTableClientRowOrderChange = Readonly<{
   readonly rowIdsChanged: boolean;
@@ -1040,7 +1135,7 @@ function createPublication<TRow>(
   fallbackCoherent: ClientCoherentSnapshot<TRow> | undefined,
   resolveRowIds: boolean,
   valueCache: ClientCanonicalValueCache,
-  queryRejection?: BrunoTableInvalidCellValue["invalid"],
+  queryRejection?: BrunoTableClientProjectionInvalid,
 ): BrunoTableRowPipelinePublication<TRow> {
   const complete = isCompleteSource(source);
   const invalid =
@@ -1511,7 +1606,18 @@ function invalidValue(
 function asClientCoherent<TRow>(
   rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
 ): ClientCoherentSnapshot<TRow> | undefined {
+  if (isClientGroupedRowSpace(rowSpace)) return undefined;
   return rowSpace as ClientCoherentSnapshot<TRow> | undefined;
+}
+
+function isClientGroupedRowSpace<TRow>(
+  rowSpace: BrunoTableRowSpaceSnapshot<TRow> | undefined,
+): boolean {
+  return (
+    rowSpace !== undefined &&
+    "brunoTableClientGrouped" in rowSpace &&
+    rowSpace.brunoTableClientGrouped === true
+  );
 }
 
 type ClientListenerError = Readonly<{ readonly value: unknown }>;
@@ -1529,6 +1635,31 @@ function notifyRowsStoreListeners(
     }
   }
   if (firstError !== undefined) throw firstError.value;
+}
+
+function createProjectionInputSnapshot(
+  epoch: number,
+  publication: BrunoTableRowPipelinePublication<unknown>,
+  columns: readonly CompiledColumn[],
+  queryConfiguration: BrunoTableQueryConfiguration,
+  groupRowsColumn?: BrunoTableCompiledGroupRowsColumn,
+): BrunoTableClientProjectionInputSnapshot {
+  const coherent = asClientCoherent(publication.rowSpace);
+  const rows = coherent?.admittedRows.asArray() ?? EMPTY_ROWS;
+  const rowIds = coherent?.rowIds ?? EMPTY_PERSISTENT_SEQUENCE;
+  return Object.freeze({
+    epoch,
+    publication,
+    rows,
+    sourceRowIds: Object.freeze({
+      authoritative: coherent !== undefined,
+      rowIds: rowIds.asArray(),
+      token: rowIds.token,
+    }),
+    columns,
+    queryConfiguration,
+    groupRowsColumn,
+  });
 }
 
 function snapshotSource<TRow>(

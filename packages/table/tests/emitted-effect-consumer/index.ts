@@ -2,9 +2,9 @@ import * as BigDecimal from "effect/BigDecimal";
 
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 import type {
+  BrunoTableAggregateCellParams,
   BrunoTableColumnValue,
   BrunoTableColumns,
-  BrunoTableFieldColumnDefinition,
   BrunoTableFilterExpressions,
   BrunoTableGroupKeyValues,
   BrunoTableValueType,
@@ -74,9 +74,10 @@ const emittedGroupedColumns = [
     headerName: "Total price",
     aggFunc: "sum",
     aggregateValueFormatter: (parameters) => {
-      const { aggFunc, columnId, value, rowCount } = parameters;
+      const { aggFunc, columnId, field, value, rowCount } = parameters;
       aggFunc satisfies "sum";
       columnId satisfies "COL_ID_TOTAL_PRICE";
+      field satisfies "price";
       rowCount satisfies bigint;
       // @ts-expect-error Emitted aggregate contexts never expose a fabricated raw row.
       void parameters.row;
@@ -133,32 +134,48 @@ const emittedGroupKeyValues: BrunoTableGroupKeyValues<
   {
     columnId: "COL_ID_PRIMARY_PRICE_GROUP",
     field: "price",
+    _tag: "Present",
     value: BigDecimal.make(1n, 0),
   },
   {
     columnId: "COL_ID_SECONDARY_PRICE_GROUP",
     field: "price",
+    _tag: "Present",
     value: BigDecimal.make(2n, 0),
   },
 ];
 void emittedGroupKeyValues;
 
-const emittedRawGroupedPrice = {
-  columnId: "COL_ID_RAW_GROUP_PRICE",
-  field: "price",
-  headerName: "Raw grouped price",
-  valueType: BrunoTableBigDecimalValueType,
-  groupBy: true,
-  aggFunc: "max",
-  aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
-} satisfies BrunoTableFieldColumnDefinition<
-  EmittedGroupedPriceRow,
-  "price",
-  typeof BrunoTableBigDecimalValueType,
-  { readonly groupBy: true; readonly aggFunc: "max" },
-  "COL_ID_RAW_GROUP_PRICE"
->;
-[emittedRawGroupedPrice] satisfies BrunoTableColumns<EmittedGroupedPriceRow>;
+const [emittedRawGroupedPrice] = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_RAW_GROUP_PRICE",
+    field: "price",
+    headerName: "Raw grouped price",
+    groupBy: true,
+    aggFunc: "max",
+    aggregateValueFormatter: ({ value }) => BigDecimal.format(value),
+  }),
+] satisfies BrunoTableColumns<EmittedGroupedPriceRow>;
+void emittedRawGroupedPrice;
+
+const emittedValidSpreadBigDecimalGroupedColumn = [
+  { ...emittedRawGroupedPrice! },
+] satisfies BrunoTableColumns<EmittedGroupedPriceRow>;
+void emittedValidSpreadBigDecimalGroupedColumn;
+const emittedReplacedSpreadBigDecimalGroupedColumn = [
+  {
+    ...emittedRawGroupedPrice!,
+    aggregateValueFormatter: ({
+      value,
+    }: BrunoTableAggregateCellParams<
+      "max",
+      BigDecimal.BigDecimal,
+      "COL_ID_RAW_GROUP_PRICE",
+      "price"
+    >) => BigDecimal.format(value),
+  },
+] satisfies BrunoTableColumns<EmittedGroupedPriceRow>;
+void emittedReplacedSpreadBigDecimalGroupedColumn;
 
 const { aggregateResults: emittedIgnoredAggregateResults, ...emittedNoAggregateValueType } =
   BrunoTableBigDecimalValueType;
@@ -169,12 +186,12 @@ emittedNoAggregateValueType satisfies BrunoTableValueType<
   "bigdecimal"
 >;
 const invalidEmittedRawAggregate = [
+  // @ts-expect-error Emitted raw Value Types must declare the selected aggregate capability.
   {
     columnId: "COL_ID_INVALID_RAW_AGGREGATE",
     field: "price",
     headerName: "Invalid raw aggregate",
     valueType: emittedNoAggregateValueType,
-    // @ts-expect-error Emitted raw Value Types must declare the selected aggregate capability.
     aggFunc: "sum",
   },
 ] satisfies BrunoTableColumns<EmittedGroupedPriceRow>;

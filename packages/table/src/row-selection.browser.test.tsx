@@ -178,6 +178,32 @@ describe("ordinary Client Row Selection", () => {
     await expect.element(page.getByRole("checkbox")).not.toBeInTheDocument();
   });
 
+  test("re-enables selection after a loading-only capability cycle", async () => {
+    const renderTable = (status: "loading" | "ready", rowSelection: true | undefined) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_ROW_SELECTION_LOADING_TOGGLE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: status === "ready" ? rows : [],
+          totalRows: rows.length,
+          version: status === "ready" ? 2 : 1,
+          status,
+        }}
+        getRowId={(row) => row.id}
+        {...(rowSelection === true ? { rowSelection } : {})}
+      />
+    );
+    const screen = await render(renderTable("loading", true));
+    await screen.rerender(renderTable("loading", undefined));
+    await screen.rerender(renderTable("loading", true));
+    await screen.rerender(renderTable("ready", true));
+
+    const firstRow = page.getByRole("checkbox", { name: "Select row 1" });
+    await userEvent.click(firstRow);
+    await expect.element(firstRow).toBeChecked();
+  });
+
   test("keeps the selection gutter while Client rows are loading", async () => {
     const loadingColumns = [
       {

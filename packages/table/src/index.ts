@@ -14,7 +14,7 @@ export type {
   BrunoTableFilterControlProps,
   BrunoTableGridFilterCommandCapability,
 } from "./bruno-table-client";
-export { BrunoTableComputedColumn } from "./public-types";
+export { BrunoTableAggregateAlgebra, BrunoTableComputedColumn } from "./public-types";
 export {
   BrunoTableBigIntColumn,
   BrunoTableBooleanColumn,
@@ -54,6 +54,9 @@ export type {
   BrunoTableNoGroupingCapability,
   BrunoTableJsonValue,
   BrunoTableGroupKeyCellParams,
+  BrunoTableGroupKeyPresence,
+  BrunoTableGroupRowsColumnOptions,
+  BrunoTableGroupingCapability,
   BrunoTableGroupableColumnId,
   BrunoTableGroupSortBy,
   BrunoTableGroupedSortableColumnId,
@@ -70,6 +73,7 @@ export type {
   BrunoTablePersistedFilterExpressions,
   BrunoTablePersistedState,
   BrunoTableRowsColumnId,
+  BrunoTableRowsCellParams,
   BrunoTableSaveCellChange,
   BrunoTableSaveCellChangeSet,
   BrunoTableSaveChangeSet,

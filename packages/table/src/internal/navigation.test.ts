@@ -33,6 +33,73 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toBeUndefined();
   });
 
+  it("suppresses restored projection activation and consumes later query epochs once", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    expect(navigation.installCommittedQuery(0, "restore", ["restored"], columns)).toBe(false);
+    navigation.setShape(["restored"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    expect(navigation.installCommittedQuery(0, "restore", ["restored"], columns)).toBe(false);
+
+    expect(navigation.installCommittedQuery(1, "projection-reset", ["next"], columns)).toBe(true);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "next",
+      columnId: "COL_ID_NAME",
+    });
+    expect(navigation.installCommittedQuery(1, "projection-reset", ["next"], columns)).toBe(false);
+  });
+
+  it("applies a first commanded projection reset exactly once", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    expect(navigation.installCommittedQuery(0, "projection-reset", ["first"], columns)).toBe(true);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "first",
+      columnId: "COL_ID_NAME",
+    });
+    expect(navigation.installCommittedQuery(0, "projection-reset", ["first"], columns)).toBe(false);
+  });
+
+  it.each(["reset", "reconcile"] as const)(
+    "leaves the existing shape unchanged on a first %s install",
+    (mode) => {
+      const columns = compileColumns([
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          headerName: "Name",
+          valueType: "text",
+        },
+      ]);
+      const navigation = new BrunoTableNavigationRuntime();
+      navigation.setShape(["existing"], columns);
+      const before = navigation.getSnapshot();
+
+      expect(navigation.installCommittedQuery(0, mode, ["replacement"], columns)).toBe(false);
+      expect(navigation.getSnapshot()).toBe(before);
+    },
+  );
+
   it("falls back to the clamped display position when its raw row identity disappears", () => {
     const columns = compileColumns([
       {

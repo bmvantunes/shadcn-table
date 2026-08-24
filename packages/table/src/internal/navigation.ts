@@ -1,4 +1,5 @@
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableQueryNavigationMode } from "./grid-runtime";
 
 export type BrunoTableActiveCell = Readonly<{
   readonly region: "header" | "body";
@@ -64,6 +65,7 @@ export class BrunoTableNavigationRuntime {
   private activeCell: BrunoTableActiveCell | undefined;
   private bodyInitializationBlocked = false;
   private pendingQueryFallbackRowIndex: number | undefined;
+  private installedQueryGeneration: number | undefined;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
 
@@ -99,6 +101,45 @@ export class BrunoTableNavigationRuntime {
     this.pendingQueryFallbackRowIndex = undefined;
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
+  };
+
+  /**
+   * Consumes one installed query epoch for the table-scoped navigation authority.
+   * Initial restored grouping blocks synthetic body activation; later epochs apply once even
+   * when their structural projection replaces the keyed viewport boundary.
+   */
+  public readonly installCommittedQuery = (
+    generation: number,
+    navigationMode: BrunoTableQueryNavigationMode,
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): boolean => {
+    if (this.installedQueryGeneration === undefined) {
+      this.installedQueryGeneration = generation;
+      if (navigationMode === "restore") {
+        this.clearForQuery();
+        return false;
+      }
+      if (navigationMode === "projection-reset") {
+        this.resetForProjection(rows, columns);
+        return true;
+      }
+      return false;
+    }
+    if (this.installedQueryGeneration === generation) return false;
+    this.installedQueryGeneration = generation;
+    if (navigationMode === "restore") {
+      this.clearForQuery();
+    } else if (navigationMode === "projection-reset") {
+      this.resetForProjection(rows, columns);
+    } else if (navigationMode === "reconcile") {
+      this.reconcileForQuery(rows, columns);
+    } else if (navigationMode === "clear") {
+      this.clearForCommittedSort(rows, columns);
+    } else {
+      this.resetForCommittedQuery(rows, columns);
+    }
+    return true;
   };
 
   /**
@@ -139,6 +180,30 @@ export class BrunoTableNavigationRuntime {
       rowIndex: 0,
       ...rowIdentity(rowSpace, 0),
       columnId: columns[0]!.columnId,
+    });
+  };
+
+  /** Grouping changes always target body row zero and the first logical column. */
+  public readonly resetForProjection = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    const column = columns[0];
+    if (column === undefined || rowSpace.totalRows === 0) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    this.bodyInitializationBlocked = false;
+    this.setActive({
+      region: "body",
+      rowIndex: 0,
+      ...rowIdentity(rowSpace, 0),
+      columnId: column.columnId,
     });
   };
 

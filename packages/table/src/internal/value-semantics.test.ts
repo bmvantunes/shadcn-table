@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   BrunoTableBigIntColumn,
@@ -7,6 +7,7 @@ import {
   BrunoTableSelectColumn,
   BrunoTableTextColumn,
 } from "../column-helpers";
+import { BrunoTableAggregateAlgebra } from "../public-types";
 import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
 
@@ -392,6 +393,128 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow(ColumnConfigurationError);
+  });
+
+  it("snapshots an exact aggregate algebra and rejects hostile capability pairs", () => {
+    type Money = Readonly<{ readonly minorUnits: bigint }>;
+    const mutable = {
+      add: function (this: void, left: Money, right: Money): Money {
+        if (this !== undefined) throw new Error("Aggregate add received a receiver.");
+        return { minorUnits: left.minorUnits + right.minorUnits };
+      },
+      divideByCount: (total: Money, count: bigint): Money => ({
+        minorUnits: total.minorUnits / count,
+      }),
+    };
+    const algebra = BrunoTableAggregateAlgebra(mutable);
+    const valueType: BrunoTableValueType<
+      Money,
+      "numeric",
+      "text",
+      { readonly sum: "self"; readonly avg: "self" }
+    > = {
+      codecId: "example/money",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "text",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      aggregateResults: { sum: "self", avg: "self" },
+      aggregateAlgebra: algebra,
+      decodeRuntime: (input) =>
+        typeof input === "object" && input !== null && "minorUnits" in input
+          ? { _tag: "Success", value: input as Money }
+          : { _tag: "Failure", message: "Expected money." },
+      equivalent: (left, right) => left.minorUnits === right.minorUnits,
+      compare: (left, right) =>
+        left.minorUnits === right.minorUnits ? 0 : left.minorUnits < right.minorUnits ? -1 : 1,
+      formatCanonicalText: (value) => value.minorUnits.toString(),
+      parseCanonicalText: (text) => ({
+        _tag: "Success",
+        value: { minorUnits: BigInt(text) },
+      }),
+      formatDisplay: (value) => value.minorUnits.toString(),
+      encodePersisted: (value) => value.minorUnits.toString(),
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: { minorUnits: BigInt(input) } }
+          : { _tag: "Failure", message: "Expected persisted money." },
+    };
+    const [compiled] = compileColumns([
+      {
+        columnId: "COL_ID_MONEY",
+        field: "money",
+        headerName: "Money",
+        valueType,
+        aggFunc: "avg",
+      },
+    ]);
+    mutable.add = () => ({ minorUnits: 999n });
+    expect(
+      compiled?.semantics.aggregateAlgebra?.add({ minorUnits: 2n }, { minorUnits: 3n }),
+    ).toEqual({ _tag: "Success", value: { minorUnits: 5n } });
+
+    for (const aggregateResults of [
+      { countDistinct: "self" },
+      { sum: "bigint" },
+      { min: "bigint" },
+      { max: "bigint" },
+      { avg: "bigint" },
+    ]) {
+      expect(() =>
+        compileColumns([
+          {
+            columnId: "COL_ID_HOSTILE",
+            field: "money",
+            headerName: "Hostile",
+            valueType: { ...valueType, aggregateResults },
+          },
+        ]),
+      ).toThrow("aggregateResults");
+    }
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_MISSING_ALGEBRA",
+          field: "money",
+          headerName: "Missing algebra",
+          valueType: {
+            ...valueType,
+            aggregateResults: { sum: "self" },
+            aggregateAlgebra: undefined,
+          },
+          aggFunc: "sum",
+        },
+      ]),
+    ).toThrow("sum aggregation requires an exact add operation");
+
+    const addGetter = vi.fn();
+    const accessorAlgebra = Object.defineProperty({}, "add", {
+      enumerable: true,
+      get: addGetter,
+    });
+    expect(() => BrunoTableAggregateAlgebra(accessorAlgebra as never)).toThrow(
+      "requires an exact add operation",
+    );
+    expect(addGetter).not.toHaveBeenCalled();
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_MISSING_DIVISION",
+          field: "money",
+          headerName: "Missing division",
+          valueType: {
+            ...valueType,
+            aggregateResults: { avg: "self" },
+            aggregateAlgebra: BrunoTableAggregateAlgebra<Money>({
+              add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+            }),
+          } as never,
+          aggFunc: "avg",
+        },
+      ]),
+    ).toThrow("avg aggregation requires an exact divideByCount operation");
   });
 
   it("rejects malformed equality and normalizes custom decoder failures", () => {

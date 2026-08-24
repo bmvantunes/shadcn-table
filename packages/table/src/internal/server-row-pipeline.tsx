@@ -26,6 +26,7 @@ export const BrunoTableServerRowPipeline: NamedExoticComponent<
     BrunoTableServerRowPipelineAdapterView
   >
 > = memo(function BrunoTableServerRowPipeline({
+  runtime,
   columns,
   rowPipelineAdapter,
   children,
@@ -41,6 +42,7 @@ export const BrunoTableServerRowPipeline: NamedExoticComponent<
   return children(
     Object.freeze({
       kind: "rows" as const,
+      runtime,
       columns,
       rowSpace: Object.freeze({
         totalRows: structure.totalRows,

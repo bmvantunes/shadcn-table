@@ -424,10 +424,12 @@ function SparseRowPipeline({
   children,
   columns,
   rowPipelineAdapter,
+  runtime,
 }: BrunoTableRowPipelineProps<BrunoTableRowPipelineRuntimeView, SparseRowPipelineAdapter>) {
   return children({
     kind: "rows",
     columns,
+    runtime,
     rowSpace: rowPipelineAdapter.rowSpace,
     queryGeneration: rowPipelineAdapter.queryGeneration,
     queryNavigationMode: "reset",
@@ -8694,7 +8696,7 @@ describe("BrunoTableClient browser surface", () => {
       ],
       orderBy: [{ columnId: "COL_ID_SCORE", direction: "desc" as const }],
       groupBy: [],
-      groupOrderBy: [],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const }],
       columnOrder: ["COL_ID_SCORE", "COL_ID_NAME"],
       columnVisibility: { COL_ID_SCORE: true, COL_ID_NAME: true },
       columnWidths: { COL_ID_SCORE: 222, COL_ID_NAME: 160 },
@@ -8702,7 +8704,7 @@ describe("BrunoTableClient browser surface", () => {
     } as const;
     const renderTable = (
       onPersistChange: typeof firstCallback,
-      initialPersistedState: BrunoTablePersistedState<Row, typeof columns> = persisted,
+      initialPersistedState: BrunoTablePersistedState<Row, typeof columns, true> = persisted,
     ) => (
       <BrunoTableClient
         tableId="TABLE_ID_PREFERENCES_HYDRATION"

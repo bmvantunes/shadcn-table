@@ -4,6 +4,7 @@ import { captureBrunoTablePlainRecord } from "./untrusted-input";
 
 export const BRUNO_TABLE_MIN_COLUMN_WIDTH = 32;
 export const BRUNO_TABLE_MAX_COLUMN_WIDTH = 1_000;
+export const BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH = 96;
 const BRUNO_TABLE_PERSISTED_LAYOUT_MAX_STALE_IDENTITIES = 1_024;
 export const BRUNO_TABLE_LIVE_VIEWPORT_FILL_CSS_VARIABLE = "--bruno-table-live-viewport-fill";
 export const BRUNO_TABLE_LIVE_LEFT_PADDING_CSS_VARIABLE = "--bruno-table-live-left-padding";
@@ -66,6 +67,13 @@ export type BrunoTableColumnLayoutCommand =
 export type BrunoTableGridCommand =
   | BrunoTableColumnLayoutCommand
   | BrunoTableSortingCommand
+  | Readonly<{ readonly type: "grouping.add"; readonly columnId: string }>
+  | Readonly<{ readonly type: "grouping.remove"; readonly columnId: string }>
+  | Readonly<{
+      readonly type: "grouping.move";
+      readonly columnId: string;
+      readonly direction: -1 | 1;
+    }>
   | Readonly<{
       readonly type: "column.filter.clear";
       readonly columnId: string;
@@ -108,6 +116,9 @@ export function isBrunoTableColumnLayoutCommand(
     case "sorting.remove":
     case "sorting.move":
     case "sorting.reset":
+    case "grouping.add":
+    case "grouping.remove":
+    case "grouping.move":
     case "column.filter.clear":
     case "column.filters.clear":
     case "column.filter.reset":

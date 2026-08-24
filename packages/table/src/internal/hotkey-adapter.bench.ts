@@ -5,6 +5,7 @@ import {
   BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_GRID_HOTKEYS,
+  BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT,
   brunoTableHotkeyRegistrationBound,
 } from "./hotkey-adapter";
 import { BrunoTableNavigationRuntime } from "./navigation";
@@ -80,9 +81,17 @@ describe("BrunoTable navigation command seam benchmark (8.33 ms/120 Hz reference
           mountedColumns,
           1,
         ),
+        bindingDefinitionsWithGrouping: brunoTableHotkeyRegistrationBound(
+          mountedRows,
+          mountedColumns,
+          0,
+          false,
+          true,
+        ),
         expectedBaseBindingDefinitions: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
         expectedFilterWorkflowBindingDefinitions:
           BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
+        expectedGroupByBindingDefinitions: BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT,
         declaredGridHotkeys: BRUNO_TABLE_GRID_HOTKEYS.length,
         mountedRows,
         mountedColumns,

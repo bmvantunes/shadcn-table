@@ -323,6 +323,7 @@ export const BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT: number = BRUNO_TABLE_GR
 export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_ROW_SELECTION_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
+export const BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT: number = 2;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
 
@@ -375,11 +376,13 @@ export function brunoTableHotkeyRegistrationBound(
   _mountedColumns: number,
   activeFilterWorkflows = 0,
   rowSelection = false,
+  grouping = false,
 ): number {
   return (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
     activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT +
-    (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0)
+    (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0) +
+    (grouping ? BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT : 0)
   );
 }
 
@@ -500,6 +503,35 @@ export function useBrunoTableGridHotkeys(
   useBrunoTableHotkeys(
     reactDocumentTargetRef as unknown as RefObject<HTMLElement | null>,
     escapeBindings,
+    "allow",
+  );
+}
+
+/** Scoped Group By Region shortcuts translated into one semantic move command. */
+export function useBrunoTableGroupByHotkeys(
+  target: RefObject<HTMLElement | null>,
+  move: (direction: -1 | 1) => boolean,
+): void {
+  const moveRef = useRef(move);
+  useLayoutEffect(() => {
+    moveRef.current = move;
+  }, [move]);
+  useBrunoTableHotkeys(
+    target,
+    [
+      {
+        hotkey: "Alt+ArrowLeft",
+        onTrigger: (event) => {
+          if (moveRef.current(-1)) event.preventDefault();
+        },
+      },
+      {
+        hotkey: "Alt+ArrowRight",
+        onTrigger: (event) => {
+          if (moveRef.current(1)) event.preventDefault();
+        },
+      },
+    ],
     "allow",
   );
 }

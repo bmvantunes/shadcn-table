@@ -6,6 +6,8 @@ import type {
 } from "effect-view-server/react/viewport-base-row";
 import type { ReactNode } from "react";
 
+import type { BrunoTableColumnHelperProvenanceCarrier } from "./internal/column-helper-provenance";
+
 type ColumnIdFirstCharacter =
   | "_"
   | "0"
@@ -99,9 +101,78 @@ export type BrunoTableAggFunc = "countDistinct" | "sum" | "min" | "max" | "avg";
 
 export type BrunoTableAggregateResultKind = "self" | "bigint";
 
-export type BrunoTableAggregateResults = Readonly<
-  Partial<Record<BrunoTableAggFunc, BrunoTableAggregateResultKind>>
->;
+export type BrunoTableAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly sum?: "self";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly avg?: "self";
+}>;
+
+const brunoTableAggregateAlgebraBrand: unique symbol = Symbol("BrunoTableAggregateAlgebra");
+
+/** Exact arithmetic owned by a custom Value Type rather than a Column Definition. */
+export type BrunoTableAggregateAlgebra<TValue> = Readonly<{
+  readonly [brunoTableAggregateAlgebraBrand]: true;
+  readonly add: (this: void, left: TValue, right: TValue) => TValue;
+  readonly divideByCount?: (this: void, total: TValue, count: bigint) => TValue;
+}>;
+
+type BrunoTableAggregateAlgebraInput<TValue> = Readonly<{
+  readonly add: (this: void, left: TValue, right: TValue) => TValue;
+  readonly divideByCount?: (this: void, total: TValue, count: bigint) => TValue;
+}>;
+
+/** Brands and snapshots one exact Value-Type aggregate algebra. */
+export function BrunoTableAggregateAlgebra<TValue>(
+  algebra: BrunoTableAggregateAlgebraInput<TValue> &
+    Required<Pick<BrunoTableAggregateAlgebraInput<TValue>, "divideByCount">>,
+): BrunoTableAggregateAlgebra<TValue> &
+  Required<Pick<BrunoTableAggregateAlgebra<TValue>, "divideByCount">>;
+export function BrunoTableAggregateAlgebra<TValue>(
+  algebra: BrunoTableAggregateAlgebraInput<TValue>,
+): BrunoTableAggregateAlgebra<TValue>;
+export function BrunoTableAggregateAlgebra<TValue>(
+  algebra: BrunoTableAggregateAlgebraInput<TValue>,
+): BrunoTableAggregateAlgebra<TValue> {
+  if (typeof algebra !== "object" || algebra === null || Array.isArray(algebra)) {
+    throw new TypeError("BrunoTable Aggregate Algebra must be an object.");
+  }
+  const add = ownDataFunction(algebra, "add");
+  const divideByCount = ownOptionalDataFunction(algebra, "divideByCount");
+  if (add === undefined) {
+    throw new TypeError("BrunoTable Aggregate Algebra requires an exact add operation.");
+  }
+  const snapshot = { add, ...(divideByCount === undefined ? {} : { divideByCount }) };
+  Object.defineProperty(snapshot, brunoTableAggregateAlgebraBrand, {
+    configurable: false,
+    enumerable: false,
+    value: true,
+    writable: false,
+  });
+  return Object.freeze(snapshot) as BrunoTableAggregateAlgebra<TValue>;
+}
+
+function ownDataFunction(
+  value: object,
+  key: "add",
+): ((this: void, ...parameters: never[]) => unknown) | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "function"
+    ? descriptor.value
+    : undefined;
+}
+
+function ownOptionalDataFunction(
+  value: object,
+  key: "divideByCount",
+): ((this: void, ...parameters: never[]) => unknown) | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return undefined;
+  return "value" in descriptor && typeof descriptor.value === "function"
+    ? descriptor.value
+    : undefined;
+}
 
 export type BrunoTableDecodeResult<TValue> =
   | { readonly _tag: "Success"; readonly value: TValue }
@@ -139,7 +210,7 @@ export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
   TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
-  TAggregateResults extends BrunoTableAggregateResults = {},
+  TAggregateResults extends BrunoTableAggregateResults = never,
 > = {
   readonly codecId: string;
   readonly codecVersion: number;
@@ -159,9 +230,67 @@ export type BrunoTableValueType<
   readonly formatDisplay: (this: void, value: TValue) => string;
   readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
   readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
-} & ([keyof TAggregateResults] extends [never]
-  ? { readonly aggregateResults?: TAggregateResults }
-  : { readonly aggregateResults: TAggregateResults });
+} & ([TAggregateResults] extends [never]
+  ? InferredAggregateCapability<TValue>
+  : AggregateAlgebraRequirement<TValue, TAggregateResults> &
+      ([keyof TAggregateResults] extends [never]
+        ? { readonly aggregateResults?: TAggregateResults }
+        : { readonly aggregateResults: TAggregateResults }));
+
+type NonArithmeticAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly sum?: never;
+  readonly avg?: never;
+}>;
+
+type SumAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly sum: "self";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly avg?: never;
+}>;
+
+type AverageAggregateResults = Readonly<{
+  readonly countDistinct?: "bigint";
+  readonly sum?: "self";
+  readonly min?: "self";
+  readonly max?: "self";
+  readonly avg: "self";
+}>;
+
+type InferredAggregateCapability<TValue> =
+  | {
+      readonly aggregateResults?: never;
+      readonly aggregateAlgebra?: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: NonArithmeticAggregateResults;
+      readonly aggregateAlgebra?: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: SumAggregateResults;
+      readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue>;
+    }
+  | {
+      readonly aggregateResults: AverageAggregateResults;
+      readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue> &
+        Required<Pick<BrunoTableAggregateAlgebra<TValue>, "divideByCount">>;
+    };
+
+type AggregateAlgebraRequirement<
+  TValue,
+  TAggregateResults extends BrunoTableAggregateResults,
+> = "avg" extends keyof TAggregateResults
+  ? {
+      readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue> &
+        Required<Pick<BrunoTableAggregateAlgebra<TValue>, "divideByCount">>;
+    }
+  : "sum" extends keyof TAggregateResults
+    ? { readonly aggregateAlgebra: BrunoTableAggregateAlgebra<TValue> }
+    : {};
 
 export type BrunoTableValueTypeValue<TValueType> = TValueType extends {
   readonly decodeRuntime: (this: void, input: unknown) => BrunoTableDecodeResult<infer TValue>;
@@ -222,16 +351,24 @@ type ValueParams<TRow, TValue> = {
   readonly value: TValue;
 };
 
-type GroupKeyCallback<TValue, TColumnId extends BrunoTableColumnId, TResult> = (
-  parameters: BrunoTableGroupKeyCellParams<TValue, TColumnId>,
-) => TResult;
+type GroupKeyCallback<
+  TValue,
+  TColumnId extends BrunoTableColumnId,
+  TField extends string,
+  TResult,
+> = (parameters: BrunoTableGroupKeyCellParams<TValue, TColumnId, TField>) => TResult;
 
 type AggregateCallback<
   TValue,
   TColumnId extends BrunoTableColumnId,
+  TField extends string,
   TAggFunc extends BrunoTableAggFunc,
   TResult,
-> = (parameters: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId>) => TResult;
+> = (parameters: BrunoTableAggregateCellParams<TAggFunc, TValue, TColumnId, TField>) => TResult;
+
+export type BrunoTableGroupKeyPresence<TValue> =
+  | Readonly<{ readonly _tag: "Missing" }>
+  | Readonly<{ readonly _tag: "Present"; readonly value: TValue }>;
 
 type RowGroupKeyValue<TRow> = {
   readonly [TField in FieldKey<TRow>]: [NonNullish<TRow[TField]>] extends [never]
@@ -239,8 +376,7 @@ type RowGroupKeyValue<TRow> = {
     : {
         readonly columnId: BrunoTableColumnId;
         readonly field: TField;
-        readonly value: TRow[TField];
-      };
+      } & BrunoTableGroupKeyPresence<TRow[TField]>;
 }[FieldKey<TRow>];
 
 type DefinedGroupKeyValue<
@@ -255,8 +391,7 @@ type DefinedGroupKeyValue<
     ? {
         readonly columnId: TColumnId;
         readonly field: TField;
-        readonly value: TRow[TField];
-      }
+      } & BrunoTableGroupKeyPresence<TRow[TField]>
     : never
   : never;
 
@@ -272,8 +407,35 @@ export type BrunoTableGroupKeyValues<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = readonly BrunoTableGroupKeyValue<TRow, TColumns>[];
 
-export type BrunoTableGroupKeyCellParams<TValue, TColumnId extends BrunoTableColumnId> = {
+export type BrunoTableRowsCellParams<
+  TRow,
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = {
+  readonly columnId: BrunoTableRowsColumnId;
+  readonly value: bigint;
+  readonly groupKeys: BrunoTableGroupKeyValues<TRow, TColumns>;
+};
+
+export type BrunoTableGroupRowsColumnOptions<
+  TRow,
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> = {
+  readonly headerName?: string;
+  readonly width?: number;
+  readonly valueFormatter?: (parameters: BrunoTableRowsCellParams<TRow, TColumns>) => string;
+  readonly cellClassName?:
+    | string
+    | ((parameters: BrunoTableRowsCellParams<TRow, TColumns>) => string | undefined);
+  readonly cellRenderer?: (parameters: BrunoTableRowsCellParams<TRow, TColumns>) => ReactNode;
+};
+
+export type BrunoTableGroupKeyCellParams<
+  TValue,
+  TColumnId extends BrunoTableColumnId,
+  TField extends string = string,
+> = {
   readonly columnId: TColumnId;
+  readonly field: TField;
   readonly value: TValue;
   readonly rowCount: bigint;
 };
@@ -282,14 +444,16 @@ export type BrunoTableAggregateCellParams<
   TAggFunc extends BrunoTableAggFunc,
   TValue,
   TColumnId extends BrunoTableColumnId,
+  TField extends string = string,
 > = {
   readonly columnId: TColumnId;
+  readonly field: TField;
   readonly aggFunc: TAggFunc;
   readonly value: TValue;
   readonly rowCount: bigint;
 };
 
-type GroupKeyPresentation<TValue, TColumnId extends BrunoTableColumnId> =
+type GroupKeyPresentation<TValue, TColumnId extends BrunoTableColumnId, TField extends string> =
   | {
       readonly groupBy?: false | undefined;
       readonly groupKeyValueFormatter?: never;
@@ -298,11 +462,11 @@ type GroupKeyPresentation<TValue, TColumnId extends BrunoTableColumnId> =
     }
   | {
       readonly groupBy: true;
-      readonly groupKeyValueFormatter?: GroupKeyCallback<TValue, TColumnId, string>;
+      readonly groupKeyValueFormatter?: GroupKeyCallback<TValue, TColumnId, TField, string>;
       readonly groupKeyCellClassName?:
         | string
-        | GroupKeyCallback<TValue, TColumnId, string | undefined>;
-      readonly groupKeyCellRenderer?: GroupKeyCallback<TValue, TColumnId, ReactNode>;
+        | GroupKeyCallback<TValue, TColumnId, TField, string | undefined>;
+      readonly groupKeyCellRenderer?: GroupKeyCallback<TValue, TColumnId, TField, ReactNode>;
     };
 
 type BuiltInAggregateResults<TValueType extends BrunoTableBuiltInValueType> =
@@ -339,6 +503,7 @@ type AggregateResultValue<TValue, TResultKind> = TResultKind extends "self"
 type AggregatePresentationBranch<
   TValue,
   TColumnId extends BrunoTableColumnId,
+  TField extends string,
   TAggFunc extends BrunoTableAggFunc,
   TResultKind extends BrunoTableAggregateResultKind,
 > = {
@@ -346,6 +511,7 @@ type AggregatePresentationBranch<
   readonly aggregateValueFormatter?: AggregateCallback<
     AggregateResultValue<TValue, TResultKind>,
     TColumnId,
+    TField,
     TAggFunc,
     string
   >;
@@ -354,18 +520,25 @@ type AggregatePresentationBranch<
     | AggregateCallback<
         AggregateResultValue<TValue, TResultKind>,
         TColumnId,
+        TField,
         TAggFunc,
         string | undefined
       >;
   readonly aggregateCellRenderer?: AggregateCallback<
     AggregateResultValue<TValue, TResultKind>,
     TColumnId,
+    TField,
     TAggFunc,
     ReactNode
   >;
 };
 
-type AggregatePresentation<TValue, TValueType, TColumnId extends BrunoTableColumnId> =
+type AggregatePresentation<
+  TValue,
+  TValueType,
+  TColumnId extends BrunoTableColumnId,
+  TField extends string,
+> =
   | {
       readonly aggFunc?: never;
       readonly aggregateValueFormatter?: never;
@@ -379,6 +552,7 @@ type AggregatePresentation<TValue, TValueType, TColumnId extends BrunoTableColum
       >]: AggregatePresentationBranch<
         TValue,
         TColumnId,
+        TField,
         TAggFunc,
         Extract<AggregateResultsFor<TValue, TValueType>[TAggFunc], BrunoTableAggregateResultKind>
       >;
@@ -429,8 +603,8 @@ type FieldColumn<
     readonly fields?: never;
     readonly valueGetter?: never;
   } & FieldColumnFilteringCapability &
-  GroupKeyPresentation<TRow[TField], TColumnId> &
-  AggregatePresentation<TRow[TField], TValueType, TColumnId>;
+  GroupKeyPresentation<TRow[TField], TColumnId, TField> &
+  AggregatePresentation<TRow[TField], TValueType, TColumnId, TField>;
 
 type RawCustomFieldValueType<
   TValue,
@@ -603,13 +777,34 @@ type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void
       : Extract<TColumn, { readonly groupBy?: false | undefined; readonly aggFunc?: never }>;
 
 /** Exact structural Field Column definition for advanced raw configuration. */
+declare const brunoTableColumnHelperFieldDomainWitness: unique symbol;
+declare const brunoTableColumnHelperRowWitness: unique symbol;
+
+type BrunoTableColumnHelperRowWitness<TRow> = Readonly<{
+  [brunoTableColumnHelperRowWitness]?: (row: TRow) => TRow;
+}>;
+
+type BrunoTableColumnHelperFieldDomainWitness<TField extends string, TValue> = Readonly<{
+  [brunoTableColumnHelperFieldDomainWitness]?: Readonly<{
+    readonly field: TField;
+    readonly value: TValue;
+  }>;
+}>;
+
+type BrunoTableColumnHelperFieldDomainFor<TRow, TField extends FieldKey<TRow>> =
+  TField extends FieldKey<TRow>
+    ? BrunoTableColumnHelperFieldDomainWitness<TField, TRow[TField]>
+    : never;
+
 export type BrunoTableFieldColumnDefinition<
   TRow,
   TField extends FieldKey<TRow>,
   TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
   TOptions = void,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
-> = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId>;
+> = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId> &
+  BrunoTableColumnHelperFieldDomainFor<TRow, TField> &
+  BrunoTableColumnHelperRowWitness<TRow>;
 
 /** @internal Capability-selecting input shape for first-party Column Helpers. */
 export type BrunoTableFieldColumnInput<
@@ -714,33 +909,41 @@ export function BrunoTableComputedColumn(options: Readonly<Record<string, unknow
   return { ...options, [computedColumnMarker]: true };
 }
 
-type GroupedPresentationCallbackKey =
-  | "groupKeyValueFormatter"
-  | "groupKeyCellClassName"
-  | "groupKeyCellRenderer"
-  | "aggregateValueFormatter"
-  | "aggregateCellClassName"
-  | "aggregateCellRenderer";
+type HelperGroupedPresentationCallbacks = Readonly<{
+  groupKeyValueFormatter?: unknown;
+  groupKeyCellClassName?: unknown;
+  groupKeyCellRenderer?: unknown;
+  aggregateValueFormatter?: unknown;
+  aggregateCellClassName?: unknown;
+  aggregateCellRenderer?: unknown;
+}>;
 
-type EraseCallbackParameters<TValue> = TValue extends (...parameters: never[]) => infer TResult
-  ? (...parameters: never[]) => TResult
-  : TValue;
+/** @internal Exact helper output recognized by the plain BrunoTable column-array boundary. */
+export type BrunoTableColumnHelperOutput<TColumn> = TColumn &
+  BrunoTableColumnHelperProvenanceCarrier<
+    TColumn extends { readonly field: infer TField }
+      ? Readonly<{ readonly field: TField }>
+      : TColumn extends { readonly fields: infer TFields }
+        ? Readonly<{ readonly fields: TFields }>
+        : never
+  >;
 
-type EraseGroupedPresentationCallbacks<TColumn> = TColumn extends unknown
-  ? {
-      readonly [TKey in keyof TColumn]: TKey extends GroupedPresentationCallbackKey
-        ? EraseCallbackParameters<TColumn[TKey]>
-        : TColumn[TKey];
-    }
-  : never;
+type HelperFieldDomainForRow<TRow> = BrunoTableColumnHelperFieldDomainFor<TRow, FieldKey<TRow>>;
 
-type Column<TRow> = EraseGroupedPresentationCallbacks<FieldColumns<TRow>> | AnyComputedColumn<TRow>;
+type Column<TRow> =
+  | FieldColumns<TRow>
+  | AnyComputedColumn<TRow>
+  | ({ readonly columnId: BrunoTableColumnId } & HelperGroupedPresentationCallbacks &
+      BrunoTableColumnHelperProvenanceCarrier<Readonly<{ readonly field: FieldKey<TRow> }>> &
+      HelperFieldDomainForRow<TRow> &
+      BrunoTableColumnHelperRowWitness<TRow>);
 
 /**
  * A plain column array intended to be used with `satisfies`.
  *
- * No helper call is required, so literal column identities and computed getter return types remain
- * available from the consumer's `typeof columns`.
+ * Ordinary raw Field Columns require no helper. Inline grouped callbacks receive the honest broad
+ * Column Identity context; exact grouped callbacks use one of BrunoTable's global typed Column
+ * Helpers so their owning literal identity remains exact.
  */
 export type BrunoTableColumns<TRow> = readonly Column<TRow>[];
 
@@ -1169,20 +1372,34 @@ export type BrunoTablePersistedColumnPinning<
   readonly end: readonly BrunoTableColumnIdOf<TColumns>[];
 }>;
 
-export type BrunoTablePersistedState<TRow, TColumns extends BrunoTableColumns<TRow>> = Readonly<{
-  readonly version: 1;
-  readonly tableId: string;
-  readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
-  readonly orderBy: BrunoTableSortBy<TColumns>;
-  readonly groupBy: readonly BrunoTableGroupableColumnId<TColumns>[];
-  readonly groupOrderBy: readonly [] | BrunoTableGroupSortBy<TColumns>;
-  readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
-  readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
-  readonly columnWidths: Readonly<
-    Partial<Record<BrunoTableColumnIdOf<TColumns> | BrunoTableRowsColumnId, number>>
-  >;
-  readonly columnPinning: BrunoTablePersistedColumnPinning<TColumns>;
-}>;
+export type BrunoTablePersistedState<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TGrouping extends boolean = boolean,
+> = TGrouping extends boolean
+  ? Readonly<{
+      readonly version: 1;
+      readonly tableId: string;
+      readonly filters: BrunoTablePersistedFilterExpressions<TRow, TColumns>;
+      readonly orderBy: BrunoTableSortBy<TColumns>;
+      readonly groupBy: TGrouping extends true
+        ? readonly BrunoTableGroupableColumnId<TColumns>[]
+        : readonly [];
+      readonly groupOrderBy: TGrouping extends true ? BrunoTableGroupSortBy<TColumns> : readonly [];
+      readonly columnOrder: readonly BrunoTableColumnIdOf<TColumns>[];
+      readonly columnVisibility: Readonly<Partial<Record<BrunoTableColumnIdOf<TColumns>, boolean>>>;
+      readonly columnWidths: Readonly<
+        Partial<
+          Record<
+            | BrunoTableColumnIdOf<TColumns>
+            | (TGrouping extends true ? BrunoTableRowsColumnId : never),
+            number
+          >
+        >
+      >;
+      readonly columnPinning: BrunoTablePersistedColumnPinning<TColumns>;
+    }>
+  : never;
 
 type SaveCellChangeForColumn<TRow, TColumn> = TColumn extends {
   readonly columnId: infer TColumnId extends BrunoTableColumnId;
@@ -1238,6 +1455,10 @@ export type BrunoTableNoGroupingCapability = {
   readonly groupRowsColumn?: never;
 };
 
+export type BrunoTableGroupingCapability<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TRow, TColumns>;
+};
+
 export type BrunoTableEditableCapability<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
@@ -1257,12 +1478,16 @@ export type BrunoTableEditingCapability<
   TRowVersion,
 > = BrunoTableReadOnlyCapability | BrunoTableEditableCapability<TRow, TColumns, TRowVersion>;
 
-type CommonPropsWithoutInitialOrderBy<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+type CommonPropsWithoutInitialOrderBy<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TGrouping extends boolean = boolean,
+> = {
   readonly tableId: string;
   readonly columns: TColumns & BrunoTableColumnIdentityGuard<NoInfer<TColumns>>;
   readonly initialFilters?: BrunoTableFilterExpressions<TRow, TColumns>;
-  readonly initialPersistedState?: BrunoTablePersistedState<TRow, TColumns>;
-  readonly onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns>) => void;
+  readonly initialPersistedState?: BrunoTablePersistedState<TRow, TColumns, TGrouping>;
+  readonly onPersistChange?: (state: BrunoTablePersistedState<TRow, TColumns, TGrouping>) => void;
   /** Optional page-specific content rendered in BrunoTable's toolbar region. */
   readonly children?: ReactNode;
 };
@@ -1279,16 +1504,18 @@ export type BrunoTableCommonProps<
 type ComponentCommonProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
-> = CommonPropsWithoutInitialOrderBy<TRow, TColumns> &
+  TGrouping extends boolean,
+> = CommonPropsWithoutInitialOrderBy<TRow, TColumns, TGrouping> &
   ([BrunoTableSortableColumnId<TColumns>] extends [never]
     ? { readonly initialOrderBy?: never }
     : { readonly initialOrderBy: BrunoTableSortBy<TColumns> });
 
 export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  ComponentCommonProps<TRow, TColumns>,
+  ComponentCommonProps<TRow, TColumns, true>,
   "initialOrderBy"
 > &
-  BrunoTableReadOnlyCapability & {
+  BrunoTableReadOnlyCapability &
+  BrunoTableGroupingCapability<TRow, TColumns> & {
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     readonly getRowId: (row: TRow) => BrunoTableRowId;
     readonly clientSource: BrunoTableClientSource<TRow>;
@@ -1303,7 +1530,7 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = Omit<ComponentCommonProps<TRow, TColumns>, "initialOrderBy"> &
+> = Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
   BrunoTableReadOnlyCapability & {
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     /** Server row identity is supplied authoritatively by the Viewport Source. */
@@ -1321,6 +1548,7 @@ export type BrunoTableServerProps<
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly editable?: never;
+    readonly groupRowsColumn?: never;
     readonly rowSelection?: never;
     readonly rangeSelection?: never;
     readonly onPaste?: never;

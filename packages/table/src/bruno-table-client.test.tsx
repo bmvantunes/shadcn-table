@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { BrunoTableClient } from "./bruno-table-client";
 import { installBrunoTableClientRowOrderPlanningListener } from "./internal/render-instrumentation";
+import type { BrunoTablePersistedState } from "./public-types";
 
 describe("BrunoTableClient server rendering", () => {
   it.each([undefined, null, 42, ""])(
@@ -138,6 +139,66 @@ describe("BrunoTableClient server rendering", () => {
     } finally {
       removePlanningListener();
     }
+  });
+
+  it("server-renders the restored grouped projection without a raw bridge", () => {
+    const rows = [
+      { id: "one", desk: "Alpha", quantity: 2n },
+      { id: "two", desk: "Alpha", quantity: 3n },
+    ] as const;
+    const columns = [
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+        groupKeyValueFormatter: ({
+          value,
+          rowCount,
+        }: {
+          readonly value: string;
+          readonly rowCount: bigint;
+        }) => `${value} (${String(rowCount)})`,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        aggFunc: "sum",
+        aggregateValueFormatter: ({ value }: { readonly value: bigint }) =>
+          `${value.toString()} units`,
+      },
+    ] as const;
+    const tableId = "TABLE_ID_SERVER_GROUPED";
+    const persisted = {
+      version: 1,
+      tableId,
+      filters: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
+      columnOrder: ["COL_ID_DESK", "COL_ID_QUANTITY"],
+      columnVisibility: { COL_ID_DESK: true, COL_ID_QUANTITY: true },
+      columnWidths: {},
+      columnPinning: { start: [], end: [] },
+    } satisfies BrunoTablePersistedState<(typeof rows)[number], typeof columns, true>;
+
+    const html = renderToStaticMarkup(
+      <BrunoTableClient
+        tableId={tableId}
+        getRowId={(row) => row.id}
+        columns={columns}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        initialPersistedState={persisted}
+      />,
+    );
+
+    expect(html).toContain("Alpha (2)");
+    expect(html).toContain("5 units");
+    expect(html).toContain("Rows");
   });
 
   it("keeps custom renderer controls inert before hydration", () => {

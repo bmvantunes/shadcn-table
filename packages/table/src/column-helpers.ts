@@ -1,9 +1,11 @@
 import { BrunoTableComputedColumn } from "./public-types";
+import { attachBrunoTableColumnHelperProvenance } from "./internal/column-helper-provenance";
 
 import type {
   BrunoTableBuiltInValueType,
   BrunoTableCellAlign,
   BrunoTableColumnId,
+  BrunoTableColumnHelperOutput,
   BrunoTableColumnIdentityInput,
   BrunoTableComputedColumnDependencies,
   BrunoTableComputedColumnDefinition,
@@ -86,14 +88,14 @@ type NarrowFieldCapabilities<TColumn, TOptions> = TColumn extends { readonly fie
         : never
   : TColumn;
 
-type HelperResult<TBuiltIn, TOptions, TColumn> = Merge<TBuiltIn, TOptions> &
-  NarrowFieldCapabilities<TColumn, TOptions>;
+type HelperResult<TBuiltIn, TOptions, TColumn> = BrunoTableColumnHelperOutput<
+  Merge<TBuiltIn, TOptions> & NarrowFieldCapabilities<TColumn, TOptions>
+>;
 
-type PresetResult<TBuiltIn, TDefaults, TOptions, TColumn> = Merge<
-  Merge<TBuiltIn, TDefaults>,
-  TOptions
-> &
-  NarrowFieldCapabilities<TColumn, Merge<TDefaults, TOptions>>;
+type PresetResult<TBuiltIn, TDefaults, TOptions, TColumn> = BrunoTableColumnHelperOutput<
+  Merge<Merge<TBuiltIn, TDefaults>, TOptions> &
+    NarrowFieldCapabilities<TColumn, Merge<TDefaults, TOptions>>
+>;
 
 type FieldInput<
   TRow,
@@ -354,9 +356,10 @@ function mergeRuntimeColumn(
     validateRuntimeFieldCapabilities(merged);
   }
 
-  return isComputed
+  const column = isComputed
     ? (BrunoTableComputedColumn(merged as never) as unknown as RuntimeColumnOptions)
     : merged;
+  return attachBrunoTableColumnHelperProvenance(column);
 }
 
 function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {

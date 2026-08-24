@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "./effect";
 import type { BrunoTableColumns } from "./public-types";
 import { createBrunoTableClientFacetSnapshot } from "./internal/client-facet";
-import { compileColumns } from "./internal/compile-columns";
+import {
+  deriveBrunoTableClientGroupedProjection,
+  type BrunoTableClientGroupingInputRow,
+} from "./internal/client-grouping";
+import { ColumnConfigurationError, compileColumns } from "./internal/compile-columns";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileClientFilterCollection } from "./internal/grid-query";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
@@ -17,6 +21,104 @@ import {
 const decimal = BigDecimal.fromStringUnsafe;
 
 describe("Effect BigDecimal Value Type", () => {
+  it("rejects a spread-mutated helper Value Type before compiling the optional adapter column", () => {
+    const [helperColumn] = [
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_EXACT_AMOUNT",
+        field: "amount",
+        headerName: "Exact amount",
+        aggFunc: "sum",
+      }),
+    ] satisfies BrunoTableColumns<{ readonly amount: BigDecimal.BigDecimal }>;
+
+    expect(() => compileColumns([{ ...helperColumn, valueType: "number" }])).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable Column Helper structural evidence does not match valueType: COL_ID_EXACT_AMOUNT",
+      ),
+    );
+  });
+
+  it("executes exact grouped sum and default-precision average through the optional adapter", () => {
+    type DecimalRow = Readonly<{
+      readonly id: string;
+      readonly group: string;
+      readonly amount: BigDecimal.BigDecimal;
+    }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_AMOUNT_SUM",
+        field: "amount",
+        headerName: "Amount sum",
+        aggFunc: "sum",
+      }),
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_AMOUNT_AVG",
+        field: "amount",
+        headerName: "Amount average",
+        aggFunc: "avg",
+      }),
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_AMOUNT_MIN",
+        field: "amount",
+        headerName: "Amount minimum",
+        aggFunc: "min",
+      }),
+      BrunoTableBigDecimalColumn({
+        columnId: "COL_ID_AMOUNT_MAX",
+        field: "amount",
+        headerName: "Amount maximum",
+        aggFunc: "max",
+      }),
+    ] satisfies BrunoTableColumns<DecimalRow>);
+    const rawRows: readonly DecimalRow[] = Object.freeze([
+      { id: "a", group: "fraction", amount: decimal("0.1") },
+      { id: "b", group: "fraction", amount: decimal("0.2") },
+      { id: "c", group: "third", amount: decimal("1") },
+      { id: "d", group: "third", amount: decimal("0") },
+      { id: "e", group: "third", amount: decimal("0") },
+    ]);
+    const rows: readonly BrunoTableClientGroupingInputRow[] = rawRows.map((raw, rowIndex) => ({
+      raw,
+      rowId: raw.id,
+      rowIndex,
+      readValue: (column) => (column.kind === "field" ? Reflect.get(raw, column.field) : undefined),
+    }));
+    const projection = deriveBrunoTableClientGroupedProjection({
+      rows,
+      columns,
+      groupBy: ["COL_ID_GROUP"],
+      groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    });
+    expect(projection.kind).toBe("ready");
+    if (projection.kind !== "ready") return;
+    const fraction = projection.rows[0]!;
+    const third = projection.rows[1]!;
+    expect(
+      BigDecimal.format(fraction.values.get("COL_ID_AMOUNT_SUM") as BigDecimal.BigDecimal),
+    ).toBe("0.3");
+    expect(
+      BigDecimal.format(fraction.values.get("COL_ID_AMOUNT_MIN") as BigDecimal.BigDecimal),
+    ).toBe("0.1");
+    expect(
+      BigDecimal.format(fraction.values.get("COL_ID_AMOUNT_MAX") as BigDecimal.BigDecimal),
+    ).toBe("0.2");
+    const expectedThird = BigDecimal.divideUnsafe(decimal("1"), BigDecimal.fromBigInt(3n));
+    expect(
+      BrunoTableBigDecimalValueType.equivalent(
+        third.values.get("COL_ID_AMOUNT_AVG") as BigDecimal.BigDecimal,
+        expectedThird,
+      ),
+    ).toBe(true);
+    expect(BigDecimal.format(expectedThird)).toBe(`3.${"3".repeat(99)}e-1`);
+  });
+
   it("rejects canonical text over the persistence budget at runtime admission", () => {
     const overBudget = BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0);
 
@@ -440,6 +542,7 @@ describe("BrunoTableBigDecimalColumn", () => {
     expect(
       column.aggregateValueFormatter?.({
         columnId: "COL_ID_TOTAL_PRICE",
+        field: "price",
         aggFunc: "sum",
         value: decimal("12.5"),
         rowCount: 2n,

@@ -19,6 +19,7 @@ import {
   BrunoTableQuickFilter,
   BrunoTableActiveFilterCount,
   BrunoTableActiveSortCount,
+  BrunoTableAggregateAlgebra,
   BrunoTableFilterControl,
   BrunoTableLoadedRowCount,
   BrunoTableResultRowCount,
@@ -31,6 +32,8 @@ import {
 import * as BrunoTablePublic from "./index";
 
 import type {
+  BrunoTableAggregateAlgebra as BrunoTableAggregateAlgebraType,
+  BrunoTableAggregateResults,
   BrunoTableClientProps,
   BrunoTableClientSource,
   BrunoTableCommonProps,
@@ -47,8 +50,9 @@ import type {
   BrunoTableFilterExpressions,
   BrunoTableQuickFilterField,
   BrunoTableQuickFilterFields,
-  BrunoTableFieldColumnDefinition,
   BrunoTableGroupKeyCellParams,
+  BrunoTableGroupKeyPresence,
+  BrunoTableGroupRowsColumnOptions,
   BrunoTablePersistedState,
   BrunoTableSaveCellChange,
   BrunoTableSaveChangeSet,
@@ -57,6 +61,122 @@ import type {
   BrunoTableSortBy,
   BrunoTableValueType,
 } from "./index";
+
+type ExactMoney = Readonly<{ readonly minorUnits: bigint }>;
+
+const exactMoneyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
+  add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+  divideByCount: (total, count) => ({ minorUnits: total.minorUnits / count }),
+});
+expectTypeOf(exactMoneyAlgebra).toMatchTypeOf<BrunoTableAggregateAlgebraType<ExactMoney>>();
+
+const exactMoneyValueType = {
+  codecId: "example/exact-money",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  aggregateResults: { countDistinct: "bigint", sum: "self", avg: "self" },
+  aggregateAlgebra: exactMoneyAlgebra,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "object" && input !== null && "minorUnits" in input
+      ? { _tag: "Success" as const, value: input as ExactMoney }
+      : { _tag: "Failure" as const, message: "Expected exact money." },
+  equivalent: (left: ExactMoney, right: ExactMoney) => left.minorUnits === right.minorUnits,
+  compare: (left: ExactMoney, right: ExactMoney) =>
+    left.minorUnits === right.minorUnits ? 0 : left.minorUnits < right.minorUnits ? -1 : 1,
+  formatCanonicalText: (value: ExactMoney) => value.minorUnits.toString(),
+  parseCanonicalText: (text: string) => ({
+    _tag: "Success" as const,
+    value: { minorUnits: BigInt(text) },
+  }),
+  formatDisplay: (value: ExactMoney) => value.minorUnits.toString(),
+  encodePersisted: (value: ExactMoney) => value.minorUnits.toString(),
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? { _tag: "Success" as const, value: { minorUnits: BigInt(input) } }
+      : { _tag: "Failure" as const, message: "Expected persisted exact money." },
+} satisfies BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly countDistinct: "bigint"; readonly sum: "self"; readonly avg: "self" }
+>;
+void exactMoneyValueType;
+
+const sumWithoutAlgebra = {
+  ...exactMoneyValueType,
+  aggregateResults: { sum: "self" as const },
+  aggregateAlgebra: undefined,
+};
+// @ts-expect-error Advertising sum requires an exact add operation.
+const invalidSumWithoutAlgebra: BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly sum: "self" }
+> = sumWithoutAlgebra;
+void invalidSumWithoutAlgebra;
+
+const invalidAggregateResultPair = {
+  // @ts-expect-error countDistinct always produces bigint.
+  countDistinct: "self",
+} satisfies BrunoTableAggregateResults;
+void invalidAggregateResultPair;
+
+const exactMoneyValueTypeBase = {
+  codecId: "example/single-generic-exact-money",
+  codecVersion: 1,
+  filterFamily: "numeric" as const,
+  editorFamily: "text" as const,
+  cellAlign: "end" as const,
+  editorLayout: "inline" as const,
+  defaultWidth: 120,
+  decodeRuntime: exactMoneyValueType.decodeRuntime,
+  equivalent: exactMoneyValueType.equivalent,
+  compare: exactMoneyValueType.compare,
+  formatCanonicalText: exactMoneyValueType.formatCanonicalText,
+  parseCanonicalText: exactMoneyValueType.parseCanonicalText,
+  formatDisplay: exactMoneyValueType.formatDisplay,
+  encodePersisted: exactMoneyValueType.encodePersisted,
+  decodePersisted: exactMoneyValueType.decodePersisted,
+};
+
+const exactMoneyNonArithmeticAggregates = {
+  ...exactMoneyValueTypeBase,
+  aggregateResults: { countDistinct: "bigint", min: "self", max: "self" },
+} satisfies BrunoTableValueType<ExactMoney>;
+void exactMoneyNonArithmeticAggregates;
+
+const exactMoneySingleGenericArithmetic = {
+  ...exactMoneyValueTypeBase,
+  aggregateResults: { sum: "self", avg: "self" },
+  aggregateAlgebra: exactMoneyAlgebra,
+} satisfies BrunoTableValueType<ExactMoney>;
+void exactMoneySingleGenericArithmetic;
+
+const exactMoneySingleGenericSumWithoutAlgebra = {
+  ...exactMoneyValueTypeBase,
+  aggregateResults: { sum: "self" as const },
+};
+// @ts-expect-error The single-generic form still requires exact addition for sum.
+const invalidSingleGenericSumWithoutAlgebra: BrunoTableValueType<ExactMoney> =
+  exactMoneySingleGenericSumWithoutAlgebra;
+void invalidSingleGenericSumWithoutAlgebra;
+
+const exactMoneySingleGenericAverageWithoutDivision = {
+  ...exactMoneyValueTypeBase,
+  aggregateResults: { avg: "self" as const },
+  aggregateAlgebra: BrunoTableAggregateAlgebra<ExactMoney>({
+    add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+  }),
+};
+// @ts-expect-error The single-generic form requires exact division for avg.
+const invalidSingleGenericAverageWithoutDivision: BrunoTableValueType<ExactMoney> =
+  exactMoneySingleGenericAverageWithoutDivision;
+void invalidSingleGenericAverageWithoutDivision;
 
 type Order = {
   readonly id: string;
@@ -67,6 +187,171 @@ type Order = {
   readonly revision: bigint;
   readonly hiddenLabel: string;
 };
+
+type OptionalGroupRow = Readonly<{ readonly optional?: string | null }>;
+expectTypeOf<BrunoTableGroupKeyPresence<string | null | undefined>>().toEqualTypeOf<
+  | Readonly<{ readonly _tag: "Missing" }>
+  | Readonly<{
+      readonly _tag: "Present";
+      readonly value: string | null | undefined;
+    }>
+>();
+const optionalGroupColumns = [
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "text",
+    groupBy: true,
+  },
+] as const satisfies BrunoTableColumns<OptionalGroupRow>;
+const exactRowsPresenceCallbacks = {
+  valueFormatter: ({ groupKeys }) => {
+    const key = groupKeys[0];
+    if (key?._tag === "Present") {
+      expectTypeOf(key.columnId).toEqualTypeOf<"COL_ID_OPTIONAL">();
+      expectTypeOf(key.field).toEqualTypeOf<"optional">();
+      expectTypeOf(key.value).toEqualTypeOf<string | null | undefined>();
+      return String(key.value);
+    }
+    if (key?._tag === "Missing") {
+      // @ts-expect-error Missing evidence owns no fabricated value.
+      void key.value;
+    }
+    return "Missing";
+  },
+} satisfies BrunoTableGroupRowsColumnOptions<OptionalGroupRow, typeof optionalGroupColumns>;
+void exactRowsPresenceCallbacks;
+
+type AggregateMatrixRow = Readonly<{
+  text: string;
+  boolean: boolean;
+  number: number;
+  bigint: bigint;
+}>;
+
+const builtInAggregateMatrix = [
+  {
+    columnId: "COL_ID_TEXT_DISTINCT",
+    field: "text",
+    headerName: "Text distinct",
+    valueType: "text",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_TEXT_MIN",
+    field: "text",
+    headerName: "Text min",
+    valueType: "text",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_TEXT_MAX",
+    field: "text",
+    headerName: "Text max",
+    valueType: "text",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_DISTINCT",
+    field: "boolean",
+    headerName: "Boolean distinct",
+    valueType: "boolean",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MIN",
+    field: "boolean",
+    headerName: "Boolean min",
+    valueType: "boolean",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MAX",
+    field: "boolean",
+    headerName: "Boolean max",
+    valueType: "boolean",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_NUMBER_DISTINCT",
+    field: "number",
+    headerName: "Number distinct",
+    valueType: "number",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MIN",
+    field: "number",
+    headerName: "Number min",
+    valueType: "number",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MAX",
+    field: "number",
+    headerName: "Number max",
+    valueType: "number",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BIGINT_DISTINCT",
+    field: "bigint",
+    headerName: "Bigint distinct",
+    valueType: "bigint",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BIGINT_SUM",
+    field: "bigint",
+    headerName: "Bigint sum",
+    valueType: "bigint",
+    aggFunc: "sum",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MIN",
+    field: "bigint",
+    headerName: "Bigint min",
+    valueType: "bigint",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MAX",
+    field: "bigint",
+    headerName: "Bigint max",
+    valueType: "bigint",
+    aggFunc: "max",
+  },
+] as const satisfies BrunoTableColumns<AggregateMatrixRow>;
+void builtInAggregateMatrix;
+
+const forbiddenBuiltInAggregates = [
+  // @ts-expect-error Number sum is Server-owned BigDecimal semantics, not a Client number result.
+  {
+    columnId: "COL_ID_NUMBER_SUM",
+    field: "number",
+    headerName: "Number sum",
+    valueType: "number",
+    aggFunc: "sum",
+  },
+  // @ts-expect-error Number average is Server-owned BigDecimal semantics.
+  {
+    columnId: "COL_ID_NUMBER_AVG",
+    field: "number",
+    headerName: "Number average",
+    valueType: "number",
+    aggFunc: "avg",
+  },
+  // @ts-expect-error Bigint average is Server-owned BigDecimal semantics.
+  {
+    columnId: "COL_ID_BIGINT_AVG",
+    field: "bigint",
+    headerName: "Bigint average",
+    valueType: "bigint",
+    aggFunc: "avg",
+  },
+] as const satisfies BrunoTableColumns<AggregateMatrixRow>;
+void forbiddenBuiltInAggregates;
 
 const columns = [
   {
@@ -164,6 +449,8 @@ describe("BrunoTableServer viewport row witness", () => {
       columns,
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       viewportSource: orderViewportSource,
+      onPersistChange: (state) =>
+        expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, false>>(),
     } as const satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
     void BrunoTableServer(matchingProps);
 
@@ -260,7 +547,7 @@ const persistedPreferences = {
   ],
   orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   groupBy: [],
-  groupOrderBy: [],
+  groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
   columnOrder: ["COL_ID_SYMBOL", "COL_ID_PRICE", "COL_ID_DOUBLE_QUANTITY"],
   columnVisibility: { COL_ID_SYMBOL: true },
   columnWidths: { COL_ID_PRICE: 144 },
@@ -413,9 +700,35 @@ const persistedClientProps = {
   clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" as const },
   initialPersistedState: persistedPreferences,
   onPersistChange: (state) =>
-    expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns>>(),
+    expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, true>>(),
 } satisfies BrunoTableClientProps<Order, Columns>;
 void persistedClientProps;
+
+const nonGroupingPersistedPreferences = {
+  ...persistedPreferences,
+  groupOrderBy: [],
+} as const satisfies BrunoTablePersistedState<Order, Columns, false>;
+void nonGroupingPersistedPreferences;
+const invalidNonGroupingPersistedGroupBy = {
+  ...nonGroupingPersistedPreferences,
+  // @ts-expect-error Non-grouping persistence rejects active Group By intent.
+  groupBy: ["COL_ID_SYMBOL"],
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void invalidNonGroupingPersistedGroupBy;
+const invalidNonGroupingPersistedRowsWidth = {
+  ...nonGroupingPersistedPreferences,
+  columnWidths: {
+    // @ts-expect-error Non-grouping persistence rejects the dormant Rows width.
+    COL_ID_BRUNO_TABLE_ROWS: 144,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void invalidNonGroupingPersistedRowsWidth;
+const invalidGroupingPersistedPreferences = {
+  ...persistedPreferences,
+  // @ts-expect-error Grouping-capable Client persistence always retains one grouped sort.
+  groupOrderBy: [],
+} as const satisfies BrunoTablePersistedState<Order, Columns, true>;
+void invalidGroupingPersistedPreferences;
 
 const directViewServerResult = null as unknown as LiveQueryResult<Order>;
 const directClientSource: BrunoTableClientSource<Order> = directViewServerResult;
@@ -429,38 +742,226 @@ const directViewServerClient = BrunoTableClient({
 void directClientSource;
 void directViewServerClient;
 
-const rawGroupSymbol = {
-  columnId: "COL_ID_GROUP_SYMBOL",
-  field: "symbol",
-  headerName: "Symbol group",
-  valueType: "text",
-  groupBy: true,
-  groupKeyValueFormatter: ({ value }) => value,
-} satisfies BrunoTableFieldColumnDefinition<
-  Order,
-  "symbol",
-  "text",
-  { readonly groupBy: true },
-  "COL_ID_GROUP_SYMBOL"
->;
-
-const rawMaximumPrice = {
-  columnId: "COL_ID_MAX_PRICE",
-  field: "price",
-  headerName: "Maximum price",
-  valueType: "number",
-  aggFunc: "max",
-  aggregateValueFormatter: ({ value }) => value.toFixed(2),
-} satisfies BrunoTableFieldColumnDefinition<
-  Order,
-  "price",
-  "number",
-  { readonly aggFunc: "max" },
-  "COL_ID_MAX_PRICE"
->;
-
-const rawGroupedColumns = [rawGroupSymbol, rawMaximumPrice] satisfies BrunoTableColumns<Order>;
+const rawGroupedColumns = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_GROUP_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol group",
+    groupBy: true,
+    groupKeyValueFormatter: ({ columnId, field, value }) => {
+      expectTypeOf(columnId).toEqualTypeOf<"COL_ID_GROUP_SYMBOL">();
+      expectTypeOf(field).toEqualTypeOf<"symbol">();
+      expectTypeOf(value).toEqualTypeOf<string>();
+      return value;
+    },
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_MAX_PRICE",
+    field: "price",
+    headerName: "Maximum price",
+    aggFunc: "max",
+    aggregateValueFormatter: ({ columnId, field, value }) => {
+      expectTypeOf(columnId).toEqualTypeOf<"COL_ID_MAX_PRICE">();
+      expectTypeOf(field).toEqualTypeOf<"price">();
+      expectTypeOf(value).toEqualTypeOf<number>();
+      return value.toFixed(2);
+    },
+  }),
+  {
+    columnId: "COL_ID_RAW_STATUS",
+    field: "status",
+    headerName: "Raw status",
+    valueType: "text",
+  },
+] satisfies BrunoTableColumns<Order>;
 void rawGroupedColumns;
+
+type HostileSymbolGroupParams = BrunoTableGroupKeyCellParams<
+  string,
+  "COL_ID_HOSTILE_SYMBOL",
+  "symbol"
+> & {
+  readonly groupKeys: readonly [{ readonly columnId: "COL_ID_GROUP_SYMBOL" }];
+};
+const hostileSymbolGroupFormatter = (_parameters: HostileSymbolGroupParams) => "hostile";
+const hostileHelperGroupedOptions = {
+  columnId: "COL_ID_HOSTILE_SYMBOL",
+  field: "symbol",
+  headerName: "Hostile symbol",
+  groupBy: true,
+  groupKeyValueFormatter: hostileSymbolGroupFormatter,
+} as const;
+// @ts-expect-error Column-level helper callbacks cannot require sibling Group Key evidence.
+const hostileHelperGroupedColumn = BrunoTableTextColumn(hostileHelperGroupedOptions);
+void hostileHelperGroupedColumn;
+
+const spreadHelperGroupedSource = [
+  BrunoTableTextColumn({
+    columnId: "COL_ID_GROUP_SYMBOL",
+    field: "symbol",
+    headerName: "Group symbol",
+    groupBy: true,
+    groupKeyValueFormatter: ({ value }) => value,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
+  }),
+] satisfies BrunoTableColumns<Order>;
+const validSpreadHelperGroupedColumns = [
+  { ...spreadHelperGroupedSource[0]! },
+] satisfies BrunoTableColumns<Order>;
+void validSpreadHelperGroupedColumns;
+type IncompatibleHelperRow = Readonly<{ readonly unrelated: string }>;
+const crossRowHelperColumns = [spreadHelperGroupedSource[0]!];
+// @ts-expect-error A helper column remains tied to the row type inferred by that helper call.
+const invalidCrossRowHelperColumns: BrunoTableColumns<IncompatibleHelperRow> =
+  crossRowHelperColumns;
+void invalidCrossRowHelperColumns;
+type IncompatibleHelperValueRow = Readonly<{ readonly symbol: number }>;
+// @ts-expect-error A same-name field with a different value domain is not helper-compatible.
+const invalidCrossValueHelperColumns: BrunoTableColumns<IncompatibleHelperValueRow> =
+  crossRowHelperColumns;
+void invalidCrossValueHelperColumns;
+type IncompatibleHelperSiblingRow = Readonly<{ readonly symbol: string }>;
+// @ts-expect-error Helper raw callbacks remain tied to sibling evidence from the inferred row.
+const invalidCrossSiblingHelperColumns: BrunoTableColumns<IncompatibleHelperSiblingRow> =
+  crossRowHelperColumns;
+void invalidCrossSiblingHelperColumns;
+type IncompatibleHelperWidenedRow = Omit<Order, "symbol"> &
+  Readonly<{ readonly symbol: string | number }>;
+// @ts-expect-error Helper provenance is invariant in the complete inferred row value domain.
+const invalidWidenedHelperColumns: BrunoTableColumns<IncompatibleHelperWidenedRow> =
+  crossRowHelperColumns;
+void invalidWidenedHelperColumns;
+const computedHelperForOrder = BrunoTableTextColumn({
+  columnId: "COL_ID_COMPUTED_HELPER_SYMBOL",
+  fields: ["symbol"] as const,
+  headerName: "Computed symbol",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "symbol"> }) => row.symbol,
+});
+const invalidComputedHelperDependencies: BrunoTableColumns<IncompatibleHelperValueRow> = [
+  // @ts-expect-error Computed helper dependencies retain their exact source value domains.
+  computedHelperForOrder,
+];
+void invalidComputedHelperDependencies;
+const replacedSpreadHelperGroupedColumns = [
+  {
+    ...spreadHelperGroupedSource[0]!,
+    groupKeyValueFormatter: ({
+      columnId,
+      value,
+    }: BrunoTableGroupKeyCellParams<string, "COL_ID_GROUP_SYMBOL", "symbol">) => {
+      expectTypeOf(columnId).toEqualTypeOf<"COL_ID_GROUP_SYMBOL">();
+      expectTypeOf(value).toEqualTypeOf<string>();
+      return value;
+    },
+  },
+] satisfies BrunoTableColumns<Order>;
+void replacedSpreadHelperGroupedColumns;
+
+const hostileSpreadHelperGroupedColumns = [
+  {
+    ...spreadHelperGroupedSource[0]!,
+    groupKeyValueFormatter: hostileSymbolGroupFormatter,
+  },
+];
+// TypeScript preserves the helper's column-level provenance through object spread, but cannot
+// re-contextualize a separately declared replacement callback against its sibling properties.
+const unsupportedHostileSpreadHelperColumns: BrunoTableColumns<Order> =
+  hostileSpreadHelperGroupedColumns;
+void unsupportedHostileSpreadHelperColumns;
+
+const changedIdentitySpreadHelperGroupedColumns = [
+  {
+    ...spreadHelperGroupedSource[0]!,
+    columnId: "COL_ID_CHANGED_HELPER_SYMBOL",
+    groupKeyValueFormatter: ({ value }: { readonly value: string }) => value,
+  } as const,
+] as const satisfies BrunoTableColumns<Order>;
+void changedIdentitySpreadHelperGroupedColumns;
+
+const changedDomainSpreadHelperGroupedColumns = [
+  {
+    ...spreadHelperGroupedSource[0]!,
+    field: "status",
+    valueType: "text",
+    groupKeyValueFormatter: ({ value }: { readonly value: string }) => value,
+  } as const,
+] as const satisfies BrunoTableColumns<Order>;
+void changedDomainSpreadHelperGroupedColumns;
+
+const unsupportedInlineGroupFormatter = (
+  parameters: BrunoTableGroupKeyCellParams<string, "COL_ID_INLINE_GROUP", "symbol">,
+) => parameters.value;
+const rawInlineGroupedPresentation = [
+  {
+    columnId: "COL_ID_INLINE_GROUP",
+    field: "symbol",
+    headerName: "Inline group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: unsupportedInlineGroupFormatter,
+  },
+] as const;
+// @ts-expect-error Exact grouped callbacks cross a global Column Helper, not a raw inline definition.
+const invalidRawInlineGroupedPresentation: BrunoTableColumns<Order> = rawInlineGroupedPresentation;
+void invalidRawInlineGroupedPresentation;
+
+const honestRawInlineGroupedPresentation = [
+  {
+    columnId: "COL_ID_INLINE_BROAD_GROUP",
+    field: "symbol",
+    headerName: "Inline broad group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: ({ columnId, value }) => {
+      expectTypeOf(columnId).toEqualTypeOf<BrunoTableColumnId>();
+      expectTypeOf(value).toEqualTypeOf<string>();
+      // @ts-expect-error A raw inline callback cannot claim its sibling Column Identity literal.
+      const exactColumnId: "COL_ID_INLINE_BROAD_GROUP" = columnId;
+      void exactColumnId;
+      return value;
+    },
+  },
+] satisfies BrunoTableColumns<Order>;
+void honestRawInlineGroupedPresentation;
+const groupRowsColumn = {
+  headerName: "Orders",
+  width: 112,
+  valueFormatter: ({ columnId, value, groupKeys }) => {
+    expectTypeOf(columnId).toEqualTypeOf<"COL_ID_BRUNO_TABLE_ROWS">();
+    expectTypeOf(value).toEqualTypeOf<bigint>();
+    expectTypeOf<(typeof groupKeys)[number]>().toMatchTypeOf<{
+      readonly columnId: "COL_ID_GROUP_SYMBOL";
+      readonly field: "symbol";
+      readonly _tag: "Missing" | "Present";
+    }>();
+    return value.toString();
+  },
+} satisfies BrunoTableGroupRowsColumnOptions<Order, typeof rawGroupedColumns>;
+
+const groupedClientProps = {
+  tableId: "TABLE_ID_GROUPED_CLIENT",
+  columns: rawGroupedColumns,
+  initialOrderBy: [{ columnId: "COL_ID_GROUP_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" as const },
+  groupRowsColumn,
+} satisfies BrunoTableClientProps<Order, typeof rawGroupedColumns>;
+void groupedClientProps;
+
+const serverWithClientGroupingConfiguration = {
+  tableId: "TABLE_ID_INVALID_SERVER_GROUPING",
+  columns: rawGroupedColumns,
+  initialOrderBy: [{ columnId: "COL_ID_GROUP_SYMBOL", direction: "asc" }],
+  viewportSource: orderViewportSource,
+  groupRowsColumn,
+} as const;
+// @ts-expect-error Server grouping is outside the Client-only issue #20 capability.
+const invalidServerGroupingConfiguration: BrunoTableServerProps<
+  Order,
+  typeof rawGroupedColumns,
+  typeof orderViewportSource.viewport
+> = serverWithClientGroupingConfiguration;
+void invalidServerGroupingConfiguration;
 const groupedPersistedPreferences = {
   version: 1,
   tableId: "TABLE_ID_GROUPED_PREFERENCES",
@@ -498,6 +999,22 @@ type UnsafelyNarrowGroupedCallbackParams = BrunoTableGroupKeyCellParams<
 > & { readonly groupKeys: OnlySymbolGroupEvidence };
 
 const unsafelyNarrowGroupedCallback = (_params: UnsafelyNarrowGroupedCallbackParams) => "symbol";
+
+const rawColumnWithUnsafelyNarrowGroupedCallback = [
+  {
+    columnId: "COL_ID_GROUP_SYMBOL",
+    field: "symbol",
+    headerName: "Unsafe raw symbol group",
+    valueType: "text",
+    groupBy: true,
+    groupKeyValueFormatter: unsafelyNarrowGroupedCallback,
+  },
+] as const;
+
+// @ts-expect-error Raw columns cannot require sibling Group Key evidence.
+const invalidRawNarrowGroupedCallback: BrunoTableColumns<Order> =
+  rawColumnWithUnsafelyNarrowGroupedCallback;
+void invalidRawNarrowGroupedCallback;
 
 BrunoTableTextColumn({
   columnId: "COL_ID_UNSAFE_GROUP_SYMBOL",
@@ -1550,9 +2067,9 @@ const invalidColumnIds = [
 ] satisfies BrunoTableColumns<Order>;
 
 const invalidField = [
+  // @ts-expect-error field must be a real row key.
   {
     columnId: "COL_ID_PRICES",
-    // @ts-expect-error field must be a real row key.
     field: "prices",
     headerName: "Price",
     valueType: "number",
@@ -1590,20 +2107,20 @@ const invalidValueType = [
 ] satisfies BrunoTableColumns<Order>;
 
 const invalidCapabilityFlags = [
+  // @ts-expect-error filtering capability accepts only a boolean opt-out.
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
     valueType: "number",
-    // @ts-expect-error filtering capability accepts only a boolean opt-out.
     enableFilter: "no",
   },
+  // @ts-expect-error sorting capability accepts only a boolean opt-out.
   {
     columnId: "COL_ID_SYMBOL",
     field: "symbol",
     headerName: "Symbol",
     valueType: "text",
-    // @ts-expect-error sorting capability accepts only a boolean opt-out.
     enableSorting: 0,
   },
 ] satisfies BrunoTableColumns<Order>;
@@ -1765,10 +2282,10 @@ const invalidDefaultNumberSetFilter = [
 ] satisfies BrunoTableFilterExpressions<Order, Columns>;
 
 const invalidSetFilterCapability = [
+  // @ts-expect-error Set Filter cannot be enabled when filtering is disabled.
   {
     columnId: "COL_ID_SYMBOL",
     enableFilter: false,
-    // @ts-expect-error Set Filter cannot be enabled when filtering is disabled.
     enableSetFilter: true,
     field: "symbol",
     headerName: "Symbol",
@@ -2099,7 +2616,6 @@ const invalidCommonWithoutSortingCapability = {
 void invalidCommonWithoutSortingCapability;
 
 const invalidNumberHelperField = [
-  // @ts-expect-error the rejected helper result cannot enter the typed column tuple.
   BrunoTableNumberColumn({
     columnId: "COL_ID_SYMBOL",
     // @ts-expect-error the Number helper cannot target a string field.
@@ -2160,12 +2676,12 @@ const narrowPriceFormatter = ({
 }) => `${row.secret}:${value}`;
 
 const invalidNarrowPresentationCallback = [
+  // @ts-expect-error BrunoTable may pass any HelperRow, not a narrower row subtype.
   {
     columnId: "COL_ID_PRICE",
     field: "price",
     headerName: "Price",
     valueType: "number",
-    // @ts-expect-error BrunoTable may pass any HelperRow, not a narrower row subtype.
     valueFormatter: narrowPriceFormatter,
   },
 ] satisfies BrunoTableColumns<HelperRow>;
@@ -2209,7 +2725,6 @@ const invalidCustomComputedDependency = [
 ] satisfies BrunoTableColumns<AmountRow>;
 
 const invalidIncompleteSelectDomain = [
-  // @ts-expect-error the rejected Select helper result cannot enter the typed column tuple.
   BrunoTableSelectColumn({
     columnId: "COL_ID_STATUS",
     // @ts-expect-error Select options must cover the field's exact non-nullish value domain.
