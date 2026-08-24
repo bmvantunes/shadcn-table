@@ -462,30 +462,57 @@ export class BrunoTableClientProjectionStore {
         ? undefined
         : this.adapter.retryQueryRows();
     let ungroupedPublication = retriedPublication ?? this.adapter.projectUngroupedRows();
+    const previousGroupedProjection = this.coordinator?.getPreviousGroupedProjection();
     let candidate: BrunoTableClientProjectionCandidate;
     if (rowModel.kind === "invalid") {
       ungroupedPublication =
         this.adapter.rejectQueryRows(projectionInput.rows, rowModel.invalid) ??
         ungroupedPublication;
-      candidate = createBrunoTableInvalidProjectionCandidate({
-        groupBy: configuration.groupBy,
-        columns: rowModel.visibleColumns,
-        presentationKey: clientProjectionPresentationKey(
-          "invalid",
-          projectionInput.columns,
-          configuration.queryGeneration,
-          configuration.columnLayout.version,
-          configuration.rowsWidth,
-          projectionInput.groupRowsColumn,
-        ).concat(":source:", String(ungroupedPublication.version)),
-        publication: ungroupedPublication,
-        queryGeneration: configuration.queryGeneration,
-        queryNavigationMode: configuration.queryNavigationMode,
-        invalid: rowModel.invalid,
-      });
+      const groupedPresentationKey = clientProjectionPresentationKey(
+        "grouped",
+        projectionInput.columns,
+        configuration.queryGeneration,
+        configuration.columnLayout.version,
+        configuration.rowsWidth,
+        projectionInput.groupRowsColumn,
+      );
+      candidate =
+        ungroupedPublication.hasCoherentRows &&
+        previousGroupedProjection?.kind === "ready" &&
+        installedBeforeCandidate?.kind === "grouped" &&
+        installedBeforeCandidate.queryGeneration === configuration.queryGeneration &&
+        installedBeforeCandidate.presentationKey === groupedPresentationKey &&
+        sameStrings(previousGroupedProjection.groupBy, configuration.groupBy)
+          ? createBrunoTableGroupedProjectionCandidate({
+              projection: previousGroupedProjection,
+              columns: installedBeforeCandidate.columns,
+              presentationKey: installedBeforeCandidate.presentationKey,
+              publication: this.adapter.projectGroupedRows(
+                previousGroupedProjection.rows,
+                new Set(),
+                projectionInput.sourceRowIds.authoritative,
+              ),
+              queryGeneration: configuration.queryGeneration,
+              queryNavigationMode: configuration.queryNavigationMode,
+            })
+          : createBrunoTableInvalidProjectionCandidate({
+              groupBy: configuration.groupBy,
+              columns: rowModel.visibleColumns,
+              presentationKey: clientProjectionPresentationKey(
+                "invalid",
+                projectionInput.columns,
+                configuration.queryGeneration,
+                configuration.columnLayout.version,
+                configuration.rowsWidth,
+                projectionInput.groupRowsColumn,
+              ).concat(":source:", String(ungroupedPublication.version)),
+              publication: ungroupedPublication,
+              queryGeneration: configuration.queryGeneration,
+              queryNavigationMode: configuration.queryNavigationMode,
+              invalid: rowModel.invalid,
+            });
     } else {
       this.adapter.acceptRows(projectionInput.rows);
-      const previousGroupedProjection = this.coordinator?.getPreviousGroupedProjection();
       candidate = createClientProjectionCandidate({
         columns: projectionInput.columns,
         columnLayout: configuration.columnLayout,

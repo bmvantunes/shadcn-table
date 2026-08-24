@@ -229,9 +229,6 @@ export function BrunoTableViewportAdapterBoundary({
     clearColumnWidthPreview: viewport.clearColumnWidthPreview,
     revealCell: viewport.revealCell,
   }));
-  const queryGenerationRef = useRef<number | undefined>(
-    installedQueryNavigationMode === "projection-reset" ? undefined : installedQueryGeneration,
-  );
   const appliedColumnLayoutSignatureRef = useRef<string | undefined>(undefined);
   const publishedRangeRef = useRef<
     | {
@@ -270,20 +267,14 @@ export function BrunoTableViewportAdapterBoundary({
     });
   }, [installedQueryGeneration, installedRowSpace, logicalColumns, viewportBindings]);
   useLayoutEffect(() => {
-    if (queryGenerationRef.current === installedQueryGeneration) return;
-    queryGenerationRef.current = installedQueryGeneration;
+    const changed = navigation.installCommittedQuery(
+      installedQueryGeneration,
+      installedQueryNavigationMode,
+      installedRowSpace,
+      logicalColumns,
+    );
+    if (!changed) return;
     resetViewportForCommittedQuery();
-    if (installedQueryNavigationMode === "projection-reset") {
-      navigation.resetForProjection(installedRowSpace, logicalColumns);
-    } else if (installedQueryNavigationMode === "reconcile") {
-      navigation.reconcileForQuery(installedRowSpace, logicalColumns);
-    } else if (installedQueryNavigationMode === "clear") {
-      navigation.clearForCommittedSort(installedRowSpace, logicalColumns);
-    } else {
-      // Issue #12 resets body position without retaining a hidden/non-zero row. A header
-      // origin remains a header origin, so its DOM focus and logical header navigation survive.
-      navigation.resetForCommittedQuery(installedRowSpace, logicalColumns);
-    }
     onCommittedNavigationChange?.(navigation.getSnapshot(), logicalColumns);
   }, [
     logicalColumns,

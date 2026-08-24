@@ -64,6 +64,7 @@ export class BrunoTableNavigationRuntime {
   private activeCell: BrunoTableActiveCell | undefined;
   private bodyInitializationBlocked = false;
   private pendingQueryFallbackRowIndex: number | undefined;
+  private installedQueryGeneration: number | undefined;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
 
@@ -99,6 +100,45 @@ export class BrunoTableNavigationRuntime {
     this.pendingQueryFallbackRowIndex = undefined;
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
+  };
+
+  /**
+   * Consumes one installed query epoch for the table-scoped navigation authority.
+   * Initial restored grouping blocks synthetic body activation; later epochs apply once even
+   * when their structural projection replaces the keyed viewport boundary.
+   */
+  public readonly installCommittedQuery = (
+    generation: number,
+    navigationMode: "reset" | "reconcile" | "clear" | "projection-reset" | "restore",
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): boolean => {
+    if (this.installedQueryGeneration === undefined) {
+      this.installedQueryGeneration = generation;
+      if (navigationMode === "restore") {
+        this.clearForQuery();
+        return false;
+      }
+      if (navigationMode === "projection-reset") {
+        this.resetForProjection(rows, columns);
+        return true;
+      }
+      return false;
+    }
+    if (this.installedQueryGeneration === generation) return false;
+    this.installedQueryGeneration = generation;
+    if (navigationMode === "restore") {
+      this.clearForQuery();
+    } else if (navigationMode === "projection-reset") {
+      this.resetForProjection(rows, columns);
+    } else if (navigationMode === "reconcile") {
+      this.reconcileForQuery(rows, columns);
+    } else if (navigationMode === "clear") {
+      this.clearForCommittedSort(rows, columns);
+    } else {
+      this.resetForCommittedQuery(rows, columns);
+    }
+    return true;
   };
 
   /**

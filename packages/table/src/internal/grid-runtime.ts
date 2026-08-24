@@ -215,7 +215,12 @@ export type BrunoTableBodySnapshot =
   | Readonly<{ readonly kind: "invalid" }>
   | Readonly<{ readonly kind: "empty" }>;
 
-export type BrunoTableQueryNavigationMode = "reset" | "reconcile" | "clear" | "projection-reset";
+export type BrunoTableQueryNavigationMode =
+  | "reset"
+  | "reconcile"
+  | "clear"
+  | "projection-reset"
+  | "restore";
 
 export const BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY: string = JSON.stringify(["raw", []]);
 
@@ -796,7 +801,7 @@ export class BrunoTableGridRuntime<TRow> {
       "",
       restoredPreferences.orderBy,
       0,
-      restoredPreferences.groupBy.length > 0 ? "projection-reset" : "reset",
+      restoredPreferences.groupBy.length > 0 ? "restore" : "reset",
       restoredPreferences.groupBy,
       restoredPreferences.groupOrderBy,
       this.rowsWidth,

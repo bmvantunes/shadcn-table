@@ -5,12 +5,13 @@ import type { BrunoTableValueType } from "../public-types";
 import { compileColumns } from "./compile-columns";
 import {
   deriveBrunoTableClientGroupedProjection,
+  type BrunoTableClientGroupedProjection,
   type BrunoTableClientGroupingInputRow,
 } from "./client-grouping";
 
 type Order = Readonly<{
   readonly id: string;
-  readonly region?: string | null;
+  readonly region?: string | null | undefined;
   readonly status: string;
   readonly quantity: bigint;
   readonly price: number;
@@ -519,6 +520,63 @@ describe("Client flat grouping", () => {
     });
     expect(equivalent.kind).toBe("ready");
     if (equivalent.kind === "ready") expect(equivalent.rows).toBe(first.rows);
+  });
+
+  it("replaces grouped rows when Present null and Present undefined aggregates alternate", () => {
+    const nullableColumns = compileColumns([
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_REGION_MIN",
+        field: "region",
+        headerName: "Minimum region",
+        valueType: "text",
+        aggFunc: "min",
+      },
+    ]);
+    const derive = (
+      region: string | null | undefined,
+      previous?: BrunoTableClientGroupedProjection,
+    ) =>
+      deriveBrunoTableClientGroupedProjection({
+        rows: [
+          inputRow(
+            {
+              id: "one",
+              region,
+              status: "same",
+              quantity: 1n,
+              price: 1,
+              money: { minorUnits: 1n },
+            },
+            0,
+          ),
+        ],
+        columns: nullableColumns,
+        groupBy: ["COL_ID_STATUS"],
+        groupOrderBy: [{ columnId: "COL_ID_STATUS", direction: "asc" }],
+        ...(previous === undefined ? {} : { previous }),
+      });
+    const nullProjection = derive(null);
+    expect(nullProjection.kind).toBe("ready");
+    if (nullProjection.kind !== "ready") return;
+    const undefinedProjection = derive(undefined, nullProjection);
+    expect(undefinedProjection.kind).toBe("ready");
+    if (undefinedProjection.kind !== "ready") return;
+    expect(undefinedProjection.rows[0]).not.toBe(nullProjection.rows[0]);
+    expect(undefinedProjection.rows[0]?.values.get("COL_ID_REGION_MIN")).toBeUndefined();
+
+    const nullAgain = derive(null, undefinedProjection);
+    expect(nullAgain.kind).toBe("ready");
+    if (nullAgain.kind === "ready") {
+      expect(nullAgain.rows[0]).not.toBe(undefinedProjection.rows[0]);
+      expect(nullAgain.rows[0]?.values.get("COL_ID_REGION_MIN")).toBeNull();
+    }
   });
 
   it("sorts an active countDistinct-capable key through its field semantics", () => {

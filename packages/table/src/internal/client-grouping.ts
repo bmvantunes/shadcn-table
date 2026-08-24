@@ -370,6 +370,15 @@ function sameGroupedRow(
     const column = columnsById.get(columnId);
     if (column === undefined) return false;
     try {
+      if (
+        previousPresence.value === null ||
+        previousPresence.value === undefined ||
+        nextPresence.value === null ||
+        nextPresence.value === undefined
+      ) {
+        if (previousPresence.value !== nextPresence.value) return false;
+        continue;
+      }
       const semantics = activeGroupIds.has(columnId) ? column.semantics : resultSemantics(column);
       if (!semantics.equivalent(previousPresence.value, nextPresence.value)) {
         return false;

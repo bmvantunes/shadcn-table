@@ -140,6 +140,15 @@ describe("grouped presentation compilation", () => {
         headerName: "Distinct",
         valueType: "text",
         aggFunc: "countDistinct",
+        width: 211,
+      },
+      {
+        columnId: "COL_ID_DISTINCT_SECOND",
+        field: "region",
+        headerName: "Distinct second",
+        valueType: "text",
+        aggFunc: "countDistinct",
+        width: 177,
       },
     ]);
     const input = {
@@ -152,10 +161,30 @@ describe("grouped presentation compilation", () => {
     const compiler = new BrunoTableGroupedPresentationCompiler();
     const first = compiler.compile(input);
     const second = compiler.compile(input);
+    const firstDistinctSemantics = first.find(
+      ({ columnId }) => columnId === "COL_ID_DISTINCT",
+    )?.semantics;
+    const hiddenSecond = compiler.compile({
+      ...input,
+      visibleColumnIds: input.visibleColumnIds.filter(
+        (columnId) => columnId !== "COL_ID_DISTINCT_SECOND",
+      ),
+    });
+    const shownAgain = compiler.compile(input);
 
-    expect(first.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics).toBe(
+    expect(firstDistinctSemantics).toBe(
       second.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics,
     );
+    expect(firstDistinctSemantics).toBe(
+      hiddenSecond.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics,
+    );
+    expect(firstDistinctSemantics).toBe(
+      shownAgain.find(({ columnId }) => columnId === "COL_ID_DISTINCT")?.semantics,
+    );
+    expect(firstDistinctSemantics?.width).toBe(211);
+    expect(
+      shownAgain.find(({ columnId }) => columnId === "COL_ID_DISTINCT_SECOND")?.semantics.width,
+    ).toBe(177);
     expect(first.find(({ columnId }) => columnId === BRUNO_TABLE_ROWS_COLUMN_ID)?.semantics).toBe(
       second.find(({ columnId }) => columnId === BRUNO_TABLE_ROWS_COLUMN_ID)?.semantics,
     );

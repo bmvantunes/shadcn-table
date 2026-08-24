@@ -241,6 +241,78 @@ describe("grouped Client projection planning", () => {
     deactivate();
   });
 
+  it("retains compatible grouped rows when a stale pre-group filter read is invalid", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_AMOUNT",
+        field: "amount",
+        headerName: "Amount",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+    type Row = Readonly<{ id: string; group: string; amount: unknown }>;
+    const source = (amount: unknown, version: number, status: "ready" | "stale") => ({
+      rows: [{ id: "one", group: "A", amount }],
+      totalRows: 1,
+      version,
+      status,
+      ...(status === "stale" ? { message: "Stale filter value" } : {}),
+    });
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source(1n, 1, "ready"),
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_PRE_GROUP_FILTER_FALLBACK",
+      { grouping: true },
+    );
+    const view = runtime.getView();
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined);
+    const deactivate = store.activate();
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
+    view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_AMOUNT",
+      filter: { columnId: "COL_ID_AMOUNT", type: "equals", filter: 1n },
+    });
+    const readyProjection = view.getInstalledClientProjectionSnapshot();
+    expect(readyProjection?.kind).toBe("grouped");
+    const readyRowId = readyProjection?.rowIds[0];
+    expect(readyRowId).toBeDefined();
+
+    adapter.reconcile(source("invalid-bigint", 2, "stale"), (row: Row) => row.id, columns);
+    adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
+
+    expect(view.getInstalledClientProjectionSnapshot()).toMatchObject({
+      kind: "grouped",
+      rowIds: [readyRowId],
+    });
+    expect(view.getChromeSnapshot()).toMatchObject({
+      status: "stale",
+      hasCoherentRows: true,
+      invalid: { kind: "invalid-value", columnId: "COL_ID_AMOUNT" },
+    });
+    expect(view.getCellSnapshot(readyRowId!, "COL_ID_AMOUNT")).toMatchObject({
+      kind: "available",
+      value: 1n,
+    });
+    deactivate();
+  });
+
   it.each(["stale", "closed", "error"] as const)(
     "retains the compatible ready grouped epoch when a %s aggregate candidate fails",
     (status) => {

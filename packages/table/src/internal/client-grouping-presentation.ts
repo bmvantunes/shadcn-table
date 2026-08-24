@@ -11,8 +11,6 @@ import { compileColumnValueSemantics } from "./value-semantics";
 
 type RuntimeCallback = (...parameters: never[]) => unknown;
 
-const COUNT_DISTINCT_PRESENTATION_SEMANTICS = compileColumnValueSemantics("bigint", {});
-
 export type BrunoTableGroupedPresentationInput = Readonly<{
   readonly columns: readonly CompiledColumn[];
   readonly visibleColumnIds: readonly string[];
@@ -88,12 +86,20 @@ export class BrunoTableGroupedPresentationCompiler {
   private rowsSemantics:
     | Readonly<{ readonly width: number; readonly value: CompiledFieldColumn["semantics"] }>
     | undefined;
+  private readonly countDistinctSemantics = new WeakMap<
+    CompiledFieldColumn["semantics"],
+    CompiledFieldColumn["semantics"]
+  >();
 
   public compile(input: BrunoTableGroupedPresentationInput): readonly CompiledColumn[] {
     if (this.input !== undefined && samePresentationInput(this.input, input)) {
       return this.output as readonly CompiledColumn[];
     }
-    const output = createGroupedColumns(input, (width) => this.compileRowsSemantics(width));
+    const output = createGroupedColumns(
+      input,
+      (width) => this.compileRowsSemantics(width),
+      (semantics) => this.compileCountDistinctSemantics(semantics),
+    );
     this.input = Object.freeze({
       ...input,
       visibleColumnIds: Object.freeze(Array.from(input.visibleColumnIds)),
@@ -109,11 +115,24 @@ export class BrunoTableGroupedPresentationCompiler {
     this.rowsSemantics = Object.freeze({ width, value });
     return value;
   }
+
+  private compileCountDistinctSemantics(
+    source: CompiledFieldColumn["semantics"],
+  ): CompiledFieldColumn["semantics"] {
+    const cached = this.countDistinctSemantics.get(source);
+    if (cached !== undefined) return cached;
+    const value = compileColumnValueSemantics("bigint", { width: source.width });
+    this.countDistinctSemantics.set(source, value);
+    return value;
+  }
 }
 
 function createGroupedColumns(
   input: BrunoTableGroupedPresentationInput,
   compileRowsSemantics: (width: number) => CompiledFieldColumn["semantics"],
+  compileCountDistinctSemantics: (
+    source: CompiledFieldColumn["semantics"],
+  ) => CompiledFieldColumn["semantics"],
 ): readonly CompiledColumn[] {
   const byId = new Map<string, CompiledColumn>(
     input.columns.map((column) => [column.columnId, column]),
@@ -121,7 +140,9 @@ function createGroupedColumns(
   const active = new Set(input.groupBy);
   const keys = input.groupBy.flatMap((columnId) => {
     const column = byId.get(columnId);
-    return column?.kind === "field" ? [createRoleColumn(column, "groupKey")] : [];
+    return column?.kind === "field"
+      ? [createRoleColumn(column, "groupKey", compileCountDistinctSemantics)]
+      : [];
   });
   const visible = new Set(input.visibleColumnIds);
   const aggregates = input.columns.flatMap((column) =>
@@ -129,7 +150,7 @@ function createGroupedColumns(
     column.aggFunc !== undefined &&
     !active.has(column.columnId) &&
     visible.has(column.columnId)
-      ? [createRoleColumn(column, "aggregate")]
+      ? [createRoleColumn(column, "aggregate", compileCountDistinctSemantics)]
       : [],
   );
   return Object.freeze([
@@ -148,9 +169,14 @@ function createGroupedColumns(
 function createRoleColumn(
   column: CompiledFieldColumn,
   role: "groupKey" | "aggregate",
+  compileCountDistinctSemantics: (
+    source: CompiledFieldColumn["semantics"],
+  ) => CompiledFieldColumn["semantics"],
 ): CompiledColumn {
   const aggregateIsBigInt = role === "aggregate" && column.aggFunc === "countDistinct";
-  const semantics = aggregateIsBigInt ? COUNT_DISTINCT_PRESENTATION_SEMANTICS : column.semantics;
+  const semantics = aggregateIsBigInt
+    ? compileCountDistinctSemantics(column.semantics)
+    : column.semantics;
   const formatter =
     role === "groupKey" ? column.groupKeyValueFormatter : column.aggregateValueFormatter;
   const className =

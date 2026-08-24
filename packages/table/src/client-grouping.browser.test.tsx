@@ -1,4 +1,4 @@
-import { detectPlatform } from "@tanstack/react-hotkeys";
+import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 import * as BigDecimal from "effect/BigDecimal";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
@@ -14,6 +14,7 @@ import { BrunoTableBigDecimalColumn } from "./effect";
 import { BrunoTableAggregateAlgebra } from "./public-types";
 import type { BrunoTableColumns, BrunoTablePersistedState } from "./public-types";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT } from "./internal/hotkey-adapter";
 import {
   installBrunoTableClientCellRenderListenerForTable,
   installBrunoTableClientGridSurfaceRenderListenerForTable,
@@ -243,7 +244,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
   });
 
   test("groups the filtered resident result and exposes accessible add, remove, and reorder commands", async () => {
-    await render(
+    const screen = await render(
       <BrunoTableClient
         tableId="TABLE_ID_CLIENT_GROUPING"
         columns={columns}
@@ -278,6 +279,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     };
 
     const groupRegion = page.getByRole("region", { name: "Group By" });
+    const groupRegionElement = groupRegion.element();
     const addGroup = groupRegion.getByRole("combobox", { name: "Add Group" });
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Group by Desk" }));
@@ -317,6 +319,12 @@ describe("BrunoTableClient grouping and aggregation", () => {
       .element(page.getByRole("gridcell", { name: "West", exact: true }))
       .not.toHaveAttribute("aria-selected");
     const regionChip = groupRegion.getByRole("button", { name: /Region, position 2 of 2/u });
+    const groupingRegistrations = [...getHotkeyManager().registrations.state.values()].filter(
+      (registration) =>
+        registration.target === groupRegion.element() &&
+        (registration.hotkey === "Alt+ArrowLeft" || registration.hotkey === "Alt+ArrowRight"),
+    );
+    expect(groupingRegistrations).toHaveLength(BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT);
     grid.element().focus();
     await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
     await userEvent.click(regionChip);
@@ -382,6 +390,12 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("gridcell", { name: "East", exact: true }).first())
       .not.toHaveAttribute("aria-selected");
+    await screen.unmount();
+    expect(
+      [...getHotkeyManager().registrations.state.values()].filter(
+        (registration) => registration.target === groupRegionElement,
+      ),
+    ).toHaveLength(0);
   });
 
   test("atomically replaces same-identity aggregate result and formatter semantics", async () => {
@@ -523,7 +537,37 @@ describe("BrunoTableClient grouping and aggregation", () => {
 
     await expect.element(page.getByRole("gridcell", { name: "Alpha (2)" })).toBeInTheDocument();
     expect(page.getByRole("gridcell", { name: "5 units" }).all()).toHaveLength(2);
+    expect(page.getByRole("grid").element().getAttribute("aria-activedescendant")).toBeNull();
     expect(readCommittedHeaderProjection()).toEqual(["Desk", "Rows", "Quantity", "Maximum price"]);
+  });
+
+  test("resets Active when grouping is commanded before the first ready rows viewport", async () => {
+    const renderTable = (status: "loading" | "ready", version: number) => (
+      <BrunoTableClient
+        tableId="TABLE_ID_GROUPED_DURING_INITIAL_LOADING"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{
+          rows: status === "ready" ? rows : [],
+          totalRows: rows.length,
+          version,
+          status,
+        }}
+      />
+    );
+    const screen = await render(renderTable("loading", 1));
+    const addGroup = page
+      .getByRole("region", { name: "Group By" })
+      .getByRole("combobox", { name: "Add Group" });
+
+    await chooseGroup("Desk");
+    await vi.waitFor(() => expect(document.activeElement).toBe(addGroup.element()));
+    await screen.rerender(renderTable("ready", 2));
+
+    await expect.element(page.getByRole("gridcell", { name: "Alpha (2)" })).toBeInTheDocument();
+    expect(activeGridCellText()).toBe("Alpha (2)");
+    expect(document.activeElement).toBe(addGroup.element());
   });
 
   test("clears the current row-selection capability after it is toggled", async () => {
@@ -1274,13 +1318,22 @@ describe("BrunoTableClient grouping and aggregation", () => {
             status: "ready",
           }}
           groupRowsColumn={{ headerName: "Orders" }}
-        />
+          quickFilterFields={["desk"]}
+        >
+          <BrunoTableToolbar>
+            <BrunoTableQuickFilter />
+          </BrunoTableToolbar>
+        </BrunoTableClient>
       );
       const screen = await render(renderTable(rows, 1));
       await chooseGroup("Desk");
       await settleBrunoTableBrowserFrames();
       const commitsAfterGrouping = sortPanelCommits.mock.calls.length;
       expect(commitsAfterGrouping).toBeGreaterThan(0);
+
+      await userEvent.fill(page.getByRole("searchbox", { name: "Quick Filter" }), "Alpha");
+      await settleBrunoTableBrowserFrames();
+      expect(sortPanelCommits).toHaveBeenCalledTimes(commitsAfterGrouping);
 
       await screen.rerender(
         renderTable([{ ...rows[2]!, desk: "Alpha", quantity: 7n }, rows[1]!, rows[0]!], 2),

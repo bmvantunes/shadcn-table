@@ -54,6 +54,20 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
       },
       [],
     );
+    useBrunoTableGroupByHotkeys(region, (direction) => {
+      const focused = region.current?.ownerDocument.activeElement;
+      const index = groupBy.findIndex((columnId) => groupChips.current.get(columnId) === focused);
+      const columnId = groupBy[index];
+      const target = index + direction;
+      if (columnId === undefined || target < 0 || target >= groupBy.length) return false;
+      if (!runtime.dispatchGridCommand({ type: "grouping.move", columnId, direction })) {
+        return false;
+      }
+      setAnnouncement(
+        `${headerName(columns, columnId)} moved to position ${String(target + 1)} of ${String(groupBy.length)}`,
+      );
+      return true;
+    });
     const groupingFocusOwner = useMemo(
       () => ({
         prepareRemoval: (columnId: string): (() => void) => {
@@ -139,12 +153,6 @@ export const BrunoTableClientGroupBy: NamedExoticComponent<BrunoTableClientGroup
                 index={index}
                 name={headerName(columns, columnId)}
                 register={registerGroupChip}
-                runtime={runtime}
-                onMoved={(target) => {
-                  setAnnouncement(
-                    `${headerName(columns, columnId)} moved to position ${String(target + 1)} of ${String(groupBy.length)}`,
-                  );
-                }}
               />
               <Button
                 aria-label={`Remove ${headerName(columns, columnId)} from Group By`}
@@ -184,9 +192,7 @@ type BrunoTableClientGroupChipProps = Readonly<{
   readonly descriptionId: string;
   readonly index: number;
   readonly name: string;
-  readonly onMoved: (targetIndex: number) => void;
   readonly register: (columnId: string, element: HTMLButtonElement | null) => void;
-  readonly runtime: BrunoTableRowPipelineRuntimeView;
 }>;
 
 const BrunoTableClientGroupChip: NamedExoticComponent<BrunoTableClientGroupChipProps> = memo(
@@ -196,23 +202,13 @@ const BrunoTableClientGroupChip: NamedExoticComponent<BrunoTableClientGroupChipP
     descriptionId,
     index,
     name,
-    onMoved,
     register,
-    runtime,
   }: BrunoTableClientGroupChipProps): ReactElement {
     const chip = useRef<HTMLButtonElement>(null);
     useLayoutEffect(() => {
       register(columnId, chip.current);
       return () => register(columnId, null);
     }, [columnId, register]);
-    useBrunoTableGroupByHotkeys(chip, (direction) => {
-      const target = index + direction;
-      if (target < 0 || target >= count) return false;
-      if (!runtime.dispatchGridCommand({ type: "grouping.move", columnId, direction }))
-        return false;
-      onMoved(target);
-      return true;
-    });
     return (
       <Button
         ref={chip}

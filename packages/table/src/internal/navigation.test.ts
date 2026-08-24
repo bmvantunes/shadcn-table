@@ -33,6 +33,32 @@ describe("BrunoTableNavigationRuntime", () => {
     expect(navigation.getSnapshot()).toBeUndefined();
   });
 
+  it("suppresses restored projection activation and consumes later query epochs once", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+
+    expect(navigation.installCommittedQuery(0, "restore", ["restored"], columns)).toBe(false);
+    navigation.setShape(["restored"], columns);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    expect(navigation.installCommittedQuery(0, "restore", ["restored"], columns)).toBe(false);
+
+    expect(navigation.installCommittedQuery(1, "projection-reset", ["next"], columns)).toBe(true);
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "next",
+      columnId: "COL_ID_NAME",
+    });
+    expect(navigation.installCommittedQuery(1, "projection-reset", ["next"], columns)).toBe(false);
+  });
+
   it("falls back to the clamped display position when its raw row identity disappears", () => {
     const columns = compileColumns([
       {

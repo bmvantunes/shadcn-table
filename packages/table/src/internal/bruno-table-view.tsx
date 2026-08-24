@@ -565,10 +565,10 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
     runtime.getSortingSnapshot,
     runtime.getSortingSnapshot,
   );
-  const query = useSyncExternalStore(
-    runtime.subscribeQuery,
-    runtime.getQuerySnapshot,
-    runtime.getQuerySnapshot,
+  const groupBy = useSyncExternalStore(
+    runtime.subscribeGroupBy,
+    runtime.getGroupBySnapshot,
+    runtime.getGroupBySnapshot,
   );
   const columnLayout = useSyncExternalStore(
     runtime.subscribeColumnStructure,
@@ -616,11 +616,11 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
     };
   });
   const visible = new Set(columnLayout.visibleColumnIds);
-  const activeGroups = new Set(query.groupBy);
+  const activeGroups = new Set(groupBy);
   const sortableColumns = columns.filter(
     (column) =>
-      (query.groupBy.length === 0 && column.enableSorting !== false) ||
-      (query.groupBy.length > 0 &&
+      (groupBy.length === 0 && column.enableSorting !== false) ||
+      (groupBy.length > 0 &&
         (activeGroups.has(column.columnId) ||
           (column.kind === "field" &&
             column.aggFunc !== undefined &&
@@ -630,7 +630,7 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
   const activeIds = new Set(orderBy.map((sort) => sort.columnId));
   const eligibleColumns = [
     ...sortableColumns.filter((column) => !activeIds.has(column.columnId)),
-    ...(query.groupBy.length > 0 && !activeIds.has("COL_ID_BRUNO_TABLE_ROWS")
+    ...(groupBy.length > 0 && !activeIds.has("COL_ID_BRUNO_TABLE_ROWS")
       ? [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", headerName: rowsHeaderName }]
       : []),
   ];
