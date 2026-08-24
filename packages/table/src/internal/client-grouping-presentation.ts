@@ -1,7 +1,11 @@
 import type { BrunoTableColumnId } from "../public-types";
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
 import { BRUNO_TABLE_ROWS_COLUMN_ID, type BrunoTableClientGroupedRow } from "./client-grouping";
-import { BRUNO_TABLE_MAX_COLUMN_WIDTH, BRUNO_TABLE_MIN_COLUMN_WIDTH } from "./column-management";
+import {
+  BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH,
+  BRUNO_TABLE_MAX_COLUMN_WIDTH,
+  BRUNO_TABLE_MIN_COLUMN_WIDTH,
+} from "./column-management";
 import { captureBrunoTablePlainRecord } from "./untrusted-input";
 import { compileColumnValueSemantics } from "./value-semantics";
 
@@ -42,7 +46,7 @@ export function compileBrunoTableGroupRowsColumn(
   if (typeof headerName !== "string" || headerName.trim().length === 0) {
     throw new TypeError("BrunoTable groupRowsColumn headerName must be non-empty.");
   }
-  const width = record?.["width"] ?? 96;
+  const width = record?.["width"] ?? BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH;
   if (
     typeof width !== "number" ||
     !Number.isFinite(width) ||

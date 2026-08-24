@@ -118,6 +118,10 @@ describe("grouped Client projection planning", () => {
     });
     view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
     const installed = view.getInstalledClientProjectionSnapshot();
+    expect(installed?.kind).toBe("grouped");
+    if (installed === undefined) {
+      throw new Error("Expected an installed grouped Client projection.");
+    }
     const initialCompilations = planCompiler.getCompilationDiagnosticSnapshot();
 
     for (const [value, version] of [
@@ -127,9 +131,9 @@ describe("grouped Client projection planning", () => {
       adapter.publish(source(value, version));
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
       const next = view.getInstalledClientProjectionSnapshot();
-      expect(next?.columns).toBe(installed?.columns);
+      expect(next?.columns).toBe(installed.columns);
       expect(next?.columns.map((column) => column.valueFormatter)).toEqual(
-        installed?.columns.map((column) => column.valueFormatter),
+        installed.columns.map((column) => column.valueFormatter),
       );
       expect(planCompiler.getCompilationDiagnosticSnapshot()).toEqual(initialCompilations);
     }

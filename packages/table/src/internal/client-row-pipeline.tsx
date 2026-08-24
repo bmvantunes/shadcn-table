@@ -433,7 +433,8 @@ export class BrunoTableClientProjectionStore {
     const requested = this.runtime.getQuerySnapshot();
     const installedBeforeStage = this.runtime.getInstalledClientProjectionSnapshot();
     if (requested.groupBy.length === 0 && installedBeforeStage === undefined) return undefined;
-    const groupRowsWidth = projectionInput.groupRowsColumn?.width ?? 96;
+    const groupRowsWidth =
+      projectionInput.groupRowsColumn?.width ?? this.defaultGroupRowsColumn.width;
     const staged = this.runtime.stageClientProjectionConfiguration(
       projectionInput.columns,
       projectionInput.queryConfiguration,

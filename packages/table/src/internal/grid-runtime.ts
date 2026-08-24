@@ -6,6 +6,7 @@ import type {
 } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
 import {
+  BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH,
   BRUNO_TABLE_MAX_COLUMN_WIDTH,
   BRUNO_TABLE_MIN_COLUMN_WIDTH,
   applyBrunoTableGridCommand,
@@ -733,7 +734,8 @@ export class BrunoTableGridRuntime<TRow> {
     this.groupingPermitted = preferencesOptions.grouping === true;
     this.groupingEnabled =
       this.groupingPermitted && columns.some((column) => column.kind === "field" && column.groupBy);
-    this.groupRowsWidth = preferencesOptions.groupRowsWidth ?? 96;
+    this.groupRowsWidth =
+      preferencesOptions.groupRowsWidth ?? BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH;
     this.beforeGroupingChange = preferencesOptions.beforeGroupingChange;
     this.columns = columns;
     this.columnsById = indexColumns(columns);
@@ -2956,7 +2958,7 @@ function createColumnCommandSnapshots(
   baselineFilterCollection: BrunoTableClientFilterCollection,
   previous?: ReadonlyMap<string, BrunoTableColumnCommandSnapshot>,
   layout?: BrunoTableColumnLayoutSnapshot,
-  groupRowsWidth = 96,
+  groupRowsWidth = BRUNO_TABLE_DEFAULT_GROUP_ROWS_COLUMN_WIDTH,
 ): Map<string, BrunoTableColumnCommandSnapshot> {
   const snapshots = new Map<string, BrunoTableColumnCommandSnapshot>();
   const activeFilterColumnIds = query.filterCollection.columnIds;
