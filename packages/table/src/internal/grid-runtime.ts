@@ -799,7 +799,7 @@ export class BrunoTableGridRuntime<TRow> {
     this.hasDurableGroupOrderByIntent =
       restoredPreferences.hasDurableGroupOrderByIntent || restoredPreferences.groupBy.length > 0;
     this.getOnPersistChange = preferencesOptions.getOnPersistChange ?? (() => undefined);
-    this.rowsWidth = restoredPreferences.rowsWidth;
+    this.rowsWidth = this.groupingEnabled ? restoredPreferences.rowsWidth : undefined;
     this.query = createQuerySnapshot(
       columns,
       this.filterCollection,

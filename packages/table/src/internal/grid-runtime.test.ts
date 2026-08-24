@@ -718,13 +718,39 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       undefined,
       [{ columnId: "COL_ID_NAME", direction: "asc" }],
     );
+    const persisted: Readonly<Record<string, unknown>>[] = [];
     const runtime = new BrunoTableGridRuntime(
       adapter.getPublication(),
       initialColumns,
       adapter.getQueryConfiguration(initialColumns),
       "TABLE_ID_DYNAMIC_GROUPING_CAPABILITY",
-      { grouping: true, groupRowsWidth: 96 },
+      {
+        grouping: true,
+        groupRowsWidth: 96,
+        initialPersistedState: {
+          version: 1,
+          tableId: "TABLE_ID_DYNAMIC_GROUPING_CAPABILITY",
+          filters: [],
+          orderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+          groupBy: [],
+          groupOrderBy: [],
+          columnOrder: ["COL_ID_NAME"],
+          columnVisibility: { COL_ID_NAME: true },
+          columnWidths: { COL_ID_BRUNO_TABLE_ROWS: 333 },
+          columnPinning: { start: [], end: [] },
+        },
+        getOnPersistChange: () => (state) => persisted.push(state),
+      },
     );
+    expect(runtime.getView().getQuerySnapshot().rowsWidth).toBeUndefined();
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 170,
+      }),
+    ).toBe(true);
+    expect(persisted.at(-1)?.["columnWidths"]).not.toHaveProperty("COL_ID_BRUNO_TABLE_ROWS");
 
     runtime.reconcile(
       adapter.configure((row: Row) => row.id, groupingColumns),
@@ -771,6 +797,16 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(
       runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" }),
     ).toBe(false);
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 180,
+      }),
+    ).toBe(true);
+    expect(persisted.at(-1)?.["columnWidths"]).toMatchObject({
+      COL_ID_BRUNO_TABLE_ROWS: 173,
+    });
 
     runtime.reconcile(
       adapter.configure((row: Row) => row.id, groupingColumns),
@@ -841,7 +877,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(counts.at(-1)).toBe(1);
   });
 
-  it("correlates dormant grouped sorting with the read-only Client persistence capability", () => {
+  it("retains dormant grouped sorting when the initial columns have no grouping capability", () => {
     const clientPersist = vi.fn();
     const serverPersist = vi.fn();
     const createPersistenceSubject = (grouping: boolean, persist: typeof clientPersist) => {
