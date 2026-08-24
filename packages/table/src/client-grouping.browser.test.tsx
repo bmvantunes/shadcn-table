@@ -374,6 +374,20 @@ describe("BrunoTableClient grouping and aggregation", () => {
       "Maximum price",
     ]);
 
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Region" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Remove Region from grouping" }));
+    await expectCommittedProjection(["Desk", "Orders", "Quantity", "Maximum price"]);
+    await expect
+      .element(page.getByRole("log", { name: "Table interaction status" }))
+      .toHaveTextContent("Region removed from Group By, 1 group remaining");
+    await expect
+      .element(groupRegion.getByRole("button", { name: /Desk, position 1 of 1/u }))
+      .toHaveFocus();
+    expect(activeGridCellText()).toBe("Alpha (1)");
+
+    await chooseGroup("Region");
+    await expectCommittedProjection(["Desk", "Region", "Orders", "Quantity", "Maximum price"]);
+
     grid.element().focus();
     await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
     await userEvent.click(groupRegion.getByRole("button", { name: "Remove Region from Group By" }));
@@ -395,6 +409,9 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.click(page.getByRole("menuitem", { name: "Remove Desk from grouping" }));
     await expectCommittedProjection(["Desk", "Region", "Quantity", "Maximum price"]);
     await vi.waitFor(() => expect(document.activeElement).toBe(addGroup.element()));
+    await expect
+      .element(page.getByRole("log", { name: "Table interaction status" }))
+      .toHaveTextContent("Desk removed from Group By, 0 groups remaining");
     expect(activeGridCellText()).toBe("Alpha");
     await expect.element(page.getByRole("columnheader", { name: /Region/u })).toBeInTheDocument();
     await expect

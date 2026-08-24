@@ -192,6 +192,43 @@ describe("grouped presentation compilation", () => {
 });
 
 describe("BrunoTableClientProjectionCoordinator", () => {
+  it("retains grouped recovery evidence only until the final raw ungroup commits", () => {
+    const initial = rawCandidate(0, ["raw-a"]);
+    const coordinator = new BrunoTableClientProjectionCoordinator(initial);
+    coordinator.commit(initial, () => undefined);
+    const grouped = groupedCandidate(1, ["COL_ID_DESK"], [groupedRow("group-a", 1n)]);
+
+    expect(coordinator.commit(grouped, () => undefined)).toBe(true);
+    const groupedEvidence = coordinator.getPreviousGroupedProjection();
+    expect(groupedEvidence).toMatchObject({
+      kind: "ready",
+      groupBy: ["COL_ID_DESK"],
+      rowIds: ["group-a"],
+    });
+    expect(groupedEvidence?.rows).toBe(
+      grouped.kind === "grouped" ? grouped.groupedRows : undefined,
+    );
+
+    expect(coordinator.commit(invalidCandidate(2, ["COL_ID_DESK"]), () => undefined)).toBe(true);
+    expect(coordinator.getPreviousGroupedProjection()).toBe(groupedEvidence);
+
+    const raw = rawCandidate(3, ["raw-a"]);
+    expect(() =>
+      coordinator.commit(raw, () => {
+        throw new Error("raw install listener failed");
+      }),
+    ).toThrow("raw install listener failed");
+    expect(coordinator.getSnapshot().kind).toBe("raw");
+    expect(coordinator.getPreviousGroupedProjection()).toBeUndefined();
+
+    const regrouped = groupedCandidate(4, ["COL_ID_DESK"], [groupedRow("group-b", 2n)]);
+    expect(coordinator.getPreviousGroupedProjection()).toBeUndefined();
+    expect(coordinator.commit(regrouped, () => undefined)).toBe(true);
+    const freshEvidence = coordinator.getPreviousGroupedProjection();
+    expect(freshEvidence).not.toBe(groupedEvidence);
+    expect(freshEvidence?.rowIds).toEqual(["group-b"]);
+  });
+
   it("publishes one installed grouping structure epoch and ignores value or order-only rows", () => {
     const initial = rawCandidate(0, ["raw-a"]);
     const runtime = createRuntime(initial.publication);

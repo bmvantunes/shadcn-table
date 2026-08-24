@@ -81,6 +81,8 @@ export class BrunoTableClientProjectionCoordinator {
         rows: next.groupedRows,
         rowIds: next.rowIds,
       });
+    } else if (next.groupBy.length === 0) {
+      this.previousGroupedProjection = undefined;
     }
 
     installPublication(next.publication);

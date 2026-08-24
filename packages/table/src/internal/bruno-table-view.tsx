@@ -971,6 +971,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
+  const [interactionAnnouncer] = useState(() => new BrunoTableInteractionAnnouncer());
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
@@ -1055,6 +1056,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             enableActiveCellCopy={enableActiveCellCopy}
             rowSelection={rowSelection}
             cellRange={cellRange}
+            interactionAnnouncer={interactionAnnouncer}
           />
         )
       }
@@ -1099,6 +1101,25 @@ class BrunoTableBodyFocusHandoff {
   public readonly clear = (): void => {
     this.pending = false;
   };
+}
+
+class BrunoTableInteractionAnnouncer {
+  private element: HTMLSpanElement | null = null;
+  private message = "";
+
+  public readonly attach = (element: HTMLSpanElement | null): void => {
+    this.element = element;
+    if (element !== null) element.textContent = this.message;
+  };
+
+  public readonly announce = (message: string): void => {
+    this.message = message;
+    if (this.element === null) return;
+    this.element.textContent = "";
+    this.element.textContent = message;
+  };
+
+  public readonly getMessage = (): string => this.message;
 }
 
 const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }: RuntimeProps) {
@@ -1218,6 +1239,7 @@ type BrunoTableViewportAdapterProps = {
   readonly enableActiveCellCopy: boolean;
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
+  readonly interactionAnnouncer: BrunoTableInteractionAnnouncer;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1236,6 +1258,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     enableActiveCellCopy,
     rowSelection,
     cellRange,
+    interactionAnnouncer,
   }: BrunoTableViewportAdapterProps): ReactElement {
     const installedProjection = useSyncExternalStore(
       runtime.subscribeInstalledClientProjection,
@@ -1285,6 +1308,9 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
       >
         {(adapter) => (
           <BrunoTableGridSurface
+            announce={interactionAnnouncer.announce}
+            announcementMessage={interactionAnnouncer.getMessage()}
+            attachAnnouncement={interactionAnnouncer.attach}
             instanceId={adapter.instanceId}
             tableId={tableId}
             rowSpace={installedRowSpace}
@@ -1320,6 +1346,9 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
 );
 
 const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
+  announce: setAnnouncement,
+  announcementMessage,
+  attachAnnouncement,
   instanceId,
   tableId,
   rowSpace,
@@ -1348,6 +1377,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   rowSelection,
   cellRange,
 }: {
+  readonly announce: (message: string) => void;
+  readonly announcementMessage: string;
+  readonly attachAnnouncement: (element: HTMLSpanElement | null) => void;
   readonly instanceId: string;
   readonly tableId: string;
   readonly rowSpace: BrunoTableLogicalRowSpace;
@@ -1443,7 +1475,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const reorderGeometryVersion = useRef(0);
   const previewProperties = useRef<Set<string>>(new Set());
   const reorderTarget = useRef<HTMLElement | null>(null);
-  const announcement = useRef<HTMLSpanElement | null>(null);
   useLayoutEffect(() => {
     reorderGeometryVersion.current += 1;
   }, [
@@ -1458,17 +1489,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useLayoutEffect(() => {
     if (cellRangeStructure !== undefined) cellRange?.reconcile(cellRangeStructure);
   }, [cellRange, cellRangeStructure]);
-
-  const setAnnouncement = useMemo(
-    () =>
-      (message: string): void => {
-        const liveRegion = announcement.current;
-        if (liveRegion === null) return;
-        liveRegion.textContent = "";
-        liveRegion.textContent = message;
-      },
-    [],
-  );
 
   const restoreColumnFocus = useMemo(
     () =>
@@ -2694,12 +2714,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           tableId={tableId}
         />
         <span
-          ref={announcement}
+          ref={attachAnnouncement}
           aria-label="Table interaction status"
           aria-live="polite"
           role="log"
           style={VISUALLY_HIDDEN}
-        />
+        >
+          {announcementMessage}
+        </span>
         <div
           ref={attachRowLayer}
           data-bruno-row-layer=""
@@ -3956,9 +3978,10 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
                 cancelGroupingFocus();
                 return;
               }
+              const remaining = groupBy.length - 1;
               announce(
                 groupingActive
-                  ? `${column.headerName} removed from Group By`
+                  ? `${column.headerName} removed from Group By, ${String(remaining)} ${remaining === 1 ? "group" : "groups"} remaining`
                   : `${column.headerName} added to Group By`,
               );
             }}
