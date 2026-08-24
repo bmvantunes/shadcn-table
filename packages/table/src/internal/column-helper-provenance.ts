@@ -53,8 +53,11 @@ export const brunoTableColumnHelperProvenance: unique symbol = Symbol(
   "BrunoTable.private.columnHelperProvenance",
 );
 
-export type BrunoTableColumnHelperProvenanceCarrier = Readonly<{
+declare const brunoTableColumnHelperStructureWitness: unique symbol;
+
+export type BrunoTableColumnHelperProvenanceCarrier<TStructure = unknown> = Readonly<{
   [brunoTableColumnHelperProvenance]: ColumnHelperEvidence;
+  [brunoTableColumnHelperStructureWitness]?: TStructure;
 }>;
 
 export type BrunoTableColumnHelperProvenanceMismatch =

@@ -777,13 +777,34 @@ type SelectFieldColumnCapabilities<TColumn, TOptions> = [TOptions] extends [void
       : Extract<TColumn, { readonly groupBy?: false | undefined; readonly aggFunc?: never }>;
 
 /** Exact structural Field Column definition for advanced raw configuration. */
+declare const brunoTableColumnHelperFieldDomainWitness: unique symbol;
+declare const brunoTableColumnHelperRowWitness: unique symbol;
+
+type BrunoTableColumnHelperRowWitness<TRow> = Readonly<{
+  [brunoTableColumnHelperRowWitness]?: (row: TRow) => TRow;
+}>;
+
+type BrunoTableColumnHelperFieldDomainWitness<TField extends string, TValue> = Readonly<{
+  [brunoTableColumnHelperFieldDomainWitness]?: Readonly<{
+    readonly field: TField;
+    readonly value: TValue;
+  }>;
+}>;
+
+type BrunoTableColumnHelperFieldDomainFor<TRow, TField extends FieldKey<TRow>> =
+  TField extends FieldKey<TRow>
+    ? BrunoTableColumnHelperFieldDomainWitness<TField, TRow[TField]>
+    : never;
+
 export type BrunoTableFieldColumnDefinition<
   TRow,
   TField extends FieldKey<TRow>,
   TValueType extends BrunoTableBuiltInValueType | ErasedValueType,
   TOptions = void,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
-> = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId>;
+> = BrunoTableFieldColumnInput<TRow, TField, TValueType, TOptions, TColumnId> &
+  BrunoTableColumnHelperFieldDomainFor<TRow, TField> &
+  BrunoTableColumnHelperRowWitness<TRow>;
 
 /** @internal Capability-selecting input shape for first-party Column Helpers. */
 export type BrunoTableFieldColumnInput<
@@ -899,13 +920,23 @@ type HelperGroupedPresentationCallbacks = Readonly<{
 
 /** @internal Exact helper output recognized by the plain BrunoTable column-array boundary. */
 export type BrunoTableColumnHelperOutput<TColumn, _TCallbacks = TColumn> = TColumn &
-  BrunoTableColumnHelperProvenanceCarrier;
+  BrunoTableColumnHelperProvenanceCarrier<
+    TColumn extends { readonly field: infer TField }
+      ? Readonly<{ readonly field: TField }>
+      : TColumn extends { readonly fields: infer TFields }
+        ? Readonly<{ readonly fields: TFields }>
+        : never
+  >;
+
+type HelperFieldDomainForRow<TRow> = BrunoTableColumnHelperFieldDomainFor<TRow, FieldKey<TRow>>;
 
 type Column<TRow> =
   | FieldColumns<TRow>
   | AnyComputedColumn<TRow>
   | ({ readonly columnId: BrunoTableColumnId } & HelperGroupedPresentationCallbacks &
-      BrunoTableColumnHelperProvenanceCarrier);
+      BrunoTableColumnHelperProvenanceCarrier<Readonly<{ readonly field: FieldKey<TRow> }>> &
+      HelperFieldDomainForRow<TRow> &
+      BrunoTableColumnHelperRowWitness<TRow>);
 
 /**
  * A plain column array intended to be used with `satisfies`.

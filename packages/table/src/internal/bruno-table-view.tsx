@@ -976,6 +976,13 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
     runtime.getBodySnapshot,
     runtime.getBodySnapshot,
   );
+  const installedGroupingStructure = useSyncExternalStore(
+    runtime.subscribeInstalledGroupingStructure,
+    runtime.getInstalledGroupingStructureSnapshot,
+    runtime.getInstalledGroupingStructureSnapshot,
+  );
+  const loadingRowSelection =
+    installedGroupingStructure.groupBy.length === 0 ? rowSelection : undefined;
   const emptyCellRangeStructure = useMemo(
     () =>
       createBrunoTableCellRangeStructure(
@@ -1002,7 +1009,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         focusFallback={focusFallback}
         focusHandoff={focusHandoff}
         tableId={tableId}
-        rowSelection={rowSelection}
+        rowSelection={loadingRowSelection}
       />
     );
   }
@@ -4013,8 +4020,8 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           </DropdownMenuItem>
         </DropdownMenuGroup>
       ) : null}
-      {!grouped ? <DropdownMenuSeparator /> : null}
-      {!grouped ? (
+      {column.columnId !== "COL_ID_BRUNO_TABLE_ROWS" ? <DropdownMenuSeparator /> : null}
+      {column.columnId !== "COL_ID_BRUNO_TABLE_ROWS" ? (
         <DropdownMenuGroup>
           <DropdownMenuLabel>Pin</DropdownMenuLabel>
           <DropdownMenuRadioGroup
@@ -4102,10 +4109,10 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       ) : null}
-      {!grouped ? (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Reset</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>Reset</DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          {!grouped ? (
             <DropdownMenuItem
               onClick={() => {
                 if (dispatch({ type: "column.reset.order" })) announce("Column order reset");
@@ -4113,40 +4120,44 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
             >
               Reset order
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                if (dispatch({ type: "column.reset.widths" })) announce("Column widths reset");
-              }}
-            >
-              Reset widths
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                if (dispatch({ type: "column.reset.visibility" }))
-                  announce("Column visibility reset");
-              }}
-            >
-              Reset visibility
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                if (dispatch({ type: "column.reset.pinning" })) announce("Column pinning reset");
-              }}
-            >
-              Reset pinning
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                if (dispatch({ type: "column.reset.layout" }))
-                  announce("Complete column layout reset");
-              }}
-            >
-              Reset complete layout
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      ) : null}
+          ) : null}
+          <DropdownMenuItem
+            onClick={() => {
+              if (dispatch({ type: "column.reset.widths" })) announce("Column widths reset");
+            }}
+          >
+            Reset widths
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              if (dispatch({ type: "column.reset.visibility" }))
+                announce("Column visibility reset");
+            }}
+          >
+            Reset visibility
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              if (dispatch({ type: "column.reset.pinning" })) announce("Column pinning reset");
+            }}
+          >
+            Reset pinning
+          </DropdownMenuItem>
+          {!grouped ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  if (dispatch({ type: "column.reset.layout" }))
+                    announce("Complete column layout reset");
+                }}
+              >
+                Reset complete layout
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
     </DropdownMenuContent>
   );
 });

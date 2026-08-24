@@ -293,6 +293,94 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     expect(persisted.at(-1)?.["columnWidths"]).not.toHaveProperty("COL_ID_BRUNO_TABLE_ROWS");
   });
 
+  it("keeps non-order base column preferences operable while grouped", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+        aggFunc: "countDistinct",
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([{ id: "first", name: "Ada", note: "first" }]),
+      (row: Row) => row.id,
+      groupedColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const persisted: Readonly<Record<string, unknown>>[] = [];
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      groupedColumns,
+      adapter.getQueryConfiguration(groupedColumns),
+      "TABLE_ID_GROUPED_BASE_RESETS",
+      { grouping: true, getOnPersistChange: () => (state) => persisted.push(state) },
+    );
+    const view = runtime.getView();
+
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" });
+    expect(
+      view.dispatchGridCommand({
+        type: "column.pin.commit",
+        columnId: "COL_ID_NOTE",
+        pinned: "start",
+      }),
+    ).toBe(true);
+    expect(
+      view.dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NOTE",
+        width: 240,
+      }),
+    ).toBe(true);
+    expect(
+      view.dispatchGridCommand({
+        type: "column.visibility.commit",
+        columnId: "COL_ID_NOTE",
+        visible: false,
+      }),
+    ).toBe(true);
+
+    const widthResetCount = persisted.length;
+    expect(view.dispatchGridCommand({ type: "column.reset.widths" })).toBe(true);
+    expect(persisted).toHaveLength(widthResetCount + 1);
+    expect(persisted.at(-1)?.["columnWidths"]).not.toHaveProperty("COL_ID_NOTE");
+
+    const visibilityResetCount = persisted.length;
+    expect(view.dispatchGridCommand({ type: "column.reset.visibility" })).toBe(true);
+    expect(persisted).toHaveLength(visibilityResetCount + 1);
+    expect(persisted.at(-1)?.["columnVisibility"]).toMatchObject({ COL_ID_NOTE: true });
+
+    const pinningResetCount = persisted.length;
+    expect(view.dispatchGridCommand({ type: "column.reset.pinning" })).toBe(true);
+    expect(persisted).toHaveLength(pinningResetCount + 1);
+    expect(persisted.at(-1)?.["columnPinning"]).toEqual({ start: [], end: [] });
+
+    expect(view.getColumnCommandSnapshot("COL_ID_NOTE")).toMatchObject({
+      visible: true,
+      width: 160,
+    });
+    expect(view.getColumnCommandSnapshot("COL_ID_NOTE").pinned).toBeUndefined();
+    expect(view.dispatchGridCommand({ type: "column.reset.order" })).toBe(false);
+    expect(view.dispatchGridCommand({ type: "column.reset.layout" })).toBe(false);
+
+    view.dispatchGridCommand({ type: "grouping.remove", columnId: "COL_ID_NAME" });
+    expect(view.getColumnCommandSnapshot("COL_ID_NOTE")).toMatchObject({
+      visible: true,
+      width: 160,
+    });
+    expect(view.getColumnCommandSnapshot("COL_ID_NOTE").pinned).toBeUndefined();
+  });
+
   it("keeps normal and grouped sort contexts separate and orders the shape transition hook first", () => {
     const groupedColumns = compileColumns([
       {

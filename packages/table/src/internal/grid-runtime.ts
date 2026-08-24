@@ -1691,11 +1691,7 @@ export class BrunoTableGridRuntime<TRow> {
     if (this.query.groupBy.length > 0) {
       if (
         command.type === "column.reorder.commit" ||
-        command.type === "column.pin.commit" ||
         command.type === "column.reset.order" ||
-        command.type === "column.reset.widths" ||
-        command.type === "column.reset.visibility" ||
-        command.type === "column.reset.pinning" ||
         command.type === "column.reset.layout"
       ) {
         return false;
@@ -1759,7 +1755,10 @@ export class BrunoTableGridRuntime<TRow> {
       );
     }
     let groupingSortChanged = false;
-    if (this.query.groupBy.length > 0 && command.type === "column.visibility.commit") {
+    if (
+      this.query.groupBy.length > 0 &&
+      (command.type === "column.visibility.commit" || command.type === "column.reset.visibility")
+    ) {
       const nextGroupOrderBy = reconcileGroupedOrderBy(
         this.query.groupOrderBy,
         this.query.groupBy,

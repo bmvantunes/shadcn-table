@@ -249,6 +249,7 @@ const emittedSpreadHelperGroupedSource = [
     headerName: "Emitted helper group",
     groupBy: true,
     groupKeyValueFormatter: ({ value }) => value,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
   }),
 ] satisfies BrunoTableColumns<Order>;
 const emittedValidSpreadHelperColumns = [
@@ -270,6 +271,41 @@ const emittedReplacedSpreadHelperColumns = [
   },
 ] satisfies BrunoTableColumns<Order>;
 void emittedReplacedSpreadHelperColumns;
+
+type EmittedIncompatibleHelperRow = Readonly<{ readonly unrelated: string }>;
+const emittedCrossRowHelperColumns = [emittedSpreadHelperGroupedSource[0]!];
+// @ts-expect-error Emitted helper provenance remains tied to the helper's inferred row type.
+const emittedInvalidCrossRowHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossRowHelperColumns;
+type EmittedIncompatibleHelperValueRow = Readonly<{ readonly symbol: number }>;
+// @ts-expect-error Emitted helper provenance retains the source field value domain.
+const emittedInvalidCrossValueHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperValueRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossValueHelperColumns;
+type EmittedIncompatibleHelperSiblingRow = Readonly<{ readonly symbol: string }>;
+// @ts-expect-error Emitted helper raw callbacks retain their inferred sibling-row evidence.
+const emittedInvalidCrossSiblingHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperSiblingRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidCrossSiblingHelperColumns;
+type EmittedIncompatibleHelperWidenedRow = Omit<Order, "symbol"> &
+  Readonly<{ readonly symbol: string | number }>;
+// @ts-expect-error Emitted helper provenance is invariant in the inferred row value domain.
+const emittedInvalidWidenedHelperColumns: BrunoTableColumns<EmittedIncompatibleHelperWidenedRow> =
+  emittedCrossRowHelperColumns;
+void emittedInvalidWidenedHelperColumns;
+const emittedComputedHelperForOrder = BrunoTableTextColumn({
+  columnId: "COL_ID_EMITTED_COMPUTED_HELPER_SYMBOL",
+  fields: ["symbol"] as const,
+  headerName: "Computed symbol",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "symbol"> }) => row.symbol,
+});
+const emittedInvalidComputedHelperDependencies: BrunoTableColumns<EmittedIncompatibleHelperValueRow> =
+  [
+    // @ts-expect-error Emitted computed helper dependencies retain exact source value domains.
+    emittedComputedHelperForOrder,
+  ];
+void emittedInvalidComputedHelperDependencies;
 
 const emittedHostileSpreadHelperGroupedColumns = [
   {

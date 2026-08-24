@@ -198,6 +198,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
         columns={creditColumns}
         initialOrderBy={[{ columnId: "COL_ID_GROUP", direction: "asc" }]}
         getRowId={(row) => row.id}
+        rowSelection
         clientSource={{
           rows: sourceRows,
           totalRows: sourceRows.length,
@@ -208,7 +209,11 @@ describe("BrunoTableClient grouping and aggregation", () => {
       />
     );
     const screen = await render(renderTable(initialRows, 1, "ready"));
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select all rows" }))
+      .toBeInTheDocument();
     await chooseGroup("Group");
+    expect(page.getByRole("checkbox", { name: "Select all rows" }).all()).toHaveLength(0);
     await expect.element(page.getByRole("gridcell", { name: "1 credits" })).toBeInTheDocument();
 
     rejectAggregate = true;
@@ -238,9 +243,17 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("grid", { name: "Data for TABLE_ID_GROUPED_AGGREGATE_FALLBACK" }))
       .not.toBeInTheDocument();
+    expect(page.getByRole("checkbox", { name: "Select all rows" }).all()).toHaveLength(0);
+    expect(page.getByRole("checkbox", { name: /Select row/u }).all()).toHaveLength(0);
     await expect
       .element(page.getByRole("alert"))
       .toHaveTextContent("Grouped result, column COL_ID_CREDIT");
+
+    rejectAggregate = false;
+    await screen.rerender(renderTable(recoveredRows, 5, "ready"));
+    await expect.element(page.getByRole("gridcell", { name: "3 credits" })).toBeInTheDocument();
+    expect(page.getByRole("checkbox", { name: "Select all rows" }).all()).toHaveLength(0);
+    expect(page.getByRole("checkbox", { name: /Select row/u }).all()).toHaveLength(0);
   });
 
   test("groups the filtered resident result and exposes accessible add, remove, and reorder commands", async () => {
@@ -461,12 +474,16 @@ describe("BrunoTableClient grouping and aggregation", () => {
         columns={columns}
         initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
         getRowId={(row) => row.id}
+        rowSelection
         clientSource={source}
       />
     );
     const screen = await render(
       renderTable({ rows, totalRows: rows.length, version: 1, status: "ready" }),
     );
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select all rows" }))
+      .toBeInTheDocument();
     await chooseGroup("Desk");
     await expect.element(page.getByRole("gridcell", { name: "Alpha (2)" })).toBeInTheDocument();
 
@@ -476,6 +493,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("grid", { name: "Loading table rows" }))
       .toBeInTheDocument();
+    expect(page.getByRole("gridcell", { name: "Row selection loading" }).all()).toHaveLength(0);
 
     const recoveredRows = Object.freeze([
       ...rows,
@@ -520,6 +538,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
         initialPersistedState={persisted}
         initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
         getRowId={(row) => row.id}
+        rowSelection
         clientSource={{
           rows: status === "ready" ? rows : [],
           totalRows: rows.length,
@@ -532,6 +551,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("grid", { name: "Loading table rows" }))
       .toBeInTheDocument();
+    expect(page.getByRole("gridcell", { name: "Row selection loading" }).all()).toHaveLength(0);
 
     await screen.rerender(renderTable("ready", 2));
 
@@ -727,7 +747,9 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await chooseGroup("Desk");
 
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
-    expect(page.getByRole("menuitem", { name: "Pin", exact: true }).all()).toHaveLength(0);
+    await expect
+      .element(page.getByRole("menuitemradio", { name: "Pin to logical start" }))
+      .toBeInTheDocument();
     expect(page.getByRole("menuitem", { name: "Move", exact: true }).all()).toHaveLength(0);
     await userEvent.hover(page.getByRole("menuitem", { name: "Visibility", exact: true }));
     await expect
@@ -740,7 +762,14 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("menuitemcheckbox", { name: "Region" }))
       .toBeInTheDocument();
-    expect(page.getByRole("menuitem", { name: "Reset", exact: true }).all()).toHaveLength(0);
+    await userEvent.hover(page.getByRole("menuitem", { name: "Reset", exact: true }));
+    await expect.element(page.getByRole("menuitem", { name: "Reset widths" })).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("menuitem", { name: "Reset visibility" }))
+      .toBeInTheDocument();
+    await expect.element(page.getByRole("menuitem", { name: "Reset pinning" })).toBeInTheDocument();
+    expect(page.getByRole("menuitem", { name: "Reset order" }).all()).toHaveLength(0);
+    expect(page.getByRole("menuitem", { name: "Reset complete layout" }).all()).toHaveLength(0);
     expect(page.getByRole("menuitem", { name: "Increase width" }).all()).toHaveLength(0);
     await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
@@ -754,6 +783,13 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("separator", { name: "Resize Orders" }))
       .toHaveAttribute("aria-valuenow", "122");
+
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
+    await userEvent.hover(page.getByRole("menuitem", { name: "Reset", exact: true }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Reset widths" }));
+    await expect
+      .element(page.getByRole("separator", { name: "Resize Orders" }))
+      .toHaveAttribute("aria-valuenow", "112");
 
     await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
     const sortPanel = page.getByRole("dialog", { name: "Sort rows" });

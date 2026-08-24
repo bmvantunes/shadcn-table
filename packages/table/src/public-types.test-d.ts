@@ -802,12 +802,46 @@ const spreadHelperGroupedSource = [
     headerName: "Group symbol",
     groupBy: true,
     groupKeyValueFormatter: ({ value }) => value,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
   }),
 ] satisfies BrunoTableColumns<Order>;
 const validSpreadHelperGroupedColumns = [
   { ...spreadHelperGroupedSource[0]! },
 ] satisfies BrunoTableColumns<Order>;
 void validSpreadHelperGroupedColumns;
+type IncompatibleHelperRow = Readonly<{ readonly unrelated: string }>;
+const crossRowHelperColumns = [spreadHelperGroupedSource[0]!];
+// @ts-expect-error A helper column remains tied to the row type inferred by that helper call.
+const invalidCrossRowHelperColumns: BrunoTableColumns<IncompatibleHelperRow> =
+  crossRowHelperColumns;
+void invalidCrossRowHelperColumns;
+type IncompatibleHelperValueRow = Readonly<{ readonly symbol: number }>;
+// @ts-expect-error A same-name field with a different value domain is not helper-compatible.
+const invalidCrossValueHelperColumns: BrunoTableColumns<IncompatibleHelperValueRow> =
+  crossRowHelperColumns;
+void invalidCrossValueHelperColumns;
+type IncompatibleHelperSiblingRow = Readonly<{ readonly symbol: string }>;
+// @ts-expect-error Helper raw callbacks remain tied to sibling evidence from the inferred row.
+const invalidCrossSiblingHelperColumns: BrunoTableColumns<IncompatibleHelperSiblingRow> =
+  crossRowHelperColumns;
+void invalidCrossSiblingHelperColumns;
+type IncompatibleHelperWidenedRow = Omit<Order, "symbol"> &
+  Readonly<{ readonly symbol: string | number }>;
+// @ts-expect-error Helper provenance is invariant in the complete inferred row value domain.
+const invalidWidenedHelperColumns: BrunoTableColumns<IncompatibleHelperWidenedRow> =
+  crossRowHelperColumns;
+void invalidWidenedHelperColumns;
+const computedHelperForOrder = BrunoTableTextColumn({
+  columnId: "COL_ID_COMPUTED_HELPER_SYMBOL",
+  fields: ["symbol"] as const,
+  headerName: "Computed symbol",
+  valueGetter: ({ row }: { readonly row: Pick<Order, "symbol"> }) => row.symbol,
+});
+const invalidComputedHelperDependencies: BrunoTableColumns<IncompatibleHelperValueRow> = [
+  // @ts-expect-error Computed helper dependencies retain their exact source value domains.
+  computedHelperForOrder,
+];
+void invalidComputedHelperDependencies;
 const replacedSpreadHelperGroupedColumns = [
   {
     ...spreadHelperGroupedSource[0]!,
