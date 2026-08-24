@@ -260,7 +260,10 @@ export type BrunoTableInstalledClientProjectionSnapshot =
 
 export type BrunoTableInstalledGroupingStructureSnapshot = Readonly<{
   readonly layoutKey: string;
+  readonly presentationKey: string;
   readonly groupBy: readonly string[];
+  /** Installed grouped presentation structure; absent for the raw projection. */
+  readonly columns: readonly CompiledColumn[] | undefined;
 }>;
 
 type WithoutClientProjectionEpoch<T> = T extends unknown ? Omit<T, "epoch"> : never;
@@ -605,7 +608,9 @@ const EMPTY_GROUPING: readonly never[] = Object.freeze([]);
 const RAW_INSTALLED_GROUPING_STRUCTURE: BrunoTableInstalledGroupingStructureSnapshot =
   Object.freeze({
     layoutKey: BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY,
+    presentationKey: BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY,
     groupBy: EMPTY_GROUPING,
+    columns: undefined,
   });
 
 type QueryTransition = Readonly<{
@@ -3383,10 +3388,19 @@ function stabilizeInstalledGroupingStructure(
 ): BrunoTableInstalledGroupingStructureSnapshot {
   const layoutKey = projection?.layoutKey ?? BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY;
   const groupBy = projection?.groupBy ?? EMPTY_GROUPING;
-  if (previous.layoutKey === layoutKey && sameStringArray(previous.groupBy, groupBy)) {
+  const columns = groupBy.length === 0 ? undefined : projection?.columns;
+  const presentationKey =
+    groupBy.length === 0
+      ? BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY
+      : (projection?.presentationKey ?? BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY);
+  if (
+    previous.layoutKey === layoutKey &&
+    previous.presentationKey === presentationKey &&
+    sameStringArray(previous.groupBy, groupBy)
+  ) {
     return previous;
   }
-  return Object.freeze({ layoutKey, groupBy });
+  return Object.freeze({ layoutKey, presentationKey, groupBy, columns });
 }
 
 function installedRowsHeaderName(

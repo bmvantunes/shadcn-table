@@ -241,6 +241,111 @@ describe("grouped Client projection planning", () => {
     deactivate();
   });
 
+  it("keeps dormant visibility out of grouped presentation identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_TOTAL",
+        field: "amount",
+        headerName: "Total",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+      {
+        columnId: "COL_ID_DORMANT",
+        field: "note",
+        headerName: "Dormant",
+        valueType: "text",
+      },
+    ]);
+    type Row = Readonly<{ id: string; group: string; amount: bigint; note: string }>;
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      {
+        rows: [{ id: "one", group: "A", amount: 1n, note: "private" }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      },
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+    );
+    const persisted: Readonly<Record<string, unknown>>[] = [];
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_DORMANT_GROUPED_VISIBILITY",
+      { grouping: true, getOnPersistChange: () => (state) => persisted.push(state) },
+    );
+    const view = runtime.getView();
+    const planCompiler = new BrunoTableClientProjectionPlanCompiler();
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined, planCompiler);
+    const deactivate = store.activate();
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
+    const grouped = view.getInstalledClientProjectionSnapshot();
+    expect(grouped?.kind).toBe("grouped");
+    if (grouped?.kind !== "grouped") throw new Error("Expected grouped projection.");
+    const groupedColumns = grouped.columns;
+    const groupedColumnRefs = Object.freeze(Array.from(grouped.columns));
+    const compilationCount = planCompiler.getCompilationDiagnosticSnapshot();
+    const projectionNotifications = vi.fn();
+    const unsubscribe = view.subscribeInstalledClientProjection(projectionNotifications);
+
+    expect(
+      view.dispatchGridCommand({
+        type: "column.visibility.commit",
+        columnId: "COL_ID_DORMANT",
+        visible: false,
+      }),
+    ).toBe(true);
+
+    expect(persisted.at(-1)?.["columnVisibility"]).toMatchObject({ COL_ID_DORMANT: false });
+    expect(view.getInstalledClientProjectionSnapshot()).toBe(grouped);
+    expect(view.getInstalledClientProjectionSnapshot()?.columns).toBe(groupedColumns);
+    expect(
+      view
+        .getInstalledClientProjectionSnapshot()
+        ?.columns.every((column, index) => column === groupedColumnRefs[index]),
+    ).toBe(true);
+    expect(planCompiler.getCompilationDiagnosticSnapshot()).toEqual({
+      logical: compilationCount.logical,
+      presentation: compilationCount.presentation,
+      presentationDescriptors: compilationCount.presentationDescriptors + 1,
+    });
+    expect(projectionNotifications).not.toHaveBeenCalled();
+
+    expect(
+      view.dispatchGridCommand({
+        type: "column.visibility.commit",
+        columnId: "COL_ID_TOTAL",
+        visible: false,
+      }),
+    ).toBe(true);
+
+    expect(projectionNotifications).toHaveBeenCalledOnce();
+    const withoutAggregate = view.getInstalledClientProjectionSnapshot();
+    expect(withoutAggregate).not.toBe(grouped);
+    expect(withoutAggregate?.columns.map((column) => column.columnId)).toEqual([
+      "COL_ID_GROUP",
+      "COL_ID_BRUNO_TABLE_ROWS",
+    ]);
+    expect(planCompiler.getCompilationDiagnosticSnapshot()).toEqual({
+      logical: compilationCount.logical,
+      presentation: compilationCount.presentation + 1,
+      presentationDescriptors: compilationCount.presentationDescriptors + 2,
+    });
+    unsubscribe();
+    deactivate();
+  });
+
   it("retains compatible grouped rows when a stale pre-group filter read is invalid", () => {
     const columns = compileColumns([
       {
@@ -317,7 +422,7 @@ describe("grouped Client projection planning", () => {
     "retains the compatible ready grouped epoch when a %s aggregate candidate fails",
     (status) => {
       type Money = Readonly<{ readonly minorUnits: bigint }>;
-      type Row = Readonly<{ id: string; group: string; amount: Money }>;
+      type Row = Readonly<{ id: string; group: string; amount: Money; note: string }>;
       let rejectedOperation: "add" | "divide" | undefined;
       const columns = compileColumns([
         {
@@ -380,10 +485,16 @@ describe("grouped Client projection planning", () => {
           },
           aggFunc: "avg",
         },
+        {
+          columnId: "COL_ID_DORMANT",
+          field: "note",
+          headerName: "Dormant",
+          valueType: "text",
+        },
       ]);
       const readyRows: readonly Row[] = [
-        { id: "one", group: "A", amount: { minorUnits: 1n } },
-        { id: "two", group: "A", amount: { minorUnits: 2n } },
+        { id: "one", group: "A", amount: { minorUnits: 1n }, note: "first" },
+        { id: "two", group: "A", amount: { minorUnits: 2n }, note: "second" },
       ];
       const source = (
         rows: readonly Row[],
@@ -428,7 +539,7 @@ describe("grouped Client projection planning", () => {
       rejectedOperation = "divide";
       const rejectedRows: readonly Row[] = [
         readyRows[0]!,
-        { id: "two", group: "A", amount: { minorUnits: 4n } },
+        { id: "two", group: "A", amount: { minorUnits: 4n }, note: "second" },
       ];
       adapter.reconcile(source(rejectedRows, 2, status), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
@@ -462,7 +573,7 @@ describe("grouped Client projection planning", () => {
       rejectedOperation = undefined;
       const recoveredRows: readonly Row[] = [
         readyRows[0]!,
-        { id: "two", group: "A", amount: { minorUnits: 5n } },
+        { id: "two", group: "A", amount: { minorUnits: 5n }, note: "second" },
       ];
       adapter.reconcile(source(recoveredRows, 3, "ready"), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
@@ -474,6 +585,9 @@ describe("grouped Client projection planning", () => {
       });
       expect(view.getChromeSnapshot()).toMatchObject({ status: "ready", hasCoherentRows: true });
 
+      const installedStructure = view.getInstalledGroupingStructureSnapshot();
+      const structureNotifications = vi.fn();
+      const unsubscribeStructure = view.subscribeInstalledGroupingStructure(structureNotifications);
       rejectedOperation = "divide";
       adapter.reconcile(source(rejectedRows, 4, "ready"), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
@@ -487,14 +601,37 @@ describe("grouped Client projection planning", () => {
         },
       });
       expect(view.getChromeSnapshot().status).toBe("ready");
+      expect(
+        view.getInstalledClientProjectionSnapshot()?.columns.map(({ columnId }) => columnId),
+      ).toEqual(["COL_ID_GROUP", "COL_ID_BRUNO_TABLE_ROWS", "COL_ID_AMOUNT"]);
+      const invalidStructure = view.getInstalledGroupingStructureSnapshot();
+      expect(invalidStructure).not.toBe(installedStructure);
+      expect(invalidStructure.columns).toBe(installedStructure.columns);
+      expect(structureNotifications).toHaveBeenCalledOnce();
+      structureNotifications.mockClear();
+
+      expect(
+        view.dispatchGridCommand({
+          type: "column.visibility.commit",
+          columnId: "COL_ID_DORMANT",
+          visible: false,
+        }),
+      ).toBe(true);
+      expect(view.getInstalledGroupingStructureSnapshot()).toBe(invalidStructure);
+      expect(structureNotifications).not.toHaveBeenCalled();
+
+      adapter.reconcile(source(rejectedRows, 5, "ready"), (row: Row) => row.id, columns);
+      adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
+      expect(view.getInstalledGroupingStructureSnapshot()).toBe(invalidStructure);
+      expect(structureNotifications).not.toHaveBeenCalled();
 
       rejectedOperation = undefined;
-      adapter.reconcile(source(recoveredRows, 5, "ready"), (row: Row) => row.id, columns);
+      adapter.reconcile(source(recoveredRows, 6, "ready"), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
       expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("grouped");
 
       rejectedOperation = "add";
-      adapter.reconcile(source(rejectedRows, 6, "ready"), (row: Row) => row.id, columns);
+      adapter.reconcile(source(rejectedRows, 7, "ready"), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
       expect(view.getInstalledClientProjectionSnapshot()).toMatchObject({
         kind: "invalid",
@@ -509,13 +646,14 @@ describe("grouped Client projection planning", () => {
       expect(view.getChromeSnapshot().status).toBe("ready");
 
       rejectedOperation = undefined;
-      adapter.reconcile(source(recoveredRows, 7, "ready"), (row: Row) => row.id, columns);
+      adapter.reconcile(source(recoveredRows, 8, "ready"), (row: Row) => row.id, columns);
       adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
       expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("grouped");
       expect(view.getCellSnapshot(readyRowId!, "COL_ID_AMOUNT")).toMatchObject({
         kind: "available",
         value: { minorUnits: 3n },
       });
+      unsubscribeStructure();
       deactivate();
     },
   );

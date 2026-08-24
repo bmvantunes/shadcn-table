@@ -1,4 +1,5 @@
 import type { CompiledColumn } from "./compile-columns";
+import type { BrunoTableQueryNavigationMode } from "./grid-runtime";
 
 export type BrunoTableActiveCell = Readonly<{
   readonly region: "header" | "body";
@@ -109,7 +110,7 @@ export class BrunoTableNavigationRuntime {
    */
   public readonly installCommittedQuery = (
     generation: number,
-    navigationMode: "reset" | "reconcile" | "clear" | "projection-reset" | "restore",
+    navigationMode: BrunoTableQueryNavigationMode,
     rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
     columns: readonly CompiledColumn[],
   ): boolean => {

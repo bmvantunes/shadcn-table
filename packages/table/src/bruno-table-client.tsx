@@ -71,9 +71,35 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
-  const groupRowsColumn = useMemo(
+  const normalizedGroupRowsColumn = useMemo(
     () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
     [props.groupRowsColumn],
+  );
+  const {
+    cellClassName: groupRowsCellClassName,
+    cellRenderer: groupRowsCellRenderer,
+    headerName: groupRowsHeaderName,
+    valueFormatter: groupRowsValueFormatter,
+    width: groupRowsWidth,
+  } = normalizedGroupRowsColumn;
+  const groupRowsColumn = useMemo(
+    () =>
+      Object.freeze({
+        headerName: groupRowsHeaderName,
+        width: groupRowsWidth,
+        ...(groupRowsValueFormatter === undefined
+          ? {}
+          : { valueFormatter: groupRowsValueFormatter }),
+        ...(groupRowsCellRenderer === undefined ? {} : { cellRenderer: groupRowsCellRenderer }),
+        ...(groupRowsCellClassName === undefined ? {} : { cellClassName: groupRowsCellClassName }),
+      }),
+    [
+      groupRowsCellClassName,
+      groupRowsCellRenderer,
+      groupRowsHeaderName,
+      groupRowsValueFormatter,
+      groupRowsWidth,
+    ],
   );
   const [rowSelectionRuntime] = useState(() => new BrunoTableRowSelectionRuntime([]));
   const rowSelectionEnabled = props.rowSelection === true;
@@ -137,9 +163,10 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     }
     if (!previouslyEnabled && rowSelectionEnabled) {
       const projectionInput = rowPipelineAdapter.getProjectionInputSnapshot();
-      const installedProjection = runtime.getInstalledClientProjectionSnapshot();
-      if (installedProjection?.kind === "raw" && projectionInput.sourceRowIds.authoritative) {
-        rowSelectionRuntime.leaveGroupedProjection(projectionInput.sourceRowIds.rowIds);
+      if (runtime.getGroupBySnapshot().length === 0) {
+        rowSelectionRuntime.leaveGroupedProjection(
+          projectionInput.sourceRowIds.authoritative ? projectionInput.sourceRowIds.rowIds : [],
+        );
       }
     }
   }, [rowPipelineAdapter, rowSelectionEnabled, rowSelectionRuntime, runtime]);

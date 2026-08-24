@@ -490,9 +490,24 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await screen.rerender(
       renderTable({ rows: [], totalRows: rows.length, version: 2, status: "loading" }),
     );
+    const loadingGrid = page.getByRole("grid", { name: "Loading table rows" });
+    await expect.element(loadingGrid).toBeInTheDocument();
     await expect
-      .element(page.getByRole("grid", { name: "Loading table rows" }))
+      .element(loadingGrid.getByRole("gridcell", { name: "Loading Rows" }).first())
       .toBeInTheDocument();
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Desk" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Rows" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Quantity" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Maximum price" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Region" }).all()).toHaveLength(0);
     expect(page.getByRole("gridcell", { name: "Row selection loading" }).all()).toHaveLength(0);
 
     const recoveredRows = Object.freeze([
@@ -548,9 +563,24 @@ describe("BrunoTableClient grouping and aggregation", () => {
       />
     );
     const screen = await render(renderTable("loading", 1));
+    const loadingGrid = page.getByRole("grid", { name: "Loading table rows" });
+    await expect.element(loadingGrid).toBeInTheDocument();
     await expect
-      .element(page.getByRole("grid", { name: "Loading table rows" }))
+      .element(loadingGrid.getByRole("gridcell", { name: "Loading Rows" }).first())
       .toBeInTheDocument();
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Desk" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Rows" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Quantity" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Maximum price" }).all()).toHaveLength(
+      rows.length,
+    );
+    expect(loadingGrid.getByRole("gridcell", { name: "Loading Region" }).all()).toHaveLength(0);
     expect(page.getByRole("gridcell", { name: "Row selection loading" }).all()).toHaveLength(0);
 
     await screen.rerender(renderTable("ready", 2));
@@ -1122,12 +1152,14 @@ describe("BrunoTableClient grouping and aggregation", () => {
       <BrunoTableClient
         tableId={tableId}
         columns={columns}
+        groupRowsColumn={{ headerName: "Orders" }}
         initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
         getRowId={(row) => row.id}
         clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
       />,
     );
     await chooseGroup("Desk");
+    await expect.element(page.getByRole("columnheader", { name: "Orders" })).toBeInTheDocument();
     await expect
       .element(page.getByRole("gridcell", { name: "5 units" }).first())
       .toBeInTheDocument();
@@ -1149,6 +1181,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
         <BrunoTableClient
           tableId={tableId}
           columns={columns}
+          groupRowsColumn={{ headerName: "Orders" }}
           initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
           getRowId={(row) => row.id}
           clientSource={{

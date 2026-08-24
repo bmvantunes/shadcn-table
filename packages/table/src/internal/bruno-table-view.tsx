@@ -983,6 +983,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   );
   const loadingRowSelection =
     installedGroupingStructure.groupBy.length === 0 ? rowSelection : undefined;
+  const loadingColumns = installedGroupingStructure.columns ?? compiledColumns;
   const emptyCellRangeStructure = useMemo(
     () =>
       createBrunoTableCellRangeStructure(
@@ -1005,7 +1006,8 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       <LoadingRows
         runtime={runtime}
         totalRows={body.totalRows}
-        compiledColumns={compiledColumns}
+        compiledColumns={loadingColumns}
+        structuralColumns={installedGroupingStructure.columns}
         focusFallback={focusFallback}
         focusHandoff={focusHandoff}
         tableId={tableId}
@@ -5115,6 +5117,7 @@ const LoadingRows = memo(function LoadingRows({
   runtime,
   totalRows,
   compiledColumns,
+  structuralColumns,
   focusFallback,
   focusHandoff,
   tableId,
@@ -5123,6 +5126,7 @@ const LoadingRows = memo(function LoadingRows({
   readonly runtime: BrunoTableRuntimeView;
   readonly totalRows: number;
   readonly compiledColumns: readonly CompiledColumn[];
+  readonly structuralColumns?: readonly CompiledColumn[] | undefined;
   readonly focusFallback: () => void;
   readonly focusHandoff: BrunoTableBodyFocusHandoff;
   readonly tableId: string;
@@ -5133,6 +5137,7 @@ const LoadingRows = memo(function LoadingRows({
     <BrunoTableLoadingViewportAdapterBoundary
       key={rowSelection === undefined ? "no-leading-utility" : "row-selection-utility"}
       compiledColumns={compiledColumns}
+      structuralColumns={structuralColumns}
       defaultLoadingRowCount={DEFAULT_LOADING_ROW_COUNT}
       focusFallback={focusFallback}
       focusHandoff={focusHandoff}

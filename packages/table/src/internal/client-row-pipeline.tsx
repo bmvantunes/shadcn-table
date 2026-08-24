@@ -299,9 +299,16 @@ export class BrunoTableClientProjectionPlanCompiler {
   private columnLayout: BrunoTableColumnLayoutSnapshot | undefined;
   private logicalColumns: readonly CompiledColumn[] | undefined;
   private readonly presentationCompiler = new BrunoTableGroupedPresentationCompiler();
+  private presentationSourceColumns: readonly CompiledColumn[] | undefined;
+  private presentationVisibleColumnIds: readonly string[] | undefined;
+  private presentationGroupBy: readonly string[] | undefined;
+  private presentationRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined;
+  private presentationRowsWidth: number | undefined;
+  private presentationInput: BrunoTableGroupedPresentationInput | undefined;
   private presentationColumns: readonly CompiledColumn[] | undefined;
   private logicalCompilations = 0;
   private presentationCompilations = 0;
+  private presentationDescriptorBuilds = 0;
 
   public projectLogicalColumns(
     columns: readonly CompiledColumn[],
@@ -325,7 +332,32 @@ export class BrunoTableClientProjectionPlanCompiler {
   public compileGroupedPresentation(
     input: BrunoTableGroupedPresentationInput,
   ): readonly CompiledColumn[] {
-    const columns = this.presentationCompiler.compile(input);
+    if (
+      this.presentationColumns !== undefined &&
+      this.presentationSourceColumns === input.columns &&
+      this.presentationVisibleColumnIds !== undefined &&
+      sameStrings(this.presentationVisibleColumnIds, input.visibleColumnIds) &&
+      this.presentationGroupBy !== undefined &&
+      sameStrings(this.presentationGroupBy, input.groupBy) &&
+      this.presentationRowsColumn === input.rowsColumn &&
+      this.presentationRowsWidth === input.persistedRowsWidth
+    ) {
+      return this.presentationColumns;
+    }
+    this.presentationSourceColumns = input.columns;
+    this.presentationVisibleColumnIds = input.visibleColumnIds;
+    this.presentationGroupBy = input.groupBy;
+    this.presentationRowsColumn = input.rowsColumn;
+    this.presentationRowsWidth = input.persistedRowsWidth;
+    const candidate = relevantGroupedPresentationInput(input);
+    this.presentationDescriptorBuilds += 1;
+    const presentationInput =
+      this.presentationInput !== undefined &&
+      sameRelevantGroupedPresentationInput(this.presentationInput, candidate)
+        ? this.presentationInput
+        : candidate;
+    this.presentationInput = presentationInput;
+    const columns = this.presentationCompiler.compile(presentationInput);
     if (columns !== this.presentationColumns) {
       this.presentationColumns = columns;
       this.presentationCompilations += 1;
@@ -336,10 +368,12 @@ export class BrunoTableClientProjectionPlanCompiler {
   public getCompilationDiagnosticSnapshot(): Readonly<{
     readonly logical: number;
     readonly presentation: number;
+    readonly presentationDescriptors: number;
   }> {
     return Object.freeze({
       logical: this.logicalCompilations,
       presentation: this.presentationCompilations,
+      presentationDescriptors: this.presentationDescriptorBuilds,
     });
   }
 }
@@ -468,49 +502,56 @@ export class BrunoTableClientProjectionStore {
       ungroupedPublication =
         this.adapter.rejectQueryRows(projectionInput.rows, rowModel.invalid) ??
         ungroupedPublication;
-      const groupedPresentationKey = clientProjectionPresentationKey(
-        "grouped",
-        projectionInput.columns,
-        configuration.queryGeneration,
-        configuration.columnLayout.version,
-        configuration.rowsWidth,
-        projectionInput.groupRowsColumn,
-      );
-      candidate =
-        ungroupedPublication.hasCoherentRows &&
-        previousGroupedProjection?.kind === "ready" &&
-        installedBeforeCandidate?.kind === "grouped" &&
-        installedBeforeCandidate.queryGeneration === configuration.queryGeneration &&
-        installedBeforeCandidate.presentationKey === groupedPresentationKey &&
-        sameStrings(previousGroupedProjection.groupBy, configuration.groupBy)
-          ? createBrunoTableGroupedProjectionCandidate({
-              projection: previousGroupedProjection,
-              columns: installedBeforeCandidate.columns,
-              presentationKey: installedBeforeCandidate.presentationKey,
-              publication: this.adapter.projectGroupedRows(
-                previousGroupedProjection.rows,
-                new Set(),
-                projectionInput.sourceRowIds.authoritative,
-              ),
-              queryGeneration: configuration.queryGeneration,
-              queryNavigationMode: configuration.queryNavigationMode,
-            })
-          : createBrunoTableInvalidProjectionCandidate({
+      const groupedColumns =
+        configuration.groupBy.length === 0
+          ? undefined
+          : this.planCompiler.compileGroupedPresentation({
+              columns: rowModel.columns,
+              visibleColumnIds: configuration.columnLayout.visibleColumnIds,
               groupBy: configuration.groupBy,
-              columns: rowModel.visibleColumns,
-              presentationKey: clientProjectionPresentationKey(
-                "invalid",
-                projectionInput.columns,
-                configuration.queryGeneration,
-                configuration.columnLayout.version,
-                configuration.rowsWidth,
-                projectionInput.groupRowsColumn,
-              ).concat(":source:", String(ungroupedPublication.version)),
-              publication: ungroupedPublication,
+              rowsColumn: projectionInput.groupRowsColumn ?? this.defaultGroupRowsColumn,
+              ...(configuration.rowsWidth === undefined
+                ? {}
+                : { persistedRowsWidth: configuration.rowsWidth }),
+            });
+      const groupedPresentationKey =
+        groupedColumns === undefined
+          ? undefined
+          : clientGroupedProjectionPresentationKey(groupedColumns, configuration.queryGeneration);
+      const retained =
+        groupedColumns === undefined || groupedPresentationKey === undefined
+          ? undefined
+          : retainCompatibleGroupedCandidate({
+              fallbackPublication: ungroupedPublication,
+              previousGroupedProjection,
+              installedProjection: installedBeforeCandidate,
+              groupBy: configuration.groupBy,
+              presentationKey: groupedPresentationKey,
               queryGeneration: configuration.queryGeneration,
               queryNavigationMode: configuration.queryNavigationMode,
-              invalid: rowModel.invalid,
+              sourceAuthoritative: projectionInput.sourceRowIds.authoritative,
+              rowPipelineAdapter: this.adapter,
             });
+      candidate =
+        retained ??
+        createBrunoTableInvalidProjectionCandidate({
+          groupBy: configuration.groupBy,
+          columns: groupedColumns ?? rowModel.visibleColumns,
+          presentationKey:
+            groupedPresentationKey ??
+            clientProjectionPresentationKey(
+              "invalid",
+              projectionInput.columns,
+              configuration.queryGeneration,
+              configuration.columnLayout.version,
+              configuration.rowsWidth,
+              projectionInput.groupRowsColumn,
+            ).concat(":source:", String(ungroupedPublication.version)),
+          publication: ungroupedPublication,
+          queryGeneration: configuration.queryGeneration,
+          queryNavigationMode: configuration.queryNavigationMode,
+          invalid: rowModel.invalid,
+        });
     } else {
       this.adapter.acceptRows(projectionInput.rows);
       candidate = createClientProjectionCandidate({
@@ -606,6 +647,73 @@ function sameProjectionColumns(
           column.semantics.width === expectedColumn.semantics.width
         );
       }))
+  );
+}
+
+function relevantGroupedPresentationInput(
+  input: BrunoTableGroupedPresentationInput,
+): BrunoTableGroupedPresentationInput {
+  const active = new Set(input.groupBy);
+  const visible = new Set(input.visibleColumnIds);
+  const columns = Object.freeze(
+    input.columns.filter(
+      (column) =>
+        column.kind === "field" &&
+        (active.has(column.columnId) ||
+          (column.aggFunc !== undefined && visible.has(column.columnId))),
+    ),
+  );
+  const visibleColumnIds = Object.freeze(
+    columns.flatMap((column) =>
+      column.kind === "field" &&
+      column.aggFunc !== undefined &&
+      !active.has(column.columnId) &&
+      visible.has(column.columnId)
+        ? [column.columnId]
+        : [],
+    ),
+  );
+  return Object.freeze({
+    columns,
+    visibleColumnIds,
+    groupBy: input.groupBy,
+    rowsColumn: input.rowsColumn,
+    ...(input.persistedRowsWidth === undefined
+      ? {}
+      : { persistedRowsWidth: input.persistedRowsWidth }),
+  });
+}
+
+function sameRelevantGroupedPresentationInput(
+  previous: BrunoTableGroupedPresentationInput,
+  next: BrunoTableGroupedPresentationInput,
+): boolean {
+  return (
+    previous.rowsColumn === next.rowsColumn &&
+    previous.persistedRowsWidth === next.persistedRowsWidth &&
+    sameStrings(previous.visibleColumnIds, next.visibleColumnIds) &&
+    sameStrings(previous.groupBy, next.groupBy) &&
+    previous.columns.length === next.columns.length &&
+    previous.columns.every((column, index) =>
+      sameGroupedPresentationColumn(column, next.columns[index]),
+    )
+  );
+}
+
+function sameGroupedPresentationColumn(
+  previous: CompiledColumn,
+  next: CompiledColumn | undefined,
+): boolean {
+  if (next === undefined) return false;
+  if (previous === next) return true;
+  const previousKeys = Reflect.ownKeys(previous).filter((key) => key !== "pinned");
+  const nextKeys = Reflect.ownKeys(next).filter((key) => key !== "pinned");
+  return (
+    previousKeys.length === nextKeys.length &&
+    previousKeys.every(
+      (key, index) =>
+        key === nextKeys[index] && Object.is(Reflect.get(previous, key), Reflect.get(next, key)),
+    )
   );
 }
 
@@ -745,7 +853,6 @@ function sameLogicalColumnProjection(
   next: BrunoTableColumnLayoutSnapshot,
 ): boolean {
   return (
-    sameStrings(previous.visibleColumnIds, next.visibleColumnIds) &&
     previous.allColumns.length === next.allColumns.length &&
     previous.allColumns.every((column, index) => {
       const nextColumn = next.allColumns[index];
@@ -813,6 +920,17 @@ function createClientProjectionCandidate(
       queryNavigationMode: input.queryNavigationMode,
     });
   }
+  const groupedColumns = input.planCompiler.compileGroupedPresentation({
+    columns: input.rowModel.columns,
+    visibleColumnIds: input.columnLayout.visibleColumnIds,
+    groupBy: input.groupBy,
+    rowsColumn: input.presentationRowsColumn,
+    ...(input.rowsWidth === undefined ? {} : { persistedRowsWidth: input.rowsWidth }),
+  });
+  const groupedPresentationKey = clientGroupedProjectionPresentationKey(
+    groupedColumns,
+    input.queryGeneration,
+  );
   const projection = deriveBrunoTableClientGroupedProjection({
     rows: input.rowModel.filteredRows.map((row) => ({
       raw: row.raw,
@@ -845,72 +963,33 @@ function createClientProjectionCandidate(
             message: projection.invalid.message,
           });
     const fallbackPublication = input.rowPipelineAdapter.rejectQueryRows(input.sourceRows, invalid);
-    const groupedPresentationKey = clientProjectionPresentationKey(
-      "grouped",
-      input.columns,
-      input.queryGeneration,
-      input.columnLayout.version,
-      input.rowsWidth,
-      input.groupRowsColumn,
-    );
-    if (
-      fallbackPublication?.hasCoherentRows === true &&
-      fallbackPublication.rowSpace !== undefined &&
-      input.previousGroupedProjection?.kind === "ready" &&
-      input.installedProjection?.kind === "grouped" &&
-      input.installedProjection.queryGeneration === input.queryGeneration &&
-      input.installedProjection.presentationKey === groupedPresentationKey &&
-      sameStrings(input.previousGroupedProjection.groupBy, projection.groupBy)
-    ) {
-      return createBrunoTableGroupedProjectionCandidate({
-        projection: input.previousGroupedProjection,
-        columns: input.installedProjection.columns,
-        presentationKey: input.installedProjection.presentationKey,
-        publication: input.rowPipelineAdapter.projectGroupedRows(
-          input.previousGroupedProjection.rows,
-          new Set(),
-          input.sourceAuthoritative,
-        ),
-        queryGeneration: input.queryGeneration,
-        queryNavigationMode: input.queryNavigationMode,
-      });
-    }
+    const retained = retainCompatibleGroupedCandidate({
+      fallbackPublication,
+      previousGroupedProjection: input.previousGroupedProjection,
+      installedProjection: input.installedProjection,
+      groupBy: projection.groupBy,
+      presentationKey: groupedPresentationKey,
+      queryGeneration: input.queryGeneration,
+      queryNavigationMode: input.queryNavigationMode,
+      sourceAuthoritative: input.sourceAuthoritative,
+      rowPipelineAdapter: input.rowPipelineAdapter,
+    });
+    if (retained !== undefined) return retained;
     const invalidPublication = fallbackPublication ?? input.ungroupedPublication;
     return createBrunoTableInvalidProjectionCandidate({
       groupBy: projection.groupBy,
-      columns: input.rowModel.visibleColumns,
-      presentationKey: clientProjectionPresentationKey(
-        "invalid",
-        input.columns,
-        input.queryGeneration,
-        input.columnLayout.version,
-        input.rowsWidth,
-        input.groupRowsColumn,
-      ).concat(":source:", String(invalidPublication.version)),
+      columns: groupedColumns,
+      presentationKey: groupedPresentationKey,
       publication: invalidPublication,
       queryGeneration: input.queryGeneration,
       queryNavigationMode: input.queryNavigationMode,
       invalid,
     });
   }
-  const groupedColumns = input.planCompiler.compileGroupedPresentation({
-    columns: input.rowModel.columns,
-    visibleColumnIds: input.columnLayout.visibleColumnIds,
-    groupBy: projection.groupBy,
-    rowsColumn: input.presentationRowsColumn,
-    ...(input.rowsWidth === undefined ? {} : { persistedRowsWidth: input.rowsWidth }),
-  });
   return createBrunoTableGroupedProjectionCandidate({
     projection,
     columns: groupedColumns,
-    presentationKey: clientProjectionPresentationKey(
-      "grouped",
-      input.columns,
-      input.queryGeneration,
-      input.columnLayout.version,
-      input.rowsWidth,
-      input.groupRowsColumn,
-    ),
+    presentationKey: groupedPresentationKey,
     publication: input.rowPipelineAdapter.projectGroupedRows(
       projection.rows,
       changedGroupedRowIds(
@@ -919,6 +998,44 @@ function createClientProjectionCandidate(
           : undefined,
         projection.rows,
       ),
+      input.sourceAuthoritative,
+    ),
+    queryGeneration: input.queryGeneration,
+    queryNavigationMode: input.queryNavigationMode,
+  });
+}
+
+function retainCompatibleGroupedCandidate(
+  input: Readonly<{
+    readonly fallbackPublication: BrunoTableRowPipelinePublication<unknown> | undefined;
+    readonly previousGroupedProjection: BrunoTableClientGroupedProjection | undefined;
+    readonly installedProjection: BrunoTableInstalledClientProjectionSnapshot | undefined;
+    readonly groupBy: readonly string[];
+    readonly presentationKey: string;
+    readonly queryGeneration: number;
+    readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+    readonly sourceAuthoritative: boolean;
+    readonly rowPipelineAdapter: BrunoTableClientRowPipelineAdapterView;
+  }>,
+): BrunoTableClientProjectionCandidate | undefined {
+  if (
+    input.fallbackPublication?.hasCoherentRows !== true ||
+    input.fallbackPublication.rowSpace === undefined ||
+    input.previousGroupedProjection?.kind !== "ready" ||
+    input.installedProjection?.kind !== "grouped" ||
+    input.installedProjection.queryGeneration !== input.queryGeneration ||
+    input.installedProjection.presentationKey !== input.presentationKey ||
+    !sameStrings(input.previousGroupedProjection.groupBy, input.groupBy)
+  ) {
+    return undefined;
+  }
+  return createBrunoTableGroupedProjectionCandidate({
+    projection: input.previousGroupedProjection,
+    columns: input.installedProjection.columns,
+    presentationKey: input.installedProjection.presentationKey,
+    publication: input.rowPipelineAdapter.projectGroupedRows(
+      input.previousGroupedProjection.rows,
+      new Set(),
       input.sourceAuthoritative,
     ),
     queryGeneration: input.queryGeneration,
@@ -971,6 +1088,20 @@ function clientProjectionPresentationKey(
     rowsWidth ?? null,
     rowsColumnAuthority,
   ]);
+}
+
+function clientGroupedProjectionPresentationKey(
+  columns: readonly CompiledColumn[],
+  queryGeneration: number,
+): string {
+  return clientProjectionPresentationKey(
+    "grouped",
+    columns,
+    queryGeneration,
+    0,
+    undefined,
+    undefined,
+  );
 }
 
 const CLIENT_PROJECTION_COLUMN_AUTHORITIES = new WeakMap<readonly CompiledColumn[], number>();

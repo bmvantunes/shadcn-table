@@ -10,6 +10,7 @@ import {
   installBrunoTableClientReconciliationListener,
   installBrunoTableClientValueCachePruneListener,
 } from "./client-source-adapter";
+import { BrunoTableClientProjectionStore } from "./client-row-pipeline";
 import type { BrunoTableClientAdmittedRow } from "./client-source-adapter";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./grid-runtime";
 import { sanitizeClientInitialFilters, sameBrunoTableFilterCollection } from "./grid-query";
@@ -4782,6 +4783,80 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     const runtime = createRuntime(source([], "error", { retry: { run, pending: false } }));
 
     expect(runtime.getBodySnapshot()).toEqual({ kind: "empty" });
+  });
+});
+
+describe("BrunoTable installed grouping structure", () => {
+  it("publishes grouped presentation columns once and stays silent for value-only updates", () => {
+    type GroupedRow = Readonly<{ id: string; group: string; value: bigint }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "group",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+    const source = (value: bigint, version: number, status: "ready" | "loading" = "ready") => ({
+      rows: status === "ready" ? [{ id: "one", group: "A", value }] : [],
+      totalRows: 1,
+      version,
+      status,
+    });
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source(1n, 1),
+      (row: GroupedRow) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_VALUE", direction: "asc" }],
+    );
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_GROUPED_LOADING_STRUCTURE",
+      { grouping: true },
+    );
+    const view = runtime.getView();
+    const store = new BrunoTableClientProjectionStore(view, adapter, undefined);
+    const deactivate = store.activate();
+    view.dispatchGridCommand({
+      type: "column.pin.commit",
+      columnId: "COL_ID_VALUE",
+      pinned: "start",
+    });
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_GROUP" });
+    const installed = view.getInstalledGroupingStructureSnapshot();
+
+    expect(installed.columns?.map((column) => column.columnId)).toEqual([
+      "COL_ID_GROUP",
+      "COL_ID_BRUNO_TABLE_ROWS",
+      "COL_ID_VALUE",
+    ]);
+    expect(installed.columns?.every((column) => column.pinned === undefined)).toBe(true);
+    const listener = vi.fn();
+    view.subscribeInstalledGroupingStructure(listener);
+
+    adapter.publish(source(2n, 2));
+    adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
+
+    expect(view.getInstalledGroupingStructureSnapshot()).toBe(installed);
+    expect(listener).not.toHaveBeenCalled();
+
+    runtime.publish(adapter.publish(source(2n, 3, "loading")));
+    adapter.publishProjectionInput(columns, adapter.getQueryConfiguration(columns));
+
+    expect(view.getInstalledClientProjectionSnapshot()?.kind).toBe("grouped");
+    expect(view.getInstalledGroupingStructureSnapshot().columns).toBe(installed.columns);
+    deactivate();
   });
 });
 

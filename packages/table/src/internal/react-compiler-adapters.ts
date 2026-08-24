@@ -24,6 +24,10 @@ import {
 import type { BrunoTableLogicalRowSpace } from "./bruno-table-view";
 
 const documentInstanceCounters = new WeakMap<Document, number>();
+const subscribeNoop =
+  (_listener: () => void): (() => void) =>
+  () =>
+    undefined;
 
 function allocateDocumentInstanceId(ownerDocument: Document): string {
   const next = (documentInstanceCounters.get(ownerDocument) ?? 0) + 1;
@@ -423,6 +427,7 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   runtime,
   totalRows,
   compiledColumns,
+  structuralColumns,
   focusFallback,
   focusHandoff,
   defaultLoadingRowCount,
@@ -432,16 +437,31 @@ export function BrunoTableLoadingViewportAdapterBoundary({
   readonly runtime: BrunoTableRuntimeView;
   readonly totalRows: number;
   readonly compiledColumns: readonly CompiledColumn[];
+  readonly structuralColumns?: readonly CompiledColumn[] | undefined;
   readonly focusFallback: () => void;
   readonly focusHandoff: BrunoTableFocusHandoff;
   readonly defaultLoadingRowCount: number;
   readonly leadingUtilityWidth?: number;
   readonly children: (state: BrunoTableLoadingViewportAdapterState) => ReactElement;
 }): ReactElement {
+  const structuralColumnLayout = useMemo(
+    () =>
+      structuralColumns === undefined ? undefined : Object.freeze({ columns: structuralColumns }),
+    [structuralColumns],
+  );
+  const subscribeColumnLayout =
+    structuralColumnLayout === undefined ? runtime.subscribeColumnLayout : subscribeNoop;
+  const getColumnLayout = useMemo(
+    () =>
+      structuralColumnLayout === undefined
+        ? runtime.getColumnLayoutSnapshot
+        : () => structuralColumnLayout,
+    [runtime, structuralColumnLayout],
+  );
   const columnLayout = useSyncExternalStore(
-    runtime.subscribeColumnLayout,
-    runtime.getColumnLayoutSnapshot,
-    runtime.getColumnLayoutSnapshot,
+    subscribeColumnLayout,
+    getColumnLayout,
+    getColumnLayout,
   );
   const columns = columnLayout.columns.length > 0 ? columnLayout.columns : compiledColumns;
   const instanceId = useBrunoTableInstanceId();

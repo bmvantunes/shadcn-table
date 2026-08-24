@@ -89,14 +89,12 @@ type NarrowFieldCapabilities<TColumn, TOptions> = TColumn extends { readonly fie
   : TColumn;
 
 type HelperResult<TBuiltIn, TOptions, TColumn> = BrunoTableColumnHelperOutput<
-  Merge<TBuiltIn, TOptions> & NarrowFieldCapabilities<TColumn, TOptions>,
-  TOptions
+  Merge<TBuiltIn, TOptions> & NarrowFieldCapabilities<TColumn, TOptions>
 >;
 
 type PresetResult<TBuiltIn, TDefaults, TOptions, TColumn> = BrunoTableColumnHelperOutput<
   Merge<Merge<TBuiltIn, TDefaults>, TOptions> &
-    NarrowFieldCapabilities<TColumn, Merge<TDefaults, TOptions>>,
-  Merge<TDefaults, TOptions>
+    NarrowFieldCapabilities<TColumn, Merge<TDefaults, TOptions>>
 >;
 
 type FieldInput<

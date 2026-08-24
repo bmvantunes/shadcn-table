@@ -91,7 +91,7 @@ describe("grouped presentation compilation", () => {
     format(Object.freeze({ _tag: "Present" as const, value: undefined }));
     format(Object.freeze({ _tag: "Present" as const, value: null }));
 
-    expect(callback.mock.calls.map(([input]) => input.groupKeys[0])).toEqual([
+    expect(callback.mock.calls.map(([input]) => input.groupKeys[0])).toStrictEqual([
       { columnId: "COL_ID_OPTIONAL", field: "optional", _tag: "Missing" },
       {
         columnId: "COL_ID_OPTIONAL",
@@ -201,7 +201,9 @@ describe("BrunoTableClientProjectionCoordinator", () => {
     view.subscribeInstalledGroupingStructure(listener);
     expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
       layoutKey: JSON.stringify(["raw", []]),
+      presentationKey: JSON.stringify(["raw", []]),
       groupBy: [],
+      columns: undefined,
     });
     const deferred = groupedCandidate(
       1,
@@ -214,14 +216,18 @@ describe("BrunoTableClientProjectionCoordinator", () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
       layoutKey: JSON.stringify(["grouped", ["COL_ID_DESK"]]),
+      presentationKey: "grouped:1",
       groupBy: ["COL_ID_DESK"],
+      columns: deferred.columns,
     });
 
     coordinator.commit(invalidCandidate(2, ["COL_ID_DESK"]), view.publishRowPipeline);
     expect(listener).toHaveBeenCalledTimes(2);
     expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
       layoutKey: JSON.stringify(["invalid", ["COL_ID_DESK"]]),
+      presentationKey: "invalid:2",
       groupBy: ["COL_ID_DESK"],
+      columns: columns,
     });
     coordinator.commit(deferred, view.publishRowPipeline);
     expect(listener).toHaveBeenCalledTimes(3);
@@ -242,7 +248,9 @@ describe("BrunoTableClientProjectionCoordinator", () => {
     expect(listener).toHaveBeenCalledTimes(4);
     expect(view.getInstalledGroupingStructureSnapshot()).toEqual({
       layoutKey: JSON.stringify(["raw", []]),
+      presentationKey: JSON.stringify(["raw", []]),
       groupBy: [],
+      columns: undefined,
     });
   });
 

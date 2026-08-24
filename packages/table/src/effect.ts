@@ -433,8 +433,7 @@ type EffectiveFieldPresetDefaults<TDefaults, TOptions> = EffectiveAggregateDefau
 >;
 
 type BigDecimalPresetResult<TDefaults, TOptions, TColumn> = BrunoTableColumnHelperOutput<
-  Merge<Merge<BigDecimalBuiltInDefaults, TDefaults>, TOptions> & TColumn,
-  Merge<TDefaults, TOptions>
+  Merge<Merge<BigDecimalBuiltInDefaults, TDefaults>, TOptions> & TColumn
 >;
 
 type UnreplacedPresetKeys<TDefaults, TOptions, TKeys extends PropertyKey> = Exclude<
@@ -465,8 +464,7 @@ type BigDecimalPresetFieldCompatibility<TRow, TField extends keyof TRow, TDefaul
     : never;
 
 type BigDecimalHelperResult<TOptions, TColumn> = BrunoTableColumnHelperOutput<
-  Merge<BigDecimalBuiltInDefaults, TOptions> & TColumn,
-  TOptions
+  Merge<BigDecimalBuiltInDefaults, TOptions> & TColumn
 >;
 
 type BrunoTableBigDecimalColumnPreset<TDefaults extends BrunoTableBigDecimalColumnPresetDefaults> =

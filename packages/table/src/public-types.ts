@@ -919,7 +919,7 @@ type HelperGroupedPresentationCallbacks = Readonly<{
 }>;
 
 /** @internal Exact helper output recognized by the plain BrunoTable column-array boundary. */
-export type BrunoTableColumnHelperOutput<TColumn, _TCallbacks = TColumn> = TColumn &
+export type BrunoTableColumnHelperOutput<TColumn> = TColumn &
   BrunoTableColumnHelperProvenanceCarrier<
     TColumn extends { readonly field: infer TField }
       ? Readonly<{ readonly field: TField }>
