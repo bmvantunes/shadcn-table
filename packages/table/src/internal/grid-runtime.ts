@@ -40,9 +40,10 @@ import {
 } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
 import {
+  BRUNO_TABLE_ROWS_COLUMN_ID,
   isBrunoTableServerGroupedRow,
   type BrunoTableServerGroupedRowSnapshot,
-} from "./server-grouped-row";
+} from "./grouped-row";
 import { isBrunoTableQuickFilterTextWithinLimit } from "./quick-filter";
 import {
   applyBrunoTableSortingCommand,
@@ -2927,7 +2928,7 @@ function sameServerGroupedCellDependency(
   column: CompiledColumn | undefined,
 ): boolean {
   if (previous.rowCount !== next.rowCount || column === undefined) return false;
-  if (column.columnId === "COL_ID_BRUNO_TABLE_ROWS") {
+  if (column.columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
     return sameExactGroupedPresences(previous.groupKeys, next.groupKeys);
   }
   return sameExactGroupedPresence(

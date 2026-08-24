@@ -553,6 +553,7 @@ describe("BrunoTableServer", () => {
 
     const surfaceRenders = vi.fn();
     const headerRenders = vi.fn();
+    const cellRenders = vi.fn();
     const removeSurfaceListener = installBrunoTableClientGridSurfaceRenderListenerForTable(
       "TABLE_ID_SERVER_GROUPING",
       surfaceRenders,
@@ -560,6 +561,10 @@ describe("BrunoTableServer", () => {
     const removeHeaderListener = installBrunoTableClientHeaderRenderListenerForTable(
       "TABLE_ID_SERVER_GROUPING",
       headerRenders,
+    );
+    const removeCellListener = installBrunoTableClientCellRenderListenerForTable(
+      "TABLE_ID_SERVER_GROUPING",
+      cellRenders,
     );
     request.sink.setRowData(
       { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 21 } },
@@ -569,6 +574,48 @@ describe("BrunoTableServer", () => {
     expect(transport.requests).toHaveLength(2);
     expect(surfaceRenders).not.toHaveBeenCalled();
     expect(headerRenders).not.toHaveBeenCalled();
+    cellRenders.mockClear();
+
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: "invalid" } },
+      { 0: "source-owned-group-key" },
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) =>
+            alert.element().textContent?.includes("Expected a finite number value."),
+          ),
+      ).toBe(true),
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "Desk Rates" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "Max 21" })).toBeVisible();
+    expect(surfaceRenders).not.toHaveBeenCalled();
+    expect(headerRenders).not.toHaveBeenCalled();
+    expect(cellRenders).not.toHaveBeenCalled();
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.releases).toHaveBeenCalledTimes(1);
+
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [minAlias]: 10, [maxAlias]: 21 } },
+      { 0: "source-owned-group-key" },
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("alert")
+          .all()
+          .some((alert) => alert.element().textContent?.includes("Invalid source value")),
+      ).toBe(false),
+    );
+    expect(surfaceRenders).not.toHaveBeenCalled();
+    expect(headerRenders).not.toHaveBeenCalled();
+    expect(cellRenders).not.toHaveBeenCalled();
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.releases).toHaveBeenCalledTimes(1);
+    removeCellListener();
     removeSurfaceListener();
     removeHeaderListener();
 

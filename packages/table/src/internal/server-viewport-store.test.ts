@@ -119,6 +119,34 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("validated-key");
   });
 
+  it("keeps every authority snapshot and lookup coherent when prepublication work throws", () => {
+    const store = new BrunoTableServerViewportStore<Row>();
+    const generation = store.beginGeneration({ firstRow: 0, lastRow: 1 });
+    const stable = { symbol: "AAPL", price: 240 } as const;
+    store.setRowData(generation, { 0: stable }, { 0: "a" });
+    const before = store.getSnapshot();
+    const delivery = [
+      Object.freeze({ index: 1, row: { symbol: "MSFT", price: 410 }, rowId: "m" }),
+    ] as const;
+    const plan = store.planRowDataSnapshot(generation, delivery)!;
+
+    expect(() =>
+      store.commitRowDataPlan(plan, delivery, () => {
+        throw new Error("prepublication failure");
+      }),
+    ).toThrow("prepublication failure");
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("a");
+    expect(store.getSnapshot().rowSpace.getRow("a")).toBe(stable);
+    expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+    expect(store.findRowIndex("a")).toBe(0);
+    expect(store.findRowIndex("m")).toBeUndefined();
+
+    expect(store.setRowData(generation, { 1: delivery[0].row }, { 1: "m" })).toBe(true);
+    expect(store.getSnapshot().rowSpace.getRowId(1)).toBe("m");
+    expect(store.findRowIndex("m")).toBe(1);
+  });
+
   it("does not let setRowCount retention hints bridge semantic generations", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const first = store.beginGeneration({ firstRow: 0, lastRow: 9 });

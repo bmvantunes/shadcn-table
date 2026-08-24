@@ -259,6 +259,318 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(projectionNotifications).not.toHaveBeenCalled();
   });
 
+  it("publishes deterministic grouped invalid values without throwing or dropping coherent rows", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_MAX_PRICE",
+        field: "price",
+        headerName: "Maximum",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 2,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "desc" }],
+    });
+    const request = transport.getRequest()!;
+    const aggregateQuery = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregateQuery).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const maxAlias = Object.entries(aggregateQuery).find(
+      ([, aggregate]) => aggregate.aggFunc === "max",
+    )![0];
+    request.sink.setRowCount(2, true);
+    request.sink.setRowData(
+      {
+        0: { desk: "Rates", [rowsAlias]: 2n, [maxAlias]: 20 },
+        1: { desk: "Credit", [rowsAlias]: 4n, [maxAlias]: 40 },
+      },
+      { 0: "rates", 1: "credit" },
+    );
+    const coherentRow = adapter.getPublication().rowSpace?.getRow("rates");
+    const coherentCredit = adapter.getPublication().rowSpace?.getRow("credit");
+    const publicationNotification = vi.fn();
+    const structureNotification = vi.fn();
+    const resultNotification = vi.fn();
+    const unsubscribePublication = adapter.subscribePublication(publicationNotification);
+    const unsubscribeStructure = adapter.subscribeStructure(structureNotification);
+    const unsubscribeResult = adapter.subscribeResultRowCount(resultNotification);
+
+    expect(() =>
+      request.sink.setRowData(
+        {
+          0: { desk: "Rates", [rowsAlias]: 2n, [maxAlias]: "invalid" },
+          1: { desk: "Credit", [rowsAlias]: 5n, [maxAlias]: 41 },
+        },
+        { 0: "rates", 1: "credit" },
+      ),
+    ).not.toThrow();
+    expect(adapter.getPublication()).toMatchObject({
+      hasCoherentRows: true,
+      invalid: {
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId: "COL_ID_MAX_PRICE",
+        message: "Expected a finite number value.",
+      },
+    });
+    expect(adapter.getPublication().rowSpace?.getRow("rates")).toBe(coherentRow);
+    expect(adapter.getPublication().rowSpace?.getRow("credit")).toBe(coherentCredit);
+    expect(publicationNotification).toHaveBeenCalledOnce();
+    expect(structureNotification).not.toHaveBeenCalled();
+    expect(resultNotification).not.toHaveBeenCalled();
+
+    publicationNotification.mockClear();
+    request.sink.setRowData(
+      { 1: { desk: "Credit", [rowsAlias]: 5n, [maxAlias]: 41 } },
+      { 1: "credit" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 0 });
+    expect(publicationNotification).toHaveBeenCalledOnce();
+
+    expect(() =>
+      request.sink.setRowData(
+        { 2: { desk: "Out of range", [rowsAlias]: 1n, [maxAlias]: 10 } },
+        { 2: "out-of-range" },
+      ),
+    ).toThrow("invalid row/key maps");
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 2,
+      version: 2,
+      status: "stale",
+    });
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 0 });
+
+    request.sink.setRowData(
+      { 1: { desk: "Credit", [rowsAlias]: 4n, [maxAlias]: "invalid" } },
+      { 1: "credit" },
+    );
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [maxAlias]: 21 } },
+      { 0: "rates" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 1 });
+    expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_MAX_PRICE")).toBe(21);
+
+    request.sink.setRowData(
+      { 1: { desk: "Credit", [rowsAlias]: 5n, [maxAlias]: 41 } },
+      { 1: "credit" },
+    );
+    expect(adapter.getPublication().invalid).toBeUndefined();
+
+    expect(() =>
+      request.sink.setRowData(
+        { 0: { desk: "Rates", [rowsAlias]: 0n, [maxAlias]: 21 } },
+        { 0: "rates" },
+      ),
+    ).not.toThrow();
+    expect(adapter.getPublication().invalid).toMatchObject({
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_BRUNO_TABLE_ROWS",
+    });
+
+    request.sink.setRowCount(100, true);
+    publicationNotification.mockClear();
+    adapter.setRequiredRange(50, 51);
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(publicationNotification).toHaveBeenCalledOnce();
+
+    publicationNotification.mockClear();
+    expect(() =>
+      request.sink.setRowData(
+        { 0: { desk: "Late", [rowsAlias]: 1n, [maxAlias]: "invalid" } },
+        { 0: "late" },
+      ),
+    ).not.toThrow();
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(publicationNotification).not.toHaveBeenCalled();
+    expect(() =>
+      request.sink.setRowData(
+        { 100: { desk: "Beyond", [rowsAlias]: 1n, [maxAlias]: "invalid" } },
+        { 100: "beyond" },
+      ),
+    ).toThrow("invalid row/key maps");
+    expect(adapter.getPublication().invalid).toBeUndefined();
+
+    request.sink.setRowData(
+      { 50: { desk: "Admitted", [rowsAlias]: 1n, [maxAlias]: "invalid" } },
+      { 50: "admitted" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 50 });
+    publicationNotification.mockClear();
+    request.sink.setRowCount(50, true);
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(publicationNotification).toHaveBeenCalledOnce();
+
+    request.sink.setRowCount(100, true);
+    request.sink.setRowData(
+      { 50: { desk: "Admitted", [rowsAlias]: 1n, [maxAlias]: "invalid" } },
+      { 50: "admitted" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 50 });
+
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "asc" }],
+    });
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    unsubscribeResult();
+    unsubscribeStructure();
+    unsubscribePublication();
+  });
+
+  it("contains an invalid grouped delivery made synchronously by replacement", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_MAX_PRICE",
+        field: "price",
+        headerName: "Maximum",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    type Request = {
+      query: unknown;
+      sink: {
+        setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+        setRowData: (
+          rows: Readonly<Record<number, Record<string, unknown>>>,
+          keys: Readonly<Record<number, string>>,
+        ) => void;
+      };
+    };
+    const release = vi.fn();
+    let synchronousRequest: Request | undefined;
+    const deliverInvalid = (request: Request, index = 0) => {
+      const aggregates = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+        .aggregates;
+      const rowsAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const maxAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "max",
+      )![0];
+      if (index === 0) request.sink.setRowCount(1, true);
+      request.sink.setRowData(
+        { [index]: { desk: "Rates", [rowsAlias]: 1n, [maxAlias]: "invalid" } },
+        { [index]: `rates-${String(index)}` },
+      );
+    };
+    const replace = vi.fn((request: Request) => {
+      synchronousRequest = request;
+      deliverInvalid(request);
+      return { setWindow: vi.fn(), release };
+    });
+    const viewport = {
+      semanticKey: brunoTableTestSemanticQueryKey,
+      replace,
+    };
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+
+    expect(() =>
+      adapter.replace(viewport, {
+        ...query,
+        groupBy: ["COL_ID_DESK"],
+        groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "desc" }],
+      }),
+    ).not.toThrow();
+    expect(adapter.getPublication()).toMatchObject({
+      hasCoherentRows: false,
+      invalid: {
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId: "COL_ID_MAX_PRICE",
+      },
+    });
+
+    synchronousRequest!.sink.setRowCount(100, true);
+    const publicationNotification = vi.fn();
+    const unsubscribePublication = adapter.subscribePublication(publicationNotification);
+    adapter.setRequiredRange(50, 51);
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(publicationNotification).toHaveBeenCalledOnce();
+    deliverInvalid(synchronousRequest!, 50);
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 50 });
+    unsubscribePublication();
+
+    release.mockImplementationOnce(() => {
+      throw new Error("release failure");
+    });
+    expect(() =>
+      adapter.replace(viewport, {
+        ...query,
+        groupBy: ["COL_ID_DESK"],
+        groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "asc" }],
+      }),
+    ).toThrow("release failure");
+    expect(adapter.getPublication().invalid).toBeUndefined();
+
+    replace.mockImplementationOnce((request) => {
+      deliverInvalid(request);
+      throw new Error("replace failure");
+    });
+    expect(() =>
+      adapter.replace(viewport, {
+        ...query,
+        groupBy: ["COL_ID_DESK"],
+        groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "asc" }],
+      }),
+    ).toThrow("replace failure");
+    expect(adapter.getPublication().invalid).toBeUndefined();
+  });
+
   it("updates grouped key and aggregate widths without replacing the source generation", () => {
     const groupedColumns = compileColumns([
       {
@@ -476,6 +788,98 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       groupBy: ["COL_ID_DESK_SECONDARY", "COL_ID_DESK_PRIMARY"],
       queryNavigationMode: "projection-reset",
     });
+  });
+
+  it("retains one grouped generation across definition-only aggregate reorder", () => {
+    const initialColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_MIN_PRICE",
+        field: "price",
+        headerName: "Minimum",
+        valueType: "number",
+        aggFunc: "min",
+      },
+      {
+        columnId: "COL_ID_MAX_PRICE",
+        field: "price",
+        headerName: "Maximum",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const reorderedColumns = Object.freeze([
+      initialColumns[2]!,
+      initialColumns[0]!,
+      initialColumns[1]!,
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      initialColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_PRICE", direction: "desc" as const }],
+    };
+    const inputs = {
+      routeBy: undefined,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_DESK", "COL_ID_MIN_PRICE", "COL_ID_MAX_PRICE"],
+    };
+    adapter.replace(transport.viewport, groupedQuery, inputs);
+    const request = transport.getRequest()!;
+    const aggregateQuery = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregateQuery).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const minAlias = Object.entries(aggregateQuery).find(
+      ([, aggregate]) => aggregate.aggFunc === "min",
+    )![0];
+    const maxAlias = Object.entries(aggregateQuery).find(
+      ([, aggregate]) => aggregate.aggFunc === "max",
+    )![0];
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 2n, [minAlias]: 10, [maxAlias]: 20 } },
+      { 0: "rates" },
+    );
+    const before = adapter.getPublication();
+    const retainedRow = before.rowSpace?.getRow("rates");
+    const structureNotification = vi.fn();
+    const unsubscribe = adapter.subscribeStructure(structureNotification);
+
+    adapter.reconcileColumns(reorderedColumns, undefined);
+    adapter.replace(transport.viewport, groupedQuery, inputs);
+
+    expect(transport.getRequest()!.query).toEqual(request.query);
+    expect(transport.replace).toHaveBeenCalledOnce();
+    expect(transport.release).not.toHaveBeenCalled();
+    expect(adapter.getPublication().clientProjection?.queryGeneration).toBe(
+      before.clientProjection?.queryGeneration,
+    );
+    expect(adapter.getPublication().rowSpace?.getRow("rates")).toBe(retainedRow);
+    expect(structureNotification).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it("starts a clean grouped generation when decoder authority changes under one source query", () => {

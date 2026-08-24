@@ -110,8 +110,8 @@ describe("compileBrunoTableServerQueryPlan", () => {
       groupBy: ["desk", "symbol"],
       aggregates: {
         [plan.grouped.rowsAlias]: { aggFunc: "count" },
-        [plan.grouped.aggregates[0]!.alias]: { aggFunc: "min", field: "quantity" },
-        [plan.grouped.aggregates[1]!.alias]: { aggFunc: "max", field: "quantity" },
+        [plan.grouped.aggregates[0]!.alias]: { aggFunc: "max", field: "quantity" },
+        [plan.grouped.aggregates[1]!.alias]: { aggFunc: "min", field: "quantity" },
       },
       where: [
         { field: "quantity", type: "greaterThan", filter: 0n },
@@ -119,7 +119,7 @@ describe("compileBrunoTableServerQueryPlan", () => {
         { type: "OR", conditions: [{ field: "symbol", type: "contains", filter: "rates" }] },
       ],
       orderBy: [
-        { aggregate: plan.grouped.aggregates[1]!.alias, direction: "desc" },
+        { aggregate: plan.grouped.aggregates[0]!.alias, direction: "desc" },
         { aggregate: plan.grouped.rowsAlias, direction: "asc" },
         { field: "desk", direction: "asc" },
       ],
@@ -129,10 +129,85 @@ describe("compileBrunoTableServerQueryPlan", () => {
       { columnId: "COL_ID_SYMBOL", field: "symbol" },
     ]);
     expect(plan.grouped.aggregates.map(({ alias: _alias, ...aggregate }) => aggregate)).toEqual([
-      { columnId: "COL_ID_MIN_QUANTITY", field: "quantity", aggFunc: "min" },
       { columnId: "COL_ID_MAX_QUANTITY", field: "quantity", aggFunc: "max" },
+      { columnId: "COL_ID_MIN_QUANTITY", field: "quantity", aggFunc: "min" },
     ]);
     expect(plan.grouped.aggregates[0]!.alias).not.toBe(plan.grouped.aggregates[1]!.alias);
+  });
+
+  it("keeps private aggregate aliases stable across definition-only reorders", () => {
+    const input = {
+      filters: [],
+      quickFilter: "",
+      quickFilterFields: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_QUANTITY", direction: "desc" as const }],
+    } as const;
+    const reordered = compileColumns([
+      {
+        columnId: "COL_ID_UNRELATED",
+        field: "unrelated",
+        headerName: "Unrelated",
+        valueType: "text",
+      },
+      groupedColumns[3]!,
+      groupedColumns[0]!,
+      groupedColumns[2]!,
+      groupedColumns[1]!,
+    ]);
+    const originalPlan = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
+    const reorderedPlan = compileBrunoTableServerQueryPlan(reordered, input, completeRawSelect);
+    expect(reorderedPlan.query).toEqual(originalPlan.query);
+    expect(reorderedPlan.grouped.aggregates).toEqual(originalPlan.grouped.aggregates);
+  });
+
+  it("resolves private aggregate alias field collisions deterministically across reorders", () => {
+    const input = {
+      filters: [],
+      quickFilter: "",
+      quickFilterFields: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_QUANTITY", direction: "desc" as const }],
+    } as const;
+    const baseline = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
+    const maxBaseAlias = baseline.grouped.aggregates.find(
+      ({ columnId }) => columnId === "COL_ID_MAX_QUANTITY",
+    )!.alias;
+    const collisionColumns = compileColumns([
+      ...groupedColumns,
+      {
+        columnId: "COL_ID_ALIAS_COLLISION",
+        field: maxBaseAlias,
+        headerName: "Alias collision",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_ALIAS_SUFFIX_COLLISION",
+        field: `${maxBaseAlias}_1`,
+        headerName: "Alias suffix collision",
+        valueType: "text",
+      },
+    ]);
+    const reordered = compileColumns([
+      collisionColumns[5]!,
+      collisionColumns[3]!,
+      collisionColumns[1]!,
+      collisionColumns[4]!,
+      collisionColumns[0]!,
+      collisionColumns[2]!,
+    ]);
+    const collisionSelect = [...completeRawSelect, maxBaseAlias, `${maxBaseAlias}_1`] as const;
+    const first = compileBrunoTableServerQueryPlan(collisionColumns, input, collisionSelect);
+    const second = compileBrunoTableServerQueryPlan(reordered, input, collisionSelect);
+    const alias = first.grouped.aggregates.find(
+      ({ columnId }) => columnId === "COL_ID_MAX_QUANTITY",
+    )!.alias;
+
+    expect(alias).toBe(`${maxBaseAlias}_2`);
+    expect(second.query).toEqual(first.query);
+    expect(second.grouped.aggregates).toEqual(first.grouped.aggregates);
   });
 
   it("rejects empty and non-field sorting at the runtime boundary", () => {

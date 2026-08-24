@@ -1,5 +1,5 @@
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
-import { BRUNO_TABLE_ROWS_COLUMN_ID } from "./client-grouping";
+import { BRUNO_TABLE_ROWS_COLUMN_ID } from "./grouped-row";
 
 export type BrunoTableServerQueryInput = Readonly<{
   readonly routeBy?: Readonly<Record<string, unknown>>;
@@ -229,14 +229,18 @@ function compileGroupedQueryPlan(
     return candidate;
   };
   const rowsAlias = nextAlias("__bruno_table_rows");
-  const aggregates = columns.flatMap((column, index) =>
-    column.kind === "field" &&
-    column.aggFunc !== undefined &&
-    !active.has(column.columnId) &&
-    (visible === undefined || visible.has(column.columnId))
-      ? [compileServerAggregate(column, nextAlias(`__bruno_table_aggregate_${String(index)}`))]
-      : [],
-  );
+  const aggregates = columns
+    .filter(
+      (column): column is CompiledFieldColumn =>
+        column.kind === "field" &&
+        column.aggFunc !== undefined &&
+        !active.has(column.columnId) &&
+        (visible === undefined || visible.has(column.columnId)),
+    )
+    .toSorted((left, right) => compareColumnIdentity(left.columnId, right.columnId))
+    .map((column) =>
+      compileServerAggregate(column, nextAlias(stableAggregateAlias(column.columnId))),
+    );
   const aliasesByColumn = new Map<string, string>(
     aggregates.map((aggregate) => [aggregate.columnId, aggregate.alias]),
   );
@@ -287,6 +291,18 @@ function compileGroupedQueryPlan(
       orderBy: Object.freeze(orderBy),
     }),
   });
+}
+
+function stableAggregateAlias(columnId: string): string {
+  let encoded = "";
+  for (let index = 0; index < columnId.length; index += 1) {
+    encoded += columnId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `__bruno_table_aggregate_${encoded}`;
+}
+
+function compareColumnIdentity(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function compileServerAggregate(

@@ -2,7 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { BrunoTableServer } from "./bruno-table-server";
+import {
+  BrunoTableServer,
+  BrunoTableServerPresentationColumnsInstaller,
+} from "./bruno-table-server";
+import { compileColumns } from "./internal/compile-columns";
 import type { BrunoTableColumns } from "./public-types";
 
 type Row = Readonly<{ readonly desk: string; readonly price: number; readonly symbol: string }>;
@@ -43,6 +47,34 @@ const ServerRenderTestTable = BrunoTableServer as unknown as (
 ) => ReactNode;
 
 describe("BrunoTableServer server rendering", () => {
+  it("retains installed presentation identity for repeated equal durable widths", () => {
+    const compiled = compileColumns(columns);
+    const layout = compiled.map((column) =>
+      column.columnId === "COL_ID_PRICE"
+        ? Object.freeze({
+            ...column,
+            semantics: Object.freeze({ ...column.semantics, width: 277 }),
+          })
+        : column,
+    );
+    const installer = new BrunoTableServerPresentationColumnsInstaller();
+    const first = installer.install(compiled, layout);
+
+    expect(installer.install(compiled, layout)).toBe(first);
+    expect(first.find(({ columnId }) => columnId === "COL_ID_PRICE")?.semantics.width).toBe(277);
+
+    const revised = compileColumns([
+      columns[0],
+      { ...columns[1], headerName: "Revised price" },
+      columns[2],
+    ]);
+    const revisedInstalled = installer.install(revised, layout);
+    expect(revisedInstalled).not.toBe(first);
+    expect(
+      revisedInstalled.find(({ columnId }) => columnId === "COL_ID_PRICE")?.semantics.width,
+    ).toBe(277);
+  });
+
   it("installs restored grouped presentation before rendering without replacing the source", () => {
     const replace = vi.fn(() => {
       throw new Error("Server rendering must not start a viewport generation.");
