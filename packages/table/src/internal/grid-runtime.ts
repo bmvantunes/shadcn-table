@@ -1712,11 +1712,12 @@ export class BrunoTableGridRuntime<TRow> {
         command.columnId !== "COL_ID_BRUNO_TABLE_ROWS"
       ) {
         const column = this.columnsById.get(command.columnId);
-        if (
-          column?.kind !== "field" ||
-          column.aggFunc === undefined ||
-          this.query.groupBy.includes(command.columnId)
-        ) {
+        const participates =
+          column?.kind === "field" &&
+          (this.query.groupBy.includes(command.columnId) ||
+            (column.aggFunc !== undefined &&
+              this.columnLayoutSnapshot.visibleColumnIds.includes(command.columnId)));
+        if (!participates) {
           return false;
         }
       }
@@ -2387,7 +2388,9 @@ export class BrunoTableGridRuntime<TRow> {
   private notifyColumnStructureTransition(
     previous: BrunoTableColumnLayoutSnapshot,
   ): NotificationFailure | undefined {
-    if (sameColumnProjection(previous, this.columnLayoutSnapshot)) return undefined;
+    if (sameColumnProjection(previous, this.columnLayoutSnapshot, this.query.groupBy)) {
+      return undefined;
+    }
     this.columnStructureSnapshot = this.columnLayoutSnapshot;
     return notify(this.columnStructureListeners);
   }
@@ -3144,11 +3147,32 @@ function sameColumnCommand(
 function sameColumnProjection(
   previous: BrunoTableColumnLayoutSnapshot,
   next: BrunoTableColumnLayoutSnapshot,
+  groupBy: readonly string[],
 ): boolean {
   return (
     sameColumnIdentityAndPinning(previous.allColumns, next.allColumns) &&
-    sameStringArray(previous.visibleColumnIds, next.visibleColumnIds)
+    sameStringArray(previous.visibleColumnIds, next.visibleColumnIds) &&
+    (groupBy.length === 0 || sameGroupedPresentationWidths(previous, next, groupBy))
   );
+}
+
+function sameGroupedPresentationWidths(
+  previous: BrunoTableColumnLayoutSnapshot,
+  next: BrunoTableColumnLayoutSnapshot,
+  groupBy: readonly string[],
+): boolean {
+  const active = new Set(groupBy);
+  const visible = new Set(next.visibleColumnIds);
+  const previousById = new Map(previous.allColumns.map((column) => [column.columnId, column]));
+  return next.allColumns.every((column) => {
+    const participates =
+      column.kind === "field" &&
+      (active.has(column.columnId) ||
+        (column.aggFunc !== undefined && visible.has(column.columnId)));
+    return (
+      !participates || previousById.get(column.columnId)?.semantics.width === column.semantics.width
+    );
+  });
 }
 
 function sameColumnIdentityAndPinning(

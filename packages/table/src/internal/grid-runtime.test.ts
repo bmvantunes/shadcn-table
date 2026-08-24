@@ -310,6 +310,12 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
         valueType: "text",
         aggFunc: "countDistinct",
       },
+      {
+        columnId: "COL_ID_DORMANT",
+        field: "note",
+        headerName: "Dormant",
+        valueType: "text",
+      },
     ]);
     const adapter = new BrunoTableClientRowPipelineAdapter(
       source([{ id: "first", name: "Ada", note: "first" }]),
@@ -327,8 +333,54 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       { grouping: true, getOnPersistChange: () => (state) => persisted.push(state) },
     );
     const view = runtime.getView();
+    const projectionStore = new BrunoTableClientProjectionStore(view, adapter, undefined);
+    const deactivateProjection = projectionStore.activate();
 
     view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" });
+    const groupedStructure = view.getInstalledGroupingStructureSnapshot();
+    const structureNotifications = vi.fn();
+    const unsubscribeStructure = view.subscribeInstalledGroupingStructure(structureNotifications);
+    const persistenceBeforeKeyResize = persisted.length;
+    expect(
+      view.dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NAME",
+        width: 210,
+      }),
+    ).toBe(true);
+    expect(persisted).toHaveLength(persistenceBeforeKeyResize + 1);
+    expect(persisted.at(-1)?.["columnWidths"]).toMatchObject({ COL_ID_NAME: 210 });
+    expect(structureNotifications).toHaveBeenCalledOnce();
+    expect(view.getInstalledGroupingStructureSnapshot()).not.toBe(groupedStructure);
+    expect(
+      view
+        .getInstalledClientProjectionSnapshot()
+        ?.columns.find(({ columnId }) => columnId === "COL_ID_NAME")?.semantics.width,
+    ).toBe(210);
+    expect(
+      view.dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_DORMANT",
+        width: 220,
+      }),
+    ).toBe(false);
+    expect(
+      view.dispatchGridCommand({
+        type: "column.reorder.commit",
+        columnId: "COL_ID_NAME",
+        targetIndex: 1,
+        pinned: undefined,
+      }),
+    ).toBe(false);
+    unsubscribeStructure();
+    view.dispatchGridCommand({ type: "grouping.remove", columnId: "COL_ID_NAME" });
+    expect(view.getColumnCommandSnapshot("COL_ID_NAME").width).toBe(210);
+    view.dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" });
+    expect(
+      view
+        .getInstalledClientProjectionSnapshot()
+        ?.columns.find(({ columnId }) => columnId === "COL_ID_NAME")?.semantics.width,
+    ).toBe(210);
     expect(
       view.dispatchGridCommand({
         type: "column.pin.commit",
@@ -350,6 +402,13 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
         visible: false,
       }),
     ).toBe(true);
+    expect(
+      view.dispatchGridCommand({
+        type: "column.resize.commit",
+        columnId: "COL_ID_NOTE",
+        width: 250,
+      }),
+    ).toBe(false);
 
     const widthResetCount = persisted.length;
     expect(view.dispatchGridCommand({ type: "column.reset.widths" })).toBe(true);
@@ -380,6 +439,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       width: 160,
     });
     expect(view.getColumnCommandSnapshot("COL_ID_NOTE").pinned).toBeUndefined();
+    deactivateProjection();
   });
 
   it("keeps normal and grouped sort contexts separate and orders the shape transition hook first", () => {

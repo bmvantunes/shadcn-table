@@ -3758,8 +3758,7 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
       {groupBy.length === 0 ||
       column.columnId === "COL_ID_BRUNO_TABLE_ROWS" ||
       (column.kind === "field" &&
-        column.aggFunc !== undefined &&
-        !groupBy.includes(column.columnId)) ? (
+        (column.aggFunc !== undefined || groupBy.includes(column.columnId))) ? (
         <span
           aria-label={`Resize ${column.headerName}`}
           aria-orientation="vertical"
@@ -3900,7 +3899,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   const groupingActive = groupBy.includes(column.columnId);
   const groupedResizeAvailable =
     column.columnId === "COL_ID_BRUNO_TABLE_ROWS" ||
-    (column.kind === "field" && column.aggFunc !== undefined && !groupingActive);
+    (column.kind === "field" && (column.aggFunc !== undefined || groupingActive));
   const visibilityColumns = grouped
     ? allColumns.filter(
         (candidate) =>

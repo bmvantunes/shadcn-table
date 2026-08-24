@@ -781,6 +781,20 @@ describe("BrunoTableClient grouping and aggregation", () => {
       .element(page.getByRole("menuitemradio", { name: "Pin to logical start" }))
       .toBeInTheDocument();
     expect(page.getByRole("menuitem", { name: "Move", exact: true }).all()).toHaveLength(0);
+    await expect
+      .element(page.getByRole("menuitem", { name: "Increase width" }))
+      .toBeInTheDocument();
+    await userEvent.click(page.getByRole("menuitem", { name: "Increase width" }));
+    await expect
+      .element(page.getByRole("separator", { name: "Resize Desk" }))
+      .toHaveAttribute("aria-valuenow", "170");
+
+    await userEvent.click(page.getByRole("button", { name: "Remove Desk from Group By" }));
+    await chooseGroup("Desk");
+    await expect
+      .element(page.getByRole("separator", { name: "Resize Desk" }))
+      .toHaveAttribute("aria-valuenow", "170");
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
     await userEvent.hover(page.getByRole("menuitem", { name: "Visibility", exact: true }));
     await expect
       .element(page.getByRole("menuitemcheckbox", { name: "Quantity" }))
@@ -800,10 +814,18 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect.element(page.getByRole("menuitem", { name: "Reset pinning" })).toBeInTheDocument();
     expect(page.getByRole("menuitem", { name: "Reset order" }).all()).toHaveLength(0);
     expect(page.getByRole("menuitem", { name: "Reset complete layout" }).all()).toHaveLength(0);
-    expect(page.getByRole("menuitem", { name: "Increase width" }).all()).toHaveLength(0);
     await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(page.getByRole("menu").all()).toHaveLength(0));
+
+    await expect
+      .element(page.getByRole("separator", { name: "Resize Quantity" }))
+      .toBeInTheDocument();
+    await userEvent.click(page.getByRole("button", { name: "Column menu for Quantity" }));
+    await expect
+      .element(page.getByRole("menuitem", { name: "Increase width" }))
+      .toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
 
     await userEvent.click(page.getByRole("button", { name: "Column menu for Orders" }));
     await expect
