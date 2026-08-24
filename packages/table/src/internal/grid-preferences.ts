@@ -1,6 +1,8 @@
 import type { BrunoTableJsonValue } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
 import {
+  BRUNO_TABLE_MAX_COLUMN_WIDTH,
+  BRUNO_TABLE_MIN_COLUMN_WIDTH,
   createBrunoTableColumnLayout,
   getBrunoTableCommittedColumnWidths,
   getBrunoTableColumnLayoutSnapshot,
@@ -76,6 +78,7 @@ export type BrunoTableGridPreferences = Readonly<{
   readonly orderBy: BrunoTableOrderBy;
   readonly groupBy: readonly string[];
   readonly groupOrderBy: BrunoTableOrderBy;
+  readonly rowsWidth?: number;
   readonly columnLayout: BrunoTableColumnLayoutState;
 }>;
 
@@ -85,6 +88,7 @@ export type BrunoTableGridPreferencesInput = Readonly<{
   readonly initialFilters: readonly unknown[];
   readonly initialOrderBy: BrunoTableOrderBy;
   readonly initialPersistedState?: unknown;
+  readonly grouping?: boolean;
 }>;
 
 export function createBrunoTableGridPreferences(
@@ -107,7 +111,11 @@ export function createBrunoTableGridPreferences(
       filterCollection: baselineFilters,
       orderBy: baselineOrderBy,
       groupBy: Object.freeze([]),
-      groupOrderBy: Object.freeze([]),
+      groupOrderBy: Object.freeze(
+        input.grouping === true
+          ? [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const }]
+          : [],
+      ),
       columnLayout: createBrunoTableColumnLayout(input.columns),
     });
   }
@@ -124,22 +132,39 @@ export function createBrunoTableGridPreferences(
     }
   }
   const orderBy = reconcileBrunoTableOrderBy(persisted["orderBy"], baselineOrderBy, input.columns);
+  const columnLayout = restoreBrunoTableColumnLayout(input.columns, {
+    columnOrder: persisted["columnOrder"],
+    columnVisibility: persisted["columnVisibility"],
+    columnWidths: persisted["columnWidths"],
+    columnPinning: persisted["columnPinning"],
+  });
+  const groupBy =
+    input.grouping === true ? sanitizeGroupBy(persisted["groupBy"], input.columns) : [];
+  const groupOrderBy =
+    input.grouping === true
+      ? sanitizeGroupOrderBy(
+          persisted["groupOrderBy"],
+          groupBy,
+          input.columns,
+          getBrunoTableColumnLayoutSnapshot(columnLayout).visibleColumnIds,
+        )
+      : [];
+  const rowsWidth =
+    input.grouping === true
+      ? decodeRowsWidth(
+          captureBrunoTablePlainRecord(persisted["columnWidths"], ["COL_ID_BRUNO_TABLE_ROWS"]),
+        )
+      : undefined;
   return Object.freeze({
     tableId: input.tableId,
     columns: input.columns,
     filters: filterCollection.filters,
     filterCollection,
     orderBy,
-    // Grouping is a forward-compatible persisted seam. This Client runtime has no grouping
-    // capability, so restoration must conservatively discard it.
-    groupBy: Object.freeze([]),
-    groupOrderBy: Object.freeze([]),
-    columnLayout: restoreBrunoTableColumnLayout(input.columns, {
-      columnOrder: persisted["columnOrder"],
-      columnVisibility: persisted["columnVisibility"],
-      columnWidths: persisted["columnWidths"],
-      columnPinning: persisted["columnPinning"],
-    }),
+    groupBy: Object.freeze(groupBy),
+    groupOrderBy: Object.freeze(groupOrderBy),
+    ...(rowsWidth === undefined ? {} : { rowsWidth }),
+    columnLayout,
   });
 }
 
@@ -152,7 +177,12 @@ export function createBrunoTablePersistedState(
   const columnVisibility = Object.fromEntries(
     columnOrder.map((columnId) => [columnId, visible.has(columnId)]),
   );
-  const columnWidths = getBrunoTableCommittedColumnWidths(preferences.columnLayout);
+  const columnWidths = {
+    ...getBrunoTableCommittedColumnWidths(preferences.columnLayout),
+    ...(preferences.rowsWidth === undefined
+      ? {}
+      : { COL_ID_BRUNO_TABLE_ROWS: preferences.rowsWidth }),
+  };
   const columnPinning = {
     start: layout.allColumns
       .filter((column) => column.pinned === "start")
@@ -176,6 +206,90 @@ export function createBrunoTablePersistedState(
       end: Object.freeze(columnPinning.end),
     }),
   });
+}
+
+function sanitizeGroupBy(input: unknown, columns: readonly CompiledColumn[]): string[] {
+  if (!Array.isArray(input)) return [];
+  const eligible = new Set<string>(
+    columns.flatMap((column) =>
+      column.kind === "field" && column.groupBy ? [column.columnId] : [],
+    ),
+  );
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of input) {
+    if (typeof value !== "string" || !eligible.has(value) || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function sanitizeGroupOrderBy(
+  input: unknown,
+  groupBy: readonly string[],
+  columns: readonly CompiledColumn[],
+  visibleColumnIds: readonly string[],
+): BrunoTableOrderBy {
+  const visible = new Set(visibleColumnIds);
+  const admitted = new Set<string>(["COL_ID_BRUNO_TABLE_ROWS", ...groupBy]);
+  if (groupBy.length === 0) {
+    for (const column of columns) {
+      if (column.kind === "field" && column.groupBy) admitted.add(column.columnId);
+    }
+  }
+  for (const column of columns) {
+    if (
+      column.kind === "field" &&
+      column.aggFunc !== undefined &&
+      !admitted.has(column.columnId) &&
+      visible.has(column.columnId)
+    ) {
+      admitted.add(column.columnId);
+    }
+  }
+  const result: { columnId: string; direction: "asc" | "desc" }[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(input)) {
+    for (const candidate of input) {
+      if (
+        typeof candidate !== "object" ||
+        candidate === null ||
+        Array.isArray(candidate) ||
+        !Object.hasOwn(candidate, "columnId") ||
+        !Object.hasOwn(candidate, "direction")
+      ) {
+        continue;
+      }
+      const columnId = Reflect.get(candidate, "columnId");
+      const direction = Reflect.get(candidate, "direction");
+      if (
+        typeof columnId !== "string" ||
+        !admitted.has(columnId) ||
+        seen.has(columnId) ||
+        (direction !== "asc" && direction !== "desc")
+      ) {
+        continue;
+      }
+      seen.add(columnId);
+      result.push({ columnId, direction });
+    }
+  }
+  return Object.freeze(
+    result.length === 0
+      ? groupBy.length === 0
+        ? [Object.freeze({ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" as const })]
+        : groupBy.map((columnId) => Object.freeze({ columnId, direction: "asc" as const }))
+      : result.map((order) => Object.freeze(order)),
+  );
+}
+
+function decodeRowsWidth(
+  widths: Readonly<Record<string, unknown>> | undefined,
+): number | undefined {
+  const value = widths?.["COL_ID_BRUNO_TABLE_ROWS"];
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(BRUNO_TABLE_MAX_COLUMN_WIDTH, Math.max(BRUNO_TABLE_MIN_COLUMN_WIDTH, value));
 }
 
 function capturePersistedState(

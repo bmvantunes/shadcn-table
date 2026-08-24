@@ -27,6 +27,7 @@ type RuntimeValueTypeDescriptor = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
   readonly aggregateResults: BrunoTableAggregateResults;
+  readonly aggregateAlgebra?: RuntimeAggregateAlgebra;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -46,6 +47,7 @@ export type CompiledColumnValueSemantics = {
   readonly editorLayout: BrunoTableEditorLayout;
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
+  readonly aggregateAlgebra?: CompiledAggregateAlgebra;
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -56,6 +58,16 @@ export type CompiledColumnValueSemantics = {
   readonly encodePersisted: (value: unknown) => BrunoTableJsonValue;
   readonly decodePersisted: (input: unknown) => BrunoTableDecodeResult<unknown>;
 };
+
+type RuntimeAggregateAlgebra = Readonly<{
+  readonly add: (left: unknown, right: unknown) => unknown;
+  readonly divideByCount?: (total: unknown, count: bigint) => unknown;
+}>;
+
+export type CompiledAggregateAlgebra = Readonly<{
+  readonly add: (left: unknown, right: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly divideByCount?: (total: unknown, count: bigint) => BrunoTableDecodeResult<unknown>;
+}>;
 
 export class ValueSemanticsConfigurationError extends TypeError {}
 
@@ -177,6 +189,9 @@ export function compileColumnValueSemantics(
     editorLayout,
     width,
     aggregateResults: descriptor.aggregateResults,
+    ...(descriptor.aggregateAlgebra === undefined
+      ? {}
+      : { aggregateAlgebra: compileAggregateAlgebra(descriptor) }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
@@ -209,6 +224,10 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const editorLayout = selection["editorLayout"];
   const defaultWidth = selection["defaultWidth"];
   const aggregateResults = snapshotAggregateResults(selection["aggregateResults"]);
+  const aggregateAlgebra = snapshotAggregateAlgebra(
+    selection["aggregateAlgebra"],
+    aggregateResults,
+  );
   const decodeRuntime = selection["decodeRuntime"];
   const equivalent = selection["equivalent"];
   const compare = selection["compare"];
@@ -264,6 +283,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     editorLayout,
     defaultWidth,
     aggregateResults,
+    ...(aggregateAlgebra === undefined ? {} : { aggregateAlgebra }),
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
@@ -302,15 +322,89 @@ function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
         "BrunoTable Value Type aggregateResults must contain enumerable data properties.",
       );
     }
-    if (descriptor.value !== "self" && descriptor.value !== "bigint") {
+    const expected = key === "countDistinct" ? "bigint" : "self";
+    if (descriptor.value !== expected) {
       throw new ValueSemanticsConfigurationError(
-        `BrunoTable Value Type aggregateResults.${key} is invalid.`,
+        `BrunoTable Value Type aggregateResults.${key} is invalid; expected ${expected}.`,
       );
     }
-    snapshot[key] = descriptor.value;
+    snapshot[key] = expected;
   }
 
   return Object.freeze(snapshot);
+}
+
+function snapshotAggregateAlgebra(
+  input: unknown,
+  aggregateResults: BrunoTableAggregateResults,
+): RuntimeAggregateAlgebra | undefined {
+  const requiresAdd = aggregateResults.sum === "self" || aggregateResults.avg === "self";
+  const requiresDivision = aggregateResults.avg === "self";
+  if (input === undefined) {
+    if (requiresAdd) {
+      throw new ValueSemanticsConfigurationError(
+        `BrunoTable ${requiresDivision ? "avg" : "sum"} aggregation requires an exact add operation.`,
+      );
+    }
+    return undefined;
+  }
+  if (!isRecord(input)) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable aggregateAlgebra must be an object when provided.",
+    );
+  }
+  const addDescriptor = Object.getOwnPropertyDescriptor(input, "add");
+  const divideDescriptor = Object.getOwnPropertyDescriptor(input, "divideByCount");
+  const add =
+    addDescriptor !== undefined &&
+    "value" in addDescriptor &&
+    typeof addDescriptor.value === "function"
+      ? (addDescriptor.value as RuntimeAggregateAlgebra["add"])
+      : undefined;
+  const divideByCount =
+    divideDescriptor !== undefined &&
+    "value" in divideDescriptor &&
+    typeof divideDescriptor.value === "function"
+      ? (divideDescriptor.value as NonNullable<RuntimeAggregateAlgebra["divideByCount"]>)
+      : undefined;
+  if (requiresAdd && add === undefined) {
+    throw new ValueSemanticsConfigurationError(
+      `BrunoTable ${requiresDivision ? "avg" : "sum"} aggregation requires an exact add operation.`,
+    );
+  }
+  if (requiresDivision && divideByCount === undefined) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable avg aggregation requires an exact divideByCount operation.",
+    );
+  }
+  if (add === undefined) return undefined;
+  return Object.freeze({ add, ...(divideByCount === undefined ? {} : { divideByCount }) });
+}
+
+function compileAggregateAlgebra(descriptor: RuntimeValueTypeDescriptor): CompiledAggregateAlgebra {
+  const algebra = descriptor.aggregateAlgebra!;
+  const add = algebra.add;
+  const divideByCount = algebra.divideByCount;
+  const decode = descriptor.decodeRuntime;
+  const invoke = (operation: () => unknown): BrunoTableDecodeResult<unknown> => {
+    try {
+      const decoded = decode(operation());
+      return decoded._tag === "Success"
+        ? decoded
+        : failure(`Aggregate Algebra returned an invalid value: ${decoded.message}`);
+    } catch {
+      return failure("Aggregate Algebra operation threw.");
+    }
+  };
+  return Object.freeze({
+    add: (left, right) => invoke(() => Reflect.apply(add, undefined, [left, right])),
+    ...(divideByCount === undefined
+      ? {}
+      : {
+          divideByCount: (total: unknown, count: bigint) =>
+            invoke(() => Reflect.apply(divideByCount, undefined, [total, count])),
+        }),
+  });
 }
 
 function createTextValueType(): RuntimeValueTypeDescriptor {
@@ -351,7 +445,7 @@ function createNumberValueType(): RuntimeValueTypeDescriptor {
     aggregateResults: builtInScalarAggregateResults,
     decodeRuntime: (input) =>
       typeof input === "number" && Number.isFinite(input)
-        ? success(input)
+        ? success(Object.is(input, -0) ? 0 : input)
         : failure("Expected a finite number value."),
     equivalent: (left, right) => assertFiniteNumber(left) === assertFiniteNumber(right),
     compare: (left, right) => comparePrimitive(assertFiniteNumber(left), assertFiniteNumber(right)),
@@ -379,6 +473,9 @@ function createBigIntValueType(): RuntimeValueTypeDescriptor {
     editorLayout: "inline",
     defaultWidth: 140,
     aggregateResults: builtInBigIntAggregateResults,
+    aggregateAlgebra: Object.freeze({
+      add: (left, right) => assertBigInt(left) + assertBigInt(right),
+    }),
     decodeRuntime: (input) =>
       typeof input === "bigint" ? success(input) : failure("Expected a bigint value."),
     equivalent: (left, right) => assertBigInt(left) === assertBigInt(right),
@@ -437,7 +534,9 @@ function createBooleanValueType(): RuntimeValueTypeDescriptor {
 function parseNumberText(text: string): BrunoTableDecodeResult<number> {
   if (!numberTextPattern.test(text)) return failure("Expected a finite decimal number.");
   const value = Number(text);
-  return Number.isFinite(value) ? success(value) : failure("Expected a finite decimal number.");
+  return Number.isFinite(value)
+    ? success(Object.is(value, -0) ? 0 : value)
+    : failure("Expected a finite decimal number.");
 }
 
 function parseBigIntText(text: string): BrunoTableDecodeResult<bigint> {

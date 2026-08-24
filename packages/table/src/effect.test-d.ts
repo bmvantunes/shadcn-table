@@ -127,8 +127,9 @@ const groupedColumns = [
     field: "price",
     headerName: "Price group",
     groupBy: true,
-    groupKeyValueFormatter: ({ columnId, value, rowCount }) => {
+    groupKeyValueFormatter: ({ columnId, field, value, rowCount }) => {
       columnId satisfies "COL_ID_GROUP_PRICE";
+      field satisfies "price";
       BigDecimal.format(value);
       rowCount satisfies bigint;
       return BigDecimal.format(value);
@@ -140,9 +141,10 @@ const groupedColumns = [
     headerName: "Total price",
     aggFunc: "sum",
     aggregateValueFormatter: (parameters) => {
-      const { aggFunc, columnId, value, rowCount } = parameters;
+      const { aggFunc, columnId, field, value, rowCount } = parameters;
       aggFunc satisfies "sum";
       columnId satisfies "COL_ID_TOTAL_PRICE";
+      field satisfies "price";
       rowCount satisfies bigint;
       // @ts-expect-error Aggregate cells never fabricate one raw source row.
       void parameters.row;

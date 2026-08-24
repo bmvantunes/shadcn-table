@@ -504,6 +504,35 @@ export function useBrunoTableGridHotkeys(
   );
 }
 
+/** Scoped Group By Region shortcuts translated into one semantic move command. */
+export function useBrunoTableGroupByHotkeys(
+  target: RefObject<HTMLElement | null>,
+  move: (direction: -1 | 1) => boolean,
+): void {
+  const moveRef = useRef(move);
+  useLayoutEffect(() => {
+    moveRef.current = move;
+  }, [move]);
+  useBrunoTableHotkeys(
+    target,
+    [
+      {
+        hotkey: "Alt+ArrowLeft",
+        onTrigger: (event) => {
+          if (moveRef.current(-1)) event.preventDefault();
+        },
+      },
+      {
+        hotkey: "Alt+ArrowRight",
+        onTrigger: (event) => {
+          if (moveRef.current(1)) event.preventDefault();
+        },
+      },
+    ],
+    "allow",
+  );
+}
+
 export function useBrunoTableFilterWorkflowEscape(
   target: HTMLElement | null,
   onTrigger: (event: BrunoTableHotkeyGesture) => void,

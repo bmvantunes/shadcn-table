@@ -656,6 +656,7 @@ const actualRuntimeExports = Object.keys(publicModule).toSorted((left, right) =>
 const expectedRuntimeExports = [
   "BrunoTableActiveFilterCount",
   "BrunoTableActiveSortCount",
+  "BrunoTableAggregateAlgebra",
   "BrunoTableBigIntColumn",
   "BrunoTableBooleanColumn",
   "BrunoTableClient",

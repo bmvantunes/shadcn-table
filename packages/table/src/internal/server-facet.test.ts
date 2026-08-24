@@ -67,6 +67,8 @@ function snapshot({
     filters: filterCollection.filters,
     filterCollection,
     generation: 0,
+    groupBy: Object.freeze([]),
+    groupOrderBy: Object.freeze([]),
     navigationMode: "reconcile",
     orderBy: Object.freeze([
       Object.freeze({ columnId: "COL_ID_SYMBOL", direction: orderDirection }),

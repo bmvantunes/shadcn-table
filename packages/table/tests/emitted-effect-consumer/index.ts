@@ -74,9 +74,10 @@ const emittedGroupedColumns = [
     headerName: "Total price",
     aggFunc: "sum",
     aggregateValueFormatter: (parameters) => {
-      const { aggFunc, columnId, value, rowCount } = parameters;
+      const { aggFunc, columnId, field, value, rowCount } = parameters;
       aggFunc satisfies "sum";
       columnId satisfies "COL_ID_TOTAL_PRICE";
+      field satisfies "price";
       rowCount satisfies bigint;
       // @ts-expect-error Emitted aggregate contexts never expose a fabricated raw row.
       void parameters.row;

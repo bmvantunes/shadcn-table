@@ -809,6 +809,15 @@ const columns = [
 ] satisfies BrunoTableColumns<Order>;
 ```
 
+Custom Value Types that advertise exact arithmetic additionally provide a branded
+`BrunoTableAggregateAlgebra<TValue>`. `sum` requires exact `add`; `avg` requires both exact `add`
+and `divideByCount(total, count)`. Arithmetic belongs to the Value Type rather than the Column, and
+normalization snapshots the operation references and validates every result through
+`decodeRuntime`. Text, Boolean, and Number expose only `countDistinct`, `min`, and `max`; BigInt also
+exposes `sum`; the optional Effect BigDecimal Value Type exposes all five. Number `sum`/`avg` and
+BigInt `avg` stay unavailable because the View Server returns Effect BigDecimal for those result
+domains and the root package remains Effect-free.
+
 `groupBy: true` means the user may add the column to BrunoTable's Group By Region; it does not mean the column starts actively grouped. The Region provides Add Group and column-menu commands in addition to pointer drag. `aggFunc` is one built-in function, never an array or arbitrary callback. Multiple aggregate presentations over one field are ordinary separate columns with separate `columnId` values. Supporting them requires no public renamed fields: both definitions above retain `field: "price"`, while their Column Identities distinguish their logical cells.
 
 A column may provide both capabilities. While that column is an active group key, the flat grouped row contains its group-field value and suppresses its own aggregate output. When another column is grouping and this column is not an active key, its `aggFunc` contributes an aggregate output. The ordered active Group By Region determines the ordered field tuple sent to the View Server or evaluated by the Client Adapter.

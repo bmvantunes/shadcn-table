@@ -241,7 +241,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     runtime.setOnPersistChange(
       notify === undefined
         ? undefined
-        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns>),
+        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, false>),
     );
   }, [props.onPersistChange, runtime]);
 

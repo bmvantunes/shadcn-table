@@ -12,6 +12,7 @@ import {
   BrunoTableClient,
   BrunoTableActiveFilterCount,
   BrunoTableActiveSortCount,
+  BrunoTableAggregateAlgebra,
   BrunoTableComputedColumn,
   BrunoTableFilterControl,
   BrunoTableLoadedRowCount,
@@ -23,6 +24,8 @@ import {
   BrunoTableTextColumn,
   BrunoTableToolbar,
   type BrunoTableBuiltInValueType,
+  type BrunoTableAggregateAlgebra as BrunoTableAggregateAlgebraType,
+  type BrunoTableAggregateResults,
   type BrunoTableClientProps,
   type BrunoTableCommonProps,
   type BrunoTableColumnField,
@@ -54,6 +57,79 @@ type Equal<TLeft, TRight> =
 
 type Expect<TValue extends true> = TValue;
 
+type ExactMoney = Readonly<{ readonly minorUnits: bigint }>;
+const emittedExactMoneyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
+  add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+  divideByCount: (total, count) => ({ minorUnits: total.minorUnits / count }),
+});
+const emittedExactMoneyAlgebraType: BrunoTableAggregateAlgebraType<ExactMoney> =
+  emittedExactMoneyAlgebra;
+void emittedExactMoneyAlgebraType;
+
+const emittedExactMoneyValueType = {
+  codecId: "emitted/exact-money",
+  codecVersion: 1,
+  filterFamily: "numeric",
+  editorFamily: "text",
+  cellAlign: "end",
+  editorLayout: "inline",
+  defaultWidth: 120,
+  aggregateResults: { sum: "self", avg: "self" },
+  aggregateAlgebra: emittedExactMoneyAlgebra,
+  decodeRuntime: (input: unknown) =>
+    typeof input === "object" && input !== null && "minorUnits" in input
+      ? { _tag: "Success" as const, value: input as ExactMoney }
+      : { _tag: "Failure" as const, message: "Expected exact money." },
+  equivalent: (left: ExactMoney, right: ExactMoney) => left.minorUnits === right.minorUnits,
+  compare: (left: ExactMoney, right: ExactMoney) =>
+    left.minorUnits === right.minorUnits ? 0 : left.minorUnits < right.minorUnits ? -1 : 1,
+  formatCanonicalText: (value: ExactMoney) => value.minorUnits.toString(),
+  parseCanonicalText: (text: string) => ({
+    _tag: "Success" as const,
+    value: { minorUnits: BigInt(text) },
+  }),
+  formatDisplay: (value: ExactMoney) => value.minorUnits.toString(),
+  encodePersisted: (value: ExactMoney) => value.minorUnits.toString(),
+  decodePersisted: (input: unknown) =>
+    typeof input === "string"
+      ? { _tag: "Success" as const, value: { minorUnits: BigInt(input) } }
+      : { _tag: "Failure" as const, message: "Expected persisted exact money." },
+} satisfies BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly sum: "self"; readonly avg: "self" }
+>;
+void emittedExactMoneyValueType;
+
+const emittedAddOnlyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
+  add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),
+});
+const emittedAverageWithoutDivision = {
+  ...emittedExactMoneyValueType,
+  aggregateResults: { avg: "self" as const },
+  aggregateAlgebra: emittedAddOnlyAlgebra,
+};
+// @ts-expect-error Advertising avg requires exact addition and division by bigint count.
+const emittedInvalidAverageWithoutDivision: BrunoTableValueType<
+  ExactMoney,
+  "numeric",
+  "text",
+  { readonly avg: "self" }
+> = emittedAverageWithoutDivision;
+void emittedInvalidAverageWithoutDivision;
+
+const emittedInvalidAggregateResultPair = {
+  // @ts-expect-error countDistinct always produces bigint.
+  countDistinct: "self",
+} satisfies BrunoTableAggregateResults;
+void emittedInvalidAggregateResultPair;
+
+BrunoTableAggregateAlgebra<ExactMoney>({
+  // @ts-expect-error Exact arithmetic cannot return a different domain.
+  add: (left, right): bigint => left.minorUnits + right.minorUnits,
+});
+
 const emittedWhitespaceColumnIdRejected: Expect<Equal<BrunoTableColumnId<"COL_ID_A B">, never>> =
   true;
 void emittedWhitespaceColumnIdRejected;
@@ -77,6 +153,129 @@ type Order = {
   readonly multiplier: number;
   readonly hiddenLabel: string;
 };
+
+const emittedBuiltInAggregateMatrix = [
+  {
+    columnId: "COL_ID_TEXT_DISTINCT",
+    field: "symbol",
+    headerName: "Text distinct",
+    valueType: "text",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_TEXT_MIN",
+    field: "symbol",
+    headerName: "Text min",
+    valueType: "text",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_TEXT_MAX",
+    field: "symbol",
+    headerName: "Text max",
+    valueType: "text",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_DISTINCT",
+    field: "active",
+    headerName: "Boolean distinct",
+    valueType: "boolean",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MIN",
+    field: "active",
+    headerName: "Boolean min",
+    valueType: "boolean",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BOOLEAN_MAX",
+    field: "active",
+    headerName: "Boolean max",
+    valueType: "boolean",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_NUMBER_DISTINCT",
+    field: "price",
+    headerName: "Number distinct",
+    valueType: "number",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MIN",
+    field: "price",
+    headerName: "Number min",
+    valueType: "number",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_NUMBER_MAX",
+    field: "price",
+    headerName: "Number max",
+    valueType: "number",
+    aggFunc: "max",
+  },
+  {
+    columnId: "COL_ID_BIGINT_DISTINCT",
+    field: "quantity",
+    headerName: "Bigint distinct",
+    valueType: "bigint",
+    aggFunc: "countDistinct",
+  },
+  {
+    columnId: "COL_ID_BIGINT_SUM",
+    field: "quantity",
+    headerName: "Bigint sum",
+    valueType: "bigint",
+    aggFunc: "sum",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MIN",
+    field: "quantity",
+    headerName: "Bigint min",
+    valueType: "bigint",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_BIGINT_MAX",
+    field: "quantity",
+    headerName: "Bigint max",
+    valueType: "bigint",
+    aggFunc: "max",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void emittedBuiltInAggregateMatrix;
+
+const emittedForbiddenBuiltInAggregates = [
+  {
+    columnId: "COL_ID_NUMBER_SUM",
+    field: "price",
+    headerName: "Number sum",
+    valueType: "number",
+    // @ts-expect-error Emitted declarations reject Client number sum.
+    aggFunc: "sum",
+  },
+  {
+    columnId: "COL_ID_NUMBER_AVG",
+    field: "price",
+    headerName: "Number average",
+    valueType: "number",
+    // @ts-expect-error Emitted declarations reject Client number average.
+    aggFunc: "avg",
+  },
+  {
+    columnId: "COL_ID_BIGINT_AVG",
+    field: "quantity",
+    headerName: "Bigint average",
+    valueType: "bigint",
+    // @ts-expect-error Emitted declarations reject Client bigint average.
+    aggFunc: "avg",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+void emittedForbiddenBuiltInAggregates;
 
 const emittedServerConfig = defineViewServerConfig({
   topics: {
@@ -246,6 +445,11 @@ const emittedWitnessedServerProps = {
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
+  onPersistChange: (state) => {
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, false>>> =
+      true;
+    void exactState;
+  },
 } as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 BrunoTableServer(emittedWitnessedServerProps);
 BrunoTableServer({
@@ -505,7 +709,7 @@ const emittedPersistedState = {
   filters: [],
   orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
   groupBy: [],
-  groupOrderBy: [],
+  groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
   columnOrder: ["COL_ID_PRICE", "COL_ID_SYMBOL", "COL_ID_DOUBLE_QUANTITY"],
   columnVisibility: { COL_ID_SYMBOL: true },
   columnWidths: { COL_ID_PRICE: 222 },
@@ -579,11 +783,31 @@ const emittedPersistedProps = {
   ...emittedClientProps,
   initialPersistedState: emittedPersistedState,
   onPersistChange: (state) => {
-    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns>>> = true;
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, true>>> =
+      true;
     void exactState;
   },
 } satisfies BrunoTableClientProps<Order, Columns>;
 void emittedPersistedProps;
+const emittedNonGroupingPersistedState = {
+  ...emittedPersistedState,
+  groupOrderBy: [],
+} as const satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedNonGroupingPersistedState;
+const emittedInvalidNonGroupingGroupBy = {
+  ...emittedNonGroupingPersistedState,
+  // @ts-expect-error Emitted non-grouping persistence rejects Group By intent.
+  groupBy: ["COL_ID_SYMBOL"],
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedInvalidNonGroupingGroupBy;
+const emittedInvalidNonGroupingRowsWidth = {
+  ...emittedNonGroupingPersistedState,
+  columnWidths: {
+    // @ts-expect-error Emitted non-grouping persistence rejects the Rows width.
+    COL_ID_BRUNO_TABLE_ROWS: 144,
+  },
+} satisfies BrunoTablePersistedState<Order, Columns, false>;
+void emittedInvalidNonGroupingRowsWidth;
 const emittedQuickFields = [
   "symbol",
   "hiddenLabel",

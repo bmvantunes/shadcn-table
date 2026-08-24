@@ -1296,6 +1296,143 @@ describe("Grid Preferences", () => {
     });
   });
 
+  it("sanitizes and restores Client grouping, grouped sorting, and dormant Rows width", () => {
+    const groupingColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "name",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_GROUPING",
+      columns: groupingColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      grouping: true,
+      initialPersistedState: {
+        version: 1,
+        tableId: "TABLE_ID_GROUPING",
+        filters: [],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "desc" }],
+        groupBy: ["COL_ID_UNKNOWN", "COL_ID_DESK", "COL_ID_DESK"],
+        groupOrderBy: [
+          { columnId: "COL_ID_UNKNOWN", direction: "asc" },
+          { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" },
+          { columnId: "COL_ID_QUANTITY", direction: "asc" },
+          { columnId: "COL_ID_SCORE", direction: "sideways" },
+        ],
+        columnOrder: ["COL_ID_DESK", "COL_ID_QUANTITY", "COL_ID_SCORE"],
+        columnVisibility: { COL_ID_SCORE: false },
+        columnWidths: { COL_ID_BRUNO_TABLE_ROWS: 333 },
+        columnPinning: { start: ["COL_ID_DESK"], end: [] },
+      },
+    });
+
+    expect(restored.groupBy).toEqual(["COL_ID_DESK"]);
+    expect(restored.groupOrderBy).toEqual([
+      { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" },
+      { columnId: "COL_ID_QUANTITY", direction: "asc" },
+    ]);
+    expect(restored.rowsWidth).toBe(333);
+    expect(createBrunoTablePersistedState(restored)).toMatchObject({
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [
+        { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "desc" },
+        { columnId: "COL_ID_QUANTITY", direction: "asc" },
+      ],
+      columnWidths: { COL_ID_BRUNO_TABLE_ROWS: 333 },
+    });
+  });
+
+  it("restores a mandatory grouped sort over the active key when persisted intent sanitizes empty", () => {
+    const groupingColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "name",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_GROUP_SORT_FALLBACK",
+      columns: groupingColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      grouping: true,
+      initialPersistedState: {
+        version: 1,
+        tableId: "TABLE_ID_GROUP_SORT_FALLBACK",
+        filters: [],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "desc" }],
+        groupBy: ["COL_ID_DESK"],
+        groupOrderBy: [{ columnId: "COL_ID_UNKNOWN", direction: "asc" }],
+        columnOrder: ["COL_ID_DESK"],
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+
+    expect(restored.groupOrderBy).toEqual([{ columnId: "COL_ID_DESK", direction: "asc" }]);
+    expect(restored.orderBy).toEqual([{ columnId: "COL_ID_DESK", direction: "desc" }]);
+  });
+
+  it("restores Rows as the mandatory dormant grouped sort before the first group key", () => {
+    const groupingColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "name",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const restored = createBrunoTableGridPreferences({
+      tableId: "TABLE_ID_DORMANT_GROUP_SORT_FALLBACK",
+      columns: groupingColumns,
+      initialFilters: [],
+      initialOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      grouping: true,
+      initialPersistedState: {
+        version: 1,
+        tableId: "TABLE_ID_DORMANT_GROUP_SORT_FALLBACK",
+        filters: [],
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "desc" }],
+        groupBy: [],
+        groupOrderBy: [],
+        columnOrder: ["COL_ID_DESK"],
+        columnVisibility: {},
+        columnWidths: {},
+        columnPinning: { start: [], end: [] },
+      },
+    });
+
+    expect(restored.groupOrderBy).toEqual([
+      { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" },
+    ]);
+    expect(createBrunoTablePersistedState(restored)["groupOrderBy"]).toEqual([
+      { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" },
+    ]);
+  });
+
   it("encodes only at committed preference boundaries", () => {
     accountEncodePersisted.mockClear();
     const preferences = createBrunoTableGridPreferences({

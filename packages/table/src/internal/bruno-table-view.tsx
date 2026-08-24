@@ -122,7 +122,10 @@ import type {
   BrunoTableRowSpaceSnapshot,
   BrunoTableRuntimeView,
 } from "./grid-runtime";
-import { isBrunoTableInvalidCellValue } from "./grid-runtime";
+import {
+  BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY,
+  isBrunoTableInvalidCellValue,
+} from "./grid-runtime";
 import {
   recordBrunoTableClientColumnPreviewStyleWrite,
   recordBrunoTableClientColumnReorderFrame,
@@ -411,6 +414,7 @@ export type BrunoTableRowPipelineProps<
 export type BrunoTableRowPipelineSnapshot =
   | Readonly<{
       readonly kind: "rows";
+      readonly runtime: BrunoTableRuntimeView;
       readonly columns: readonly CompiledColumn[];
       readonly rowSpace: BrunoTableLogicalRowSpace;
       readonly queryGeneration: number;
@@ -560,6 +564,21 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
     runtime.getSortingSnapshot,
     runtime.getSortingSnapshot,
   );
+  const query = useSyncExternalStore(
+    runtime.subscribeQuery,
+    runtime.getQuerySnapshot,
+    runtime.getQuerySnapshot,
+  );
+  const columnLayout = useSyncExternalStore(
+    runtime.subscribeColumnStructure,
+    runtime.getColumnStructureSnapshot,
+    runtime.getColumnStructureSnapshot,
+  );
+  const installedProjection = useSyncExternalStore(
+    runtime.subscribeInstalledClientProjection,
+    runtime.getInstalledClientProjectionSnapshot,
+    runtime.getInstalledClientProjectionSnapshot,
+  );
   const [open, setOpen] = useState(false);
   const sortPanelRootRef = useRef<HTMLDivElement>(null);
   const sortPanelControlRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -595,12 +614,30 @@ const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
       if (followupFrameId !== undefined) cancelAnimationFrame(followupFrameId);
     };
   });
-  const sortableColumns = columns.filter((column) => column.enableSorting !== false);
+  const visible = new Set(columnLayout.visibleColumnIds);
+  const activeGroups = new Set(query.groupBy);
+  const sortableColumns = columns.filter(
+    (column) =>
+      column.enableSorting !== false &&
+      (query.groupBy.length === 0 ||
+        activeGroups.has(column.columnId) ||
+        (column.kind === "field" && column.aggFunc !== undefined && visible.has(column.columnId))),
+  );
   if (sortableColumns.length === 0) return null;
   const activeIds = new Set(orderBy.map((sort) => sort.columnId));
-  const eligibleColumns = sortableColumns.filter((column) => !activeIds.has(column.columnId));
+  const rowsHeaderName =
+    installedProjection?.columns.find((column) => column.columnId === "COL_ID_BRUNO_TABLE_ROWS")
+      ?.headerName ?? "Rows";
+  const eligibleColumns = [
+    ...sortableColumns.filter((column) => !activeIds.has(column.columnId)),
+    ...(query.groupBy.length > 0 && !activeIds.has("COL_ID_BRUNO_TABLE_ROWS")
+      ? [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", headerName: rowsHeaderName }]
+      : []),
+  ];
   const headerName = (columnId: string): string =>
-    sortableColumns.find((column) => column.columnId === columnId)?.headerName ?? columnId;
+    columnId === "COL_ID_BRUNO_TABLE_ROWS"
+      ? rowsHeaderName
+      : (sortableColumns.find((column) => column.columnId === columnId)?.headerName ?? columnId);
   const directionLabel = (direction: "asc" | "desc"): "ascending" | "descending" =>
     direction === "asc" ? "ascending" : "descending";
 
@@ -993,7 +1030,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
           <BrunoTableViewportAdapter
             tableId={tableId}
             rowSpace={snapshot.rowSpace}
-            runtime={runtime}
+            runtime={snapshot.runtime}
             columns={snapshot.columns}
             focusFallback={focusFallback}
             focusHandoff={focusHandoff}
@@ -1184,11 +1221,28 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     rowSelection,
     cellRange,
   }: BrunoTableViewportAdapterProps): ReactElement {
+    const installedProjection = useSyncExternalStore(
+      runtime.subscribeInstalledClientProjection,
+      runtime.getInstalledClientProjectionSnapshot,
+      runtime.getInstalledClientProjectionSnapshot,
+    );
+    const installedRowSpace = installedProjection?.rowSpace ?? rowSpace;
+    const installedColumns = installedProjection?.columns ?? columns;
+    const installedQueryGeneration = installedProjection?.queryGeneration ?? queryGeneration;
+    const installedQueryNavigationMode =
+      installedProjection?.queryNavigationMode ?? queryNavigationMode;
+    const projectionLayoutKey =
+      installedProjection?.layoutKey ?? BRUNO_TABLE_RAW_CLIENT_PROJECTION_LAYOUT_KEY;
+    const projectedRowSelection =
+      installedProjection?.kind === "grouped" ? undefined : rowSelection;
+    const viewportLayoutKey = `${projectionLayoutKey}:${
+      projectedRowSelection === undefined ? "without-row-selection" : "with-row-selection"
+    }`;
     const reconcileRangeAnchorAfterCommittedNavigation = useCallback(
       (activeCell: BrunoTableActiveCell | undefined, logicalColumns: readonly CompiledColumn[]) => {
         if (cellRange === undefined) return;
         const structure = createBrunoTableCellRangeStructureFromRowSpace(
-          rowSpace,
+          installedRowSpace,
           logicalColumns.map((column) => column.columnId),
         );
         cellRange.reconcileAfterCommittedNavigation(
@@ -1198,31 +1252,31 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             : undefined,
         );
       },
-      [cellRange, rowSpace],
+      [cellRange, installedRowSpace],
     );
     return (
       <BrunoTableViewportAdapterBoundary
-        key={rowSelection === undefined ? "no-leading-utility" : "row-selection-utility"}
-        columns={columns}
-        leadingUtilityWidth={rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH}
+        key={viewportLayoutKey}
+        columns={installedColumns}
+        leadingUtilityWidth={projectedRowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH}
         navigation={navigation}
-        queryGeneration={queryGeneration}
-        queryNavigationMode={queryNavigationMode}
+        queryGeneration={installedQueryGeneration}
+        queryNavigationMode={installedQueryNavigationMode}
         onCommittedNavigationChange={reconcileRangeAnchorAfterCommittedNavigation}
-        rowSpace={rowSpace}
+        rowSpace={installedRowSpace}
         runtime={runtime}
       >
         {(adapter) => (
           <BrunoTableGridSurface
             instanceId={adapter.instanceId}
             tableId={tableId}
-            rowSpace={rowSpace}
+            rowSpace={installedRowSpace}
             runtime={runtime}
             columns={adapter.columns}
             allColumns={adapter.columnLayout.allColumns}
             visibleColumnIds={adapter.columnLayout.visibleColumnIds}
             columnLayout={adapter.columnLayout}
-            queryGeneration={queryGeneration}
+            queryGeneration={installedQueryGeneration}
             loading={loading}
             viewportSnapshot={adapter.viewportSnapshot}
             attach={adapter.attach}
@@ -1239,7 +1293,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             revealCell={adapter.revealCell}
             renderColumnFilter={renderColumnFilter}
             enableActiveCellCopy={enableActiveCellCopy}
-            rowSelection={rowSelection}
+            rowSelection={projectedRowSelection}
             cellRange={cellRange}
           />
         )}
@@ -3619,15 +3673,17 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           </Button>
         ) : null}
       </div>
-      <button
-        aria-label={`Reorder ${column.headerName}`}
-        className="inline-flex size-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing"
-        tabIndex={-1}
-        type="button"
-        onPointerDown={(event) => onColumnPointerDown(event, column, "reorder")}
-      >
-        <ArrowsHorizontalIcon aria-hidden="true" />
-      </button>
+      {runtime.getQuerySnapshot().groupBy.length === 0 ? (
+        <button
+          aria-label={`Reorder ${column.headerName}`}
+          className="inline-flex size-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing"
+          tabIndex={-1}
+          type="button"
+          onPointerDown={(event) => onColumnPointerDown(event, column, "reorder")}
+        >
+          <ArrowsHorizontalIcon aria-hidden="true" />
+        </button>
+      ) : null}
       <DirectionProvider direction={menuDirection}>
         <DropdownMenu
           open={menuOpen}
@@ -3668,19 +3724,25 @@ const BrunoTableHeaderCell = memo(function BrunoTableHeaderCell({
           ) : null}
         </DropdownMenu>
       </DirectionProvider>
-      <span
-        aria-label={`Resize ${column.headerName}`}
-        aria-orientation="vertical"
-        aria-valuemax={command.maxWidth}
-        aria-valuemin={command.minWidth}
-        aria-valuenow={command.width}
-        aria-keyshortcuts="ArrowLeft ArrowRight Home End"
-        className="-mr-1 inline-flex h-7 w-2 shrink-0 cursor-col-resize touch-none items-center justify-center outline-none after:h-4 after:w-px after:bg-border hover:after:bg-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-        role="separator"
-        tabIndex={resizeActive ? 0 : -1}
-        onFocus={() => activateHeaderForResize(column.columnId)}
-        onPointerDown={(event) => onColumnPointerDown(event, column, "resize")}
-      />
+      {runtime.getQuerySnapshot().groupBy.length === 0 ||
+      column.columnId === "COL_ID_BRUNO_TABLE_ROWS" ||
+      (column.kind === "field" &&
+        column.aggFunc !== undefined &&
+        !runtime.getQuerySnapshot().groupBy.includes(column.columnId)) ? (
+        <span
+          aria-label={`Resize ${column.headerName}`}
+          aria-orientation="vertical"
+          aria-valuemax={command.maxWidth}
+          aria-valuemin={command.minWidth}
+          aria-valuenow={command.width}
+          aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+          className="-mr-1 inline-flex h-7 w-2 shrink-0 cursor-col-resize touch-none items-center justify-center outline-none after:h-4 after:w-px after:bg-border hover:after:bg-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+          role="separator"
+          tabIndex={resizeActive ? 0 : -1}
+          onFocus={() => activateHeaderForResize(column.columnId)}
+          onPointerDown={(event) => onColumnPointerDown(event, column, "resize")}
+        />
+      ) : null}
     </div>
   );
   const headerProps = {
@@ -3768,19 +3830,24 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
       if (focusTarget?.isConnected) focusTarget.focus({ preventScroll: true });
     });
   };
-  const dispatch = (commandToDispatch: BrunoTableGridCommand): void => {
-    runtime.dispatchGridCommand(commandToDispatch);
+  const dispatch = (commandToDispatch: BrunoTableGridCommand): boolean => {
+    const accepted = runtime.dispatchGridCommand(commandToDispatch);
+    if (!accepted) return false;
     restoreColumnFocus(column.columnId);
+    return true;
   };
   const move = (requestedIndex: number): void => {
     const targetIndex = Math.max(groupStart, Math.min(groupEnd, requestedIndex));
     if (targetIndex === index) return;
-    dispatch({
-      type: "column.reorder.commit",
-      columnId: column.columnId,
-      targetIndex,
-      pinned: command.pinned,
-    });
+    if (
+      !dispatch({
+        type: "column.reorder.commit",
+        columnId: column.columnId,
+        targetIndex,
+        pinned: command.pinned,
+      })
+    )
+      return;
     announce(
       `${column.headerName} position ${String(targetIndex + 1)} of ${String(visibleColumnIds.length)}`,
     );
@@ -3791,9 +3858,25 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
       max: command.maxWidth,
     });
     if (width === command.width) return;
-    dispatch({ type: "column.resize.commit", columnId: column.columnId, width });
+    if (!dispatch({ type: "column.resize.commit", columnId: column.columnId, width })) return;
     announce(`${column.headerName} width ${String(width)} pixels`);
   };
+  const groupBy = runtime.getQuerySnapshot().groupBy;
+  const grouped = groupBy.length > 0;
+  const groupingEligible =
+    runtime.getGroupingEnabledSnapshot() && column.kind === "field" && column.groupBy;
+  const groupingActive = groupBy.includes(column.columnId);
+  const groupedResizeAvailable =
+    column.columnId === "COL_ID_BRUNO_TABLE_ROWS" ||
+    (column.kind === "field" && column.aggFunc !== undefined && !groupingActive);
+  const visibilityColumns = grouped
+    ? allColumns.filter(
+        (candidate) =>
+          candidate.kind === "field" &&
+          candidate.aggFunc !== undefined &&
+          !groupBy.includes(candidate.columnId),
+      )
+    : allColumns;
   return (
     <DropdownMenuContent align="start" finalFocus={finalFocus}>
       {command.sortable ? (
@@ -3825,6 +3908,27 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
             }}
           >
             Sort by {column.headerName}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      ) : null}
+      {groupingEligible ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Group</DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={() => {
+              const accepted = runtime.dispatchGridCommand({
+                type: groupingActive ? "grouping.remove" : "grouping.add",
+                columnId: column.columnId,
+              });
+              if (!accepted) return;
+              announce(
+                groupingActive
+                  ? `${column.headerName} removed from Group By`
+                  : `${column.headerName} added to Group By`,
+              );
+            }}
+          >
+            {groupingActive ? "Remove from Group By" : "Add to Group By"}
           </DropdownMenuItem>
         </DropdownMenuGroup>
       ) : null}
@@ -3866,138 +3970,157 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
           ) : null}
         </DropdownMenuGroup>
       ) : null}
-      <DropdownMenuGroup>
-        <DropdownMenuLabel>Resize</DropdownMenuLabel>
-        <DropdownMenuItem disabled={command.width <= command.minWidth} onClick={() => resize(-10)}>
-          Decrease width
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled={command.width >= command.maxWidth} onClick={() => resize(10)}>
-          Increase width
-        </DropdownMenuItem>
-      </DropdownMenuGroup>
-      <DropdownMenuSeparator />
-      <DropdownMenuGroup>
-        <DropdownMenuLabel>Pin</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={command.pinned ?? "none"}
-          onValueChange={(value) => {
-            if (value === "start" || value === "end" || value === "none") {
-              dispatch({
-                type: "column.pin.commit",
-                columnId: column.columnId,
-                pinned: value === "none" ? undefined : value,
-              });
-              announce(
-                value === "none"
-                  ? `${column.headerName} unpinned`
-                  : `${column.headerName} pinned to logical ${value}`,
-              );
-            }
-          }}
-        >
-          <DropdownMenuRadioItem value="start">
-            <PushPinIcon aria-hidden="true" />
-            Pin to logical start
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="end">
-            <PushPinIcon aria-hidden="true" />
-            Pin to logical end
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="none">
-            <PushPinSlashIcon aria-hidden="true" />
-            Unpin
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuGroup>
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
-        <DropdownMenuSubContent>
-          <DropdownMenuItem disabled={isFirst} onClick={() => move(index - 1)}>
-            <MoveStartIcon aria-hidden="true" />
-            Move toward logical start
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={isLast} onClick={() => move(index + 1)}>
-            <MoveEndIcon aria-hidden="true" />
-            Move toward logical end
-          </DropdownMenuItem>
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger>Visibility</DropdownMenuSubTrigger>
-        <DropdownMenuSubContent>
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Columns</DropdownMenuLabel>
-            {allColumns.map((candidate) => {
-              const visible = visibleColumnIds.includes(candidate.columnId);
-              return (
-                <DropdownMenuCheckboxItem
-                  key={candidate.columnId}
-                  checked={visible}
-                  disabled={visible && visibleColumnIds.length === 1}
-                  onCheckedChange={(checked) => {
-                    if (checked === true || checked === false) {
-                      dispatch({
-                        type: "column.visibility.commit",
-                        columnId: candidate.columnId,
-                        visible: checked,
-                      });
-                      announce(`${candidate.headerName} ${checked ? "shown" : "hidden"}`);
-                    }
-                  }}
-                >
-                  {candidate.headerName}
-                </DropdownMenuCheckboxItem>
-              );
-            })}
-          </DropdownMenuGroup>
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger>Reset</DropdownMenuSubTrigger>
-        <DropdownMenuSubContent>
+      {!grouped || groupedResizeAvailable ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Resize</DropdownMenuLabel>
           <DropdownMenuItem
-            onClick={() => {
-              dispatch({ type: "column.reset.order" });
-              announce("Column order reset");
+            disabled={command.width <= command.minWidth}
+            onClick={() => resize(-10)}
+          >
+            Decrease width
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={command.width >= command.maxWidth} onClick={() => resize(10)}>
+            Increase width
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      ) : null}
+      {!grouped ? <DropdownMenuSeparator /> : null}
+      {!grouped ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Pin</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={command.pinned ?? "none"}
+            onValueChange={(value) => {
+              if (value === "start" || value === "end" || value === "none") {
+                if (
+                  !dispatch({
+                    type: "column.pin.commit",
+                    columnId: column.columnId,
+                    pinned: value === "none" ? undefined : value,
+                  })
+                )
+                  return;
+                announce(
+                  value === "none"
+                    ? `${column.headerName} unpinned`
+                    : `${column.headerName} pinned to logical ${value}`,
+                );
+              }
             }}
           >
-            Reset order
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => {
-              dispatch({ type: "column.reset.widths" });
-              announce("Column widths reset");
-            }}
-          >
-            Reset widths
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => {
-              dispatch({ type: "column.reset.visibility" });
-              announce("Column visibility reset");
-            }}
-          >
-            Reset visibility
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => {
-              dispatch({ type: "column.reset.pinning" });
-              announce("Column pinning reset");
-            }}
-          >
-            Reset pinning
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={() => {
-              dispatch({ type: "column.reset.layout" });
-              announce("Complete column layout reset");
-            }}
-          >
-            Reset complete layout
-          </DropdownMenuItem>
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
+            <DropdownMenuRadioItem value="start">
+              <PushPinIcon aria-hidden="true" />
+              Pin to logical start
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="end">
+              <PushPinIcon aria-hidden="true" />
+              Pin to logical end
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="none">
+              <PushPinSlashIcon aria-hidden="true" />
+              Unpin
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      ) : null}
+      {!grouped ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuItem disabled={isFirst} onClick={() => move(index - 1)}>
+              <MoveStartIcon aria-hidden="true" />
+              Move toward logical start
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={isLast} onClick={() => move(index + 1)}>
+              <MoveEndIcon aria-hidden="true" />
+              Move toward logical end
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
+      {visibilityColumns.length > 0 ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Visibility</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Columns</DropdownMenuLabel>
+              {visibilityColumns.map((candidate) => {
+                const visible = visibleColumnIds.includes(candidate.columnId);
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={candidate.columnId}
+                    checked={visible}
+                    disabled={visible && visibleColumnIds.length === 1}
+                    onCheckedChange={(checked) => {
+                      if (checked === true || checked === false) {
+                        if (
+                          !dispatch({
+                            type: "column.visibility.commit",
+                            columnId: candidate.columnId,
+                            visible: checked,
+                          })
+                        )
+                          return;
+                        announce(`${candidate.headerName} ${checked ? "shown" : "hidden"}`);
+                      }
+                    }}
+                  >
+                    {candidate.headerName}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
+      {!grouped ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Reset</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuItem
+              onClick={() => {
+                dispatch({ type: "column.reset.order" });
+                announce("Column order reset");
+              }}
+            >
+              Reset order
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                dispatch({ type: "column.reset.widths" });
+                announce("Column widths reset");
+              }}
+            >
+              Reset widths
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                dispatch({ type: "column.reset.visibility" });
+                announce("Column visibility reset");
+              }}
+            >
+              Reset visibility
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                dispatch({ type: "column.reset.pinning" });
+                announce("Column pinning reset");
+              }}
+            >
+              Reset pinning
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                dispatch({ type: "column.reset.layout" });
+                announce("Complete column layout reset");
+              }}
+            >
+              Reset complete layout
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
     </DropdownMenuContent>
   );
 });

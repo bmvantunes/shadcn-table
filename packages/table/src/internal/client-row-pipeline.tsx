@@ -19,11 +19,30 @@ import type { BrunoTableLogicalRowSpace, BrunoTableRowPipelineProps } from "./br
 import {
   createClientAdmittedQueryProjectionPlan,
   type BrunoTableClientAdmittedRow,
+  type BrunoTableClientProjectionInputSnapshot,
   type BrunoTableClientRowOrderChangeDetector,
   type BrunoTableClientRowsStore,
 } from "./client-source-adapter";
 import { useClientRowIds } from "./client-adapter";
+import { createBrunoTableClientRowComparator } from "./client-row-model";
 import { recordBrunoTableClientRowOrderPlanning } from "./render-instrumentation";
+import {
+  deriveBrunoTableClientGroupedProjection,
+  type BrunoTableClientGroupedProjection,
+  type BrunoTableClientGroupedRow,
+} from "./client-grouping";
+import {
+  compileBrunoTableGroupRowsColumn,
+  createBrunoTableGroupedColumns,
+  type BrunoTableCompiledGroupRowsColumn,
+} from "./client-grouping-presentation";
+import {
+  BrunoTableClientProjectionCoordinator,
+  createBrunoTableGroupedProjectionCandidate,
+  createBrunoTableInvalidProjectionCandidate,
+  createBrunoTableRawProjectionCandidate,
+  type BrunoTableClientProjectionCandidate,
+} from "./client-projection";
 
 export type BrunoTableClientRowPipelineAdapterView = Readonly<{
   readonly resolveRowId: (row: unknown) => string;
@@ -39,6 +58,14 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
   ) => BrunoTableRowPipelinePublication<unknown> | undefined;
   readonly retryQueryRows: () => BrunoTableRowPipelinePublication<unknown> | undefined;
   readonly publishResultRowCount: (count: number) => void;
+  readonly projectGroupedRows: (
+    rows: readonly BrunoTableClientGroupedRow[],
+    changedRowIds: ReadonlySet<string>,
+    sourceAuthoritative: boolean,
+  ) => BrunoTableRowPipelinePublication<unknown>;
+  readonly projectUngroupedRows: () => BrunoTableRowPipelinePublication<unknown>;
+  readonly getProjectionInputSnapshot: () => BrunoTableClientProjectionInputSnapshot;
+  readonly subscribeProjectionInput: (listener: () => void) => () => void;
 }>;
 
 type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
@@ -56,6 +83,12 @@ type ClientResolvedRowOrderProps = BrunoTableRowPipelineProps<
     readonly columnId: string;
     readonly direction: "asc" | "desc";
   }[];
+  readonly groupBy: readonly string[];
+  readonly groupOrderBy: readonly {
+    readonly columnId: string;
+    readonly direction: "asc" | "desc";
+  }[];
+  readonly rowsWidth?: number;
 };
 
 export const BrunoTableClientRowPipeline: NamedExoticComponent<
@@ -79,8 +112,57 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
     props.runtime.getColumnStructureSnapshot,
     props.runtime.getColumnStructureSnapshot,
   );
+  const installedProjection = useSyncExternalStore(
+    props.runtime.subscribeInstalledClientProjection,
+    props.runtime.getInstalledClientProjectionSnapshot,
+    props.runtime.getInstalledClientProjectionSnapshot,
+  );
+  const [projectionStore] = useState(
+    () =>
+      new ClientGroupingProjectionStore(
+        props.runtime,
+        props.rowPipelineAdapter,
+        props.rowSelection,
+      ),
+  );
+  useLayoutEffect(() => {
+    projectionStore.configure({
+      columns: query.columns,
+      columnLayout,
+      filters: query.filters,
+      filterCollection: query.filterCollection,
+      quickFilter: query.quickFilter,
+      quickFilterFields: props.runtime.getQuickFilterFieldsSnapshot(),
+      orderBy: query.orderBy,
+      groupBy: query.groupBy,
+      groupOrderBy: query.groupOrderBy,
+      ...(query.rowsWidth === undefined ? {} : { rowsWidth: query.rowsWidth }),
+      queryGeneration: query.generation,
+      queryNavigationMode: query.navigationMode,
+    });
+  }, [columnLayout, projectionStore, props.runtime, query]);
+  useLayoutEffect(() => () => projectionStore.dispose(), [projectionStore]);
+  if (installedProjection !== undefined) {
+    return props.children(
+      installedProjection.kind === "invalid"
+        ? Object.freeze({
+            kind: "invalid" as const,
+            columns: installedProjection.columns,
+            invalid: installedProjection.invalid,
+          })
+        : Object.freeze({
+            kind: "rows" as const,
+            runtime: props.runtime,
+            rowSpace: installedProjection.rowSpace,
+            columns: installedProjection.columns,
+            queryGeneration: installedProjection.queryGeneration,
+            queryNavigationMode: installedProjection.queryNavigationMode,
+            loading: false,
+          }),
+    );
+  }
   return (
-    <ClientResolvedRowOrder
+    <ClientRawResolvedRowOrder
       {...props}
       columnLayout={columnLayout}
       columns={query.columns}
@@ -89,13 +171,16 @@ export const BrunoTableClientRowPipeline: NamedExoticComponent<
       quickFilter={query.quickFilter}
       quickFilterFields={props.runtime.getQuickFilterFieldsSnapshot()}
       orderBy={query.orderBy}
+      groupBy={query.groupBy}
+      groupOrderBy={query.groupOrderBy}
+      {...(query.rowsWidth === undefined ? {} : { rowsWidth: query.rowsWidth })}
       queryGeneration={query.generation}
       queryNavigationMode={query.navigationMode}
     />
   );
 });
 
-const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
+const ClientRawResolvedRowOrder = memo(function ClientRawResolvedRowOrder({
   runtime,
   tableId,
   columns,
@@ -150,9 +235,17 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
     filterPlan,
   );
   const invalid = rowModel.kind === "invalid" ? rowModel.invalid : undefined;
-  const nextRowIds =
+  const rawRowIds =
     invalid === undefined && rowModel.kind === "ready" ? rowModel.rowIds : EMPTY_ROW_IDS;
-  const [orderStore] = useState(() => new ClientRowOrderStore(nextRowIds, queryGeneration));
+  const [rawOrderStore] = useState(() => new ClientRowOrderStore(rawRowIds, queryGeneration));
+  useLayoutEffect(() => {
+    rawOrderStore.publish(rawRowIds, queryGeneration);
+  }, [queryGeneration, rawOrderStore, rawRowIds]);
+  const rawOrderSnapshot = useSyncExternalStore(
+    rawOrderStore.subscribe,
+    rawOrderStore.getSnapshot,
+    rawOrderStore.getSnapshot,
+  );
   useLayoutEffect(() => {
     const candidate = rowPipelineAdapter.retryQueryRows();
     if (candidate !== undefined) runtime.publishRowPipeline(candidate);
@@ -160,44 +253,470 @@ const ClientResolvedRowOrder = memo(function ClientResolvedRowOrder({
   useLayoutEffect(() => {
     if (invalid === undefined) {
       rowPipelineAdapter.acceptRows(rows);
-      return;
+    } else {
+      const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
+      if (fallback !== undefined) runtime.publishRowPipeline(fallback);
     }
-    const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
-    if (fallback !== undefined) runtime.publishRowPipeline(fallback);
-  }, [invalid, rowPipelineAdapter, rows, runtime]);
-  useLayoutEffect(() => {
-    orderStore.publish(nextRowIds, queryGeneration);
-    rowPipelineAdapter.publishResultRowCount(nextRowIds.length);
-    if (sourceRowIds.authoritative) {
-      rowSelection?.reconcile(sourceRowIds.rowIds, nextRowIds, sourceRowIds.token);
+    rowPipelineAdapter.publishResultRowCount(
+      rowModel.kind === "ready" ? rowModel.rowIds.length : 0,
+    );
+    if (rowModel.kind === "ready" && sourceRowIds.authoritative) {
+      rowSelection?.leaveGroupedProjection(sourceRowIds.rowIds);
+      rowSelection?.reconcile(sourceRowIds.rowIds, rowModel.rowIds, sourceRowIds.token);
     }
-  }, [
-    invalid,
-    nextRowIds,
-    orderStore,
-    queryGeneration,
-    rowPipelineAdapter,
-    rowSelection,
-    sourceRowIds,
-  ]);
-  const orderSnapshot = useSyncExternalStore(
-    orderStore.subscribe,
-    orderStore.getSnapshot,
-    orderStore.getSnapshot,
-  );
-
+  }, [invalid, rowModel, rowPipelineAdapter, rowSelection, rows, runtime, sourceRowIds]);
   return children(
     invalid !== undefined
-      ? Object.freeze({ kind: "invalid" as const, columns: rowModel.columns, invalid })
+      ? Object.freeze({
+          kind: "invalid" as const,
+          columns: rowModel.columns,
+          invalid,
+        })
       : Object.freeze({
           kind: "rows" as const,
-          ...orderSnapshot,
+          runtime,
+          rowSpace: rawOrderSnapshot.rowSpace,
           columns: rowModel.columns,
+          queryGeneration: rawOrderSnapshot.queryGeneration,
           queryNavigationMode,
           loading: false,
         }),
   );
 });
+
+type ClientProjectionConfiguration = Readonly<{
+  readonly columns: readonly CompiledColumn[];
+  readonly columnLayout: BrunoTableColumnLayoutSnapshot;
+  readonly filters: readonly unknown[];
+  readonly filterCollection: BrunoTableClientFilterCollection;
+  readonly quickFilter: string;
+  readonly quickFilterFields: readonly string[];
+  readonly orderBy: ClientResolvedRowOrderProps["orderBy"];
+  readonly groupBy: readonly string[];
+  readonly groupOrderBy: ClientResolvedRowOrderProps["groupOrderBy"];
+  readonly rowsWidth?: number;
+  readonly queryGeneration: number;
+  readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+}>;
+
+type ClientProjectionRowModel =
+  | Readonly<{
+      readonly kind: "ready";
+      readonly columns: readonly CompiledColumn[];
+      readonly visibleColumns: readonly CompiledColumn[];
+      readonly rowIds: readonly string[];
+      readonly filteredRows: readonly BrunoTableClientAdmittedRow[];
+    }>
+  | Readonly<{
+      readonly kind: "invalid";
+      readonly columns: readonly CompiledColumn[];
+      readonly visibleColumns: readonly CompiledColumn[];
+      readonly invalid: BrunoTableInvalidCellValue["invalid"];
+    }>;
+
+class ClientGroupingProjectionStore {
+  private configuration: ClientProjectionConfiguration | undefined;
+  private coordinator: BrunoTableClientProjectionCoordinator | undefined;
+  private unsubscribeProjectionInput: (() => void) | undefined;
+
+  public constructor(
+    private readonly runtime: BrunoTableRowPipelineRuntimeView,
+    private readonly adapter: BrunoTableClientRowPipelineAdapterView,
+    private readonly rowSelection: ClientResolvedRowOrderProps["rowSelection"],
+  ) {}
+
+  public configure(configuration: ClientProjectionConfiguration): void {
+    this.configuration = configuration;
+    const installed = this.runtime.getInstalledClientProjectionSnapshot();
+    if (configuration.groupBy.length === 0 && installed === undefined) {
+      this.unsubscribeProjectionInput?.();
+      this.unsubscribeProjectionInput = undefined;
+      return;
+    }
+    this.unsubscribeProjectionInput ??= this.adapter.subscribeProjectionInput(this.reconcile);
+    this.reconcile();
+  }
+
+  public dispose(): void {
+    this.unsubscribeProjectionInput?.();
+    this.unsubscribeProjectionInput = undefined;
+  }
+
+  private readonly reconcile = (): void => {
+    if (this.configuration === undefined) return;
+    const projectionInput = this.adapter.getProjectionInputSnapshot();
+    const groupRowsWidth = projectionInput.groupRowsColumn?.width ?? 96;
+    const staged = this.runtime.stageClientProjectionConfiguration(
+      projectionInput.columns,
+      projectionInput.queryConfiguration,
+      groupRowsWidth,
+    );
+    const configuration: ClientProjectionConfiguration = Object.freeze({
+      columns: staged.query.columns,
+      columnLayout: staged.columnLayout,
+      filters: staged.query.filters,
+      filterCollection: staged.query.filterCollection,
+      quickFilter: staged.query.quickFilter,
+      quickFilterFields: staged.quickFilterFields,
+      orderBy: staged.query.orderBy,
+      groupBy: staged.query.groupBy,
+      groupOrderBy: staged.query.groupOrderBy,
+      ...(staged.query.rowsWidth === undefined ? {} : { rowsWidth: staged.query.rowsWidth }),
+      queryGeneration: staged.query.generation,
+      queryNavigationMode: staged.query.navigationMode,
+    });
+    const rowModel = deriveClientProjectionRowModel(projectionInput.rows, configuration);
+    const installedBeforeCandidate = this.runtime.getInstalledClientProjectionSnapshot();
+    const retriedPublication =
+      installedBeforeCandidate?.kind === "invalid" &&
+      installedBeforeCandidate.queryGeneration === configuration.queryGeneration
+        ? undefined
+        : this.adapter.retryQueryRows();
+    let ungroupedPublication = retriedPublication ?? this.adapter.projectUngroupedRows();
+    let candidate: BrunoTableClientProjectionCandidate;
+    if (rowModel.kind === "invalid") {
+      ungroupedPublication =
+        this.adapter.rejectQueryRows(projectionInput.rows, rowModel.invalid) ??
+        ungroupedPublication;
+      candidate = createBrunoTableInvalidProjectionCandidate({
+        groupBy: configuration.groupBy,
+        columns: rowModel.visibleColumns,
+        presentationKey: clientProjectionPresentationKey(
+          "invalid",
+          projectionInput.columns,
+          configuration.queryGeneration,
+          configuration.columnLayout.version,
+          configuration.rowsWidth,
+          projectionInput.groupRowsColumn,
+        ).concat(":source:", String(ungroupedPublication.version)),
+        publication: ungroupedPublication,
+        queryGeneration: configuration.queryGeneration,
+        queryNavigationMode: configuration.queryNavigationMode,
+        invalid: rowModel.invalid,
+      });
+    } else {
+      this.adapter.acceptRows(projectionInput.rows);
+      const previousGroupedProjection = this.coordinator?.getPreviousGroupedProjection();
+      candidate = createClientProjectionCandidate({
+        columns: projectionInput.columns,
+        columnLayout: configuration.columnLayout,
+        groupBy: configuration.groupBy,
+        groupOrderBy: configuration.groupOrderBy,
+        ...(configuration.rowsWidth === undefined ? {} : { rowsWidth: configuration.rowsWidth }),
+        queryGeneration: configuration.queryGeneration,
+        queryNavigationMode: configuration.queryNavigationMode,
+        rowModel,
+        rowPipelineAdapter: this.adapter,
+        groupRowsColumn: projectionInput.groupRowsColumn,
+        sourceAuthoritative: projectionInput.sourceRowIds.authoritative,
+        ungroupedPublication,
+        ...(previousGroupedProjection === undefined ? {} : { previousGroupedProjection }),
+      });
+    }
+    this.coordinator ??= new BrunoTableClientProjectionCoordinator(candidate);
+    this.coordinator.commit(candidate, (publication) =>
+      this.runtime.reconcileClientProjection(
+        publication,
+        projectionInput.columns,
+        projectionInput.queryConfiguration,
+        groupRowsWidth,
+      ),
+    );
+    const installed = this.coordinator.getSnapshot();
+    this.adapter.publishResultRowCount(installed.rowIds.length);
+    if (installed.kind === "grouped" || installed.groupBy.length > 0) {
+      this.rowSelection?.enterGroupedProjection();
+    } else if (projectionInput.sourceRowIds.authoritative) {
+      this.rowSelection?.leaveGroupedProjection(projectionInput.sourceRowIds.rowIds);
+      this.rowSelection?.reconcile(
+        projectionInput.sourceRowIds.rowIds,
+        installed.rowIds,
+        projectionInput.sourceRowIds.token,
+      );
+    }
+  };
+}
+
+export function deriveClientProjectionRowModel(
+  rows: readonly BrunoTableClientAdmittedRow[],
+  configuration: ClientProjectionConfiguration,
+): ClientProjectionRowModel {
+  const logicalColumns = projectCurrentLogicalColumns(
+    configuration.columns,
+    configuration.columnLayout,
+  );
+  const visible = new Set(configuration.columnLayout.visibleColumnIds);
+  const visibleColumns = Object.freeze(
+    logicalColumns.filter((column) => visible.has(column.columnId)),
+  );
+  const filterPlan = compileClientFilterPlan(
+    configuration.columns,
+    configuration.filters,
+    configuration.filterCollection,
+  );
+  const { filterPredicate } = createClientAdmittedQueryProjectionPlan(
+    configuration.columns,
+    configuration.filters,
+    configuration.quickFilter,
+    configuration.quickFilterFields,
+    configuration.orderBy,
+    filterPlan,
+  );
+  const readValue = (column: CompiledColumn, row: BrunoTableClientAdmittedRow): unknown => {
+    const value = row.values.read(row.raw, row.rowId, row.rowIndex, column);
+    if (isBrunoTableInvalidCellValue(value)) throw new ClientProjectionValueError(value.invalid);
+    return value;
+  };
+  try {
+    const filteredRows = Object.freeze(
+      rows.filter((row) => filterPredicate === undefined || filterPredicate(row)),
+    );
+    const orderedRows =
+      configuration.groupBy.length === 0
+        ? Object.freeze(
+            Array.from(filteredRows).sort(
+              createBrunoTableClientRowComparator(
+                configuration.columns,
+                configuration.orderBy,
+                readValue,
+                (row) => row.rowIndex,
+              ),
+            ),
+          )
+        : filteredRows;
+    return Object.freeze({
+      kind: "ready" as const,
+      columns: logicalColumns,
+      visibleColumns,
+      rowIds: Object.freeze(orderedRows.map((row) => row.rowId)),
+      filteredRows,
+    });
+  } catch (error) {
+    const invalid =
+      error instanceof ClientProjectionValueError
+        ? error.invalid
+        : isInvalidValueEvidence(error)
+          ? error
+          : Object.freeze({
+              kind: "invalid-value" as const,
+              rowIndex: 0,
+              columnId: "COL_ID_BRUNO_TABLE_ROWS",
+              message: error instanceof Error ? error.message : "Client projection is invalid.",
+            });
+    return Object.freeze({
+      kind: "invalid" as const,
+      columns: logicalColumns,
+      visibleColumns,
+      invalid,
+    });
+  }
+}
+
+function projectCurrentLogicalColumns(
+  columns: readonly CompiledColumn[],
+  layout: BrunoTableColumnLayoutSnapshot,
+): readonly CompiledColumn[] {
+  const currentById = new Map<string, CompiledColumn>(
+    columns.map((column) => [column.columnId, column] as const),
+  );
+  return Object.freeze(
+    layout.allColumns.flatMap((requested) => {
+      const columnId = requested.columnId;
+      const current = currentById.get(columnId);
+      if (current === undefined) return [];
+      let projected = current;
+      if (current.semantics.width !== requested.semantics.width) {
+        projected = Object.freeze({
+          ...projected,
+          semantics: Object.freeze({ ...projected.semantics, width: requested.semantics.width }),
+        });
+      }
+      if (projected.pinned !== requested.pinned) {
+        const withPin = { ...projected };
+        if (requested.pinned === undefined) delete withPin.pinned;
+        else withPin.pinned = requested.pinned;
+        projected = Object.freeze(withPin);
+      }
+      return [projected];
+    }),
+  );
+}
+
+class ClientProjectionValueError extends Error {
+  public constructor(public readonly invalid: BrunoTableInvalidCellValue["invalid"]) {
+    super(invalid.message);
+  }
+}
+
+function isInvalidValueEvidence(input: unknown): input is BrunoTableInvalidCellValue["invalid"] {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    Reflect.get(input, "kind") === "invalid-value" &&
+    typeof Reflect.get(input, "rowIndex") === "number" &&
+    typeof Reflect.get(input, "columnId") === "string" &&
+    typeof Reflect.get(input, "message") === "string"
+  );
+}
+
+function createClientProjectionCandidate(
+  input: Readonly<{
+    readonly columns: readonly CompiledColumn[];
+    readonly columnLayout: BrunoTableColumnLayoutSnapshot;
+    readonly groupBy: readonly string[];
+    readonly groupOrderBy: ClientResolvedRowOrderProps["groupOrderBy"];
+    readonly rowsWidth?: number;
+    readonly queryGeneration: number;
+    readonly queryNavigationMode: BrunoTableQueryNavigationMode;
+    readonly rowModel: Extract<ClientProjectionRowModel, { readonly kind: "ready" }>;
+    readonly rowPipelineAdapter: BrunoTableClientRowPipelineAdapterView;
+    readonly groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined;
+    readonly sourceAuthoritative: boolean;
+    readonly ungroupedPublication: BrunoTableRowPipelinePublication<unknown>;
+    readonly previousGroupedProjection?: BrunoTableClientGroupedProjection;
+  }>,
+): BrunoTableClientProjectionCandidate {
+  if (input.groupBy.length === 0) {
+    return createBrunoTableRawProjectionCandidate({
+      columns: input.rowModel.visibleColumns,
+      presentationKey: clientProjectionPresentationKey(
+        "raw",
+        input.columns,
+        input.queryGeneration,
+        input.columnLayout.version,
+        input.rowsWidth,
+        input.groupRowsColumn,
+      ),
+      rowIds: input.rowModel.rowIds,
+      publication: input.ungroupedPublication,
+      queryGeneration: input.queryGeneration,
+      queryNavigationMode: input.queryNavigationMode,
+    });
+  }
+  const projection = deriveBrunoTableClientGroupedProjection({
+    rows: input.rowModel.filteredRows.map((row) => ({
+      raw: row.raw,
+      rowId: row.rowId,
+      rowIndex: row.rowIndex,
+      readValue: (column) => row.values.read(row.raw, row.rowId, row.rowIndex, column),
+    })),
+    columns: input.columns,
+    groupBy: input.groupBy,
+    groupOrderBy: input.groupOrderBy,
+    ...(input.previousGroupedProjection === undefined
+      ? {}
+      : { previous: input.previousGroupedProjection }),
+  });
+  if (projection.kind === "invalid") {
+    return createBrunoTableInvalidProjectionCandidate({
+      groupBy: projection.groupBy,
+      columns: input.rowModel.visibleColumns,
+      presentationKey: clientProjectionPresentationKey(
+        "invalid",
+        input.columns,
+        input.queryGeneration,
+        input.columnLayout.version,
+        input.rowsWidth,
+        input.groupRowsColumn,
+      ).concat(":source:", String(input.ungroupedPublication.version)),
+      publication: input.ungroupedPublication,
+      queryGeneration: input.queryGeneration,
+      queryNavigationMode: input.queryNavigationMode,
+      invalid: Object.freeze({
+        kind: "invalid-value" as const,
+        rowIndex: 0,
+        columnId: projection.columnId,
+        message: projection.message,
+      }),
+    });
+  }
+  const groupedColumns = createBrunoTableGroupedColumns({
+    columns: input.rowModel.columns,
+    visibleColumnIds: input.columnLayout.visibleColumnIds,
+    groupBy: projection.groupBy,
+    rowsColumn: input.groupRowsColumn ?? compileBrunoTableGroupRowsColumn(undefined),
+    ...(input.rowsWidth === undefined ? {} : { persistedRowsWidth: input.rowsWidth }),
+  });
+  return createBrunoTableGroupedProjectionCandidate({
+    projection,
+    columns: groupedColumns,
+    presentationKey: clientProjectionPresentationKey(
+      "grouped",
+      input.columns,
+      input.queryGeneration,
+      input.columnLayout.version,
+      input.rowsWidth,
+      input.groupRowsColumn,
+    ),
+    publication: input.rowPipelineAdapter.projectGroupedRows(
+      projection.rows,
+      changedGroupedRowIds(
+        input.previousGroupedProjection?.kind === "ready"
+          ? input.previousGroupedProjection.rows
+          : undefined,
+        projection.rows,
+      ),
+      input.sourceAuthoritative,
+    ),
+    queryGeneration: input.queryGeneration,
+    queryNavigationMode: input.queryNavigationMode,
+  });
+}
+
+function changedGroupedRowIds(
+  previous: readonly BrunoTableClientGroupedRow[] | undefined,
+  next: readonly BrunoTableClientGroupedRow[],
+): ReadonlySet<string> {
+  if (previous === undefined) return new Set(next.map((row) => row.rowId));
+  const previousById = new Map(previous.map((row) => [row.rowId, row]));
+  const nextIds = new Set(next.map((row) => row.rowId));
+  return new Set([
+    ...next.flatMap((row) => (previousById.get(row.rowId) === row ? [] : [row.rowId])),
+    ...previous.flatMap((row) => (nextIds.has(row.rowId) ? [] : [row.rowId])),
+  ]);
+}
+
+function clientProjectionPresentationKey(
+  kind: "raw" | "grouped" | "invalid",
+  columns: readonly CompiledColumn[],
+  queryGeneration: number,
+  columnLayoutVersion: number,
+  rowsWidth: number | undefined,
+  groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined,
+): string {
+  let columnAuthority = CLIENT_PROJECTION_COLUMN_AUTHORITIES.get(columns);
+  if (columnAuthority === undefined) {
+    columnAuthority = nextClientProjectionColumnAuthority;
+    nextClientProjectionColumnAuthority += 1;
+    CLIENT_PROJECTION_COLUMN_AUTHORITIES.set(columns, columnAuthority);
+  }
+  let rowsColumnAuthority: number | null = null;
+  if (groupRowsColumn !== undefined) {
+    let authority = CLIENT_PROJECTION_ROWS_COLUMN_AUTHORITIES.get(groupRowsColumn);
+    if (authority === undefined) {
+      authority = nextClientProjectionRowsColumnAuthority;
+      nextClientProjectionRowsColumnAuthority += 1;
+      CLIENT_PROJECTION_ROWS_COLUMN_AUTHORITIES.set(groupRowsColumn, authority);
+    }
+    rowsColumnAuthority = authority;
+  }
+  return JSON.stringify([
+    kind,
+    columnAuthority,
+    queryGeneration,
+    columnLayoutVersion,
+    rowsWidth ?? null,
+    rowsColumnAuthority,
+  ]);
+}
+
+const CLIENT_PROJECTION_COLUMN_AUTHORITIES = new WeakMap<readonly CompiledColumn[], number>();
+const CLIENT_PROJECTION_ROWS_COLUMN_AUTHORITIES = new WeakMap<
+  BrunoTableCompiledGroupRowsColumn,
+  number
+>();
+let nextClientProjectionColumnAuthority = 0;
+let nextClientProjectionRowsColumnAuthority = 0;
 
 function createRowOrderChangeDetector(
   tableId: string,
@@ -323,7 +842,7 @@ export class ClientRowOrderStore {
   };
 }
 
-function createLogicalRowSpace(rowIds: readonly string[]) {
+function createLogicalRowSpace(rowIds: readonly string[]): BrunoTableLogicalRowSpace {
   const rowIndexById = new Map(rowIds.map((rowId, index) => [rowId, index]));
   const identitySnapshot = Object.freeze({ rowIds, rowIndexById });
   return Object.freeze({

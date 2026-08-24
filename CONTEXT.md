@@ -40,6 +40,10 @@ _Avoid_: Drop zone, drag-only grouping, grouped column order
 A grouped-summary cell produced by one Field Column's `aggFunc`. It retains that column's Column Identity and source-field meaning while presenting the aggregate result; multiple Aggregate Cells may use one source field when their Column Identities differ.
 _Avoid_: Renamed result field, public aggregate alias, fabricated source row
 
+**Aggregate Algebra**:
+Exact Value-Type-owned addition and optional division-by-positive-count used only when that Value Type advertises `sum` or `avg`. BrunoTable snapshots the operations and validates every result through the same runtime decoder; Columns select a closed aggregate name and never supply arithmetic callbacks.
+_Avoid_: Column aggregate callback, numeric coercion, runtime value switch
+
 **Rows System Column**:
 The BrunoTable-owned grouped-summary column whose exact `bigint` value is the count of filtered source rows represented by one group. Its reserved Column Identity remains stable when callers customize its label or presentation.
 _Avoid_: Consumer Field Column, aggregate alias, configurable identity, ordinary row-count field

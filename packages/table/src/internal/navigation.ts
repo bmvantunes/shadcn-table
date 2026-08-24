@@ -142,6 +142,30 @@ export class BrunoTableNavigationRuntime {
     });
   };
 
+  /** Grouping changes always target body row zero and the first logical column. */
+  public readonly resetForProjection = (
+    rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],
+    columns: readonly CompiledColumn[],
+  ): void => {
+    const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
+    this.pendingQueryFallbackRowIndex = undefined;
+    this.rowSpace = rowSpace;
+    this.columns = columns;
+    const column = columns[0];
+    if (column === undefined || rowSpace.totalRows === 0) {
+      this.bodyInitializationBlocked = true;
+      this.setActive(undefined);
+      return;
+    }
+    this.bodyInitializationBlocked = false;
+    this.setActive({
+      region: "body",
+      rowIndex: 0,
+      ...rowIdentity(rowSpace, 0),
+      columnId: column.columnId,
+    });
+  };
+
   /** Sorting invalidates a position-based body Active Cell without manufacturing row zero. */
   public readonly clearForCommittedSort = (
     rows: BrunoTableNavigationRowSpace | readonly (string | undefined)[],

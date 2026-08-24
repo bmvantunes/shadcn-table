@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 
 import type { ReactNode } from "react";
 
-import { BrunoTableComputedColumn } from "./public-types";
+import { BrunoTableAggregateAlgebra, BrunoTableComputedColumn } from "./public-types";
 
 import type {
   BrunoTableAggregateCellParams,
@@ -52,6 +52,11 @@ type BigDecimalAggregateResults = {
   readonly max: "self";
   readonly avg: "self";
 };
+
+const bigDecimalAggregateAlgebra = BrunoTableAggregateAlgebra<BigDecimal.BigDecimal>({
+  add: BigDecimal.sum,
+  divideByCount: (total, count) => BigDecimal.divideUnsafe(total, BigDecimal.fromBigInt(count)),
+});
 
 function success<TValue>(value: TValue): BrunoTableDecodeResult<TValue> {
   return { _tag: "Success", value };
@@ -209,6 +214,7 @@ export const BrunoTableBigDecimalValueType: BrunoTableValueType<
     max: "self",
     avg: "self",
   } satisfies BrunoTableAggregateResults),
+  aggregateAlgebra: bigDecimalAggregateAlgebra,
   decodeRuntime: decodeRuntimeBigDecimal,
   equivalent: (left: BigDecimal.BigDecimal, right: BigDecimal.BigDecimal): boolean =>
     compareBigDecimal(left, right) === 0,

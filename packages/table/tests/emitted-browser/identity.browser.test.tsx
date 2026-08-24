@@ -85,7 +85,7 @@ test("restores and emits versioned Grid Preferences from the emitted package", a
         ],
         orderBy: [{ columnId: "COL_ID_EMITTED_PREFERENCE_NAME", direction: "desc" }],
         groupBy: [],
-        groupOrderBy: [],
+        groupOrderBy: [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" }],
         columnOrder: ["COL_ID_EMITTED_PREFERENCE_NAME"],
         columnVisibility: { COL_ID_EMITTED_PREFERENCE_NAME: true },
         columnWidths: { COL_ID_EMITTED_PREFERENCE_NAME: 180 },

@@ -168,6 +168,10 @@ export function BrunoTableViewportAdapterBoundary({
   readonly children: (state: BrunoTableViewportAdapterState) => ReactElement;
 }): ReactElement {
   const instanceId = useBrunoTableInstanceId();
+  const installedColumns = columns;
+  const installedRowSpace = rowSpace;
+  const installedQueryGeneration = queryGeneration;
+  const installedQueryNavigationMode = queryNavigationMode;
   const columnLayout = useSyncExternalStore(
     runtime.subscribeColumnLayout,
     runtime.getColumnLayoutSnapshot,
@@ -181,16 +185,19 @@ export function BrunoTableViewportAdapterBoundary({
     () => new Map(columnLayout.allColumns.map((column) => [column.columnId, column])),
     [columnLayout.allColumns],
   );
-  const logicalColumns = useMemo(
-    () =>
-      Object.freeze(
-        columns.flatMap((column) => {
-          if (!visibleColumnIds.has(column.columnId)) return [];
-          return [layoutColumnsById.get(column.columnId) ?? column];
-        }),
-      ),
-    [columns, layoutColumnsById, visibleColumnIds],
-  );
+  const logicalColumns = useMemo(() => {
+    const groupedProjection = installedColumns.some(
+      (column) => column.columnId === "COL_ID_BRUNO_TABLE_ROWS",
+    );
+    return groupedProjection
+      ? installedColumns
+      : Object.freeze(
+          installedColumns.flatMap((column) => {
+            if (!visibleColumnIds.has(column.columnId)) return [];
+            return [layoutColumnsById.get(column.columnId) ?? column];
+          }),
+        );
+  }, [installedColumns, layoutColumnsById, visibleColumnIds]);
   const logicalColumnLayoutSignature = useMemo(
     () =>
       JSON.stringify(
@@ -204,7 +211,7 @@ export function BrunoTableViewportAdapterBoundary({
   );
   const [viewport] = useState(() => {
     const next = new BrunoTableViewportRuntime(BRUNO_TABLE_ROW_HEIGHT, leadingUtilityWidth);
-    next.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
+    next.setLayout(installedRowSpace.totalRows, logicalColumns, installedRowSpace.findRowIndex);
     return next;
   });
   const [viewportBindings] = useState(() => ({
@@ -223,7 +230,9 @@ export function BrunoTableViewportAdapterBoundary({
     clearColumnWidthPreview: viewport.clearColumnWidthPreview,
     revealCell: viewport.revealCell,
   }));
-  const queryGenerationRef = useRef(queryGeneration);
+  const queryGenerationRef = useRef<number | undefined>(
+    installedQueryNavigationMode === "projection-reset" ? undefined : installedQueryGeneration,
+  );
   const appliedColumnLayoutSignatureRef = useRef<string | undefined>(undefined);
   const publishedRangeRef = useRef<
     | {
@@ -246,38 +255,44 @@ export function BrunoTableViewportAdapterBoundary({
   );
   const filterPositionResetEpochRef = useRef(filterPositionResetEpoch);
   const resetViewportForCommittedQuery = useCallback((): void => {
-    viewportBindings.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
+    viewportBindings.setLayout(
+      installedRowSpace.totalRows,
+      logicalColumns,
+      installedRowSpace.findRowIndex,
+    );
     viewportBindings.resetVertical();
     const resetWindow = viewportBindings.getSnapshot().virtualWindow;
-    rowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
+    installedRowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
     publishedRangeRef.current = Object.freeze({
-      rowSpace,
-      generation: queryGeneration,
+      rowSpace: installedRowSpace,
+      generation: installedQueryGeneration,
       start: resetWindow.rowStart,
       end: resetWindow.rowEnd,
     });
-  }, [logicalColumns, queryGeneration, rowSpace, viewportBindings]);
+  }, [installedQueryGeneration, installedRowSpace, logicalColumns, viewportBindings]);
   useLayoutEffect(() => {
-    if (queryGenerationRef.current === queryGeneration) return;
-    queryGenerationRef.current = queryGeneration;
+    if (queryGenerationRef.current === installedQueryGeneration) return;
+    queryGenerationRef.current = installedQueryGeneration;
     resetViewportForCommittedQuery();
-    if (queryNavigationMode === "reconcile") {
-      navigation.reconcileForQuery(rowSpace, logicalColumns);
-    } else if (queryNavigationMode === "clear") {
-      navigation.clearForCommittedSort(rowSpace, logicalColumns);
+    if (installedQueryNavigationMode === "projection-reset") {
+      navigation.resetForProjection(installedRowSpace, logicalColumns);
+    } else if (installedQueryNavigationMode === "reconcile") {
+      navigation.reconcileForQuery(installedRowSpace, logicalColumns);
+    } else if (installedQueryNavigationMode === "clear") {
+      navigation.clearForCommittedSort(installedRowSpace, logicalColumns);
     } else {
       // Issue #12 resets body position without retaining a hidden/non-zero row. A header
       // origin remains a header origin, so its DOM focus and logical header navigation survive.
-      navigation.resetForCommittedQuery(rowSpace, logicalColumns);
+      navigation.resetForCommittedQuery(installedRowSpace, logicalColumns);
     }
     onCommittedNavigationChange?.(navigation.getSnapshot(), logicalColumns);
   }, [
     logicalColumns,
     navigation,
     onCommittedNavigationChange,
-    queryNavigationMode,
-    queryGeneration,
-    rowSpace,
+    installedQueryNavigationMode,
+    installedQueryGeneration,
+    installedRowSpace,
     resetViewportForCommittedQuery,
     viewportBindings,
   ]);
@@ -297,8 +312,12 @@ export function BrunoTableViewportAdapterBoundary({
   ]);
   useLayoutEffect(() => {
     const columnsChanged = appliedColumnLayoutSignatureRef.current !== logicalColumnLayoutSignature;
-    viewportBindings.setLayout(rowSpace.totalRows, logicalColumns, rowSpace.findRowIndex);
-    navigation.setShape(rowSpace, logicalColumns);
+    viewportBindings.setLayout(
+      installedRowSpace.totalRows,
+      logicalColumns,
+      installedRowSpace.findRowIndex,
+    );
+    navigation.setShape(installedRowSpace, logicalColumns);
     if (columnsChanged) {
       const activeCell = navigation.getSnapshot();
       if (activeCell !== undefined) {
@@ -311,28 +330,34 @@ export function BrunoTableViewportAdapterBoundary({
       }
     }
     appliedColumnLayoutSignatureRef.current = logicalColumnLayoutSignature;
-  }, [logicalColumnLayoutSignature, logicalColumns, navigation, rowSpace, viewportBindings]);
+  }, [
+    installedRowSpace,
+    logicalColumnLayoutSignature,
+    logicalColumns,
+    navigation,
+    viewportBindings,
+  ]);
   useLayoutEffect(() => {
     if (viewportSnapshot !== viewportBindings.getSnapshot()) return;
     const start = viewportSnapshot.virtualWindow.rowStart;
     const end = viewportSnapshot.virtualWindow.rowEnd;
     const previous = publishedRangeRef.current;
     if (
-      previous?.rowSpace === rowSpace &&
-      previous.generation === queryGeneration &&
+      previous?.rowSpace === installedRowSpace &&
+      previous.generation === installedQueryGeneration &&
       previous.start === start &&
       previous.end === end
     ) {
       return;
     }
-    rowSpace.setRequiredRange(start, end);
+    installedRowSpace.setRequiredRange(start, end);
     publishedRangeRef.current = Object.freeze({
-      rowSpace,
-      generation: queryGeneration,
+      rowSpace: installedRowSpace,
+      generation: installedQueryGeneration,
       start,
       end,
     });
-  }, [queryGeneration, rowSpace, viewportBindings, viewportSnapshot]);
+  }, [installedQueryGeneration, installedRowSpace, viewportBindings, viewportSnapshot]);
   useEffect(() => () => viewportBindings.dispose(), [viewportBindings]);
 
   return children({

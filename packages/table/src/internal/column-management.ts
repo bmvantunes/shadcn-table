@@ -66,6 +66,13 @@ export type BrunoTableColumnLayoutCommand =
 export type BrunoTableGridCommand =
   | BrunoTableColumnLayoutCommand
   | BrunoTableSortingCommand
+  | Readonly<{ readonly type: "grouping.add"; readonly columnId: string }>
+  | Readonly<{ readonly type: "grouping.remove"; readonly columnId: string }>
+  | Readonly<{
+      readonly type: "grouping.move";
+      readonly columnId: string;
+      readonly direction: -1 | 1;
+    }>
   | Readonly<{
       readonly type: "column.filter.clear";
       readonly columnId: string;
@@ -108,6 +115,9 @@ export function isBrunoTableColumnLayoutCommand(
     case "sorting.remove":
     case "sorting.move":
     case "sorting.reset":
+    case "grouping.add":
+    case "grouping.remove":
+    case "grouping.move":
     case "column.filter.clear":
     case "column.filters.clear":
     case "column.filter.reset":
