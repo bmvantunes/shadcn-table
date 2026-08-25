@@ -2737,6 +2737,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       cellEdit.start(active.rowId, active.columnId, "replace", producedText)
     );
   };
+  const moveAfterCellEditRef = useRef(moveAfterCellEdit);
+  const startReplaceFromProducedTextRef = useRef(startReplaceFromProducedText);
+  useLayoutEffect(() => {
+    moveAfterCellEditRef.current = moveAfterCellEdit;
+    startReplaceFromProducedTextRef.current = startReplaceFromProducedText;
+  });
   useEffect(
     () =>
       cellEdit === undefined
@@ -2755,10 +2761,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       ) {
         return;
       }
-      if (startReplaceFromProducedText(event.data)) event.preventDefault();
+      if (startReplaceFromProducedTextRef.current(event.data)) event.preventDefault();
     };
     const handleCompositionEnd = (event: CompositionEvent) => {
-      if (event.target === grid && startReplaceFromProducedText(event.data)) event.preventDefault();
+      if (event.target === grid && startReplaceFromProducedTextRef.current(event.data)) {
+        event.preventDefault();
+      }
     };
     grid.addEventListener("beforeinput", handleBeforeInput);
     grid.addEventListener("compositionend", handleCompositionEnd);
@@ -2766,9 +2774,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       grid.removeEventListener("beforeinput", handleBeforeInput);
       grid.removeEventListener("compositionend", handleCompositionEnd);
     };
-  });
-  useEffect(() =>
-    cellEdit === undefined ? undefined : cellEdit.registerMovementCommand(moveAfterCellEdit),
+  }, [cellEdit]);
+  useEffect(
+    () =>
+      cellEdit === undefined
+        ? undefined
+        : cellEdit.registerMovementCommand((movement) => moveAfterCellEditRef.current(movement)),
+    [cellEdit],
   );
   const runSelectAll = (event: BrunoTableHotkeyGesture): void => {
     if (!ownsRowSelectionCommand(event) || rowSelection === undefined) return;

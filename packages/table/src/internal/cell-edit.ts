@@ -1,4 +1,4 @@
-import { Store } from "@tanstack/store";
+import { batch, Store } from "@tanstack/store";
 import { assign, createActor, createMachine } from "xstate";
 
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
@@ -22,43 +22,247 @@ type ActiveSession = Readonly<{
   readonly invalidMessage?: string;
 }>;
 
-type CellEditContext = Readonly<{ readonly session: ActiveSession | undefined }>;
+type DraftEntry = Readonly<{
+  readonly value: unknown;
+  readonly projection: BrunoTableCellEditProjection;
+}>;
+
+type CommitEvaluation =
+  | Readonly<{ readonly kind: "invalid"; readonly message: string }>
+  | Readonly<{
+      readonly kind: "accepted";
+      readonly cellKey: string;
+      readonly value: unknown;
+      readonly removeDraft: boolean;
+      readonly change?: BrunoTableCellEditChange;
+    }>;
+
+type CellEditContext = Readonly<{
+  readonly session: ActiveSession | undefined;
+  readonly drafts: ReadonlyMap<string, DraftEntry>;
+  readonly affectedCellKeys: readonly string[];
+  readonly evaluation: CommitEvaluation | undefined;
+  readonly acceptedChange: BrunoTableCellEditChange | undefined;
+}>;
 type CellEditEvent =
-  | Readonly<{ readonly type: "START"; readonly session: ActiveSession }>
-  | Readonly<{ readonly type: "INVALID"; readonly message: string }>
-  | Readonly<{ readonly type: "COMMIT" }>
+  | Readonly<{
+      readonly type: "START";
+      readonly rowId: string;
+      readonly column: CompiledColumn | undefined;
+      readonly row: unknown;
+      readonly mode: "current" | "replace";
+      readonly producedText: string;
+    }>
+  | Readonly<{ readonly type: "COMMIT"; readonly rawText: string }>
   | Readonly<{ readonly type: "CANCEL" }>;
 
 const brunoTableCellEditMachine = createMachine({
   id: "brunoTableCellEditSession",
   initial: "idle",
   types: {} as { context: CellEditContext; events: CellEditEvent },
-  context: { session: undefined },
+  context: {
+    session: undefined,
+    drafts: new Map(),
+    affectedCellKeys: [],
+    evaluation: undefined,
+    acceptedChange: undefined,
+  },
   states: {
     idle: {
       on: {
         START: {
-          target: "editing",
-          actions: assign({ session: ({ event }) => event.session }),
+          target: "admitting",
+          actions: assign({
+            session: ({ context, event }) => prepareSession(context, event),
+            affectedCellKeys: [],
+            evaluation: undefined,
+            acceptedChange: undefined,
+          }),
         },
       },
+    },
+    admitting: {
+      always: [
+        { guard: ({ context }) => context.session !== undefined, target: "editing" },
+        { target: "idle" },
+      ],
     },
     editing: {
       on: {
-        INVALID: {
+        COMMIT: {
+          target: "validating",
           actions: assign({
-            session: ({ context, event }) =>
-              context.session === undefined
-                ? undefined
-                : Object.freeze({ ...context.session, invalidMessage: event.message }),
+            evaluation: ({ context, event }) => evaluateCandidate(context.session, event.rawText),
+            affectedCellKeys: [],
+            acceptedChange: undefined,
           }),
         },
-        COMMIT: { target: "idle", actions: assign({ session: undefined }) },
-        CANCEL: { target: "idle", actions: assign({ session: undefined }) },
+        CANCEL: {
+          target: "idle",
+          actions: assign({
+            session: undefined,
+            affectedCellKeys: [],
+            evaluation: undefined,
+            acceptedChange: undefined,
+          }),
+        },
       },
+    },
+    validating: {
+      always: [
+        {
+          guard: ({ context }) => context.evaluation?.kind === "accepted",
+          target: "idle",
+          actions: assign({
+            session: undefined,
+            drafts: ({ context }) => applyAcceptedDraft(context),
+            affectedCellKeys: ({ context }) =>
+              Object.freeze([getAcceptedEvaluation(context).cellKey]),
+            acceptedChange: ({ context }) => getAcceptedEvaluation(context).change,
+            evaluation: undefined,
+          }),
+        },
+        {
+          target: "editing",
+          actions: assign({
+            session: ({ context }) => {
+              const session = context.session;
+              const evaluation = context.evaluation;
+              return session === undefined || evaluation?.kind !== "invalid"
+                ? session
+                : Object.freeze({ ...session, invalidMessage: evaluation.message });
+            },
+            affectedCellKeys: [],
+            acceptedChange: undefined,
+            evaluation: undefined,
+          }),
+        },
+      ],
     },
   },
 });
+
+function prepareSession(
+  context: CellEditContext,
+  event: Extract<CellEditEvent, { readonly type: "START" }>,
+): ActiveSession | undefined {
+  const { column, row } = event;
+  if (
+    column?.kind !== "field" ||
+    column.isEditable === undefined ||
+    column.isEditable === false ||
+    typeof row !== "object" ||
+    row === null
+  ) {
+    return undefined;
+  }
+  const key = cellKey(event.rowId, column.columnId);
+  const draft = context.drafts.get(key);
+  const sourceValue = Reflect.get(row, column.field);
+  const before = draft === undefined ? sourceValue : draft.value;
+  if (typeof column.isEditable === "function") {
+    try {
+      if (Reflect.apply(column.isEditable, undefined, [{ row, value: before }]) !== true) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    return Object.freeze({
+      rowId: event.rowId,
+      column,
+      row,
+      before,
+      initialText:
+        event.mode === "replace"
+          ? event.producedText
+          : column.semantics.formatCanonicalText(before),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function evaluateCandidate(session: ActiveSession | undefined, rawText: string): CommitEvaluation {
+  if (session === undefined) {
+    return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+  }
+  const parsed = session.column.semantics.parseCanonicalText(rawText);
+  if (parsed._tag === "Failure") {
+    return Object.freeze({ kind: "invalid", message: boundedMessage(parsed.message) });
+  }
+  const after = parsed.value;
+  if (session.column.validate !== undefined) {
+    let result: unknown;
+    try {
+      result = Reflect.apply(session.column.validate, undefined, [
+        { row: session.row, value: after },
+      ]);
+    } catch {
+      result = "The value could not be validated.";
+    }
+    if (result !== undefined) {
+      return Object.freeze({
+        kind: "invalid",
+        message:
+          typeof result === "string" && result.trim().length > 0
+            ? boundedMessage(result)
+            : "The value is invalid.",
+      });
+    }
+  }
+  const sourceValue = Reflect.get(session.row, session.column.field);
+  const changed = !session.column.semantics.equivalent(session.before, after);
+  return Object.freeze({
+    kind: "accepted",
+    cellKey: cellKey(session.rowId, session.column.columnId),
+    value: after,
+    removeDraft: session.column.semantics.equivalent(after, sourceValue),
+    ...(changed
+      ? {
+          change: Object.freeze({
+            rowId: session.rowId,
+            columnId: session.column.columnId,
+            field: session.column.field,
+            before: session.before,
+            after,
+          }),
+        }
+      : {}),
+  });
+}
+
+function getAcceptedEvaluation(
+  context: CellEditContext,
+): Extract<CommitEvaluation, { readonly kind: "accepted" }> {
+  const evaluation = context.evaluation;
+  if (evaluation?.kind !== "accepted") {
+    throw new TypeError("BrunoTable Cell Edit accepted without evaluated candidate evidence.");
+  }
+  return evaluation;
+}
+
+function applyAcceptedDraft(context: CellEditContext): ReadonlyMap<string, DraftEntry> {
+  const evaluation = getAcceptedEvaluation(context);
+  const next = new Map(context.drafts);
+  if (evaluation.removeDraft) next.delete(evaluation.cellKey);
+  else {
+    next.set(
+      evaluation.cellKey,
+      Object.freeze({
+        value: evaluation.value,
+        projection: Object.freeze({
+          active: false,
+          hasDraft: true,
+          draft: evaluation.value,
+        }),
+      }),
+    );
+  }
+  return next;
+}
 
 export type BrunoTableCellEditSessionSnapshot =
   | Readonly<{ readonly kind: "idle" }>
@@ -81,6 +285,7 @@ export type BrunoTableCellEditMovement =
   | "tab-forward"
   | "tab-backward";
 const IDLE_SESSION: BrunoTableCellEditSessionSnapshot = Object.freeze({ kind: "idle" });
+const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, hasDraft: false });
 
 export class BrunoTableCellEditRuntime {
   private columns: readonly CompiledColumn[];
@@ -88,7 +293,6 @@ export class BrunoTableCellEditRuntime {
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
   private readonly actor = createActor(brunoTableCellEditMachine);
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
-  private readonly drafts = new Map<string, unknown>();
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
   private activeCellKey: string | undefined;
@@ -107,7 +311,7 @@ export class BrunoTableCellEditRuntime {
     this.columns = options.columns;
     this.getRow = options.getRow;
     this.onCommit = options.onCommit ?? (() => undefined);
-    this.actor.subscribe(() => this.publishSession());
+    this.actor.subscribe(() => this.publishActorDecision());
     this.actor.start();
   }
 
@@ -122,10 +326,7 @@ export class BrunoTableCellEditRuntime {
   public readonly getCellSnapshot = (
     rowId: string,
     columnId: string,
-  ): BrunoTableCellEditProjection => {
-    const key = cellKey(rowId, columnId);
-    return (this.cellStores.get(key) ?? this.installCellStore(key)).get();
-  };
+  ): BrunoTableCellEditProjection => this.getCellProjection(cellKey(rowId, columnId));
 
   public readonly subscribeCell = (
     rowId: string,
@@ -149,7 +350,9 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly getDraftSnapshot = (rowId: string, columnId: string): unknown =>
-    this.drafts.get(cellKey(rowId, columnId));
+    this.actor.getSnapshot().context.drafts.get(cellKey(rowId, columnId))?.value;
+
+  public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
 
   public readonly registerActiveCandidate = (
     candidate: Readonly<{ readonly read: () => string; readonly restoreFocus: () => void }>,
@@ -197,8 +400,8 @@ export class BrunoTableCellEditRuntime {
     const row = this.getRow(rowId);
     if (typeof row !== "object" || row === null) return false;
     if (typeof column.isEditable !== "function") return true;
-    const key = cellKey(rowId, columnId);
-    const value = this.drafts.has(key) ? this.drafts.get(key) : Reflect.get(row, column.field);
+    const draft = this.actor.getSnapshot().context.drafts.get(cellKey(rowId, columnId));
+    const value = draft === undefined ? Reflect.get(row, column.field) : draft.value;
     try {
       return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
     } catch {
@@ -213,78 +416,28 @@ export class BrunoTableCellEditRuntime {
     producedText = "",
   ): boolean => {
     if (this.getSessionSnapshot().kind !== "idle") return false;
-    const column = this.columns.find(
-      (candidate): candidate is CompiledFieldColumn =>
-        candidate.kind === "field" && candidate.columnId === columnId,
-    );
-    if (!this.isEditable(rowId, columnId) || column === undefined) return false;
+    const column = this.columns.find((candidate) => candidate.columnId === columnId);
     const row = this.getRow(rowId);
-    if (typeof row !== "object" || row === null) return false;
-    const sourceValue = Reflect.get(row, column.field);
-    const key = cellKey(rowId, columnId);
-    const before = this.drafts.has(key) ? this.drafts.get(key) : sourceValue;
-    let initialText: string;
-    try {
-      initialText =
-        mode === "replace" ? producedText : column.semantics.formatCanonicalText(before);
-    } catch {
-      return false;
-    }
     this.actor.send({
       type: "START",
-      session: Object.freeze({ rowId, column, row, before, initialText }),
+      rowId,
+      column,
+      row,
+      mode,
+      producedText,
     });
     return this.getSessionSnapshot().kind === "editing";
   };
 
   public readonly commit = (rawText: string): boolean => {
     const actorSnapshot = this.actor.getSnapshot();
-    const session = actorSnapshot.context.session;
-    if (actorSnapshot.value !== "editing" || session === undefined) return false;
-    const parsed = session.column.semantics.parseCanonicalText(rawText);
-    if (parsed._tag === "Failure") {
-      this.actor.send({ type: "INVALID", message: boundedMessage(parsed.message) });
+    if (actorSnapshot.value !== "editing" || actorSnapshot.context.session === undefined) {
       return false;
     }
-    const after = parsed.value;
-    if (session.column.validate !== undefined) {
-      let result: unknown;
-      try {
-        result = Reflect.apply(session.column.validate, undefined, [
-          { row: session.row, value: after },
-        ]);
-      } catch {
-        result = "The value could not be validated.";
-      }
-      if (result !== undefined) {
-        this.actor.send({
-          type: "INVALID",
-          message:
-            typeof result === "string" && result.trim().length > 0
-              ? boundedMessage(result)
-              : "The value is invalid.",
-        });
-        return false;
-      }
-    }
-    const key = cellKey(session.rowId, session.column.columnId);
-    const sourceValue = Reflect.get(session.row, session.column.field);
-    if (session.column.semantics.equivalent(after, sourceValue)) this.drafts.delete(key);
-    else this.drafts.set(key, after);
-    const changed = !session.column.semantics.equivalent(session.before, after);
-    this.actor.send({ type: "COMMIT" });
-    this.publishCell(key);
-    if (changed) {
-      this.onCommit(
-        Object.freeze({
-          rowId: session.rowId,
-          columnId: session.column.columnId,
-          field: session.column.field,
-          before: session.before,
-          after,
-        }),
-      );
-    }
+    this.actor.send({ type: "COMMIT", rawText });
+    const result = this.actor.getSnapshot();
+    if (result.value !== "idle") return false;
+    if (result.context.acceptedChange !== undefined) this.onCommit(result.context.acceptedChange);
     return true;
   };
 
@@ -300,7 +453,7 @@ export class BrunoTableCellEditRuntime {
     this.cellSubscriberCounts.clear();
   };
 
-  private readonly publishSession = (): void => {
+  private readonly publishActorDecision = (): void => {
     const previousKey = this.activeCellKey;
     const snapshot = this.actor.getSnapshot();
     const session = snapshot.value === "editing" ? snapshot.context.session : undefined;
@@ -318,19 +471,32 @@ export class BrunoTableCellEditRuntime {
           });
     const nextKey = next.kind === "editing" ? cellKey(next.rowId, next.columnId) : undefined;
     this.activeCellKey = nextKey;
-    if (!sameSessionSnapshot(this.sessionStore.get(), next)) {
-      this.sessionStore.setState(() => next);
-    }
-    if (previousKey !== undefined) this.publishCell(previousKey);
-    if (nextKey !== undefined && nextKey !== previousKey) this.publishCell(nextKey);
+    if (nextKey !== undefined && !this.cellStores.has(nextKey)) this.installCellStore(nextKey);
+    const affectedKeys = new Set(this.actor.getSnapshot().context.affectedCellKeys);
+    if (previousKey !== undefined) affectedKeys.add(previousKey);
+    if (nextKey !== undefined) affectedKeys.add(nextKey);
+    batch(() => {
+      if (!sameSessionSnapshot(this.sessionStore.get(), next)) {
+        this.sessionStore.setState(() => next);
+      }
+      for (const key of affectedKeys) this.publishCell(key);
+    });
+    for (const key of affectedKeys) this.releaseUnusedCellStore(key);
+  };
+
+  private readonly getCellProjection = (key: string): BrunoTableCellEditProjection => {
+    const store = this.cellStores.get(key);
+    if (store !== undefined) return store.get();
+    return this.actor.getSnapshot().context.drafts.get(key)?.projection ?? IDLE_CELL;
   };
 
   private readonly createCellProjection = (key: string): BrunoTableCellEditProjection => {
-    const draft = this.drafts.get(key);
+    const draft = this.actor.getSnapshot().context.drafts.get(key);
+    if (this.activeCellKey !== key) return draft?.projection ?? IDLE_CELL;
     return Object.freeze({
-      active: this.activeCellKey === key,
-      hasDraft: draft !== undefined || this.drafts.has(key),
-      ...(draft === undefined && !this.drafts.has(key) ? {} : { draft }),
+      active: true,
+      hasDraft: draft !== undefined,
+      ...(draft === undefined ? {} : { draft: draft.value }),
     });
   };
 
@@ -347,6 +513,11 @@ export class BrunoTableCellEditRuntime {
     const previous = store.get();
     if (previous.active === next.active && Object.is(previous.draft, next.draft)) return;
     store.setState(() => next);
+  };
+
+  private readonly releaseUnusedCellStore = (key: string): void => {
+    if (this.activeCellKey === key || (this.cellSubscriberCounts.get(key) ?? 0) > 0) return;
+    this.cellStores.delete(key);
   };
 }
 

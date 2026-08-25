@@ -114,6 +114,75 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.dispose();
   });
 
+  it("publishes actor-owned invalid, accepted, and cancel decisions coherently", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    const sessionObservations: Array<readonly [string, boolean]> = [];
+    const cellObservations: Array<readonly [boolean, string]> = [];
+    const unsubscribeSession = runtime.subscribeSession(() => {
+      sessionObservations.push([
+        runtime.getSessionSnapshot().kind,
+        runtime.getCellSnapshot("row-1", "COL_ID_SCORE").active,
+      ]);
+    });
+    const unsubscribeCell = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => {
+      cellObservations.push([
+        runtime.getCellSnapshot("row-1", "COL_ID_SCORE").active,
+        runtime.getSessionSnapshot().kind,
+      ]);
+    });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(sessionObservations).toEqual([["editing", true]]);
+    expect(cellObservations).toEqual([[true, "editing"]]);
+    expect(runtime.commit("11")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "Score must be at most 10.",
+    });
+    expect(runtime.getCellSnapshot("row-1", "COL_ID_SCORE").active).toBe(true);
+    expect(runtime.commit("6")).toBe(true);
+    expect(sessionObservations.at(-1)).toEqual(["idle", false]);
+    expect(cellObservations.at(-1)).toEqual([false, "idle"]);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.cancel()).toBe(true);
+    expect(sessionObservations.at(-1)).toEqual(["idle", false]);
+    expect(cellObservations.at(-1)).toEqual([false, "idle"]);
+
+    unsubscribeCell();
+    unsubscribeSession();
+    runtime.dispose();
+  });
+
+  it("keeps snapshot reads observational and bounds stores to live subscriptions or the editor", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    for (let index = 0; index < 1_000; index += 1) {
+      runtime.getCellSnapshot(`row-${String(index)}`, "COL_ID_SCORE");
+    }
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+
+    const unsubscribe = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => undefined);
+    expect(runtime.getRetainedCellStoreCount()).toBe(1);
+    unsubscribe();
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+
+    const unsubscribeActive = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => undefined);
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.getRetainedCellStoreCount()).toBe(1);
+    unsubscribeActive();
+    expect(runtime.getRetainedCellStoreCount()).toBe(1);
+    expect(runtime.cancel()).toBe(true);
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("6")).toBe(true);
+    const first = runtime.getCellSnapshot("row-1", "COL_ID_SCORE");
+    expect(runtime.getCellSnapshot("row-1", "COL_ID_SCORE")).toBe(first);
+    expect(first).toMatchObject({ active: false, hasDraft: true, draft: 6 });
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+    runtime.dispose();
+  });
+
   it("preserves the optional Effect BigDecimal domain without number coercion", () => {
     const before = BigDecimal.fromStringUnsafe("12345678901234567890.00000000000000000001");
     const decimalRow = { id: "decimal", amount: before };

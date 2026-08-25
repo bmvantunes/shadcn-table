@@ -201,21 +201,20 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
   const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{F2}");
   await userEvent.keyboard("{Tab}");
-  let active = document.getElementById(grid.element().getAttribute("aria-activedescendant") ?? "");
-  expect(active?.getAttribute("data-bruno-column-id")).toBe("COL_ID_SCORE");
+  const scoreCell = screen.getByRole("gridcell", { name: "4", exact: true });
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(scoreCell.element().id);
 
   await userEvent.keyboard("{Shift>}{ArrowLeft}{/Shift}");
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();
-  active = document.getElementById(grid.element().getAttribute("aria-activedescendant") ?? "");
-  expect(active?.getAttribute("data-bruno-column-id")).toBe("COL_ID_SCORE");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(scoreCell.element().id);
   await userEvent.keyboard("{Enter}");
-  active = document.getElementById(grid.element().getAttribute("aria-activedescendant") ?? "");
-  expect(active?.getAttribute("data-bruno-column-id")).toBe("COL_ID_NAME");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "Ada", exact: true }).element().id,
+  );
   await userEvent.keyboard("{F2}");
   await userEvent.keyboard("{Tab}");
-  active = document.getElementById(grid.element().getAttribute("aria-activedescendant") ?? "");
-  expect(active?.getAttribute("data-bruno-column-id")).toBe("COL_ID_SCORE");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(scoreCell.element().id);
 
   await userEvent.keyboard("{Escape}");
   await userEvent.click(screen.getByRole("gridcell", { name: "last", exact: true }));
@@ -281,9 +280,8 @@ test("reveals an off-screen editable destination while skipping ineligible cells
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_VIRTUAL" });
   grid.element().focus();
   await userEvent.keyboard("{F2}{Tab}");
-  const active = document.getElementById(
-    grid.element().getAttribute("aria-activedescendant") ?? "",
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "revealed", exact: true }).element().id,
   );
-  expect(active?.getAttribute("data-bruno-column-id")).toBe("COL_ID_DESTINATION");
   expect(grid.element().scrollLeft).toBeGreaterThan(0);
 });
