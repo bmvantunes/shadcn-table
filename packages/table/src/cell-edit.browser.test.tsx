@@ -60,6 +60,9 @@ async function renderEditableTable() {
         getRowVersion={(row) => row.revision}
         onSaveEdits={onSaveEdits}
       />
+      <details>
+        <summary role="button">After grid summary</summary>
+      </details>
       <button type="button">After table</button>
     </>,
   );
@@ -87,7 +90,7 @@ test("commits through one parse-validation gate and preserves invalid editor evi
   await expect.element(screen.getByRole("alert")).toBeVisible();
   expect(onSaveEdits).not.toHaveBeenCalled();
 
-  await userEvent.fill(editor, "11");
+  await userEvent.keyboard("{Backspace}1");
   await userEvent.keyboard("{Tab}");
   await expect.element(editor).toHaveFocus();
   await expect.element(screen.getByRole("alert")).toHaveTextContent("Score must be at most 10.");
@@ -173,6 +176,39 @@ test("uses only browser-produced composition text and respects prevented nested 
   await userEvent.keyboard("{Escape}");
 });
 
+test("preserves incomplete Number replace seeds until the native control can own them", async () => {
+  const { grid, screen } = await renderEditableTable();
+  await userEvent.keyboard("{ArrowRight}-");
+  let editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
+  await expect.element(editor).toHaveAttribute("placeholder", "-");
+  await userEvent.keyboard("5");
+  await expect.element(editor).toHaveValue(-5);
+  await userEvent.keyboard("{Escape}");
+
+  grid.element().focus();
+  await userEvent.keyboard(".");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(editor).toHaveAttribute("aria-valuetext", ".");
+  await userEvent.keyboard("5");
+  await expect.element(editor).toHaveValue(0.5);
+  await userEvent.keyboard("{Escape}");
+
+  grid.element().focus();
+  await userEvent.keyboard("1e");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+  await userEvent.keyboard("1");
+  await expect.element(editor).toHaveValue(10);
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "10", exact: true }))
+    .toBeInTheDocument();
+});
+
 test("gates outside pointer, sorting, and filtering before their actions", async () => {
   const { onSaveEdits, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowRight}{F2}");
@@ -195,7 +231,7 @@ test("gates outside pointer, sorting, and filtering before their actions", async
   await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
   await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).not.toBeInTheDocument();
 
-  await userEvent.fill(editor, "6");
+  await userEvent.keyboard("{Backspace}{Backspace}6");
   await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
   await expect.element(editor).not.toBeInTheDocument();
   await expect
@@ -230,7 +266,7 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
   await userEvent.keyboard("{Escape}");
   await userEvent.click(screen.getByRole("gridcell", { name: "last", exact: true }));
   await userEvent.keyboard("{F2}{Tab}");
-  await expect.element(screen.getByRole("button", { name: "After table" })).toHaveFocus();
+  await expect.element(screen.getByRole("button", { name: "After grid summary" })).toHaveFocus();
 });
 
 test("supports reverse commit movement and exits backward at the first eligible cell", async () => {
@@ -297,7 +333,7 @@ test("reveals an off-screen editable destination while skipping ineligible cells
   expect(grid.element().scrollLeft).toBeGreaterThan(0);
 });
 
-test("Enter traversal skips rows rejected by the column edit policy", async () => {
+test("ordinary Enter moves exactly one row even when that destination is not editable", async () => {
   type EligibilityRow = Readonly<{ readonly id: string; readonly score: number }>;
   const eligibilityRows: readonly EligibilityRow[] = [
     { id: "first", score: 1 },
@@ -336,11 +372,15 @@ test("Enter traversal skips rows rejected by the column edit policy", async () =
   grid.element().focus();
   await userEvent.keyboard("{F2}{Enter}");
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
-    screen.getByRole("gridcell", { name: "3", exact: true }).element().id,
+    screen.getByRole("gridcell", { name: "2", exact: true }).element().id,
   );
-  await userEvent.keyboard("{F2}{Shift>}{Enter}{/Shift}");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("spinbutton", { name: "Edit Score" }))
+    .not.toBeInTheDocument();
+  await userEvent.keyboard("{ArrowDown}{F2}{Shift>}{Enter}{/Shift}");
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
-    screen.getByRole("gridcell", { name: "1", exact: true }).element().id,
+    screen.getByRole("gridcell", { name: "2", exact: true }).element().id,
   );
 });
 

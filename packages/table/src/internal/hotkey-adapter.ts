@@ -21,7 +21,7 @@ type BrunoTableHotkeyBinding = Readonly<{
 }>;
 
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
-  Pick<KeyboardEvent, "isComposing" | "preventDefault">;
+  Pick<KeyboardEvent, "preventDefault">;
 
 export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
   "Escape",
@@ -428,7 +428,6 @@ function useBrunoTableHotkeys(
       if (event.isComposing) return;
       binding.onTrigger({
         defaultPrevented: event.defaultPrevented,
-        isComposing: event.isComposing,
         preventDefault: event.preventDefault.bind(event),
         target: event.target,
       });
@@ -500,7 +499,6 @@ export function useBrunoTableGridHotkeys(
       if (event.defaultPrevented) return;
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
       if (index < BRUNO_TABLE_ESCAPE_HOTKEYS.length) {
-        if (event.isComposing) return;
         const registration = documentEscapeRegistrationRef.current;
         const activeRegistration = activeDocumentEscapeRegistration(target.current?.ownerDocument);
         if (activeRegistration !== undefined) {
@@ -545,7 +543,7 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Escape",
         allowInTextInput: true,
         onTrigger: (event) => {
-          if (event.defaultPrevented || event.isComposing) return;
+          if (event.defaultPrevented) return;
           event.preventDefault();
           commandsRef.current.cancel();
         },
@@ -554,7 +552,6 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Enter",
         allowInTextInput: true,
         onTrigger: (event) => {
-          if (event.isComposing) return;
           if (commandsRef.current.commit("enter-forward")) event.preventDefault();
         },
       },
@@ -562,7 +559,6 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Shift+Enter",
         allowInTextInput: true,
         onTrigger: (event) => {
-          if (event.isComposing) return;
           if (commandsRef.current.commit("enter-backward")) event.preventDefault();
         },
       },
@@ -570,7 +566,6 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Tab",
         allowInTextInput: true,
         onTrigger: (event) => {
-          if (event.isComposing) return;
           if (commandsRef.current.commit("tab-forward")) event.preventDefault();
         },
       },
@@ -578,7 +573,6 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Shift+Tab",
         allowInTextInput: true,
         onTrigger: (event) => {
-          if (event.isComposing) return;
           if (commandsRef.current.commit("tab-backward")) event.preventDefault();
         },
       },

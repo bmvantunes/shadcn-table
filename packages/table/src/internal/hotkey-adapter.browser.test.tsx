@@ -241,7 +241,6 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(Object.getPrototypeOf(innerGesture)).toBe(Object.prototype);
     expect(Object.keys(innerGesture).sort()).toEqual([
       "defaultPrevented",
-      "isComposing",
       "preventDefault",
       "target",
     ]);

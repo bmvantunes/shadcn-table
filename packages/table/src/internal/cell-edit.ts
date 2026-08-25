@@ -19,6 +19,7 @@ type ActiveSession = Readonly<{
   readonly row: object;
   readonly before: unknown;
   readonly initialText: string;
+  readonly selectInitialText: boolean;
   readonly invalidMessage?: string;
 }>;
 
@@ -190,6 +191,7 @@ function prepareSession(
         event.mode === "replace"
           ? event.producedText
           : column.semantics.formatCanonicalText(before),
+      selectInitialText: event.mode === "current",
     });
   } catch {
     return undefined;
@@ -297,6 +299,7 @@ export type BrunoTableCellEditSessionSnapshot =
       readonly rowId: string;
       readonly columnId: string;
       readonly initialText: string;
+      readonly selectInitialText: boolean;
       readonly invalidMessage?: string;
     }>;
 
@@ -501,6 +504,7 @@ export class BrunoTableCellEditRuntime {
             rowId: session.rowId,
             columnId: session.column.columnId,
             initialText: session.initialText,
+            selectInitialText: session.selectInitialText,
             ...(session.invalidMessage === undefined
               ? {}
               : { invalidMessage: session.invalidMessage }),
@@ -577,6 +581,7 @@ function sameSessionSnapshot(
     previous.rowId === next.rowId &&
     previous.columnId === next.columnId &&
     previous.initialText === next.initialText &&
+    previous.selectInitialText === next.selectInitialText &&
     previous.invalidMessage === next.invalidMessage
   );
 }

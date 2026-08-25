@@ -2682,20 +2682,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const active = navigation.getSnapshot();
     if (active?.region !== "body") return false;
     if (movement === "enter-forward" || movement === "enter-backward") {
-      if (cellEdit === undefined) return false;
-      const direction = movement === "enter-forward" ? 1 : -1;
-      for (
-        let rowIndex = active.rowIndex + direction;
-        rowIndex >= 0 && rowIndex < rowSpace.totalRows;
-        rowIndex += direction
-      ) {
-        const rowId = rowSpace.getRowId(rowIndex);
-        if (rowId === undefined || !cellEdit.isEditable(rowId, active.columnId)) continue;
-        navigation.activateBody(rowIndex, rowId, active.columnId);
-        revealCell(rowIndex, active.columnId, "body", rowId);
-        return true;
-      }
-      return false;
+      const rowIndex = active.rowIndex + (movement === "enter-forward" ? 1 : -1);
+      const rowId = rowSpace.getRowId(rowIndex);
+      if (rowId === undefined) return false;
+      navigation.activateBody(rowIndex, rowId, active.columnId);
+      revealCell(rowIndex, active.columnId, "body", rowId);
+      return true;
     }
     if (cellEdit === undefined) return false;
     const direction = movement === "tab-forward" ? 1 : -1;
@@ -2762,10 +2754,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useEffect(() => {
     const grid = gridElement.current;
     if (grid === null || cellEdit === undefined) return;
+    const ownsCaptureEvent = (target: EventTarget | null) =>
+      target === grid || target === producedTextCapture.current;
+    const handleCompositionStart = (event: CompositionEvent) => {
+      if (!ownsCaptureEvent(event.target)) return;
+      armProducedTextCapture(grid, producedTextCapture.current);
+    };
     const handleBeforeInput = (event: InputEvent) => {
-      if (event.target !== grid && event.target !== producedTextCapture.current) return;
+      if (!ownsCaptureEvent(event.target)) return;
       if (event.isComposing || event.inputType === "insertCompositionText") return;
-      if (typeof event.data === "string" && event.inputType.startsWith("insert")) {
+      if (typeof event.data === "string" && event.inputType === "insertText") {
         startReplaceFromProducedTextRef.current(event.data);
         event.preventDefault();
         clearProducedTextCapture(grid, producedTextCapture.current);
@@ -2775,14 +2773,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       clearProducedTextCapture(grid, producedTextCapture.current);
     };
     const handleCompositionEnd = (event: CompositionEvent) => {
-      if (event.target !== grid && event.target !== producedTextCapture.current) return;
+      if (!ownsCaptureEvent(event.target)) return;
       startReplaceFromProducedTextRef.current(event.data);
       event.preventDefault();
       clearProducedTextCapture(grid, producedTextCapture.current);
     };
+    grid.addEventListener("compositionstart", handleCompositionStart);
     grid.addEventListener("beforeinput", handleBeforeInput);
     grid.addEventListener("compositionend", handleCompositionEnd);
     return () => {
+      grid.removeEventListener("compositionstart", handleCompositionStart);
       grid.removeEventListener("beforeinput", handleBeforeInput);
       grid.removeEventListener("compositionend", handleCompositionEnd);
     };
@@ -2917,6 +2917,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           }
         }}
         onPointerDown={runCellRangePointerDown}
+        onPointerUp={(event) => {
+          if (event.currentTarget.ownerDocument.activeElement === event.currentTarget) {
+            armProducedTextCapture(event.currentTarget, producedTextCapture.current);
+          }
+        }}
         style={{
           maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
           overflow: "auto",

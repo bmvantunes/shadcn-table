@@ -1,4 +1,12 @@
-import { memo, useCallback, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import {
+  memo,
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
@@ -28,6 +36,62 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     );
     const invalidMessage = session.kind === "editing" ? session.invalidMessage : undefined;
     const errorId = invalidMessage === undefined ? undefined : generatedErrorId;
+    const selectInitialTextOnMount = useRef(
+      session.kind === "editing" && session.selectInitialText,
+    );
+    const initialRawNumberSeed =
+      session.kind === "editing" && numberSeedRequiresRawBuffer(column, session.initialText)
+        ? session.initialText
+        : undefined;
+    const rawNumberSeed = useRef(initialRawNumberSeed);
+    const [rawNumberDisplay, setRawNumberDisplay] = useState(initialRawNumberSeed);
+    const reconcileRawNumberSeed = useCallback(
+      (event: InputEvent, input: HTMLInputElement) => {
+        const seed = rawNumberSeed.current;
+        if (!event.inputType.startsWith("insert") && !event.inputType.startsWith("delete")) {
+          return;
+        }
+        const current = seed ?? input.value;
+        const selectionStart =
+          seed === undefined ? (input.selectionStart ?? current.length) : current.length;
+        const selectionEnd =
+          seed === undefined ? (input.selectionEnd ?? selectionStart) : current.length;
+        const candidate = (
+          event.inputType.startsWith("delete")
+            ? `${current.slice(0, Math.max(0, selectionStart - 1))}${current.slice(selectionEnd)}`
+            : typeof event.data === "string"
+              ? `${current.slice(0, selectionStart)}${event.data}${current.slice(selectionEnd)}`
+              : current
+        ).slice(0, BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1);
+        if (candidate.length === 0) {
+          event.preventDefault();
+          rawNumberSeed.current = undefined;
+          setRawNumberDisplay(undefined);
+          input.value = "";
+          input.removeAttribute("aria-valuetext");
+          input.removeAttribute("placeholder");
+          return;
+        }
+        if (column.semantics.parseCanonicalText(candidate)._tag === "Success") {
+          if (seed !== undefined) {
+            event.preventDefault();
+            input.value = candidate;
+            rawNumberSeed.current = undefined;
+            setRawNumberDisplay(undefined);
+            input.removeAttribute("aria-valuetext");
+            input.removeAttribute("placeholder");
+          }
+          return;
+        }
+        event.preventDefault();
+        rawNumberSeed.current = candidate;
+        setRawNumberDisplay(candidate);
+        input.value = "";
+        input.setAttribute("aria-valuetext", candidate);
+        input.setAttribute("placeholder", candidate);
+      },
+      [column.semantics],
+    );
     const cancel = useCallback(() => {
       const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
       runtime.cancel();
@@ -43,9 +107,10 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           return true;
         }
         if (grid !== null) {
-          focusOutsideGrid(grid, movement === "tab-forward" ? 1 : -1);
+          grid.focus({ preventScroll: true });
+          yieldGridTabStopForNativeTraversal(grid);
         }
-        return true;
+        return false;
       },
       [runtime],
     );
@@ -58,18 +123,51 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           rawText:
             element instanceof HTMLInputElement && element.type === "checkbox"
               ? String(element.checked)
-              : Reflect.get(element, "value"),
+              : element instanceof HTMLInputElement &&
+                  element.type === "number" &&
+                  rawNumberSeed.current !== undefined &&
+                  element.value.length === 0
+                ? rawNumberSeed.current
+                : Reflect.get(element, "value"),
           nativeInvalid:
             element instanceof HTMLInputElement &&
             element.type === "number" &&
-            element.validity.badInput,
+            ((rawNumberSeed.current !== undefined && element.value.length === 0) ||
+              (element.validity.badInput && element.value.length === 0)),
         }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
       element.focus({ preventScroll: true });
-      if (element instanceof HTMLInputElement && element.type !== "checkbox") element.select();
-      return unregister;
-    }, [runtime]);
+      if (
+        selectInitialTextOnMount.current &&
+        element instanceof HTMLInputElement &&
+        element.type !== "checkbox"
+      ) {
+        element.select();
+      }
+      const handleBeforeInput = (event: InputEvent) => {
+        if (element instanceof HTMLInputElement && element.type === "number") {
+          reconcileRawNumberSeed(event, element);
+        }
+      };
+      const handleInput = () => {
+        if (
+          element instanceof HTMLInputElement &&
+          element.type === "number" &&
+          (element.value.length > 0 || !element.validity.badInput)
+        ) {
+          rawNumberSeed.current = undefined;
+          setRawNumberDisplay(undefined);
+        }
+      };
+      element.addEventListener("beforeinput", handleBeforeInput);
+      element.addEventListener("input", handleInput);
+      return () => {
+        element.removeEventListener("beforeinput", handleBeforeInput);
+        element.removeEventListener("input", handleInput);
+        unregister();
+      };
+    }, [reconcileRawNumberSeed, runtime]);
     useLayoutEffect(() => {
       const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
       const document = editor?.ownerDocument;
@@ -132,7 +230,8 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultValue={session.initialText}
+            aria-valuetext={rawNumberDisplay}
+            defaultValue={initialRawNumberSeed === undefined ? session.initialText : ""}
             maxLength={BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH}
             inputMode={
               column.semantics.editorFamily === "number" ||
@@ -141,6 +240,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
                 ? "decimal"
                 : undefined
             }
+            placeholder={rawNumberDisplay}
             step={column.semantics.editorFamily === "number" ? "any" : undefined}
             style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
             type={column.semantics.editorFamily === "number" ? "number" : "text"}
@@ -169,22 +269,18 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     );
   });
 
-function focusOutsideGrid(grid: HTMLElement, direction: -1 | 1): void {
-  const candidates = [
-    ...grid.ownerDocument.querySelectorAll<HTMLElement>(
-      'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])',
-    ),
-  ].filter(
-    (candidate) =>
-      !grid.contains(candidate) &&
-      candidate.tabIndex >= 0 &&
-      !candidate.matches(":disabled,[hidden],[aria-hidden='true']") &&
-      candidate.getClientRects().length > 0,
-  );
-  const documentPosition =
-    direction > 0 ? Node.DOCUMENT_POSITION_FOLLOWING : Node.DOCUMENT_POSITION_PRECEDING;
-  const ordered = direction > 0 ? candidates : candidates.toReversed();
-  ordered
-    .find((candidate) => (grid.compareDocumentPosition(candidate) & documentPosition) !== 0)
-    ?.focus();
+function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
+  grid.tabIndex = -1;
+  setTimeout(() => {
+    if (grid.isConnected) grid.tabIndex = 0;
+  }, 0);
+}
+
+function numberSeedRequiresRawBuffer(column: CompiledColumn, initialText: string): boolean {
+  if (column.semantics.editorFamily !== "number" || initialText.length === 0) return false;
+  try {
+    return column.semantics.parseCanonicalText(initialText)._tag === "Failure";
+  } catch {
+    return true;
+  }
 }
