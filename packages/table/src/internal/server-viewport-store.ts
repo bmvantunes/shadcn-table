@@ -130,6 +130,7 @@ export class BrunoTableServerViewportStore<TRow> {
       }
     }
     beforePublish?.(requiredWindow);
+    this.admissionRevision += 1;
     this.requiredWindow = requiredWindow;
     this.indexToRowId = nextIndexToRowId;
     this.rowIndexById = nextRowIndexById;
@@ -187,6 +188,7 @@ export class BrunoTableServerViewportStore<TRow> {
       nextRowsById = rowsById;
     }
     beforePublish?.(totalRows);
+    this.admissionRevision += 1;
     this.authoritativeTotalRows = true;
     this.indexToRowId = nextIndexToRowId;
     this.rowIndexById = nextRowIndexById;
@@ -234,7 +236,7 @@ export class BrunoTableServerViewportStore<TRow> {
   }
 
   public isSupersededRowDataPlan(plan: BrunoTableServerViewportAdmissionPlan<TRow>): boolean {
-    return plan.admissionRevision !== this.admissionRevision;
+    return !this.isCurrentAdmissionPlan(plan);
   }
 
   public setRowDataSnapshot(
@@ -257,12 +259,8 @@ export class BrunoTableServerViewportStore<TRow> {
     ) => void,
   ): boolean {
     if (!this.admissionPlans.delete(plan)) return false;
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
     if (
-      plan.generation !== this.generation ||
-      plan.admissionRevision !== this.admissionRevision ||
-      plan.requiredWindow !== this.requiredWindow ||
-      plan.authoritativeTotalRows !== this.authoritativeTotalRows ||
-      plan.totalRows !== this.snapshot.rowSpace.totalRows ||
       delivery.length !== plan.delivery.length ||
       delivery.some(
         ({ index, rowId }, position) =>
@@ -312,7 +310,7 @@ export class BrunoTableServerViewportStore<TRow> {
       if (delivered !== undefined && row !== previous) affectedRowIds.add(rowId);
       if (row !== undefined) rowsById.set(rowId, row);
     }
-    if (plan.admissionRevision !== this.admissionRevision) return false;
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
     const totalRows = this.authoritativeTotalRows
       ? this.snapshot.rowSpace.totalRows
       : admitted.reduce(
@@ -320,6 +318,7 @@ export class BrunoTableServerViewportStore<TRow> {
           this.snapshot.rowSpace.totalRows,
         );
     beforePublish?.(admitted);
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
     this.indexToRowId = indexToRowId;
     this.rowIndexById = rowIndexById;
     this.rowsById = rowsById;
@@ -336,6 +335,16 @@ export class BrunoTableServerViewportStore<TRow> {
       affectedRowIds,
     );
     return true;
+  }
+
+  private isCurrentAdmissionPlan(plan: BrunoTableServerViewportAdmissionPlan<TRow>): boolean {
+    return (
+      plan.generation === this.generation &&
+      plan.admissionRevision === this.admissionRevision &&
+      plan.requiredWindow === this.requiredWindow &&
+      plan.authoritativeTotalRows === this.authoritativeTotalRows &&
+      plan.totalRows === this.snapshot.rowSpace.totalRows
+    );
   }
 
   private publish(

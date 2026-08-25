@@ -172,6 +172,52 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.findRowIndex("row")).toBe(0);
   });
 
+  it.each(["count", "window"] as const)(
+    "does not let an older admission overwrite a reentrant %s mutation",
+    (mutation) => {
+      const row0 = { symbol: "ROW-0", price: 1 };
+      const row1 = { symbol: "ROW-1", price: 2 };
+      const outer = { symbol: "OUTER", price: 3 };
+      let generation = 0;
+      let nested = false;
+      let store: BrunoTableServerViewportStore<Row>;
+      store = new BrunoTableServerViewportStore<Row>(
+        () => undefined,
+        () => {
+          if (!nested) {
+            nested = true;
+            if (mutation === "count") {
+              expect(store.setRowCount(generation, 1, true)).toBe(true);
+            } else {
+              expect(store.setRequiredRange(generation, { firstRow: 0, lastRow: 0 })).toBe(true);
+            }
+          }
+          return false;
+        },
+      );
+      generation = store.beginGeneration({ firstRow: 0, lastRow: 1 });
+      store.setRowCount(generation, 2, true);
+      store.setRowData(generation, { 0: row0, 1: row1 }, { 0: "row-0", 1: "row-1" });
+      const notifications = vi.fn();
+      store.subscribe(notifications);
+
+      expect(store.setRowData(generation, { 0: outer }, { 0: "row-0" })).toBe(false);
+      expect(notifications).toHaveBeenCalledOnce();
+      expect(store.getSnapshot().rowSpace.getRow("row-0")).toBe(row0);
+      expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+
+      if (mutation === "count") {
+        expect(store.getSnapshot().rowSpace.totalRows).toBe(1);
+        store.setRowCount(generation, 2, true);
+      } else {
+        expect(store.getSnapshot().requiredWindow).toEqual({ firstRow: 0, lastRow: 0 });
+        store.setRequiredRange(generation, { firstRow: 0, lastRow: 1 });
+      }
+      expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+      expect(store.findRowIndex("row-1")).toBeUndefined();
+    },
+  );
+
   it("does not let setRowCount retention hints bridge semantic generations", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const first = store.beginGeneration({ firstRow: 0, lastRow: 9 });

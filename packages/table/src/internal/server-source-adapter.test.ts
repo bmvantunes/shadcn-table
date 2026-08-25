@@ -860,6 +860,71 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     });
   });
 
+  it("replaces one generation when grouped-sort Column Identity changes over one field", () => {
+    const sameFieldColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK_PRIMARY",
+        field: "desk",
+        headerName: "Primary desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_DESK_SECONDARY",
+        field: "desk",
+        headerName: "Secondary desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      sameFieldColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+      ["desk"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk"],
+      totalRows: 2,
+      version: 1,
+      status: "ready",
+    });
+    const grouped = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK_PRIMARY", "COL_ID_DESK_SECONDARY"],
+      navigationMode: "reset" as const,
+    };
+    adapter.replace(transport.viewport, {
+      ...grouped,
+      groupOrderBy: [{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }],
+    });
+    const firstRequest = transport.getRequest()!;
+    const firstQuery = firstRequest.query;
+    const rowsAlias = Object.entries(
+      (firstQuery as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+    ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+    firstRequest.sink.setRowCount(1, true);
+    firstRequest.sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "rates" });
+
+    adapter.replace(transport.viewport, {
+      ...grouped,
+      generation: 1,
+      groupOrderBy: [{ columnId: "COL_ID_DESK_SECONDARY", direction: "asc" }],
+    });
+
+    expect(transport.getRequest()!.query).toEqual(firstQuery);
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("reset");
+    firstRequest.sink.setRowData({ 0: { desk: "LATE", [rowsAlias]: 1n } }, { 0: "late" });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+  });
+
   it("snapshots one source field once for duplicate Group Column Identities", () => {
     const sameFieldColumns = compileColumns([
       {
@@ -1011,6 +1076,106 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getPublication().rowSpace?.getCellValue("group", "COL_ID_DESK")).toBe(
       "NEWEST-VALID",
     );
+  });
+
+  it("discards grouped admission superseded by a reentrant authoritative count", () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    let reenterCount = false;
+    let sink:
+      | Readonly<{
+          readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+        }>
+      | undefined;
+    const tokenType = {
+      codecId: "test/reentrant-count-token",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) => {
+        if (reenterCount) {
+          reenterCount = false;
+          sink?.setRowCount(1, true);
+        }
+        return left.id === right.id;
+      },
+      compare: (left: Token, right: Token) => left.id - right.id,
+      formatCanonicalText: (value: Token) => String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay: (value: Token) => value.label,
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    };
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_KEY",
+        field: "key",
+        headerName: "Key",
+        valueType: tokenType,
+        groupBy: true,
+      },
+    ] as never);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_KEY", direction: "asc" }],
+      ["key"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["key"],
+      totalRows: 2,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_KEY", direction: "asc" }],
+      groupBy: ["COL_ID_KEY"],
+      groupOrderBy: [{ columnId: "COL_ID_KEY", direction: "asc" }],
+    });
+    const request = transport.getRequest()!;
+    sink = request.sink;
+    const rowsAlias = Object.entries(
+      (request.query as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+    ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+    request.sink.setRowCount(2, true);
+    request.sink.setRowData(
+      {
+        0: { key: { id: 1, label: "ONE" }, [rowsAlias]: 1n },
+        1: { key: { id: 2, label: "TWO" }, [rowsAlias]: 1n },
+      },
+      { 0: "one", 1: "two" },
+    );
+
+    reenterCount = true;
+    expect(() =>
+      request.sink.setRowData(
+        { 0: { key: { id: 99, label: "OUTER" }, [rowsAlias]: 1n } },
+        { 0: "one" },
+      ),
+    ).not.toThrow();
+
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(adapter.getPublication().rowSpace?.totalRows).toBe(1);
+    expect(
+      (adapter.getPublication().rowSpace?.getCellValue("one", "COL_ID_KEY") as Token | undefined)
+        ?.label,
+    ).toBe("ONE");
+    request.sink.setRowCount(2, true);
+    expect(adapter.getPublication().rowSpace?.getRowId(1)).toBeUndefined();
   });
 
   it("retains one grouped generation across definition-only aggregate reorder", () => {
@@ -2988,6 +3153,73 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       (adapter.getPublication().rowSpace?.getCellValue("group", "COL_ID_KEY") as Token | undefined)
         ?.label,
     ).toBe("LATEST");
+  });
+
+  it("keeps built-in Number format changes presentation-only for grouped values", () => {
+    const makeColumns = (minimumFractionDigits: number) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_KEY",
+          field: "key",
+          headerName: "Key",
+          valueType: "number",
+          format: { minimumFractionDigits },
+          groupBy: true,
+        },
+        {
+          columnId: "COL_ID_AGGREGATE",
+          field: "aggregate",
+          headerName: "Aggregate",
+          valueType: "number",
+          format: { minimumFractionDigits },
+          aggFunc: "min",
+        },
+      ] as const);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      makeColumns(0),
+      undefined,
+      [],
+      [{ columnId: "COL_ID_KEY", direction: "asc" }],
+      ["key", "aggregate"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["key", "aggregate"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_KEY", direction: "asc" as const }],
+      groupBy: ["COL_ID_KEY"],
+      groupOrderBy: [{ columnId: "COL_ID_KEY", direction: "asc" as const }],
+      navigationMode: "projection-reset" as const,
+    };
+    adapter.replace(transport.viewport, groupedQuery);
+    const request = transport.getRequest()!;
+    const aggregates = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const aggregateAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "min",
+    )![0];
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData(
+      { 0: { key: 1.5, [rowsAlias]: 1n, [aggregateAlias]: 2.5 } },
+      { 0: "group" },
+    );
+    const retained = adapter.getPublication().rowSpace?.getRow("group");
+
+    adapter.reconcileColumns(makeColumns(2), undefined);
+    adapter.replace(transport.viewport, { ...groupedQuery, generation: 1 });
+
+    expect(transport.replace).toHaveBeenCalledOnce();
+    expect(transport.release).not.toHaveBeenCalled();
+    expect(adapter.getPublication().rowSpace?.getRow("group")).toBe(retained);
   });
 
   it("requires own exact non-negative countDistinct and own positive Rows results", () => {

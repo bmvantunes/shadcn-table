@@ -100,6 +100,7 @@ type ActiveGeneration = Readonly<{
   }>;
   readonly grouped?: BrunoTableCompiledServerGroupedProjection;
   readonly groupedAdmissionIdentity?: BrunoTableServerGroupedAdmissionIdentity;
+  readonly groupedSortIdentity?: BrunoTableServerGroupedSortIdentity;
   readonly rowsWidth?: number;
 }>;
 
@@ -117,6 +118,11 @@ type BrunoTableServerGroupedAdmissionIdentity = readonly Readonly<{
   readonly decoderAuthority: unknown;
   readonly retentionAuthority: CompiledColumn["semantics"]["groupedRetentionAuthority"] | "bigint";
   readonly presentationObservesValue: boolean;
+}>[];
+
+type BrunoTableServerGroupedSortIdentity = readonly Readonly<{
+  readonly columnId: string;
+  readonly direction: "asc" | "desc";
 }>[];
 
 export type BrunoTableServerQueryInputs = Readonly<{
@@ -449,6 +455,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.columnsById,
       this.groupRowsColumn,
     );
+    const groupedSortIdentity = snapshotGroupedSortIdentity(queryPlan.grouped, query.groupOrderBy);
     this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     const transport = requireViewportTransport<TRow>(viewport);
     let semanticKey: ActiveGeneration["semanticKey"];
@@ -465,19 +472,25 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.active?.groupedAdmissionIdentity,
       groupedAdmissionIdentity,
     );
+    const groupedSortIdentityCompatible = sameGroupedSortIdentity(
+      this.active?.groupedSortIdentity,
+      groupedSortIdentity,
+    );
     const admissionAuthorityChanged =
       semanticKeyUnchanged &&
+      groupedSortIdentityCompatible &&
       !admissionIdentityCompatible &&
       sameGroupedAdmissionProjection(
         this.active?.groupedAdmissionIdentity,
         groupedAdmissionIdentity,
       );
-    if (semanticKeyUnchanged && admissionIdentityCompatible) {
+    if (semanticKeyUnchanged && admissionIdentityCompatible && groupedSortIdentityCompatible) {
       const active = this.active;
       if (active !== undefined) {
         const {
           grouped: _previousGrouped,
           groupedAdmissionIdentity: _previousAdmissionIdentity,
+          groupedSortIdentity: _previousGroupedSortIdentity,
           rowsWidth: _previousRowsWidth,
           ...activeBase
         } = active;
@@ -486,6 +499,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
           inputs: nextInputs,
           ...(queryPlan.grouped === undefined ? {} : { grouped: queryPlan.grouped }),
           ...(groupedAdmissionIdentity === undefined ? {} : { groupedAdmissionIdentity }),
+          ...(groupedSortIdentity === undefined ? {} : { groupedSortIdentity }),
           ...(query.rowsWidth === undefined ? {} : { rowsWidth: query.rowsWidth }),
         });
         this.publication = this.createPublication();
@@ -622,6 +636,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       semanticKey,
       ...(queryPlan.grouped === undefined ? {} : { grouped: queryPlan.grouped }),
       ...(groupedAdmissionIdentity === undefined ? {} : { groupedAdmissionIdentity }),
+      ...(groupedSortIdentity === undefined ? {} : { groupedSortIdentity }),
       ...(query.rowsWidth === undefined ? {} : { rowsWidth: query.rowsWidth }),
     });
     this.lastReplacedViewport = viewport;
@@ -1575,8 +1590,36 @@ function sameGroupedRetentionAuthority(
       next !== "bigint" &&
       Object.is(previous.equivalent, next.equivalent) &&
       Object.is(previous.formatCanonicalText, next.formatCanonicalText) &&
-      Object.is(previous.formatDisplay, next.formatDisplay) &&
-      previous.numberFormat === next.numberFormat)
+      Object.is(previous.formatDisplay, next.formatDisplay))
+  );
+}
+
+function snapshotGroupedSortIdentity(
+  grouped: BrunoTableCompiledServerGroupedProjection | undefined,
+  groupOrderBy: BrunoTableServerRuntimeQuery["groupOrderBy"],
+): BrunoTableServerGroupedSortIdentity | undefined {
+  return grouped === undefined
+    ? undefined
+    : Object.freeze(
+        (groupOrderBy ?? []).map(({ columnId, direction }) =>
+          Object.freeze({ columnId, direction }),
+        ),
+      );
+}
+
+function sameGroupedSortIdentity(
+  previous: BrunoTableServerGroupedSortIdentity | undefined,
+  next: BrunoTableServerGroupedSortIdentity | undefined,
+): boolean {
+  return (
+    previous === next ||
+    (previous !== undefined &&
+      next !== undefined &&
+      previous.length === next.length &&
+      previous.every(
+        (entry, index) =>
+          entry.columnId === next[index]?.columnId && entry.direction === next[index]?.direction,
+      ))
   );
 }
 

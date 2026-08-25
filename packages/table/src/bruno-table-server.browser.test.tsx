@@ -891,6 +891,62 @@ describe("BrunoTableServer", () => {
     }
   });
 
+  test("reformats retained grouped Number values without replacing the Server generation", async () => {
+    const makeColumns = (minimumFractionDigits: number) =>
+      [
+        {
+          columnId: "COL_ID_DESK",
+          field: "desk",
+          headerName: "Desk",
+          valueType: "text",
+          groupBy: true,
+        },
+        {
+          columnId: "COL_ID_PRICE",
+          field: "price",
+          headerName: "Minimum price",
+          valueType: "number",
+          format: { minimumFractionDigits },
+          aggFunc: "min",
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
+    const transport = makeViewport(1, false);
+    const renderTable = (minimumFractionDigits: number) => (
+      <BrunoTableServer
+        {...serverProps(transport.viewport, "ready")}
+        tableId="TABLE_ID_SERVER_GROUPED_NUMBER_FORMAT"
+        columns={makeColumns(minimumFractionDigits)}
+        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+      />
+    );
+    const screen = await render(renderTable(0));
+    const groupRegion = screen.getByRole("region", { name: "Group By" });
+    await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+    await userEvent.click(screen.getByRole("option", { name: "Desk", exact: true }));
+    await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+    const request = transport.requests[1]!;
+    const aggregates = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const priceAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "min",
+    )![0];
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 1n, [priceAlias]: 12.5 } },
+      { 0: "rates" },
+    );
+    await expect.element(screen.getByRole("gridcell", { name: "12.5" })).toBeVisible();
+
+    await screen.rerender(renderTable(2));
+
+    await expect.element(screen.getByRole("gridcell", { name: "12.50" })).toBeVisible();
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.releases).toHaveBeenCalledOnce();
+  });
+
   test("performs one generation for Server multi-group add, reorder, remove, and raw transitions", async () => {
     const transport = makeViewport(1, false);
     const screen = await render(
@@ -1006,6 +1062,108 @@ describe("BrunoTableServer", () => {
         screen.getByRole("gridcell", { name: "Secondary Rates" }).element().id,
       ),
     );
+  });
+
+  test("replaces once and resets Active Cell for a same-field grouped-sort identity change", async () => {
+    const sameFieldColumns = [
+      {
+        columnId: "COL_ID_DESK_PRIMARY",
+        field: "desk",
+        headerName: "Primary desk",
+        valueType: "text",
+        groupBy: true,
+        groupKeyValueFormatter: ({ value }: { readonly value: string }) => `Primary ${value}`,
+      },
+      {
+        columnId: "COL_ID_DESK_SECONDARY",
+        field: "desk",
+        headerName: "Secondary desk",
+        valueType: "text",
+        groupBy: true,
+        groupKeyValueFormatter: ({ value }: { readonly value: string }) => `Secondary ${value}`,
+      },
+    ] as const satisfies BrunoTableColumns<Row>;
+    const tableId = "TABLE_ID_SERVER_SAME_FIELD_GROUP_SORT";
+    const transport = makeViewport(2, false);
+    let runtime: BrunoTableGridRuntime<Row> | undefined;
+    const removeLifetime = installBrunoTableToolbarLifetimeListener((event) => {
+      if (
+        event.tableId === tableId &&
+        event.kind === "runtime-create" &&
+        event.identity instanceof BrunoTableGridRuntime
+      ) {
+        runtime = event.identity;
+      }
+    });
+    try {
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready")}
+          tableId={tableId}
+          columns={sameFieldColumns}
+          initialOrderBy={[{ columnId: "COL_ID_DESK_PRIMARY", direction: "asc" }]}
+        />,
+      );
+      const groupRegion = screen.getByRole("region", { name: "Group By" });
+      const addGroup = groupRegion.getByRole("combobox", { name: "Add Group" });
+      await userEvent.click(addGroup);
+      await userEvent.click(screen.getByRole("option", { name: "Primary desk", exact: true }));
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+      await userEvent.click(addGroup);
+      await userEvent.click(screen.getByRole("option", { name: "Secondary desk", exact: true }));
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
+      const request = transport.requests[2]!;
+      const rowsAlias = Object.entries(
+        (request.query as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+      ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+      request.sink.setRowCount(2, true);
+      request.sink.setRowData(
+        {
+          0: { desk: "Credit", [rowsAlias]: 1n },
+          1: { desk: "Rates", [rowsAlias]: 1n },
+        },
+        { 0: "credit", 1: "rates" },
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+      grid.element().focus();
+      await userEvent.keyboard("{ArrowDown}{ArrowRight}");
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "Secondary Rates" }).element().id,
+        ),
+      );
+      const sourceQueryBeforeSort = request.query;
+
+      expect(runtime).toBeDefined();
+      expect(
+        runtime?.getView().dispatchGridCommand({
+          type: "column.sort.toggle",
+          columnId: "COL_ID_DESK_SECONDARY",
+          multi: false,
+        }),
+      ).toBe(true);
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(4));
+      expect(transport.requests[3]!.query).toEqual(sourceQueryBeforeSort);
+      expect(transport.releases).toHaveBeenCalledTimes(3);
+      transport.requests[3]!.sink.setRowCount(2, true);
+      transport.requests[3]!.sink.setRowData(
+        {
+          0: { desk: "Credit", [rowsAlias]: 1n },
+          1: { desk: "Rates", [rowsAlias]: 1n },
+        },
+        { 0: "credit", 1: "rates" },
+      );
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "Primary Credit" }).element().id,
+        ),
+      );
+      expect(runtime?.getView().getQuerySnapshot().groupOrderBy).toEqual([
+        { columnId: "COL_ID_DESK_SECONDARY", direction: "asc" },
+      ]);
+    } finally {
+      removeLifetime();
+    }
   });
 
   test("preserves grouped layout and reconciles same-generation authoritative identities", async () => {

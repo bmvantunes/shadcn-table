@@ -63,7 +63,6 @@ export type CompiledColumnValueSemantics = {
     readonly equivalent: unknown;
     readonly formatCanonicalText: unknown;
     readonly formatDisplay: unknown;
-    readonly numberFormat: string | undefined;
   }>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -171,7 +170,6 @@ export function compileColumnValueSemantics(
   }
 
   let formatDisplay = (value: unknown) => descriptor.formatDisplay(value);
-  let numberFormatAuthority: string | undefined;
   if (format !== undefined) {
     if (!isRecord(format)) {
       throw new ValueSemanticsConfigurationError(
@@ -186,7 +184,6 @@ export function compileColumnValueSemantics(
       }
     }
     const formatSnapshot = Object.freeze({ ...format }) as BrunoTableNumberFormat;
-    numberFormatAuthority = snapshotNumberFormatAuthority(formatSnapshot);
     let formatter: Intl.NumberFormat;
     try {
       formatter = new Intl.NumberFormat(BRUNO_TABLE_NUMBER_DISPLAY_LOCALE, formatSnapshot);
@@ -220,7 +217,6 @@ export function compileColumnValueSemantics(
       formatCanonicalText:
         descriptor.formatCanonicalTextAuthority ?? descriptor.formatCanonicalText,
       formatDisplay: descriptor.formatDisplayAuthority ?? descriptor.formatDisplay,
-      numberFormat: numberFormatAuthority,
     }),
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
@@ -335,17 +331,6 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
-}
-
-function snapshotNumberFormatAuthority(format: BrunoTableNumberFormat): string {
-  return Object.keys(format)
-    .filter((key) => Reflect.get(format, key) !== undefined)
-    .sort()
-    .map((key) => {
-      const value = Reflect.get(format, key);
-      return `${key}:${typeof value}:${String(value)}`;
-    })
-    .join("|");
 }
 
 function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
