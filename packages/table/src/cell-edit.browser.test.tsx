@@ -76,15 +76,15 @@ afterEach(async () => {
 test("commits through one parse-validation gate and preserves invalid editor evidence", async () => {
   const { grid, onSaveEdits, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowRight}{Enter}");
-  const editor = screen.getByRole("textbox", { name: "Edit Score" });
-  await expect.element(editor).toHaveValue("4");
-  await userEvent.fill(editor, "hello");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(editor).toHaveValue(4);
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e");
   await userEvent.keyboard("{Enter}");
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveAttribute("aria-invalid", "true");
-  await expect
-    .element(screen.getByRole("alert"))
-    .toHaveTextContent("Expected a finite decimal number.");
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Enter a valid number.");
+  await expect.element(screen.getByRole("alert")).toBeVisible();
   expect(onSaveEdits).not.toHaveBeenCalled();
 
   await userEvent.fill(editor, "11");
@@ -116,14 +116,7 @@ test("starts from exact current values, replaces from produced text, and cancels
     .toBeInTheDocument();
   expect(onSaveEdits).not.toHaveBeenCalled();
 
-  grid.element().dispatchEvent(
-    new InputEvent("beforeinput", {
-      bubbles: true,
-      cancelable: true,
-      data: "ß",
-      inputType: "insertText",
-    }),
-  );
+  await userEvent.keyboard("ß");
   editor = screen.getByRole("textbox", { name: "Edit Name" });
   await expect.element(editor).toHaveValue("ß");
   editor.element().dispatchEvent(
@@ -137,8 +130,7 @@ test("starts from exact current values, replaces from produced text, and cancels
   await expect.element(editor).toBeInTheDocument();
   await userEvent.keyboard("{Escape}");
 
-  grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }));
-  grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Backspace" }));
+  await userEvent.keyboard("{Delete}{Backspace}");
   grid.element().dispatchEvent(new ClipboardEvent("cut", { bubbles: true }));
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();
   expect(onSaveEdits).not.toHaveBeenCalled();
@@ -152,6 +144,14 @@ test("uses only browser-produced composition text and respects prevented nested 
       new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, altKey: true, key: "q" }),
     );
   grid.element().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Dead" }));
+  grid.element().dispatchEvent(
+    new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      data: "e",
+      inputType: "insertCompositionText",
+    }),
+  );
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();
   grid
     .element()
@@ -176,8 +176,9 @@ test("uses only browser-produced composition text and respects prevented nested 
 test("gates outside pointer, sorting, and filtering before their actions", async () => {
   const { onSaveEdits, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowRight}{F2}");
-  const editor = screen.getByRole("textbox", { name: "Edit Score" });
-  await userEvent.fill(editor, "invalid");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e");
   const outsideClick = vi.fn();
   screen
     .getByRole("button", { name: "After table" })
@@ -188,11 +189,21 @@ test("gates outside pointer, sorting, and filtering before their actions", async
   await expect.element(editor).toHaveFocus();
   await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
   await expect.element(editor).toHaveFocus();
-  await expect.element(screen.getByRole("button", { name: "Sort by Name" })).toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("columnheader", { name: /^Name, sorted ascending/u }))
+    .toHaveAttribute("aria-sort", "ascending");
+  await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+  await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).not.toBeInTheDocument();
 
   await userEvent.fill(editor, "6");
-  await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
   await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("columnheader", { name: /^Name, sorted descending/u }))
+    .toHaveAttribute("aria-sort", "descending");
+  await userEvent.click(screen.getByRole("gridcell", { name: "8", exact: true }));
+  await userEvent.keyboard("{F2}");
+  await userEvent.click(screen.getByRole("button", { name: "Filter Name" }));
   await expect.element(screen.getByRole("dialog", { name: "Filter Name" })).toBeInTheDocument();
   expect(onSaveEdits).not.toHaveBeenCalled();
 });
@@ -228,7 +239,7 @@ test("supports reverse commit movement and exits backward at the first eligible 
   await expect.element(screen.getByRole("textbox", { name: "Edit Score" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("gridcell", { name: "Ada", exact: true }));
   await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
-  await expect.element(screen.getByRole("button", { name: "Before table" })).toHaveFocus();
+  await expect.element(screen.getByRole("button", { name: "Sort rows, 1 active" })).toHaveFocus();
 });
 
 test("reveals an off-screen editable destination while skipping ineligible cells", async () => {
@@ -284,4 +295,80 @@ test("reveals an off-screen editable destination while skipping ineligible cells
     screen.getByRole("gridcell", { name: "revealed", exact: true }).element().id,
   );
   expect(grid.element().scrollLeft).toBeGreaterThan(0);
+});
+
+test("Enter traversal skips rows rejected by the column edit policy", async () => {
+  type EligibilityRow = Readonly<{ readonly id: string; readonly score: number }>;
+  const eligibilityRows: readonly EligibilityRow[] = [
+    { id: "first", score: 1 },
+    { id: "ineligible", score: 2 },
+    { id: "last", score: 3 },
+  ];
+  const eligibilityColumns = [
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      isEditable: ({ row }: { readonly row: EligibilityRow }) => row.id !== "ineligible",
+    },
+  ] satisfies BrunoTableColumns<EligibilityRow>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_ELIGIBILITY"
+      columns={eligibilityColumns}
+      initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+      clientSource={{
+        rows: eligibilityRows,
+        totalRows: eligibilityRows.length,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CELL_EDIT_ELIGIBILITY",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}{Enter}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "3", exact: true }).element().id,
+  );
+  await userEvent.keyboard("{F2}{Shift>}{Enter}{/Shift}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "1", exact: true }).element().id,
+  );
+});
+
+test("rejects widened editable columns without a potential edit policy at runtime", async () => {
+  const widenedColumns: BrunoTableColumns<Row> = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: false,
+    },
+  ];
+
+  await expect(
+    render(
+      <BrunoTableClient
+        tableId="TABLE_ID_CELL_EDIT_WIDENED"
+        columns={widenedColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />,
+    ),
+  ).rejects.toThrow(
+    "BrunoTable editable Client Tables require at least one potentially editable column.",
+  );
 });

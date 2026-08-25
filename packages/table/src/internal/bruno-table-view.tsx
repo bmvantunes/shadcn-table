@@ -1502,6 +1502,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   const columnIndexOffset = rowSelection === undefined ? 0 : 1;
   const gridElement = useRef<HTMLDivElement | null>(null);
+  const producedTextCapture = useRef<HTMLSpanElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
   const focusRestoreFrame = useRef<number | null>(null);
   const filterOpenFrame = useRef<number | null>(null);
@@ -2285,7 +2286,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
 
   const ownsGridSurface = (event: BrunoTableHotkeyGesture): boolean =>
-    event.target === gridElement.current;
+    event.target === gridElement.current || event.target === producedTextCapture.current;
   const ownsRowSelectionCommand = (event: BrunoTableHotkeyGesture): boolean => {
     const grid = gridElement.current;
     if (grid === null) return false;
@@ -2681,12 +2682,20 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const active = navigation.getSnapshot();
     if (active?.region !== "body") return false;
     if (movement === "enter-forward" || movement === "enter-backward") {
-      const rowIndex = active.rowIndex + (movement === "enter-forward" ? 1 : -1);
-      const rowId = rowSpace.getRowId(rowIndex);
-      if (rowId === undefined) return false;
-      navigation.activateBody(rowIndex, rowId, active.columnId);
-      revealCell(rowIndex, active.columnId, "body", rowId);
-      return true;
+      if (cellEdit === undefined) return false;
+      const direction = movement === "enter-forward" ? 1 : -1;
+      for (
+        let rowIndex = active.rowIndex + direction;
+        rowIndex >= 0 && rowIndex < rowSpace.totalRows;
+        rowIndex += direction
+      ) {
+        const rowId = rowSpace.getRowId(rowIndex);
+        if (rowId === undefined || !cellEdit.isEditable(rowId, active.columnId)) continue;
+        navigation.activateBody(rowIndex, rowId, active.columnId);
+        revealCell(rowIndex, active.columnId, "body", rowId);
+        return true;
+      }
+      return false;
     }
     if (cellEdit === undefined) return false;
     const direction = movement === "tab-forward" ? 1 : -1;
@@ -2716,7 +2725,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     return false;
   };
   const runEditableTab = (event: BrunoTableHotkeyGesture, direction: -1 | 1): void => {
-    if (cellEdit === undefined || !ownsGridSurface(event) || event.target !== gridElement.current) {
+    if (cellEdit === undefined || !ownsGridSurface(event)) {
       return;
     }
     if (moveWithinEditableRange(direction)) event.preventDefault();
@@ -2754,19 +2763,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const grid = gridElement.current;
     if (grid === null || cellEdit === undefined) return;
     const handleBeforeInput = (event: InputEvent) => {
-      if (
-        event.target !== grid ||
-        typeof event.data !== "string" ||
-        !event.inputType.startsWith("insert")
-      ) {
+      if (event.target !== grid && event.target !== producedTextCapture.current) return;
+      if (event.isComposing || event.inputType === "insertCompositionText") return;
+      if (typeof event.data === "string" && event.inputType.startsWith("insert")) {
+        startReplaceFromProducedTextRef.current(event.data);
+        event.preventDefault();
+        clearProducedTextCapture(grid, producedTextCapture.current);
         return;
       }
-      if (startReplaceFromProducedTextRef.current(event.data)) event.preventDefault();
+      event.preventDefault();
+      clearProducedTextCapture(grid, producedTextCapture.current);
     };
     const handleCompositionEnd = (event: CompositionEvent) => {
-      if (event.target === grid && startReplaceFromProducedTextRef.current(event.data)) {
-        event.preventDefault();
-      }
+      if (event.target !== grid && event.target !== producedTextCapture.current) return;
+      startReplaceFromProducedTextRef.current(event.data);
+      event.preventDefault();
+      clearProducedTextCapture(grid, producedTextCapture.current);
     };
     grid.addEventListener("beforeinput", handleBeforeInput);
     grid.addEventListener("compositionend", handleCompositionEnd);
@@ -2876,6 +2888,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         data-bruno-scroll-owner=""
         data-bruno-column-layout-version={columnLayout.version}
         role="grid"
+        contentEditable={cellEdit === undefined ? undefined : "plaintext-only"}
+        suppressContentEditableWarning={cellEdit === undefined ? undefined : true}
         aria-label={`Data for ${tableId}`}
         aria-busy={loading || undefined}
         aria-multiselectable={cellRange === undefined ? undefined : true}
@@ -2897,7 +2911,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space Control+A Meta+A"
         }
         onFocus={(event) => {
-          if (event.target === event.currentTarget) navigation.activateForFocus();
+          if (event.target === event.currentTarget) {
+            navigation.activateForFocus();
+            armProducedTextCapture(event.currentTarget, producedTextCapture.current);
+          }
         }}
         onPointerDown={runCellRangePointerDown}
         style={{
@@ -2906,6 +2923,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           position: "relative",
         }}
       >
+        {cellEdit === undefined ? null : (
+          <span
+            ref={producedTextCapture}
+            aria-hidden="true"
+            data-bruno-produced-text-capture=""
+            style={VISUALLY_HIDDEN}
+          />
+        )}
         <NavigationActiveDescendantAdapter
           gridElement={gridElement}
           instanceId={instanceId}
@@ -2924,6 +2949,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         </span>
         <div
           ref={attachRowLayer}
+          contentEditable={false}
           data-bruno-row-layer=""
           style={{
             position: "relative",
@@ -5007,11 +5033,13 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     boxSizing: "border-box",
     height: ROW_HEIGHT,
     maxHeight: ROW_HEIGHT,
-    overflow: "hidden",
+    overflow: edit.active ? "visible" : "hidden",
     padding: 0,
+    position: edit.active ? "relative" : undefined,
     textAlign: presentationColumn?.semantics.cellAlign,
     transform: `var(${brunoTableColumnCssVariable("transform", column.columnId)}, none)`,
     width: `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
+    zIndex: edit.active ? 10 : undefined,
   };
   const cellContent =
     edit.active && cellEdit !== undefined ? (
@@ -5220,6 +5248,24 @@ function focusFirstInteractiveDescendant(cell: HTMLElement): boolean {
     if (document.activeElement === candidate) return true;
   }
   return false;
+}
+
+function armProducedTextCapture(grid: HTMLElement, capture: HTMLElement | null): void {
+  if (capture === null || grid.ownerDocument.activeElement !== grid) return;
+  capture.textContent = "";
+  const selection = grid.ownerDocument.getSelection();
+  if (selection === null) return;
+  const range = grid.ownerDocument.createRange();
+  range.selectNodeContents(capture);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function clearProducedTextCapture(grid: HTMLElement, capture: HTMLElement | null): void {
+  if (capture === null) return;
+  capture.textContent = "";
+  armProducedTextCapture(grid, capture);
 }
 
 function interactiveDescendantIsUsable(candidate: InteractiveDomElement): boolean {

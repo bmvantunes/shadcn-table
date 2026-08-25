@@ -495,6 +495,7 @@ export function useBrunoTableGridHotkeys(
   const bindings = createBrunoTableGridHotkeyBindings(commands);
   const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
+    allowInTextInput: true,
     onTrigger: (event: BrunoTableHotkeyGesture) => {
       if (event.defaultPrevented) return;
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);

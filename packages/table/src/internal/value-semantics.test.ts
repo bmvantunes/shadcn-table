@@ -703,6 +703,24 @@ describe("compiled Column Value Semantics", () => {
     ).toThrow("cellRenderer must be a function");
   });
 
+  it("preserves typed validation callbacks through field Column Helpers", () => {
+    const validate = ({ value }: { readonly value: number }) =>
+      value >= 0 ? undefined : "Price must be non-negative.";
+    const helperColumns = [
+      BrunoTableNumberColumn({
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        isEditable: true,
+        validate,
+      }),
+    ] satisfies BrunoTableColumns<SemanticRow>;
+
+    expect(helperColumns[0]?.validate).toBe(validate);
+    const compiled = compileColumns(helperColumns)[0];
+    expect(compiled?.kind === "field" ? compiled.validate : undefined).toBe(validate);
+  });
+
   it("snapshots reusable preset defaults before later caller mutation", () => {
     const numberDefaults = {
       headerName: "Price",

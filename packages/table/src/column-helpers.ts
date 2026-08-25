@@ -275,6 +275,7 @@ const fieldColumnOptionKeys = new Set<PropertyKey>([
   "enableSetFilter",
   "enableSorting",
   "isEditable",
+  "validate",
   "groupBy",
   "groupKeyValueFormatter",
   "groupKeyCellClassName",

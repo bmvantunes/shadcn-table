@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
 import { BrunoTableBigDecimalValueType } from "../effect";
-import { BrunoTableCellEditRuntime } from "./cell-edit";
+import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
 type Row = Readonly<{
@@ -89,6 +89,32 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getSessionSnapshot()).toMatchObject({ initialText: "7" });
     expect(runtime.cancel()).toBe(true);
     expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+  });
+
+  it("bounds untrusted candidates and admits native Number validity through the actor gate", () => {
+    const validate = vi.fn();
+    const guardedColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: true,
+        validate,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({ columns: guardedColumns, getRow: () => row });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("1".repeat(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1))).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      invalidMessage: `Enter at most ${String(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH)} characters.`,
+    });
+    expect(validate).not.toHaveBeenCalled();
+    expect(runtime.commit("4", true)).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({ invalidMessage: "Enter a valid number." });
+    expect(validate).not.toHaveBeenCalled();
+    runtime.dispose();
   });
 
   it("publishes only the affected cell projection instead of waking the matrix", () => {

@@ -3,7 +3,7 @@ import type { NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
-import { BrunoTableCellEditRuntime } from "./cell-edit";
+import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 type BrunoTableCellEditBoundaryProps = Readonly<{
@@ -54,10 +54,16 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       const element = control.current;
       if (element === null) return;
       const unregister = runtime.registerActiveCandidate({
-        read: () =>
-          element instanceof HTMLInputElement && element.type === "checkbox"
-            ? String(element.checked)
-            : Reflect.get(element, "value"),
+        read: () => ({
+          rawText:
+            element instanceof HTMLInputElement && element.type === "checkbox"
+              ? String(element.checked)
+              : Reflect.get(element, "value"),
+          nativeInvalid:
+            element instanceof HTMLInputElement &&
+            element.type === "number" &&
+            element.validity.badInput,
+        }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
       element.focus({ preventScroll: true });
@@ -127,6 +133,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
             defaultValue={session.initialText}
+            maxLength={BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH}
             inputMode={
               column.semantics.editorFamily === "number" ||
               column.semantics.editorFamily === "bigint" ||
@@ -134,7 +141,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
                 ? "decimal"
                 : undefined
             }
+            step={column.semantics.editorFamily === "number" ? "any" : undefined}
             style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
+            type={column.semantics.editorFamily === "number" ? "number" : "text"}
           />
         )}
         {invalidMessage === undefined ? null : (
@@ -161,15 +170,13 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
   });
 
 function focusOutsideGrid(grid: HTMLElement, direction: -1 | 1): void {
-  const table = grid.closest<HTMLElement>("[data-bruno-table]");
-  if (table === null) return;
   const candidates = [
     ...grid.ownerDocument.querySelectorAll<HTMLElement>(
       'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])',
     ),
   ].filter(
     (candidate) =>
-      !table.contains(candidate) &&
+      !grid.contains(candidate) &&
       candidate.tabIndex >= 0 &&
       !candidate.matches(":disabled,[hidden],[aria-hidden='true']") &&
       candidate.getClientRects().length > 0,
@@ -178,6 +185,6 @@ function focusOutsideGrid(grid: HTMLElement, direction: -1 | 1): void {
     direction > 0 ? Node.DOCUMENT_POSITION_FOLLOWING : Node.DOCUMENT_POSITION_PRECEDING;
   const ordered = direction > 0 ? candidates : candidates.toReversed();
   ordered
-    .find((candidate) => (table.compareDocumentPosition(candidate) & documentPosition) !== 0)
+    .find((candidate) => (grid.compareDocumentPosition(candidate) & documentPosition) !== 0)
     ?.focus();
 }

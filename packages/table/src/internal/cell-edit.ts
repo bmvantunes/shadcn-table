@@ -53,7 +53,11 @@ type CellEditEvent =
       readonly mode: "current" | "replace";
       readonly producedText: string;
     }>
-  | Readonly<{ readonly type: "COMMIT"; readonly rawText: string }>
+  | Readonly<{
+      readonly type: "COMMIT";
+      readonly rawText: string;
+      readonly nativeInvalid: boolean;
+    }>
   | Readonly<{ readonly type: "CANCEL" }>;
 
 const brunoTableCellEditMachine = createMachine({
@@ -92,7 +96,8 @@ const brunoTableCellEditMachine = createMachine({
         COMMIT: {
           target: "validating",
           actions: assign({
-            evaluation: ({ context, event }) => evaluateCandidate(context.session, event.rawText),
+            evaluation: ({ context, event }) =>
+              evaluateCandidate(context.session, event.rawText, event.nativeInvalid),
             affectedCellKeys: [],
             acceptedChange: undefined,
           }),
@@ -148,6 +153,12 @@ function prepareSession(
 ): ActiveSession | undefined {
   const { column, row } = event;
   if (
+    event.mode === "replace" &&
+    event.producedText.length > BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH
+  ) {
+    return undefined;
+  }
+  if (
     column?.kind !== "field" ||
     column.isEditable === undefined ||
     column.isEditable === false ||
@@ -185,9 +196,24 @@ function prepareSession(
   }
 }
 
-function evaluateCandidate(session: ActiveSession | undefined, rawText: string): CommitEvaluation {
+export const BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH = 65_536;
+
+function evaluateCandidate(
+  session: ActiveSession | undefined,
+  rawText: string,
+  nativeInvalid = false,
+): CommitEvaluation {
   if (session === undefined) {
     return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+  }
+  if (rawText.length > BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH) {
+    return Object.freeze({
+      kind: "invalid",
+      message: `Enter at most ${String(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH)} characters.`,
+    });
+  }
+  if (nativeInvalid) {
+    return Object.freeze({ kind: "invalid", message: "Enter a valid number." });
   }
   const parsed = session.column.semantics.parseCanonicalText(rawText);
   if (parsed._tag === "Failure") {
@@ -297,7 +323,13 @@ export class BrunoTableCellEditRuntime {
   private readonly cellSubscriberCounts = new Map<string, number>();
   private activeCellKey: string | undefined;
   private activeCandidate:
-    | Readonly<{ readonly read: () => string; readonly restoreFocus: () => void }>
+    | Readonly<{
+        readonly read: () => Readonly<{
+          readonly rawText: string;
+          readonly nativeInvalid: boolean;
+        }>;
+        readonly restoreFocus: () => void;
+      }>
     | undefined;
   private movementCommand: ((movement: BrunoTableCellEditMovement) => boolean) | undefined;
 
@@ -355,7 +387,10 @@ export class BrunoTableCellEditRuntime {
   public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
 
   public readonly registerActiveCandidate = (
-    candidate: Readonly<{ readonly read: () => string; readonly restoreFocus: () => void }>,
+    candidate: Readonly<{
+      readonly read: () => Readonly<{ readonly rawText: string; readonly nativeInvalid: boolean }>;
+      readonly restoreFocus: () => void;
+    }>,
   ): (() => void) => {
     this.activeCandidate = candidate;
     return () => {
@@ -384,7 +419,8 @@ export class BrunoTableCellEditRuntime {
   public readonly commitActiveCandidate = (): boolean => {
     const candidate = this.activeCandidate;
     if (candidate === undefined) return this.getSessionSnapshot().kind === "idle";
-    const accepted = this.commit(candidate.read());
+    const candidateValue = candidate.read();
+    const accepted = this.commit(candidateValue.rawText, candidateValue.nativeInvalid);
     if (!accepted) candidate.restoreFocus();
     return accepted;
   };
@@ -429,12 +465,12 @@ export class BrunoTableCellEditRuntime {
     return this.getSessionSnapshot().kind === "editing";
   };
 
-  public readonly commit = (rawText: string): boolean => {
+  public readonly commit = (rawText: string, nativeInvalid = false): boolean => {
     const actorSnapshot = this.actor.getSnapshot();
     if (actorSnapshot.value !== "editing" || actorSnapshot.context.session === undefined) {
       return false;
     }
-    this.actor.send({ type: "COMMIT", rawText });
+    this.actor.send({ type: "COMMIT", rawText, nativeInvalid });
     const result = this.actor.getSnapshot();
     if (result.value !== "idle") return false;
     if (result.context.acceptedChange !== undefined) this.onCommit(result.context.acceptedChange);
