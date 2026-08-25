@@ -632,7 +632,7 @@ type EditableBlankRepresentation<TValue> = null extends TValue
 
 type FieldEditingCapability<TRow, TValue> =
   | {
-      readonly isEditable?: boolean;
+      readonly isEditable?: false;
       readonly blankValue?: never;
       readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
     }

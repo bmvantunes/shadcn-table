@@ -12,18 +12,20 @@ import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
-import { yieldBrunoTableGridTabStopForNativeTraversal } from "./focus";
+import { useBrunoTableGridTabStopHandoff } from "./focus";
 import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 type BrunoTableCellEditBoundaryProps = Readonly<{
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableCellEditRuntime;
+  readonly onCommittedOutsideCellPointer?: ((rowId: string, columnId: string) => void) | undefined;
 }>;
 
 export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEditBoundaryProps> =
   memo(function BrunoTableCellEditBoundary({
     column,
     runtime,
+    onCommittedOutsideCellPointer,
   }: BrunoTableCellEditBoundaryProps): ReactElement | null {
     const control = useRef<HTMLElement>(null);
     const attachControl = useCallback((element: HTMLElement | null) => {
@@ -50,6 +52,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         : undefined;
     const rawNumberSeed = useRef(initialRawNumberSeed);
     const [rawNumberDisplay, setRawNumberDisplay] = useState(initialRawNumberSeed);
+    const yieldGridTabStop = useBrunoTableGridTabStopHandoff();
     const cancel = useCallback(() => {
       const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
       runtime.cancel();
@@ -66,11 +69,11 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
         if (grid !== null) {
           grid.focus({ preventScroll: true });
-          yieldBrunoTableGridTabStopForNativeTraversal(grid);
+          yieldGridTabStop(grid);
         }
         return false;
       },
-      [runtime],
+      [runtime, yieldGridTabStop],
     );
     useBrunoTableCellEditorHotkeys(control, { cancel, commit });
     useLayoutEffect(() => {
@@ -134,18 +137,34 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     }, [column, runtime]);
     useLayoutEffect(() => {
       const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
-      const ownedSurface =
-        control.current?.closest<HTMLElement>("[data-bruno-cell-edit-surface]") ?? editor;
       const document = editor?.ownerDocument;
-      if (editor === null || ownedSurface === null || document === undefined) return;
+      if (editor === null || document === undefined) return;
       let blockedClickTarget: EventTarget | null = null;
       const commitOutsidePointer = (event: PointerEvent) => {
         blockedClickTarget = null;
-        if (event.target instanceof Node && ownedSurface.contains(event.target)) return;
+        if (
+          event.target instanceof Node &&
+          (editor.contains(event.target) ||
+            (event.target instanceof Element &&
+              event.target.closest("[data-bruno-cell-edit-cancel]") !== null))
+        ) {
+          return;
+        }
         if (!runtime.commitActiveCandidate()) {
           blockedClickTarget = event.target;
           event.preventDefault();
           event.stopImmediatePropagation();
+          return;
+        }
+        if (event.target instanceof Element) {
+          const cell = event.target.closest<HTMLElement>(
+            '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+          );
+          const rowId = cell?.dataset["brunoRowId"];
+          const columnId = cell?.dataset["brunoColumnId"];
+          if (rowId !== undefined && columnId !== undefined) {
+            onCommittedOutsideCellPointer?.(rowId, columnId);
+          }
         }
       };
       const suppressRejectedClick = (event: MouseEvent) => {
@@ -161,7 +180,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         document.removeEventListener("pointerdown", commitOutsidePointer, true);
         document.removeEventListener("click", suppressRejectedClick, true);
       };
-    }, [runtime]);
+    }, [onCommittedOutsideCellPointer, runtime]);
     if (session.kind !== "editing") return null;
     return (
       <div data-bruno-cell-editor="" style={{ height: "100%", position: "relative" }}>

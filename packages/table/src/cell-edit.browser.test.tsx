@@ -2,6 +2,8 @@ import { detectPlatform } from "@tanstack/react-hotkeys";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
+import { createRef, forwardRef, useImperativeHandle, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { BrunoTableClient } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
@@ -333,6 +335,26 @@ test("gates outside pointer, sorting, and filtering before their actions", async
   expect(onSaveEdits).not.toHaveBeenCalled();
 });
 
+test("gates another cell in the edit-owned row through the same commit boundary", async () => {
+  const { grid, screen } = await renderEditableTable();
+  await userEvent.keyboard("{ArrowRight}{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e");
+  await userEvent.click(screen.getByRole("gridcell", { name: "Ada", exact: true }));
+  await expect.element(editor).toHaveFocus();
+  expect(grid.element().getAttribute("aria-activedescendant")).not.toBe(
+    screen.getByRole("gridcell", { name: "Ada", exact: true }).element().id,
+  );
+
+  await userEvent.clear(editor);
+  await userEvent.fill(editor, "6");
+  const nameCell = screen.getByRole("gridcell", { name: "Ada", exact: true });
+  await userEvent.click(nameCell);
+  await expect.element(editor).not.toBeInTheDocument();
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(nameCell.element().id);
+});
+
 test("traverses pinned logical order, uses the one-axis range exception, and exits at terminal Tab", async () => {
   const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{F2}");
@@ -400,20 +422,21 @@ test("reveals an off-screen editable destination while skipping ineligible cells
       valueType: "text",
       isEditable: true,
       pinned: "start",
+      width: 80,
     },
     ...Array.from({ length: 20 }, (_, index) => ({
       columnId: `COL_ID_FILLER_${String(index)}` as BrunoTableColumnId,
       field: `filler${String(index)}`,
       headerName: `Filler ${String(index)}`,
       valueType: "text" as const,
-      isEditable: false,
+      isEditable: false as const,
     })),
     {
       columnId: "COL_ID_DESTINATION",
       field: "destination",
       headerName: "Destination",
       valueType: "text",
-      isEditable: true,
+      isEditable: true as const,
     },
   ];
   const wideRow: WideRow = Object.freeze({
@@ -641,6 +664,16 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await userEvent.keyboard("{F2}");
   let editor = screen.getByRole("textbox", { name: "Edit Value" });
   await userEvent.fill(editor, "Candidate survives");
+  const activeCellId = editor.element().closest<HTMLElement>('[role="gridcell"]')?.id;
+  expect(activeCellId).toBeTruthy();
+  expect(
+    [...document.querySelectorAll<HTMLElement>("[id]")].filter(
+      (candidate) => candidate.id === activeCellId,
+    ),
+  ).toHaveLength(1);
+  expect(
+    document.getElementById(activeCellId ?? "")?.closest("[data-bruno-edit-owned-row]"),
+  ).not.toBeNull();
   const anchorTop = editor.element().getBoundingClientRect().top;
 
   await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 2n }], 2));
@@ -662,6 +695,13 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await expect
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .toHaveValue("Candidate survives");
+  expect(
+    screen
+      .getByRole("textbox", { name: "Edit Value" })
+      .element()
+      .closest('[role="row"]')
+      ?.getAttribute("aria-rowindex"),
+  ).toBeNull();
 
   await screen.rerender(renderTable([peer], 4));
   await expect
@@ -744,7 +784,18 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
       onSaveEdits={() => Promise.resolve()}
     />
   );
-  const screen = await render(table(target, 1));
+  type HarnessHandle = Readonly<{ publish: (targetRow: FarRow, version: number) => void }>;
+  const harnessRef = createRef<HarnessHandle>();
+  const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+    const [publication, setPublication] = useState({ targetRow: target, version: 1 });
+    useImperativeHandle(
+      ref,
+      () => ({ publish: (targetRow, version) => setPublication({ targetRow, version }) }),
+      [],
+    );
+    return table(publication.targetRow, publication.version);
+  });
+  const screen = await render(<Harness ref={harnessRef} />);
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_FAR_SORT" });
   grid.element().focus();
   await userEvent.keyboard("{F2}");
@@ -756,9 +807,9 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
     scrollPublications += 1;
   });
 
-  await screen.rerender(table({ ...target, ordinal: 1_000 }, 2));
-  await screen.rerender(table({ ...target, ordinal: 350 }, 3));
-  await screen.rerender(table({ ...target, ordinal: 900 }, 4));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 1_000 }, 2));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 350 }, 3));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 900 }, 4));
   await settleBrunoTableBrowserFrames();
   editor = screen.getByRole("textbox", { name: "Edit Value" });
   await expect.element(editor).toHaveValue("Far candidate");
@@ -767,10 +818,141 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
   expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
   expect(scrollPublications).toBeLessThanOrEqual(1);
 
-  await screen.rerender(table({ ...target, ordinal: 0 }, 5));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 0 }, 5));
   await settleBrunoTableBrowserFrames();
   editor = screen.getByRole("textbox", { name: "Edit Value" });
   await expect.element(editor).toHaveValue("Far candidate");
+  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
+});
+
+test("shares pinned, virtual, and selection geometry with the edit-owned row", async () => {
+  type WideEditRow = Readonly<{ readonly id: string } & Record<string, string>>;
+  const centerColumns = Array.from({ length: 147 }, (_unused, index) =>
+    index === 100
+      ? {
+          columnId: `COL_ID_WIDE_${String(index)}` as BrunoTableColumnId,
+          field: `wide${String(index)}`,
+          headerName: `Wide ${String(index)}`,
+          valueType: "text" as const,
+          isEditable: true as const,
+        }
+      : {
+          columnId: `COL_ID_WIDE_${String(index)}` as BrunoTableColumnId,
+          field: `wide${String(index)}`,
+          headerName: `Wide ${String(index)}`,
+          valueType: "text" as const,
+          isEditable: false as const,
+        },
+  );
+  const wideColumns: BrunoTableColumns<WideEditRow> = [
+    {
+      columnId: "COL_ID_WIDE_START",
+      field: "start",
+      headerName: "Start",
+      valueType: "text",
+      isEditable: true,
+      pinned: "start",
+      width: 80,
+    },
+    {
+      columnId: "COL_ID_WIDE_ORDER",
+      field: "order",
+      headerName: "Order",
+      valueType: "text" as const,
+      isEditable: false as const,
+    },
+    ...centerColumns,
+    {
+      columnId: "COL_ID_WIDE_END",
+      field: "end",
+      headerName: "End",
+      valueType: "text" as const,
+      isEditable: false as const,
+      pinned: "end",
+      width: 80,
+    },
+  ];
+  const makeRow = (id: string, order: string): WideEditRow =>
+    Object.freeze({
+      id,
+      order,
+      start: `start-${id}`,
+      end: `end-${id}`,
+      ...Object.fromEntries(
+        Array.from({ length: 147 }, (_unused, index) => [
+          `wide${String(index)}`,
+          `wide-${String(index)}-${id}`,
+        ]),
+      ),
+    });
+  const target = makeRow("target", "000");
+  const peers = Array.from({ length: 80 }, (_unused, index) =>
+    makeRow(`peer-${String(index)}`, String(index + 1).padStart(3, "0")),
+  );
+  const table = (targetRow: WideEditRow, version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_WIDE_GEOMETRY"
+      columns={wideColumns}
+      initialOrderBy={[{ columnId: "COL_ID_WIDE_ORDER", direction: "asc" }]}
+      clientSource={{
+        rows: [targetRow, ...peers],
+        totalRows: peers.length + 1,
+        version,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+      rowSelection
+    />
+  );
+  const screen = await render(table(target, 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_WIDE_GEOMETRY" });
+  grid.element().focus();
+  await userEvent.keyboard("{Tab}{F2}");
+  const editor = screen.getByRole("textbox", { name: "Edit Wide 100" });
+  await userEvent.fill(editor, "wide candidate");
+  await vi.waitFor(() => expect(grid.element().scrollLeft).toBeGreaterThan(0));
+  const activeCell = editor.element().closest<HTMLElement>('[role="gridcell"]');
+  expect(activeCell).not.toBeNull();
+  const activeId = activeCell?.id ?? "";
+  expect(
+    [...document.querySelectorAll<HTMLElement>("[id]")].filter(
+      (candidate) => candidate.id === activeId,
+    ),
+  ).toHaveLength(1);
+  const activeHeader = screen.getByRole("columnheader", { name: /^Wide 100/u });
+  expect(
+    Math.abs(
+      (activeCell?.getBoundingClientRect().left ?? 0) -
+        activeHeader.element().getBoundingClientRect().left,
+    ),
+  ).toBeLessThanOrEqual(1);
+  const startCell = screen.getByRole("gridcell", { name: "start-target", exact: true });
+  const endCell = screen.getByRole("gridcell", { name: "end-target", exact: true });
+  expect(
+    Math.abs(
+      startCell.element().getBoundingClientRect().left -
+        screen
+          .getByRole("columnheader", { name: /^Start/u })
+          .element()
+          .getBoundingClientRect().left,
+    ),
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(
+      endCell.element().getBoundingClientRect().right -
+        screen.getByRole("columnheader", { name: /^End/u }).element().getBoundingClientRect().right,
+    ),
+  ).toBeLessThanOrEqual(1);
+  expect(screen.getByRole("checkbox", { name: "Select row 1", exact: true })).toBeVisible();
+  const anchorTop = editor.element().getBoundingClientRect().top;
+
+  await screen.rerender(table({ ...target, order: "999" }, 2));
+  await settleBrunoTableBrowserFrames();
+  await expect.element(editor).toHaveValue("wide candidate");
+  await expect.element(editor).toHaveFocus();
   expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
 });
 

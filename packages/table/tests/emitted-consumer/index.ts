@@ -258,6 +258,62 @@ const emittedInvalidNullableEditColumns = [
 ] satisfies BrunoTableColumns<EmittedNullableEditRow>;
 void emittedInvalidNullableEditColumns;
 
+const emittedInvalidMissingNullableBlankColumns = [
+  // @ts-expect-error emitted editable null fields require blankValue.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error emitted editable undefined fields require blankValue.
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error emitted ambiguous nullish fields require an explicit choice.
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidMissingNullableBlankColumns;
+
+const emittedInvalidMissingNullableBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error emitted Helper cannot infer nullable editability without blankValue.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error emitted Helper rejects nullable editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_OPTIONAL",
+    // @ts-expect-error emitted Helper cannot infer optional editability without blankValue.
+    field: "optional",
+    headerName: "Optional",
+    // @ts-expect-error emitted Helper rejects optional editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_AMBIGUOUS",
+    // @ts-expect-error emitted Helper cannot infer ambiguous editability without blankValue.
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    // @ts-expect-error emitted Helper rejects ambiguous editability without blankValue.
+    isEditable: true,
+  }),
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidMissingNullableBlankHelperColumns;
+
 const emittedInvalidStaticFalseBlankColumns = [
   // @ts-expect-error emitted literal static-false editability rejects an edit blank policy.
   {

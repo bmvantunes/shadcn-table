@@ -13,7 +13,7 @@ export class BrunoTableCellEditGeometryController {
   private rowId: string | undefined;
   private appliedRowIndex: number | undefined;
   private anchorViewportTop: number | undefined;
-  private hiddenProjectionRow: HTMLElement | undefined;
+  private claimedProjectionRows: readonly ProjectionRowClaim[] = [];
 
   public readonly reconcile = (input: EditGeometryInput): void => {
     if (this.rowId !== input.rowId) {
@@ -26,6 +26,7 @@ export class BrunoTableCellEditGeometryController {
       )?.getBoundingClientRect().top;
     }
     this.input = input;
+    this.claimProjectionRows(input.grid, input.rowId);
     this.schedule();
   };
 
@@ -72,32 +73,80 @@ export class BrunoTableCellEditGeometryController {
     if (this.anchorViewportTop === undefined && projectedRow !== undefined) {
       this.anchorViewportTop = projectedRow.getBoundingClientRect().top;
     }
-    if (projectedRow !== this.hiddenProjectionRow) {
-      this.restoreProjectionRow();
-      this.hiddenProjectionRow = projectedRow;
-      projectedRow?.style.setProperty("visibility", "hidden");
-    }
+    this.claimProjectionRows(grid, rowId);
 
     const parent = layer.offsetParent?.getBoundingClientRect();
     const anchor = this.anchorViewportTop;
     if (parent !== undefined && anchor !== undefined) {
-      layer.style.insetInlineStart = `${String(grid.scrollLeft)}px`;
       layer.style.top = `${String(anchor - parent.top)}px`;
     }
   };
 
   private readonly restoreProjectionRow = (): void => {
-    this.hiddenProjectionRow?.style.removeProperty("visibility");
-    this.hiddenProjectionRow = undefined;
+    for (const claim of this.claimedProjectionRows) {
+      restoreAttribute(claim.row, "aria-hidden", claim.ariaHidden);
+      restoreStyleProperty(claim.row, "visibility", claim.visibility);
+      for (const cell of claim.cells) restoreAttribute(cell.element, "id", cell.id);
+    }
+    this.claimedProjectionRows = [];
+  };
+
+  private readonly claimProjectionRows = (grid: HTMLElement, rowId: string): void => {
+    this.restoreProjectionRow();
+    const rows = new Map<HTMLElement, ProjectionRowClaim>();
+    for (const cell of projectedCells(grid, rowId)) {
+      const row = cell.closest<HTMLElement>("tr");
+      if (row === null) continue;
+      const existing = rows.get(row);
+      const cellClaim = Object.freeze({ element: cell, id: cell.getAttribute("id") });
+      if (existing !== undefined) {
+        existing.cells.push(cellClaim);
+        continue;
+      }
+      rows.set(row, {
+        row,
+        ariaHidden: row.getAttribute("aria-hidden"),
+        visibility: row.style.getPropertyValue("visibility") || null,
+        cells: [cellClaim],
+      });
+    }
+    for (const claim of rows.values()) {
+      claim.row.setAttribute("aria-hidden", "true");
+      claim.row.style.setProperty("visibility", "hidden");
+      for (const cell of claim.cells) cell.element.removeAttribute("id");
+    }
+    this.claimedProjectionRows = [...rows.values()];
   };
 }
 
+type ProjectionRowClaim = {
+  readonly row: HTMLElement;
+  readonly ariaHidden: string | null;
+  readonly visibility: string | null;
+  readonly cells: Array<Readonly<{ readonly element: HTMLElement; readonly id: string | null }>>;
+};
+
 function findProjectedRow(grid: HTMLElement, rowId: string): HTMLElement | undefined {
-  for (const cell of grid.querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id]')) {
-    if (cell.dataset["brunoRowId"] !== rowId) continue;
-    if (cell.closest("[data-bruno-edit-owned-row]") !== null) continue;
+  for (const cell of projectedCells(grid, rowId)) {
     const row = cell.closest<HTMLElement>('[role="row"]');
     if (row !== null) return row;
   }
   return undefined;
+}
+
+function projectedCells(grid: HTMLElement, rowId: string): readonly HTMLElement[] {
+  return [...grid.querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id]')].filter(
+    (cell) =>
+      cell.dataset["brunoRowId"] === rowId && cell.closest("[data-bruno-edit-owned-row]") === null,
+  );
+}
+
+function restoreAttribute(element: HTMLElement, name: string, value: string | null): void {
+  if (value === null) element.removeAttribute(name);
+  else element.setAttribute(name, value);
+}
+
+function restoreStyleProperty(element: HTMLElement, name: string, value: string | null): void {
+  if (value === null) element.style.removeProperty(name);
+  else element.style.setProperty(name, value);
 }

@@ -2921,6 +2921,58 @@ const invalidNullableEditColumns = [
     blankValue: null,
   },
 ] satisfies BrunoTableColumns<NullableEditRow>;
+const invalidMissingNullableBlankColumns = [
+  // @ts-expect-error editable null fields require an explicit blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error editable undefined fields require an explicit blank representation.
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error ambiguous nullish fields require an explicit consumer choice.
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<NullableEditRow>;
+const invalidMissingNullableBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error Number Helper cannot infer a nullable editable field without blankValue.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error Number Helper rejects nullable editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_OPTIONAL",
+    // @ts-expect-error Number Helper cannot infer an optional editable field without blankValue.
+    field: "optional",
+    headerName: "Optional",
+    // @ts-expect-error Number Helper rejects optional editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_AMBIGUOUS",
+    // @ts-expect-error Number Helper cannot infer an ambiguous editable field without blankValue.
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    // @ts-expect-error Number Helper rejects ambiguous editability without blankValue.
+    isEditable: true,
+  }),
+] satisfies BrunoTableColumns<NullableEditRow>;
 const invalidStaticFalseBlankColumns = [
   // @ts-expect-error literal static-false editability cannot declare an edit blank policy.
   {
@@ -3006,3 +3058,5 @@ void nullableEditColumns;
 void invalidNullableEditColumns;
 void invalidStaticFalseBlankColumns;
 void invalidStaticFalseBlankHelperColumns;
+void invalidMissingNullableBlankColumns;
+void invalidMissingNullableBlankHelperColumns;
