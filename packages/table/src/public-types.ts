@@ -111,6 +111,32 @@ export type BrunoTableAggregateResults = Readonly<{
 
 const brunoTableAggregateAlgebraBrand: unique symbol = Symbol("BrunoTableAggregateAlgebra");
 
+const brunoTableServerBigDecimalValueTypes = new WeakSet<object>();
+
+/** @internal Nominal authority installed only by the optional Effect entry point. */
+export declare class BrunoTableServerBigDecimalValueTypeAuthority {
+  private readonly brunoTableServerBigDecimalValueTypeAuthority;
+}
+
+/** @internal Brands the one source-compatible Effect BigDecimal descriptor. */
+export function BrunoTableServerBigDecimalValueType<TValueType extends object>(
+  valueType: TValueType,
+): TValueType & BrunoTableServerBigDecimalValueTypeAuthority {
+  brunoTableServerBigDecimalValueTypes.add(valueType);
+  return Object.freeze(valueType) as TValueType & BrunoTableServerBigDecimalValueTypeAuthority;
+}
+
+/** @internal Tests runtime source-compatible aggregate authority without trusting public data. */
+export function isBrunoTableServerBigDecimalValueType(
+  valueType: unknown,
+): valueType is BrunoTableServerBigDecimalValueTypeAuthority {
+  return (
+    typeof valueType === "object" &&
+    valueType !== null &&
+    brunoTableServerBigDecimalValueTypes.has(valueType)
+  );
+}
+
 /** Exact arithmetic owned by a custom Value Type rather than a Column Definition. */
 export type BrunoTableAggregateAlgebra<TValue> = Readonly<{
   readonly [brunoTableAggregateAlgebraBrand]: true;
@@ -964,11 +990,11 @@ type InvalidServerAggregateColumn<TColumns extends readonly unknown[]> =
   TColumns[number] extends infer TColumn
     ? TColumn extends { readonly aggFunc: infer TAggFunc; readonly valueType: infer TValueType }
       ? TAggFunc extends "sum"
-        ? TValueType extends "bigint" | { readonly codecId: "@bruno/table/effect/bigdecimal" }
+        ? TValueType extends "bigint" | BrunoTableServerBigDecimalValueTypeAuthority
           ? never
           : TColumn
         : TAggFunc extends "avg"
-          ? TValueType extends { readonly codecId: "@bruno/table/effect/bigdecimal" }
+          ? TValueType extends BrunoTableServerBigDecimalValueTypeAuthority
             ? never
             : TColumn
           : never

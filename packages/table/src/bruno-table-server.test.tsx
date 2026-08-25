@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { BrunoTableResultRowCount, BrunoTableToolbar } from "./bruno-table-client";
 import {
   BrunoTableServer,
   BrunoTableServerPresentationColumnsInstaller,
@@ -40,6 +41,7 @@ type ServerRenderTestProps = Readonly<{
   initialOrderBy: readonly unknown[];
   initialPersistedState: unknown;
   viewportSource: unknown;
+  children?: ReactNode;
 }>;
 
 const ServerRenderTestTable = BrunoTableServer as unknown as (
@@ -113,7 +115,11 @@ describe("BrunoTableServer server rendering", () => {
           version: 1,
           status: "ready" as const,
         }}
-      />,
+      >
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      </ServerRenderTestTable>,
     );
 
     expect(replace).not.toHaveBeenCalled();
@@ -121,6 +127,8 @@ describe("BrunoTableServer server rendering", () => {
     expect(markup).toContain('aria-label="Loading Rows"');
     expect(markup).toContain('aria-label="Loading Price"');
     expect(markup).not.toContain('aria-label="Loading Symbol"');
+    expect(markup).toContain('aria-label="Result rows"');
+    expect(markup).toContain(">0 result rows</output>");
     expect(markup).toContain("--bruno-table-column-width-_43_4f_4c_5f_49_44_5f_44_45_53_4b, 211px");
     expect(markup).toContain(
       "--bruno-table-column-width-_43_4f_4c_5f_49_44_5f_50_52_49_43_45, 277px",

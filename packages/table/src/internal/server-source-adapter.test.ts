@@ -1489,6 +1489,57 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getResultRowCountSnapshot()).toBe(250);
   });
 
+  it("stages restored grouped projection authority without a raw result count or reset mode", () => {
+    const transport = makeViewport();
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        aggFunc: "max",
+      },
+    ]);
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      groupedColumns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    const restoredGroupedQuery = Object.freeze({
+      ...query,
+      navigationMode: "restore" as const,
+      groupBy: ["COL_ID_SYMBOL"],
+      groupOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" as const }],
+    });
+
+    adapter.stageProjection(restoredGroupedQuery);
+
+    expect(adapter.getPublication().clientProjection).not.toBeNull();
+    expect(adapter.getResultRowCountSnapshot()).toBe(0);
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("restore");
+    expect(transport.replace).not.toHaveBeenCalled();
+
+    adapter.replace(transport.viewport, restoredGroupedQuery);
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("restore");
+    expect(transport.replace).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds Server lifecycle status and message text at source admission", () => {
     const transport = makeViewport();
     const adapter = new BrunoTableServerRowPipelineAdapter<Row>(

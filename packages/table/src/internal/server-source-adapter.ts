@@ -106,6 +106,7 @@ type BrunoTableServerProjectionIntent = Readonly<{
   readonly inputs: BrunoTableServerQueryInputs;
   readonly grouped?: BrunoTableCompiledServerGroupedProjection;
   readonly rowsWidth?: number;
+  readonly navigationMode?: BrunoTableQueryNavigationMode;
 }>;
 
 type BrunoTableServerGroupedAdmissionIdentity = readonly Readonly<{
@@ -189,6 +190,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   });
   private lastReplacedViewport: unknown;
   private queryGeneration = 0;
+  private stagedInitialNavigationMode: BrunoTableQueryNavigationMode | undefined;
   private forceNextNavigationReset = false;
   private readonly groupedInvalidsByRowIndex = new Map<number, BrunoTableGroupedInvalidValue>();
   private generationNavigationMode: BrunoTableQueryNavigationMode = "reset";
@@ -414,8 +416,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
   ): void {
     const { nextInputs, queryPlan } = this.prepareProjection(query, inputs);
-    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth);
+    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
+    this.stagedInitialNavigationMode = query.navigationMode;
+    this.generationNavigationMode = query.navigationMode;
+    if (queryPlan.grouped !== undefined) this.publishResultRowCount(0);
     this.publication = this.createPublication();
+    this.reconcileStructureSnapshot();
   }
 
   public replace(
@@ -429,7 +435,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       queryPlan.grouped,
       this.columnsById,
     );
-    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth);
+    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     const transport = requireViewportTransport<TRow>(viewport);
     let semanticKey: ActiveGeneration["semanticKey"];
     try {
@@ -482,9 +488,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const nextNavigationMode =
       semanticInputsChanged ||
       this.forceNextNavigationReset ||
-      this.lastReplacedViewport !== viewport
+      (this.lastReplacedViewport === undefined && this.stagedInitialNavigationMode === undefined) ||
+      (this.lastReplacedViewport !== undefined && this.lastReplacedViewport !== viewport)
         ? "reset"
-        : query.navigationMode;
+        : (this.stagedInitialNavigationMode ?? query.navigationMode);
     const previous = this.active;
     this.active = undefined;
     this.dispatchedWindow = undefined;
@@ -584,6 +591,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.lastReplacedViewport = viewport;
     this.queryGeneration += 1;
     this.generationNavigationMode = nextNavigationMode;
+    this.stagedInitialNavigationMode = undefined;
     this.forceNextNavigationReset = false;
     this.dispatchedWindow = INITIAL_WINDOW;
     this.suppressStorePublication = false;
@@ -640,11 +648,13 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     queryPlan: ReturnType<BrunoTableServerRowPipelineAdapter<TRow>["compilePlan"]>,
     inputs: BrunoTableServerQueryInputs,
     rowsWidth: number | undefined,
+    navigationMode: BrunoTableQueryNavigationMode,
   ): void {
     this.projectionIntent = Object.freeze({
       inputs,
       ...(queryPlan.grouped === undefined ? {} : { grouped: queryPlan.grouped }),
       ...(rowsWidth === undefined ? {} : { rowsWidth }),
+      navigationMode,
     });
   }
 
@@ -824,7 +834,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
               this.store.findRowIndex,
               this.setRequiredRange,
               this.queryGeneration,
-              this.generationNavigationMode,
+              this.active === undefined
+                ? (projection.navigationMode ?? this.generationNavigationMode)
+                : this.generationNavigationMode,
               this.getGroupedPresentationRevision,
             ),
     });
@@ -851,7 +863,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     if (!this.generationReleased && snapshot.authoritativeTotalRows) {
       return snapshot.rowSpace.totalRows;
     }
-    return snapshot.generation === 0 ? this.source.totalRows : 0;
+    return snapshot.generation === 0 && this.projectionIntent.grouped === undefined
+      ? this.source.totalRows
+      : 0;
   }
 
   private getMaskedRowSpace(

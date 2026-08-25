@@ -967,6 +967,39 @@ const clientOnlyNumberArithmetic = exactMoneyValueType as unknown as BrunoTableV
   "bigdecimal",
   { readonly sum: "self" }
 >;
+const spoofedBigDecimalCodec = {
+  ...clientOnlyNumberArithmetic,
+  codecId: "@bruno/table/effect/bigdecimal" as const,
+  aggregateResults: { sum: "self" as const },
+};
+const spoofedBigDecimalServerAggregateColumns = [
+  {
+    columnId: "COL_ID_SPOOFED_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_SPOOFED_SUM",
+    field: "price",
+    headerName: "Spoofed sum",
+    valueType: spoofedBigDecimalCodec,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const rejectedSpoofedBigDecimalServerProps: BrunoTableServerProps<
+  Order,
+  typeof spoofedBigDecimalServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = {
+  tableId: "TABLE_ID_SPOOFED_SERVER_ARITHMETIC",
+  // @ts-expect-error A public codecId literal is not Effect BigDecimal Server authority.
+  columns: spoofedBigDecimalServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_SPOOFED_GROUP", direction: "asc" }],
+  viewportSource: orderViewportSource,
+};
+void rejectedSpoofedBigDecimalServerProps;
 const clientOnlyServerAggregateColumns = [
   {
     columnId: "COL_ID_CLIENT_ONLY_GROUP",

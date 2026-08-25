@@ -257,10 +257,9 @@ describe("compileBrunoTableServerQueryPlan", () => {
         columnId: "COL_ID_CUSTOM_SUM",
         field: "amount",
         headerName: "Custom sum",
-        valueType: {
-          ...BrunoTableBigDecimalValueType,
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
           codecId: "example/client-only-arithmetic",
-        },
+        }),
         aggFunc: "sum",
       },
     ]);
@@ -278,6 +277,39 @@ describe("compileBrunoTableServerQueryPlan", () => {
         completeRawSelect,
       ),
     ).toThrow("no source-compatible exact result Value Type: COL_ID_CUSTOM_SUM");
+
+    const spoofedCodecColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "symbol",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_SPOOFED_SUM",
+        field: "amount",
+        headerName: "Spoofed sum",
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
+          codecId: "@bruno/table/effect/bigdecimal",
+        }),
+        aggFunc: "sum",
+      },
+    ]);
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        spoofedCodecColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+          groupBy: ["COL_ID_GROUP"],
+          groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("no source-compatible exact result Value Type: COL_ID_SPOOFED_SUM");
   });
 
   it("maps Column Identity to fields and retains native exact operands", () => {

@@ -315,7 +315,7 @@ function compileServerAggregate(
   }
   if (
     (aggFunc === "sum" || aggFunc === "avg") &&
-    column.semantics.codecId !== "@bruno/table/effect/bigdecimal" &&
+    column.semantics.serverAggregateAuthority !== "effect-bigdecimal" &&
     !(aggFunc === "sum" && column.semantics.codecId === "@bruno/table/bigint")
   ) {
     throw new TypeError(

@@ -10,6 +10,7 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
+import { isBrunoTableServerBigDecimalValueType } from "../public-types";
 
 type SemanticsOverrides = {
   readonly cellAlign?: unknown;
@@ -28,6 +29,7 @@ type RuntimeValueTypeDescriptor = {
   readonly defaultWidth: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: RuntimeAggregateAlgebra;
+  readonly serverAggregateAuthority?: "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly decodeRuntimeAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
@@ -49,6 +51,7 @@ export type CompiledColumnValueSemantics = {
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
+  readonly serverAggregateAuthority?: "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   /** Stable private authority used to invalidate decoded Server projections. */
   readonly decodeRuntimeAuthority: unknown;
@@ -195,6 +198,9 @@ export function compileColumnValueSemantics(
     ...(descriptor.aggregateAlgebra === undefined
       ? {}
       : { aggregateAlgebra: compileAggregateAlgebra(descriptor) }),
+    ...(descriptor.serverAggregateAuthority === undefined
+      ? {}
+      : { serverAggregateAuthority: descriptor.serverAggregateAuthority }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
     equivalent: (left, right) => descriptor.equivalent(left, right),
@@ -288,6 +294,9 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     defaultWidth,
     aggregateResults,
     ...(aggregateAlgebra === undefined ? {} : { aggregateAlgebra }),
+    ...(isBrunoTableServerBigDecimalValueType(selection)
+      ? { serverAggregateAuthority: "effect-bigdecimal" as const }
+      : {}),
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
     decodeRuntimeAuthority: decodeRuntimeFunction,
     equivalent: (left, right) =>

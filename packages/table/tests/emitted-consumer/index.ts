@@ -1818,6 +1818,39 @@ const emittedClientOnlyNumberArithmetic =
     "bigdecimal",
     { readonly sum: "self" }
   >;
+const emittedSpoofedBigDecimalCodec = {
+  ...emittedClientOnlyNumberArithmetic,
+  codecId: "@bruno/table/effect/bigdecimal" as const,
+  aggregateResults: { sum: "self" as const },
+};
+const emittedSpoofedBigDecimalColumns = [
+  {
+    columnId: "COL_ID_EMITTED_SPOOFED_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_EMITTED_SPOOFED_SUM",
+    field: "price",
+    headerName: "Spoofed sum",
+    valueType: emittedSpoofedBigDecimalCodec,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const invalidEmittedSpoofedBigDecimalServer: BrunoTableServerProps<
+  Order,
+  typeof emittedSpoofedBigDecimalColumns,
+  typeof source.viewport
+> = {
+  tableId: "orders-spoofed-bigdecimal",
+  // @ts-expect-error Emitted public codec data cannot forge Effect Server authority.
+  columns: emittedSpoofedBigDecimalColumns,
+  initialOrderBy: [{ columnId: "COL_ID_EMITTED_SPOOFED_GROUP", direction: "asc" }],
+  viewportSource: source,
+};
+void invalidEmittedSpoofedBigDecimalServer;
 const emittedClientOnlyServerAggregateColumns = [
   {
     columnId: "COL_ID_EMITTED_CLIENT_ONLY_GROUP",

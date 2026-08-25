@@ -430,7 +430,11 @@ describe("BrunoTableServer", () => {
         columns={serverGroupingColumns}
         initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
         initialPersistedState={persisted}
-      />
+      >
+        <BrunoTableToolbar>
+          <BrunoTableResultRowCount />
+        </BrunoTableToolbar>
+      </BrunoTableServer>
     );
     const host = document.createElement("div");
     host.innerHTML = renderToString(table);
@@ -444,6 +448,9 @@ describe("BrunoTableServer", () => {
     const recoverable = vi.fn();
     try {
       expect(transport.requests).toHaveLength(0);
+      await expect
+        .element(page.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("0 result rows");
       await expect
         .element(page.getByRole("gridcell", { name: "Loading Desk" }).first())
         .toBeVisible();
@@ -483,6 +490,15 @@ describe("BrunoTableServer", () => {
         );
       });
       await expect.element(page.getByRole("gridcell", { name: "Desk Rates" })).toBeVisible();
+      await expect
+        .element(page.getByRole("status", { name: "Result rows" }))
+        .toHaveTextContent("1 result row");
+      expect(
+        page
+          .getByRole("grid", { name: `Data for ${tableId}` })
+          .element()
+          .getAttribute("aria-activedescendant"),
+      ).toBeNull();
     } finally {
       await act(async () => root?.unmount());
       if (previousActEnvironment === undefined) {
