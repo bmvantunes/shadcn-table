@@ -219,6 +219,16 @@ test("preserves incomplete Number replace seeds until the native control can own
   await userEvent.keyboard("{Escape}");
 
   grid.element().focus();
+  grid
+    .element()
+    .dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true, cancelable: true, data: "+5" }),
+    );
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await expect.element(rawEditor).toHaveValue("+5");
+  await userEvent.keyboard("{Escape}");
+
+  grid.element().focus();
   await userEvent.keyboard("+5");
   rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
   await expect.element(rawEditor).toHaveValue("+5");

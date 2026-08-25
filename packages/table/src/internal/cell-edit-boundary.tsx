@@ -41,7 +41,10 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       session.kind === "editing" && session.selectInitialText,
     );
     const initialRawNumberSeed =
-      session.kind === "editing" && numberSeedRequiresRawBuffer(column, session.initialText)
+      session.kind === "editing" &&
+      column.semantics.editorFamily === "number" &&
+      session.initialText.length > 0 &&
+      (!session.selectInitialText || numberSeedRequiresRawBuffer(column, session.initialText))
         ? session.initialText
         : undefined;
     const rawNumberSeed = useRef(initialRawNumberSeed);
@@ -90,6 +93,14 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
+      if (
+        element instanceof HTMLInputElement &&
+        rawNumberSeed.current !== undefined &&
+        numberCandidateCanUseNativeControl(column, element, rawNumberSeed.current)
+      ) {
+        rawNumberSeed.current = undefined;
+        setRawNumberDisplay(undefined);
+      }
       element.focus({ preventScroll: true });
       if (
         selectInitialTextOnMount.current &&
