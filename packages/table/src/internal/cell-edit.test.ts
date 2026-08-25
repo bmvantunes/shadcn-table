@@ -191,7 +191,7 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.dispose();
   });
 
-  it("invalidates predicate traversal from the actor-owned draft revision", () => {
+  it("invalidates predicate traversal from the store-owned draft revision", () => {
     const draftColumns = compileColumns([
       {
         columnId: "COL_ID_START",
@@ -267,6 +267,33 @@ describe("BrunoTable Cell Edit Session", () => {
 
     unsubscribeCell();
     unsubscribeSession();
+    runtime.dispose();
+  });
+
+  it("applies actor-produced draft patches to store-owned memory in one observable batch", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    const initialDraftMemory = runtime.getDraftMemorySnapshot();
+    const observations: Array<readonly [string, number, unknown]> = [];
+    const unsubscribe = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => {
+      observations.push([
+        runtime.getSessionSnapshot().kind,
+        runtime.getDraftMemorySnapshot().size,
+        runtime.getCellSnapshot("row-1", "COL_ID_SCORE").draft,
+      ]);
+    });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("11")).toBe(false);
+    expect(runtime.getDraftMemorySnapshot()).toBe(initialDraftMemory);
+    expect(runtime.commit("6")).toBe(true);
+    expect(runtime.getDraftMemorySnapshot()).not.toBe(initialDraftMemory);
+    expect(observations.at(-1)).toEqual(["idle", 1, 6]);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("4")).toBe(true);
+    expect(observations.at(-1)).toEqual(["idle", 0, undefined]);
+
+    unsubscribe();
     runtime.dispose();
   });
 

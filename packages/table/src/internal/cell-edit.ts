@@ -34,6 +34,10 @@ type DraftEntry = Readonly<{
   readonly projection: BrunoTableCellEditProjection;
 }>;
 
+type DraftPatch =
+  | Readonly<{ readonly kind: "remove"; readonly cellKey: string }>
+  | Readonly<{ readonly kind: "set"; readonly cellKey: string; readonly value: unknown }>;
+
 type CommitEvaluation =
   | Readonly<{ readonly kind: "invalid"; readonly message: string }>
   | Readonly<{
@@ -46,7 +50,7 @@ type CommitEvaluation =
 
 type CellEditContext = Readonly<{
   readonly session: ActiveSession | undefined;
-  readonly drafts: ReadonlyMap<string, DraftEntry>;
+  readonly draftPatch: DraftPatch | undefined;
   readonly affectedCellKeys: readonly string[];
   readonly evaluation: CommitEvaluation | undefined;
   readonly acceptedChange: BrunoTableCellEditChange | undefined;
@@ -57,6 +61,8 @@ type CellEditEvent =
       readonly rowId: string;
       readonly column: CompiledColumn | undefined;
       readonly row: unknown;
+      readonly hasDraft: boolean;
+      readonly draftValue: unknown;
       readonly mode: "current" | "replace";
       readonly producedText: string;
     }>
@@ -73,7 +79,7 @@ const brunoTableCellEditMachine = createMachine({
   types: {} as { context: CellEditContext; events: CellEditEvent },
   context: {
     session: undefined,
-    drafts: new Map(),
+    draftPatch: undefined,
     affectedCellKeys: [],
     evaluation: undefined,
     acceptedChange: undefined,
@@ -84,7 +90,8 @@ const brunoTableCellEditMachine = createMachine({
         START: {
           target: "admitting",
           actions: assign({
-            session: ({ context, event }) => prepareSession(context, event),
+            session: ({ event }) => prepareSession(event),
+            draftPatch: undefined,
             affectedCellKeys: [],
             evaluation: undefined,
             acceptedChange: undefined,
@@ -105,6 +112,7 @@ const brunoTableCellEditMachine = createMachine({
           actions: assign({
             evaluation: ({ context, event }) =>
               evaluateCandidate(context.session, event.rawText, event.nativeInvalid),
+            draftPatch: undefined,
             affectedCellKeys: [],
             acceptedChange: undefined,
           }),
@@ -113,6 +121,7 @@ const brunoTableCellEditMachine = createMachine({
           target: "idle",
           actions: assign({
             session: undefined,
+            draftPatch: undefined,
             affectedCellKeys: [],
             evaluation: undefined,
             acceptedChange: undefined,
@@ -127,7 +136,7 @@ const brunoTableCellEditMachine = createMachine({
           target: "idle",
           actions: assign({
             session: undefined,
-            drafts: ({ context }) => applyAcceptedDraft(context),
+            draftPatch: ({ context }) => createAcceptedDraftPatch(context),
             affectedCellKeys: ({ context }) =>
               Object.freeze([getAcceptedEvaluation(context).cellKey]),
             acceptedChange: ({ context }) => getAcceptedEvaluation(context).change,
@@ -145,6 +154,7 @@ const brunoTableCellEditMachine = createMachine({
                 : Object.freeze({ ...session, invalidMessage: evaluation.message });
             },
             affectedCellKeys: [],
+            draftPatch: undefined,
             acceptedChange: undefined,
             evaluation: undefined,
           }),
@@ -155,7 +165,6 @@ const brunoTableCellEditMachine = createMachine({
 });
 
 function prepareSession(
-  context: CellEditContext,
   event: Extract<CellEditEvent, { readonly type: "START" }>,
 ): ActiveSession | undefined {
   const { column, row } = event;
@@ -174,10 +183,8 @@ function prepareSession(
   ) {
     return undefined;
   }
-  const key = cellKey(event.rowId, column.columnId);
-  const draft = context.drafts.get(key);
   const sourceValue = Reflect.get(row, column.field);
-  const before = draft === undefined ? sourceValue : draft.value;
+  const before = event.hasDraft ? event.draftValue : sourceValue;
   if (typeof column.isEditable === "function") {
     try {
       if (Reflect.apply(column.isEditable, undefined, [{ row, value: before }]) !== true) {
@@ -278,20 +285,29 @@ function getAcceptedEvaluation(
   return evaluation;
 }
 
-function applyAcceptedDraft(context: CellEditContext): ReadonlyMap<string, DraftEntry> {
+function createAcceptedDraftPatch(context: CellEditContext): DraftPatch {
   const evaluation = getAcceptedEvaluation(context);
-  const next = new Map(context.drafts);
-  if (evaluation.removeDraft) next.delete(evaluation.cellKey);
+  return evaluation.removeDraft
+    ? Object.freeze({ kind: "remove", cellKey: evaluation.cellKey })
+    : Object.freeze({ kind: "set", cellKey: evaluation.cellKey, value: evaluation.value });
+}
+
+function applyDraftPatch(
+  drafts: ReadonlyMap<string, DraftEntry>,
+  patch: DraftPatch,
+): ReadonlyMap<string, DraftEntry> {
+  const previous = drafts.get(patch.cellKey);
+  if (patch.kind === "remove" && previous === undefined) return drafts;
+  if (patch.kind === "set" && previous !== undefined && Object.is(previous.value, patch.value))
+    return drafts;
+  const next = new Map(drafts);
+  if (patch.kind === "remove") next.delete(patch.cellKey);
   else {
     next.set(
-      evaluation.cellKey,
+      patch.cellKey,
       Object.freeze({
-        value: evaluation.value,
-        projection: Object.freeze({
-          active: false,
-          hasDraft: true,
-          draft: evaluation.value,
-        }),
+        value: patch.value,
+        projection: Object.freeze({ active: false, hasDraft: true, draft: patch.value }),
       }),
     );
   }
@@ -329,10 +345,11 @@ export class BrunoTableCellEditRuntime {
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
   private readonly actor = createActor(brunoTableCellEditMachine);
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
+  private readonly draftStore = new Store<ReadonlyMap<string, DraftEntry>>(new Map());
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
-  private readonly publishedDraftEvidence = new Map<string, DraftEntry>();
   private readonly traversalIndex: BrunoTableCellEditTraversalIndex;
+  private appliedDraftPatch: DraftPatch | undefined;
   private activeCellKey: string | undefined;
   private activeCandidate:
     | Readonly<{
@@ -398,7 +415,10 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly getDraftSnapshot = (rowId: string, columnId: string): unknown =>
-    this.actor.getSnapshot().context.drafts.get(cellKey(rowId, columnId))?.value;
+    this.draftStore.get().get(cellKey(rowId, columnId))?.value;
+
+  public readonly getDraftMemorySnapshot = (): ReadonlyMap<string, unknown> =>
+    this.draftStore.get();
 
   public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
 
@@ -493,7 +513,7 @@ export class BrunoTableCellEditRuntime {
   ): boolean => {
     if (column.isEditable === undefined || column.isEditable === false) return false;
     if (typeof column.isEditable !== "function") return true;
-    const draft = this.actor.getSnapshot().context.drafts.get(cellKey(rowId, column.columnId));
+    const draft = this.draftStore.get().get(cellKey(rowId, column.columnId));
     const value = draft === undefined ? Reflect.get(row, column.field) : draft.value;
     try {
       return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
@@ -511,11 +531,14 @@ export class BrunoTableCellEditRuntime {
     if (this.getSessionSnapshot().kind !== "idle") return false;
     const column = this.fieldColumnsById.get(columnId);
     const row = this.getRow(rowId);
+    const draft = this.draftStore.get().get(cellKey(rowId, columnId));
     this.actor.send({
       type: "START",
       rowId,
       column,
       row,
+      hasDraft: draft !== undefined,
+      draftValue: draft?.value,
       mode,
       producedText,
     });
@@ -542,6 +565,7 @@ export class BrunoTableCellEditRuntime {
 
   public readonly dispose = (): void => {
     this.actor.stop();
+    this.draftStore.setState(() => new Map());
     this.cellStores.clear();
     this.cellSubscriberCounts.clear();
   };
@@ -568,14 +592,24 @@ export class BrunoTableCellEditRuntime {
     if (nextKey !== undefined && !this.cellStores.has(nextKey)) this.installCellStore(nextKey);
     const actorContext = this.actor.getSnapshot().context;
     const affectedKeys = new Set(actorContext.affectedCellKeys);
-    for (const key of affectedKeys) this.reconcileDraftRevision(key, actorContext.drafts);
+    const previousDrafts = this.draftStore.get();
+    const draftPatch = actorContext.draftPatch;
+    const nextDrafts =
+      draftPatch === undefined || this.appliedDraftPatch === draftPatch
+        ? previousDrafts
+        : applyDraftPatch(previousDrafts, draftPatch);
+    if (draftPatch !== undefined) this.appliedDraftPatch = draftPatch;
     if (previousKey !== undefined) affectedKeys.add(previousKey);
     if (nextKey !== undefined) affectedKeys.add(nextKey);
     batch(() => {
+      if (nextDrafts !== previousDrafts) {
+        this.draftStore.setState(() => nextDrafts);
+        for (const key of actorContext.affectedCellKeys) this.invalidateDraftCell(key);
+      }
       if (!sameSessionSnapshot(this.sessionStore.get(), next)) {
         this.sessionStore.setState(() => next);
       }
-      for (const key of affectedKeys) this.publishCell(key);
+      for (const key of affectedKeys) this.publishCell(key, nextDrafts);
     });
     for (const key of affectedKeys) this.releaseUnusedCellStore(key);
   };
@@ -583,11 +617,14 @@ export class BrunoTableCellEditRuntime {
   private readonly getCellProjection = (key: string): BrunoTableCellEditProjection => {
     const store = this.cellStores.get(key);
     if (store !== undefined) return store.get();
-    return this.actor.getSnapshot().context.drafts.get(key)?.projection ?? IDLE_CELL;
+    return this.draftStore.get().get(key)?.projection ?? IDLE_CELL;
   };
 
-  private readonly createCellProjection = (key: string): BrunoTableCellEditProjection => {
-    const draft = this.actor.getSnapshot().context.drafts.get(key);
+  private readonly createCellProjection = (
+    key: string,
+    drafts = this.draftStore.get(),
+  ): BrunoTableCellEditProjection => {
+    const draft = drafts.get(key);
     if (this.activeCellKey !== key) return draft?.projection ?? IDLE_CELL;
     return Object.freeze({
       active: true,
@@ -602,10 +639,10 @@ export class BrunoTableCellEditRuntime {
     return store;
   };
 
-  private readonly publishCell = (key: string): void => {
+  private readonly publishCell = (key: string, drafts: ReadonlyMap<string, DraftEntry>): void => {
     const store = this.cellStores.get(key);
     if (store === undefined) return;
-    const next = this.createCellProjection(key);
+    const next = this.createCellProjection(key, drafts);
     const previous = store.get();
     if (
       previous.active === next.active &&
@@ -622,20 +659,7 @@ export class BrunoTableCellEditRuntime {
     this.cellStores.delete(key);
   };
 
-  private readonly reconcileDraftRevision = (
-    key: string,
-    drafts: ReadonlyMap<string, DraftEntry>,
-  ): void => {
-    const previous = this.publishedDraftEvidence.get(key);
-    const next = drafts.get(key);
-    if (
-      (previous === undefined) === (next === undefined) &&
-      Object.is(previous?.value, next?.value)
-    ) {
-      return;
-    }
-    if (next === undefined) this.publishedDraftEvidence.delete(key);
-    else this.publishedDraftEvidence.set(key, next);
+  private readonly invalidateDraftCell = (key: string): void => {
     const identity = parseCellKey(key);
     if (identity !== undefined)
       this.traversalIndex.invalidateCell(identity.rowId, identity.columnId);
