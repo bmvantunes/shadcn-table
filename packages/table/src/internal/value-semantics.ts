@@ -10,6 +10,7 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
+import { isBrunoTableServerBigDecimalValueType } from "../public-types";
 
 type SemanticsOverrides = {
   readonly cellAlign?: unknown;
@@ -28,7 +29,12 @@ type RuntimeValueTypeDescriptor = {
   readonly defaultWidth: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: RuntimeAggregateAlgebra;
+  readonly serverAggregateAuthority?: "core-bigint" | "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  readonly decodeRuntimeAuthority?: unknown;
+  readonly equivalentAuthority?: unknown;
+  readonly formatCanonicalTextAuthority?: unknown;
+  readonly formatDisplayAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -48,7 +54,16 @@ export type CompiledColumnValueSemantics = {
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
+  readonly serverAggregateAuthority?: "core-bigint" | "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
+  /** Stable private authority used to invalidate decoded Server projections. */
+  readonly decodeRuntimeAuthority: unknown;
+  /** Stable private authority for grouped representative retention and Copy observability. */
+  readonly groupedRetentionAuthority: Readonly<{
+    readonly equivalent: unknown;
+    readonly formatCanonicalText: unknown;
+    readonly formatDisplay: unknown;
+  }>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -192,7 +207,17 @@ export function compileColumnValueSemantics(
     ...(descriptor.aggregateAlgebra === undefined
       ? {}
       : { aggregateAlgebra: compileAggregateAlgebra(descriptor) }),
+    ...(descriptor.serverAggregateAuthority === undefined
+      ? {}
+      : { serverAggregateAuthority: descriptor.serverAggregateAuthority }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
+    decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
+    groupedRetentionAuthority: Object.freeze({
+      equivalent: descriptor.equivalentAuthority ?? descriptor.equivalent,
+      formatCanonicalText:
+        descriptor.formatCanonicalTextAuthority ?? descriptor.formatCanonicalText,
+      formatDisplay: descriptor.formatDisplayAuthority ?? descriptor.formatDisplay,
+    }),
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
     formatCanonicalText: (value) => descriptor.formatCanonicalText(value),
@@ -204,7 +229,7 @@ export function compileColumnValueSemantics(
     encodePersistedCandidate: (value) => descriptor.encodePersisted(value),
     encodePersisted: (value) => validateJsonValue(descriptor.encodePersisted(value)),
     decodePersisted: (input) => descriptor.decodePersisted(input),
-  });
+  } satisfies CompiledColumnValueSemantics);
 }
 
 const BRUNO_TABLE_NUMBER_DISPLAY_LOCALE = "en-US";
@@ -284,7 +309,14 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     defaultWidth,
     aggregateResults,
     ...(aggregateAlgebra === undefined ? {} : { aggregateAlgebra }),
+    ...(isBrunoTableServerBigDecimalValueType(selection)
+      ? { serverAggregateAuthority: "effect-bigdecimal" as const }
+      : {}),
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
+    decodeRuntimeAuthority: decodeRuntimeFunction,
+    equivalentAuthority: equivalentFunction,
+    formatCanonicalTextAuthority: formatCanonicalTextFunction,
+    formatDisplayAuthority: formatDisplayFunction,
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
     compare: (left, right) =>
@@ -473,6 +505,7 @@ function createBigIntValueType(): RuntimeValueTypeDescriptor {
     editorLayout: "inline",
     defaultWidth: 140,
     aggregateResults: builtInBigIntAggregateResults,
+    serverAggregateAuthority: "core-bigint",
     aggregateAlgebra: Object.freeze({
       add: (left, right) => assertBigInt(left) + assertBigInt(right),
     }),

@@ -620,6 +620,22 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       },
     );
     runtime.getView().subscribeQuery(() => transitions.push("query"));
+    const atomicLayoutNotifications: Array<{
+      readonly kind: "query" | "structure";
+      readonly visibleColumnIds: readonly string[];
+    }> = [];
+    runtime.getView().subscribeColumnStructure(() =>
+      atomicLayoutNotifications.push({
+        kind: "structure",
+        visibleColumnIds: runtime.getView().getColumnStructureSnapshot().visibleColumnIds,
+      }),
+    );
+    runtime.getView().subscribeQuery(() =>
+      atomicLayoutNotifications.push({
+        kind: "query",
+        visibleColumnIds: runtime.getView().getColumnStructureSnapshot().visibleColumnIds,
+      }),
+    );
     runtime.getView().dispatchGridCommand({ type: "grouping.add", columnId: "COL_ID_NAME" });
     expect(runtime.getView().getColumnCommandSnapshot("COL_ID_AMOUNT").sortable).toBe(true);
     expect(
@@ -647,6 +663,7 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
       { columnId: "COL_ID_AMOUNT", direction: "asc" },
     ]);
 
+    atomicLayoutNotifications.length = 0;
     runtime.getView().dispatchGridCommand({
       type: "column.visibility.commit",
       columnId: "COL_ID_AMOUNT",
@@ -654,6 +671,10 @@ describe("BrunoTableGridRuntime Client grouping intent", () => {
     });
     expect(runtime.getView().getQuerySnapshot().groupOrderBy).toEqual([
       { columnId: "COL_ID_NAME", direction: "asc" },
+    ]);
+    expect(atomicLayoutNotifications).toEqual([
+      { kind: "structure", visibleColumnIds: ["COL_ID_NAME"] },
+      { kind: "query", visibleColumnIds: ["COL_ID_NAME"] },
     ]);
     expect(transitions.filter((transition) => transition === "before")).toHaveLength(1);
 

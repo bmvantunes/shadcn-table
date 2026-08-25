@@ -18,7 +18,7 @@ import {
   BrunoTableQuickFilter,
   renderBrunoTableServerColumnFilter,
 } from "./internal/client-filter-controls";
-import { compileColumns } from "./internal/compile-columns";
+import { compileColumns, type CompiledColumn } from "./internal/compile-columns";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import { BrunoTableServerRowPipeline } from "./internal/server-row-pipeline";
 import {
@@ -42,6 +42,8 @@ import {
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { snapshotBrunoTableQuickFilterFields } from "./internal/quick-filter";
 import { useBrunoTableServerFacetHookSource } from "./internal/react-compiler-adapters";
+import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
+import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
 export {
   BrunoTableActiveFilterCount,
@@ -76,6 +78,13 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
+  const groupRowsColumn = useMemo(
+    () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
+    [props.groupRowsColumn],
+  );
+  const [presentationColumnsInstaller] = useState(
+    () => new BrunoTableServerPresentationColumnsInstaller(),
+  );
   const [rowPipelineAdapter] = useState(
     () =>
       new BrunoTableServerRowPipelineAdapter<TRow>(
@@ -84,6 +93,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
         props.initialFilters,
         props.initialOrderBy,
         props.viewportSource.completeRawSelect,
+        groupRowsColumn,
       ),
   );
   const [runtime] = useState(() => {
@@ -93,8 +103,24 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       compiledColumns,
       rowPipelineAdapter.getQueryConfiguration(),
       tableId,
-      { initialPersistedState: props.initialPersistedState },
+      {
+        initialPersistedState: props.initialPersistedState,
+        grouping: true,
+        groupRowsWidth: groupRowsColumn.width,
+      },
     );
+    const createdView = created.getView();
+    const initialColumnStructure = createdView.getColumnStructureSnapshot();
+    rowPipelineAdapter.stageProjection(createdView.getQuerySnapshot(), {
+      routeBy: props.routeBy,
+      externalFilters: props.externalFilters,
+      visibleColumnIds: initialColumnStructure.visibleColumnIds,
+      presentationColumns: presentationColumnsInstaller.install(
+        compiledColumns,
+        initialColumnStructure.allColumns,
+      ),
+    });
+    createdView.publishRowPipeline(rowPipelineAdapter.getPublication());
     if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
       recordBrunoTableToolbarLifetime({ tableId, kind: "runtime-create", identity: created });
     }
@@ -102,13 +128,26 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   });
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
+  const compiledColumnsRef = useRef(compiledColumns);
   const queryInputsRef = useRef<BrunoTableServerQueryInputs>({
     routeBy: props.routeBy,
     externalFilters: props.externalFilters,
     visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+    presentationColumns: presentationColumnsInstaller.install(
+      compiledColumns,
+      runtimeView.getColumnStructureSnapshot().allColumns,
+    ),
   });
   const stagingSemanticQueryRef = useRef(false);
-  const gridOwnedControls = useMemo(() => <BrunoTableActiveFilters />, []);
+  const gridOwnedControls = useMemo(
+    () => (
+      <>
+        <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
+        <BrunoTableActiveFilters />
+      </>
+    ),
+    [compiledColumns, runtimeView],
+  );
   const quickFilterFields = useMemo(
     () => snapshotBrunoTableQuickFilterFields(props.quickFilterFields),
     [props.quickFilterFields],
@@ -159,17 +198,28 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
   }, [props.viewportSource, rowPipelineAdapter]);
 
   useLayoutEffect(() => {
+    compiledColumnsRef.current = compiledColumns;
     stageBrunoTableServerSemanticQuery(stagingSemanticQueryRef, () => {
       const queryConfiguration = rowPipelineAdapter.reconcileColumns(
         compiledColumns,
         props.quickFilterFields,
+        groupRowsColumn,
       );
-      runtime.reconcile(rowPipelineAdapter.getPublication(), compiledColumns, queryConfiguration);
+      runtime.reconcile(
+        rowPipelineAdapter.getPublication(),
+        compiledColumns,
+        queryConfiguration,
+        groupRowsColumn.width,
+      );
     });
     const queryInputs = Object.freeze({
       routeBy: props.routeBy,
       externalFilters: props.externalFilters,
       visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+      presentationColumns: presentationColumnsInstaller.install(
+        compiledColumns,
+        runtimeView.getColumnStructureSnapshot().allColumns,
+      ),
     });
     queryInputsRef.current = queryInputs;
     facetInputsRef.current = {
@@ -192,6 +242,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     });
   }, [
     compiledColumns,
+    groupRowsColumn,
     facetSource,
     facetRuntime,
     props.externalFilters,
@@ -201,6 +252,7 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
     props.viewportSource.viewport,
     quickFilterFields,
     rowPipelineAdapter,
+    presentationColumnsInstaller,
     runtime,
     runtimeView,
   ]);
@@ -212,6 +264,10 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       const queryInputs = Object.freeze({
         ...queryInputsRef.current,
         visibleColumnIds: runtimeView.getColumnStructureSnapshot().visibleColumnIds,
+        presentationColumns: presentationColumnsInstaller.install(
+          compiledColumnsRef.current,
+          runtimeView.getColumnStructureSnapshot().allColumns,
+        ),
       });
       queryInputsRef.current = queryInputs;
       rowPipelineAdapter.replace(
@@ -234,14 +290,20 @@ function BrunoTableServerInstance<TRow, const TColumns extends BrunoTableColumns
       unsubscribeColumnStructure();
       rowPipelineAdapter.release();
     };
-  }, [facetRuntime, props.viewportSource.viewport, rowPipelineAdapter, runtimeView]);
+  }, [
+    facetRuntime,
+    presentationColumnsInstaller,
+    props.viewportSource.viewport,
+    rowPipelineAdapter,
+    runtimeView,
+  ]);
 
   useLayoutEffect(() => {
     const notify = props.onPersistChange;
     runtime.setOnPersistChange(
       notify === undefined
         ? undefined
-        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, false>),
+        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
     );
   }, [props.onPersistChange, runtime]);
 
@@ -290,6 +352,41 @@ function stageBrunoTableServerSemanticQuery(
     reconcile();
   } finally {
     staging.current = false;
+  }
+}
+
+export class BrunoTableServerPresentationColumnsInstaller {
+  private sourceColumns: readonly CompiledColumn[] | undefined;
+  private widths: readonly (number | undefined)[] | undefined;
+  private installed: readonly CompiledColumn[] | undefined;
+
+  public install(
+    columns: readonly CompiledColumn[],
+    layoutColumns: readonly CompiledColumn[],
+  ): readonly CompiledColumn[] {
+    const layoutById = new Map(layoutColumns.map((column) => [column.columnId, column]));
+    const widths = columns.map((column) => layoutById.get(column.columnId)?.semantics.width);
+    if (
+      this.sourceColumns === columns &&
+      this.widths?.length === widths.length &&
+      widths.every((width, index) => Object.is(width, this.widths?.[index]))
+    ) {
+      return this.installed!;
+    }
+    let changed = false;
+    const installed = columns.map((column, index) => {
+      const width = widths[index];
+      if (width === undefined || width === column.semantics.width) return column;
+      changed = true;
+      return Object.freeze({
+        ...column,
+        semantics: Object.freeze({ ...column.semantics, width }),
+      });
+    });
+    this.sourceColumns = columns;
+    this.widths = Object.freeze(widths);
+    this.installed = changed ? Object.freeze(installed) : columns;
+    return this.installed;
   }
 }
 

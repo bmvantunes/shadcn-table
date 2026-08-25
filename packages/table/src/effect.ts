@@ -10,7 +10,11 @@ import * as Option from "effect/Option";
 import type { ReactNode } from "react";
 
 import { attachBrunoTableColumnHelperProvenance } from "./internal/column-helper-provenance";
-import { BrunoTableAggregateAlgebra, BrunoTableComputedColumn } from "./public-types";
+import {
+  BrunoTableAggregateAlgebra,
+  BrunoTableComputedColumn,
+  BrunoTableServerBigDecimalValueType,
+} from "./public-types";
 
 import type {
   BrunoTableAggregateCellParams,
@@ -31,6 +35,7 @@ import type {
   BrunoTableNonEmptyFields,
   BrunoTableNonNullish,
   BrunoTableOrdering,
+  BrunoTableServerBigDecimalValueTypeAuthority,
   BrunoTableValueType,
 } from "./public-types";
 
@@ -201,41 +206,43 @@ export const BrunoTableBigDecimalValueType: BrunoTableValueType<
   "numeric",
   "bigdecimal",
   BigDecimalAggregateResults
-> = Object.freeze({
-  codecId,
-  codecVersion,
-  filterFamily: "numeric",
-  editorFamily: "bigdecimal",
-  cellAlign: "end",
-  editorLayout: "inline",
-  defaultWidth: 140,
-  aggregateResults: Object.freeze({
-    countDistinct: "bigint",
-    sum: "self",
-    min: "self",
-    max: "self",
-    avg: "self",
-  } satisfies BrunoTableAggregateResults),
-  aggregateAlgebra: bigDecimalAggregateAlgebra,
-  decodeRuntime: decodeRuntimeBigDecimal,
-  equivalent: (left: BigDecimal.BigDecimal, right: BigDecimal.BigDecimal): boolean =>
-    compareBigDecimal(left, right) === 0,
-  compare: compareBigDecimal,
-  formatCanonicalText: (value: BigDecimal.BigDecimal): string =>
-    requireAdmittedBigDecimal(value).canonicalText,
-  parseCanonicalText: parseBigDecimalText,
-  formatDisplay: (value: BigDecimal.BigDecimal): string =>
-    requireAdmittedBigDecimal(value).canonicalText,
-  encodePersisted: (value: BigDecimal.BigDecimal) => ({
-    $brunoTableValue: persistedType,
-    version: codecVersion,
-    value: requireAdmittedBigDecimal(value).canonicalText,
-  }),
-  decodePersisted: (input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> => {
-    const decoded = decodePersistedText(input);
-    return decoded._tag === "Success" ? parseBigDecimalText(decoded.value) : decoded;
-  },
-});
+> &
+  BrunoTableServerBigDecimalValueTypeAuthority & { readonly codecId: typeof codecId } =
+  BrunoTableServerBigDecimalValueType({
+    codecId,
+    codecVersion,
+    filterFamily: "numeric",
+    editorFamily: "bigdecimal",
+    cellAlign: "end",
+    editorLayout: "inline",
+    defaultWidth: 140,
+    aggregateResults: Object.freeze({
+      countDistinct: "bigint",
+      sum: "self",
+      min: "self",
+      max: "self",
+      avg: "self",
+    } satisfies BrunoTableAggregateResults),
+    aggregateAlgebra: bigDecimalAggregateAlgebra,
+    decodeRuntime: decodeRuntimeBigDecimal,
+    equivalent: (left: BigDecimal.BigDecimal, right: BigDecimal.BigDecimal): boolean =>
+      compareBigDecimal(left, right) === 0,
+    compare: compareBigDecimal,
+    formatCanonicalText: (value: BigDecimal.BigDecimal): string =>
+      requireAdmittedBigDecimal(value).canonicalText,
+    parseCanonicalText: parseBigDecimalText,
+    formatDisplay: (value: BigDecimal.BigDecimal): string =>
+      requireAdmittedBigDecimal(value).canonicalText,
+    encodePersisted: (value: BigDecimal.BigDecimal) => ({
+      $brunoTableValue: persistedType,
+      version: codecVersion,
+      value: requireAdmittedBigDecimal(value).canonicalText,
+    }),
+    decodePersisted: (input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> => {
+      const decoded = decodePersistedText(input);
+      return decoded._tag === "Success" ? parseBigDecimalText(decoded.value) : decoded;
+    },
+  });
 
 type FieldOfBigDecimal<TRow> = {
   readonly [TField in BrunoTableFieldKey<TRow>]: [BrunoTableNonNullish<TRow[TField]>] extends [

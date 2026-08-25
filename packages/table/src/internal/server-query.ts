@@ -1,4 +1,5 @@
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
+import { BRUNO_TABLE_ROWS_COLUMN_ID } from "./grouped-row";
 
 export type BrunoTableServerQueryInput = Readonly<{
   readonly routeBy?: Readonly<Record<string, unknown>>;
@@ -11,9 +12,14 @@ export type BrunoTableServerQueryInput = Readonly<{
     readonly columnId: string;
     readonly direction: "asc" | "desc";
   }>[];
+  readonly groupBy?: readonly string[];
+  readonly groupOrderBy?: readonly Readonly<{
+    readonly columnId: string;
+    readonly direction: "asc" | "desc";
+  }>[];
 }>;
 
-export type BrunoTableCompiledServerQuery = Readonly<{
+export type BrunoTableCompiledServerRawQuery = Readonly<{
   readonly routeBy?: Readonly<Record<string, unknown>>;
   readonly select: readonly [string, ...string[]];
   readonly where: readonly unknown[];
@@ -23,9 +29,48 @@ export type BrunoTableCompiledServerQuery = Readonly<{
   }>[];
 }>;
 
-export type BrunoTableCompiledServerQueryPlan = Readonly<{
-  readonly query: BrunoTableCompiledServerQuery;
+export type BrunoTableCompiledServerGroupedQuery = Readonly<{
+  readonly routeBy?: Readonly<Record<string, unknown>>;
+  readonly groupBy: readonly [string, ...string[]];
+  readonly aggregates: Readonly<
+    Record<string, Readonly<{ readonly aggFunc: string; readonly field?: string }>>
+  >;
+  readonly where: readonly unknown[];
+  readonly orderBy: readonly Readonly<{
+    readonly field?: string;
+    readonly aggregate?: string;
+    readonly direction: "asc" | "desc";
+  }>[];
 }>;
+
+export type BrunoTableCompiledServerQuery =
+  | BrunoTableCompiledServerRawQuery
+  | BrunoTableCompiledServerGroupedQuery;
+
+export type BrunoTableCompiledServerGroupedProjection = Readonly<{
+  readonly rowsAlias: string;
+  readonly groupKeys: readonly Readonly<{ readonly columnId: string; readonly field: string }>[];
+  readonly aggregates: readonly Readonly<{
+    readonly alias: string;
+    readonly columnId: string;
+    readonly field: string;
+    readonly aggFunc: string;
+  }>[];
+}>;
+
+export type BrunoTableCompiledServerRawQueryPlan = Readonly<{
+  readonly query: BrunoTableCompiledServerRawQuery;
+  readonly grouped?: never;
+}>;
+
+export type BrunoTableCompiledServerGroupedQueryPlan = Readonly<{
+  readonly query: BrunoTableCompiledServerGroupedQuery;
+  readonly grouped: BrunoTableCompiledServerGroupedProjection;
+}>;
+
+export type BrunoTableCompiledServerQueryPlan =
+  | BrunoTableCompiledServerRawQueryPlan
+  | BrunoTableCompiledServerGroupedQueryPlan;
 
 export const BRUNO_TABLE_SERVER_FACET_COUNT_ALIAS = "__bruno_table_facet_count";
 
@@ -77,6 +122,22 @@ export function compileBrunoTableServerProjectionFields(
 
 export function compileBrunoTableServerQueryPlan(
   columns: readonly CompiledColumn[],
+  input: BrunoTableServerQueryInput &
+    Readonly<{ readonly groupBy: readonly [string, ...string[]] }>,
+  completeRawSelect: readonly [string, ...string[]] | undefined,
+): BrunoTableCompiledServerGroupedQueryPlan;
+export function compileBrunoTableServerQueryPlan(
+  columns: readonly CompiledColumn[],
+  input: BrunoTableServerQueryInput & Readonly<{ readonly groupBy?: undefined | readonly [] }>,
+  completeRawSelect: readonly [string, ...string[]] | undefined,
+): BrunoTableCompiledServerRawQueryPlan;
+export function compileBrunoTableServerQueryPlan(
+  columns: readonly CompiledColumn[],
+  input: BrunoTableServerQueryInput,
+  completeRawSelect: readonly [string, ...string[]] | undefined,
+): BrunoTableCompiledServerQueryPlan;
+export function compileBrunoTableServerQueryPlan(
+  columns: readonly CompiledColumn[],
   input: BrunoTableServerQueryInput,
   completeRawSelect: readonly [string, ...string[]] | undefined,
 ): BrunoTableCompiledServerQueryPlan {
@@ -86,13 +147,6 @@ export function compileBrunoTableServerQueryPlan(
       fieldColumns.set(column.columnId, column);
     }
   }
-  const select = compileBrunoTableServerProjectionFields(
-    columns,
-    input.quickFilterFields,
-    completeRawSelect,
-    input.visibleColumnIds,
-  );
-
   const where = [...(input.externalFilters ?? [])];
   where.push(...input.filters.map((filter) => compileFilter(filter, fieldColumns)));
   if (input.quickFilter.length > 0 && input.quickFilterFields.length > 0) {
@@ -109,6 +163,16 @@ export function compileBrunoTableServerQueryPlan(
     );
   }
 
+  if ((input.groupBy?.length ?? 0) > 0) {
+    return compileGroupedQueryPlan(columns, fieldColumns, input, Object.freeze(where));
+  }
+
+  const select = compileBrunoTableServerProjectionFields(
+    columns,
+    input.quickFilterFields,
+    completeRawSelect,
+    input.visibleColumnIds,
+  );
   const orderBy = input.orderBy.map((order) => {
     const column = fieldColumns.get(order.columnId);
     if (column === undefined || !column.enableSorting) {
@@ -128,6 +192,155 @@ export function compileBrunoTableServerQueryPlan(
       orderBy: Object.freeze(orderBy),
     }),
   });
+}
+
+function compileGroupedQueryPlan(
+  columns: readonly CompiledColumn[],
+  fieldColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  input: BrunoTableServerQueryInput,
+  where: readonly unknown[],
+): BrunoTableCompiledServerGroupedQueryPlan {
+  const groupKeys = (input.groupBy ?? []).map((columnId) => {
+    const column = fieldColumns.get(columnId);
+    if (column === undefined || !column.groupBy) {
+      throw new TypeError(`BrunoTable Server Group By has no eligible Query Field: ${columnId}`);
+    }
+    return Object.freeze({ columnId, field: column.field });
+  });
+  const firstGroup = groupKeys[0];
+  if (firstGroup === undefined)
+    throw new TypeError("BrunoTable Server grouping requires a Group Key.");
+  const active = new Set(groupKeys.map(({ columnId }) => columnId));
+  const visible =
+    input.visibleColumnIds === undefined ? undefined : new Set(input.visibleColumnIds);
+  const reservedAliases = new Set<string>([
+    "__proto__",
+    "prototype",
+    "constructor",
+    ...groupKeys.map(({ field }) => field),
+  ]);
+  const nextAlias = (base: string): string => {
+    let candidate = base;
+    let suffix = 0;
+    while (reservedAliases.has(candidate)) candidate = `${base}_${String(++suffix)}`;
+    reservedAliases.add(candidate);
+    return candidate;
+  };
+  const rowsAlias = nextAlias("__bruno_table_rows");
+  const aggregates = columns
+    .filter(
+      (column): column is CompiledFieldColumn =>
+        column.kind === "field" &&
+        column.aggFunc !== undefined &&
+        !active.has(column.columnId) &&
+        (visible === undefined || visible.has(column.columnId)),
+    )
+    .toSorted((left, right) => compareColumnIdentity(left.columnId, right.columnId))
+    .map((column) =>
+      compileServerAggregate(column, nextAlias(stableAggregateAlias(column.columnId))),
+    );
+  const aliasesByColumn = new Map<string, string>(
+    aggregates.map((aggregate) => [aggregate.columnId, aggregate.alias]),
+  );
+  const groupFieldsByColumn = new Map<string, string>(
+    groupKeys.map((group) => [group.columnId, group.field]),
+  );
+  const groupedOrderBy = input.groupOrderBy ?? [];
+  if (groupedOrderBy.length === 0) {
+    throw new TypeError("BrunoTable Server grouped sorting requires a non-empty orderBy query.");
+  }
+  const orderBy = groupedOrderBy.map((order) => {
+    if (order.columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
+      return Object.freeze({ aggregate: rowsAlias, direction: order.direction });
+    }
+    const field = groupFieldsByColumn.get(order.columnId);
+    if (field !== undefined) return Object.freeze({ field, direction: order.direction });
+    const aggregate = aliasesByColumn.get(order.columnId);
+    if (aggregate !== undefined) return Object.freeze({ aggregate, direction: order.direction });
+    throw new TypeError(`BrunoTable Server grouped sort is not active: ${order.columnId}`);
+  });
+  const aggregateQuery: Record<
+    string,
+    Readonly<{ readonly aggFunc: string; readonly field?: string }>
+  > = {
+    [rowsAlias]: Object.freeze({ aggFunc: "count" }),
+  };
+  for (const aggregate of aggregates) {
+    aggregateQuery[aggregate.alias] = Object.freeze({
+      aggFunc: aggregate.aggFunc,
+      field: aggregate.field,
+    });
+  }
+  const groupedFields: readonly [string, ...string[]] = Object.freeze([
+    firstGroup.field,
+    ...groupKeys.slice(1).map(({ field }) => field),
+  ]);
+  return Object.freeze({
+    grouped: Object.freeze({
+      rowsAlias,
+      groupKeys: Object.freeze(groupKeys),
+      aggregates: Object.freeze(aggregates),
+    }),
+    query: Object.freeze({
+      ...(input.routeBy === undefined ? {} : { routeBy: input.routeBy }),
+      groupBy: groupedFields,
+      aggregates: Object.freeze(aggregateQuery),
+      where,
+      orderBy: Object.freeze(orderBy),
+    }),
+  });
+}
+
+function stableAggregateAlias(columnId: string): string {
+  let encoded = "";
+  for (let index = 0; index < columnId.length; index += 1) {
+    encoded += columnId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `__bruno_table_aggregate_${encoded}`;
+}
+
+function compareColumnIdentity(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compileServerAggregate(
+  column: CompiledFieldColumn,
+  alias: string,
+): BrunoTableCompiledServerGroupedProjection["aggregates"][number] {
+  assertBrunoTableServerAggregateAuthority(column);
+  const aggFunc = column.aggFunc;
+  if (aggFunc === undefined) {
+    throw new TypeError(`BrunoTable Server aggregate is missing its function: ${column.columnId}`);
+  }
+  return Object.freeze({
+    alias,
+    columnId: column.columnId,
+    field: column.field,
+    aggFunc,
+  });
+}
+
+export function assertBrunoTableServerAggregateAuthorities(
+  columns: readonly CompiledColumn[],
+): void {
+  for (const column of columns) {
+    if (column.kind === "field" && column.aggFunc !== undefined) {
+      assertBrunoTableServerAggregateAuthority(column);
+    }
+  }
+}
+
+function assertBrunoTableServerAggregateAuthority(column: CompiledFieldColumn): void {
+  const aggFunc = column.aggFunc;
+  if (
+    (aggFunc === "sum" || aggFunc === "avg") &&
+    column.semantics.serverAggregateAuthority !== "effect-bigdecimal" &&
+    !(aggFunc === "sum" && column.semantics.serverAggregateAuthority === "core-bigint")
+  ) {
+    throw new TypeError(
+      `BrunoTable Server aggregate has no source-compatible exact result Value Type: ${column.columnId}`,
+    );
+  }
 }
 
 export function compileBrunoTableServerFacetQuery(

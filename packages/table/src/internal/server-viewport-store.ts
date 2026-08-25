@@ -5,6 +5,21 @@ export type BrunoTableServerViewportWindow = Readonly<{
   readonly lastRow: number;
 }>;
 
+export type BrunoTableServerViewportDeliverySnapshot<TRow> = readonly Readonly<{
+  readonly index: number;
+  readonly row: TRow;
+  readonly rowId: string;
+}>[];
+
+export type BrunoTableServerViewportAdmissionPlan<TRow> = Readonly<{
+  readonly generation: number;
+  readonly admissionRevision: number;
+  readonly requiredWindow: BrunoTableServerViewportWindow;
+  readonly authoritativeTotalRows: boolean;
+  readonly totalRows: number;
+  readonly delivery: BrunoTableServerViewportDeliverySnapshot<TRow>;
+}>;
+
 export type BrunoTableServerViewportStoreSnapshot<TRow> = Readonly<{
   readonly generation: number;
   readonly structureVersion: number;
@@ -27,6 +42,7 @@ const EMPTY_AFFECTED_ROW_IDS: ReadonlySet<string> = new Set();
 
 export class BrunoTableServerViewportStore<TRow> {
   private generation = 0;
+  private admissionRevision = 0;
   private structureVersion = 0;
   private authoritativeTotalRows = false;
   private requiredWindow: BrunoTableServerViewportWindow = Object.freeze({
@@ -37,6 +53,7 @@ export class BrunoTableServerViewportStore<TRow> {
   private rowIndexById = new Map<string, number>();
   private rowsById = new Map<string, TRow>();
   private readonly listeners = new Set<Listener>();
+  private readonly admissionPlans = new WeakSet<object>();
   private snapshot: BrunoTableServerViewportStoreSnapshot<TRow> = Object.freeze({
     generation: 0,
     structureVersion: 0,
@@ -72,7 +89,11 @@ export class BrunoTableServerViewportStore<TRow> {
     return this.generation;
   }
 
-  public setRequiredRange(generation: number, window: BrunoTableServerViewportWindow): boolean {
+  public setRequiredRange(
+    generation: number,
+    window: BrunoTableServerViewportWindow,
+    beforePublish?: (requiredWindow: BrunoTableServerViewportWindow) => void,
+  ): boolean {
     if (generation !== this.generation) return false;
     const requiredWindow = sanitizeBrunoTableServerViewportWindow(window);
     if (
@@ -81,9 +102,11 @@ export class BrunoTableServerViewportStore<TRow> {
     ) {
       return false;
     }
-    this.requiredWindow = requiredWindow;
     let prunedRows = false;
     const affectedRowIds = new Set<string>();
+    let nextIndexToRowId = this.indexToRowId;
+    let nextRowIndexById = this.rowIndexById;
+    let nextRowsById = this.rowsById;
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map<number, string>();
       const rowIndexById = new Map<string, number>();
@@ -100,12 +123,18 @@ export class BrunoTableServerViewportStore<TRow> {
         for (const rowId of this.rowIndexById.keys()) {
           if (!rowIndexById.has(rowId)) affectedRowIds.add(rowId);
         }
-        this.indexToRowId = indexToRowId;
-        this.rowIndexById = rowIndexById;
-        this.rowsById = rowsById;
+        nextIndexToRowId = indexToRowId;
+        nextRowIndexById = rowIndexById;
+        nextRowsById = rowsById;
         prunedRows = true;
       }
     }
+    beforePublish?.(requiredWindow);
+    this.admissionRevision += 1;
+    this.requiredWindow = requiredWindow;
+    this.indexToRowId = nextIndexToRowId;
+    this.rowIndexById = nextRowIndexById;
+    this.rowsById = nextRowsById;
     if (prunedRows) this.publish(this.snapshot.rowSpace.totalRows, true, affectedRowIds);
     else this.publishRequiredWindow();
     return true;
@@ -121,7 +150,12 @@ export class BrunoTableServerViewportStore<TRow> {
     return generation === this.generation;
   }
 
-  public setRowCount(generation: number, totalRows: number, keepRenderedRows?: boolean): boolean {
+  public setRowCount(
+    generation: number,
+    totalRows: number,
+    keepRenderedRows?: boolean,
+    beforePublish?: (totalRows: number) => void,
+  ): boolean {
     if (generation !== this.generation || !isValidRowCount(totalRows)) return false;
     // effect-view-server uses this activation/deactivation callback as lifecycle chrome. It is not
     // authoritative query data and must not collapse provisional loading geometry or bridge rows.
@@ -129,10 +163,12 @@ export class BrunoTableServerViewportStore<TRow> {
     if (this.authoritativeTotalRows && totalRows === this.snapshot.rowSpace.totalRows) {
       return true;
     }
-    this.authoritativeTotalRows = true;
     const previousTotalRows = this.snapshot.rowSpace.totalRows;
     let prunedRows = false;
     const affectedRowIds = new Set<string>();
+    let nextIndexToRowId = this.indexToRowId;
+    let nextRowIndexById = this.rowIndexById;
+    let nextRowsById = this.rowsById;
     if (this.indexToRowId.size > 0) {
       const indexToRowId = new Map(this.indexToRowId);
       const rowIndexById = new Map(this.rowIndexById);
@@ -147,10 +183,16 @@ export class BrunoTableServerViewportStore<TRow> {
           rowsById.delete(rowId);
         }
       }
-      this.indexToRowId = indexToRowId;
-      this.rowIndexById = rowIndexById;
-      this.rowsById = rowsById;
+      nextIndexToRowId = indexToRowId;
+      nextRowIndexById = rowIndexById;
+      nextRowsById = rowsById;
     }
+    beforePublish?.(totalRows);
+    this.admissionRevision += 1;
+    this.authoritativeTotalRows = true;
+    this.indexToRowId = nextIndexToRowId;
+    this.rowIndexById = nextRowIndexById;
+    this.rowsById = nextRowsById;
     this.publish(totalRows, prunedRows || totalRows !== previousTotalRows, affectedRowIds);
     return true;
   }
@@ -161,32 +203,73 @@ export class BrunoTableServerViewportStore<TRow> {
     rowKeysByIndex: Readonly<Record<number, string>>,
   ): boolean {
     if (generation !== this.generation) return false;
-    const rowEntries = Object.entries(rowsByIndex);
-    const keyEntries = Object.entries(rowKeysByIndex);
-    if (rowEntries.length !== keyEntries.length) return false;
+    const delivery = snapshotBrunoTableServerViewportDelivery(rowsByIndex, rowKeysByIndex);
+    if (delivery === undefined) return false;
+    return this.setRowDataSnapshot(generation, delivery);
+  }
 
+  public planRowDataSnapshot(
+    generation: number,
+    delivery: BrunoTableServerViewportDeliverySnapshot<TRow>,
+  ): BrunoTableServerViewportAdmissionPlan<TRow> | undefined {
+    if (generation !== this.generation) return undefined;
     const admitted: Array<
       Readonly<{ readonly index: number; readonly row: TRow; readonly rowId: string }>
     > = [];
-    const indexes = new Set<number>();
-    const rowIds = new Set<string>();
-    for (const [rawIndex, row] of rowEntries) {
-      const index = parseAbsoluteIndex(rawIndex);
-      if (index === undefined || indexes.has(index)) return false;
-      if (this.authoritativeTotalRows && index >= this.snapshot.rowSpace.totalRows) return false;
-      if (!Object.prototype.hasOwnProperty.call(rowKeysByIndex, rawIndex)) return false;
-      const rowId = rowKeysByIndex[index];
-      if (typeof rowId !== "string" || rowId.length === 0 || rowIds.has(rowId)) return false;
-      indexes.add(index);
-      rowIds.add(rowId);
+    for (const { index, row, rowId } of delivery) {
+      if (this.authoritativeTotalRows && index >= this.snapshot.rowSpace.totalRows)
+        return undefined;
       if (index >= this.requiredWindow.firstRow && index <= this.requiredWindow.lastRow) {
         admitted.push(Object.freeze({ index, row, rowId }));
       }
     }
-    for (const [rawIndex] of keyEntries) {
-      const index = parseAbsoluteIndex(rawIndex);
-      if (index === undefined || !indexes.has(index)) return false;
+    const plan = Object.freeze({
+      generation,
+      admissionRevision: ++this.admissionRevision,
+      requiredWindow: this.requiredWindow,
+      authoritativeTotalRows: this.authoritativeTotalRows,
+      totalRows: this.snapshot.rowSpace.totalRows,
+      delivery: Object.freeze(admitted),
+    });
+    this.admissionPlans.add(plan);
+    return plan;
+  }
+
+  public isSupersededRowDataPlan(plan: BrunoTableServerViewportAdmissionPlan<TRow>): boolean {
+    return !this.isCurrentAdmissionPlan(plan);
+  }
+
+  public setRowDataSnapshot(
+    generation: number,
+    delivery: BrunoTableServerViewportDeliverySnapshot<TRow>,
+  ): boolean {
+    const plan = this.planRowDataSnapshot(generation, delivery);
+    return plan !== undefined && this.commitRowDataPlan(plan, plan.delivery);
+  }
+
+  public commitRowDataPlan(
+    plan: BrunoTableServerViewportAdmissionPlan<TRow>,
+    delivery: BrunoTableServerViewportDeliverySnapshot<TRow>,
+    beforePublish?: (
+      admitted: readonly Readonly<{
+        readonly index: number;
+        readonly row: TRow;
+        readonly rowId: string;
+      }>[],
+    ) => void,
+  ): boolean {
+    if (!this.admissionPlans.delete(plan)) return false;
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
+    if (
+      delivery.length !== plan.delivery.length ||
+      delivery.some(
+        ({ index, rowId }, position) =>
+          index !== plan.delivery[position]?.index || rowId !== plan.delivery[position]?.rowId,
+      )
+    ) {
+      return false;
     }
+    const admitted = delivery;
     if (admitted.length === 0) return true;
 
     const previousRowsById = this.rowsById;
@@ -227,15 +310,18 @@ export class BrunoTableServerViewportStore<TRow> {
       if (delivered !== undefined && row !== previous) affectedRowIds.add(rowId);
       if (row !== undefined) rowsById.set(rowId, row);
     }
-    this.indexToRowId = indexToRowId;
-    this.rowIndexById = rowIndexById;
-    this.rowsById = rowsById;
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
     const totalRows = this.authoritativeTotalRows
       ? this.snapshot.rowSpace.totalRows
       : admitted.reduce(
           (maximum, entry) => Math.max(maximum, entry.index + 1),
           this.snapshot.rowSpace.totalRows,
         );
+    beforePublish?.(admitted);
+    if (!this.isCurrentAdmissionPlan(plan)) return false;
+    this.indexToRowId = indexToRowId;
+    this.rowIndexById = rowIndexById;
+    this.rowsById = rowsById;
     if (
       affectedRowIds.size === 0 &&
       !structureChanged &&
@@ -249,6 +335,16 @@ export class BrunoTableServerViewportStore<TRow> {
       affectedRowIds,
     );
     return true;
+  }
+
+  private isCurrentAdmissionPlan(plan: BrunoTableServerViewportAdmissionPlan<TRow>): boolean {
+    return (
+      plan.generation === this.generation &&
+      plan.admissionRevision === this.admissionRevision &&
+      plan.requiredWindow === this.requiredWindow &&
+      plan.authoritativeTotalRows === this.authoritativeTotalRows &&
+      plan.totalRows === this.snapshot.rowSpace.totalRows
+    );
   }
 
   private publish(
@@ -289,6 +385,59 @@ export class BrunoTableServerViewportStore<TRow> {
     });
     notify(this.listeners);
   }
+}
+
+export function validateBrunoTableServerViewportRowKeys<TRow>(
+  rowsByIndex: Readonly<Record<number, TRow>>,
+  rowKeysByIndex: Readonly<Record<number, string>>,
+): boolean {
+  return snapshotBrunoTableServerViewportDelivery(rowsByIndex, rowKeysByIndex) !== undefined;
+}
+
+export function snapshotBrunoTableServerViewportDelivery<TRow>(
+  rowsByIndex: Readonly<Record<number, TRow>>,
+  rowKeysByIndex: Readonly<Record<number, string>>,
+): BrunoTableServerViewportDeliverySnapshot<TRow> | undefined {
+  const rowEntries = Object.entries(rowsByIndex);
+  const keyEntries = Object.entries(rowKeysByIndex);
+  const validatedRowKeys = snapshotValidatedViewportRowKeys(rowEntries, keyEntries);
+  if (validatedRowKeys === undefined) return undefined;
+  return Object.freeze(
+    rowEntries.map(([rawIndex, row]) => {
+      const index = parseAbsoluteIndex(rawIndex)!;
+      return Object.freeze({ index, row, rowId: validatedRowKeys.get(index)! });
+    }),
+  );
+}
+
+function snapshotValidatedViewportRowKeys<TRow>(
+  rowEntries: [string, TRow][],
+  keyEntries: [string, string][],
+): ReadonlyMap<number, string> | undefined {
+  if (rowEntries.length !== keyEntries.length) return undefined;
+  const indexes = new Set<number>();
+  for (const [rawIndex] of rowEntries) {
+    const index = parseAbsoluteIndex(rawIndex);
+    if (index === undefined || indexes.has(index)) return undefined;
+    indexes.add(index);
+  }
+  const validatedRowKeys = new Map<number, string>();
+  const rowIds = new Set<string>();
+  for (const [rawIndex, rowId] of keyEntries) {
+    const index = parseAbsoluteIndex(rawIndex);
+    if (
+      index === undefined ||
+      !indexes.has(index) ||
+      typeof rowId !== "string" ||
+      rowId.length === 0 ||
+      rowIds.has(rowId)
+    ) {
+      return undefined;
+    }
+    validatedRowKeys.set(index, rowId);
+    rowIds.add(rowId);
+  }
+  return validatedRowKeys;
 }
 
 export function sanitizeBrunoTableServerViewportWindow(

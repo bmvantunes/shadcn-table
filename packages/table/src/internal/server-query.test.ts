@@ -53,7 +53,194 @@ const completeRawSelect = [
   "hiddenLabel",
 ] as const;
 
+const groupedColumns = compileColumns([
+  { columnId: "COL_ID_DESK", field: "desk", headerName: "Desk", valueType: "text", groupBy: true },
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_MIN_QUANTITY",
+    field: "quantity",
+    headerName: "Minimum quantity",
+    valueType: "bigint",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_MAX_QUANTITY",
+    field: "quantity",
+    headerName: "Maximum quantity",
+    valueType: "bigint",
+    aggFunc: "max",
+  },
+]);
+
 describe("compileBrunoTableServerQueryPlan", () => {
+  it("compiles ordered Group By fields and distinct private aggregate aliases", () => {
+    const plan = compileBrunoTableServerQueryPlan(
+      groupedColumns,
+      {
+        routeBy: { tenant: "emea" },
+        externalFilters: [{ field: "quantity", type: "greaterThan", filter: 0n }],
+        filters: [{ columnId: "COL_ID_SYMBOL", type: "startsWith", filter: "E" }],
+        quickFilter: "rates",
+        quickFilterFields: ["symbol"],
+        visibleColumnIds: [
+          "COL_ID_DESK",
+          "COL_ID_SYMBOL",
+          "COL_ID_MIN_QUANTITY",
+          "COL_ID_MAX_QUANTITY",
+        ],
+        orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+        groupBy: ["COL_ID_DESK", "COL_ID_SYMBOL"],
+        groupOrderBy: [
+          { columnId: "COL_ID_MAX_QUANTITY", direction: "desc" },
+          { columnId: "COL_ID_BRUNO_TABLE_ROWS", direction: "asc" },
+          { columnId: "COL_ID_DESK", direction: "asc" },
+        ],
+      },
+      completeRawSelect,
+    );
+
+    expect(plan.query).toEqual({
+      routeBy: { tenant: "emea" },
+      groupBy: ["desk", "symbol"],
+      aggregates: {
+        [plan.grouped.rowsAlias]: { aggFunc: "count" },
+        [plan.grouped.aggregates[0]!.alias]: { aggFunc: "max", field: "quantity" },
+        [plan.grouped.aggregates[1]!.alias]: { aggFunc: "min", field: "quantity" },
+      },
+      where: [
+        { field: "quantity", type: "greaterThan", filter: 0n },
+        { field: "symbol", type: "startsWith", filter: "E" },
+        { type: "OR", conditions: [{ field: "symbol", type: "contains", filter: "rates" }] },
+      ],
+      orderBy: [
+        { aggregate: plan.grouped.aggregates[0]!.alias, direction: "desc" },
+        { aggregate: plan.grouped.rowsAlias, direction: "asc" },
+        { field: "desk", direction: "asc" },
+      ],
+    });
+    expect(plan.grouped.groupKeys).toEqual([
+      { columnId: "COL_ID_DESK", field: "desk" },
+      { columnId: "COL_ID_SYMBOL", field: "symbol" },
+    ]);
+    expect(plan.grouped.aggregates.map(({ alias: _alias, ...aggregate }) => aggregate)).toEqual([
+      { columnId: "COL_ID_MAX_QUANTITY", field: "quantity", aggFunc: "max" },
+      { columnId: "COL_ID_MIN_QUANTITY", field: "quantity", aggFunc: "min" },
+    ]);
+    expect(plan.grouped.aggregates[0]!.alias).not.toBe(plan.grouped.aggregates[1]!.alias);
+  });
+
+  it("keeps private aggregate aliases stable across definition-only reorders", () => {
+    const input = {
+      filters: [],
+      quickFilter: "",
+      quickFilterFields: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_QUANTITY", direction: "desc" as const }],
+    } as const;
+    const reordered = compileColumns([
+      {
+        columnId: "COL_ID_UNRELATED",
+        field: "unrelated",
+        headerName: "Unrelated",
+        valueType: "text",
+      },
+      groupedColumns[3]!,
+      groupedColumns[0]!,
+      groupedColumns[2]!,
+      groupedColumns[1]!,
+    ]);
+    const originalPlan = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
+    const reorderedPlan = compileBrunoTableServerQueryPlan(reordered, input, completeRawSelect);
+    expect(reorderedPlan.query).toEqual(originalPlan.query);
+    expect(reorderedPlan.grouped.aggregates).toEqual(originalPlan.grouped.aggregates);
+  });
+
+  it("ignores dormant field collisions while suffixing active Group Key collisions", () => {
+    const input = {
+      filters: [],
+      quickFilter: "",
+      quickFilterFields: [],
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_MAX_QUANTITY", direction: "desc" as const }],
+    } as const;
+    const baseline = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
+    const maxBaseAlias = baseline.grouped.aggregates.find(
+      ({ columnId }) => columnId === "COL_ID_MAX_QUANTITY",
+    )!.alias;
+    const collisionColumns = compileColumns([
+      ...groupedColumns,
+      {
+        columnId: "COL_ID_ALIAS_COLLISION",
+        field: maxBaseAlias,
+        headerName: "Alias collision",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_ALIAS_SUFFIX_COLLISION",
+        field: `${maxBaseAlias}_1`,
+        headerName: "Alias suffix collision",
+        valueType: "text",
+      },
+    ]);
+    const reordered = compileColumns([
+      collisionColumns[5]!,
+      collisionColumns[3]!,
+      collisionColumns[1]!,
+      collisionColumns[4]!,
+      collisionColumns[0]!,
+      collisionColumns[2]!,
+    ]);
+    const collisionSelect = [...completeRawSelect, maxBaseAlias, `${maxBaseAlias}_1`] as const;
+    const original = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
+    const first = compileBrunoTableServerQueryPlan(collisionColumns, input, collisionSelect);
+    const second = compileBrunoTableServerQueryPlan(reordered, input, collisionSelect);
+    const alias = first.grouped.aggregates.find(
+      ({ columnId }) => columnId === "COL_ID_MAX_QUANTITY",
+    )!.alias;
+
+    expect(alias).toBe(maxBaseAlias);
+    expect(first.query).toEqual(original.query);
+    expect(first.grouped).toEqual(original.grouped);
+    expect(second.query).toEqual(first.query);
+    expect(second.grouped.aggregates).toEqual(first.grouped.aggregates);
+
+    const activeCollisionColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS_GROUP",
+        field: maxBaseAlias,
+        headerName: "Alias group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_ROWS_ALIAS_GROUP",
+        field: "__bruno_table_rows",
+        headerName: "Rows alias group",
+        valueType: "text",
+        groupBy: true,
+      },
+      groupedColumns[3]!,
+    ]);
+    const active = compileBrunoTableServerQueryPlan(
+      activeCollisionColumns,
+      {
+        ...input,
+        groupBy: ["COL_ID_ALIAS_GROUP", "COL_ID_ROWS_ALIAS_GROUP"],
+      },
+      [maxBaseAlias, "__bruno_table_rows", "quantity"],
+    );
+    expect(active.grouped.rowsAlias).toBe("__bruno_table_rows_1");
+    expect(active.grouped.aggregates[0]?.alias).toBe(`${maxBaseAlias}_1`);
+  });
+
   it("rejects empty and non-field sorting at the runtime boundary", () => {
     expect(() =>
       compileBrunoTableServerQueryPlan(
@@ -86,6 +273,107 @@ describe("compileBrunoTableServerQueryPlan", () => {
         completeRawSelect,
       ),
     ).toThrow("BrunoTable Server sort has no Query Field: COL_ID_NOTIONAL");
+  });
+
+  it("rejects Client-only custom arithmetic at the Server query boundary", () => {
+    const customColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "symbol",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_CUSTOM_SUM",
+        field: "amount",
+        headerName: "Custom sum",
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
+          codecId: "example/client-only-arithmetic",
+        }),
+        aggFunc: "sum",
+      },
+    ]);
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        customColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+          groupBy: ["COL_ID_GROUP"],
+          groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("no source-compatible exact result Value Type: COL_ID_CUSTOM_SUM");
+
+    const spoofedCodecColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "symbol",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_SPOOFED_SUM",
+        field: "amount",
+        headerName: "Spoofed sum",
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
+          codecId: "@bruno/table/effect/bigdecimal",
+        }),
+        aggFunc: "sum",
+      },
+    ]);
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        spoofedCodecColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+          groupBy: ["COL_ID_GROUP"],
+          groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("no source-compatible exact result Value Type: COL_ID_SPOOFED_SUM");
+
+    const spoofedBigIntColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "symbol",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_SPOOFED_BIGINT_SUM",
+        field: "amount",
+        headerName: "Spoofed bigint sum",
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
+          codecId: "@bruno/table/bigint",
+        }),
+        aggFunc: "sum",
+      },
+    ]);
+    expect(() =>
+      compileBrunoTableServerQueryPlan(
+        spoofedBigIntColumns,
+        {
+          filters: [],
+          quickFilter: "",
+          quickFilterFields: [],
+          orderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+          groupBy: ["COL_ID_GROUP"],
+          groupOrderBy: [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+        },
+        completeRawSelect,
+      ),
+    ).toThrow("no source-compatible exact result Value Type: COL_ID_SPOOFED_BIGINT_SUM");
   });
 
   it("maps Column Identity to fields and retains native exact operands", () => {

@@ -39,6 +39,11 @@ import {
   recordBrunoTableColumnFilterSubscriptionEvent,
 } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
+import {
+  BRUNO_TABLE_ROWS_COLUMN_ID,
+  isBrunoTableServerGroupedRow,
+  type BrunoTableServerGroupedRowSnapshot,
+} from "./grouped-row";
 import { isBrunoTableQuickFilterTextWithinLimit } from "./quick-filter";
 import {
   applyBrunoTableSortingCommand,
@@ -210,8 +215,12 @@ export type BrunoTableSourceVersionSnapshot = Readonly<{
 }>;
 
 export type BrunoTableBodySnapshot =
-  | Readonly<{ readonly kind: "rows" }>
-  | Readonly<{ readonly kind: "loading"; readonly totalRows: number }>
+  | Readonly<{ readonly kind: "rows"; readonly ariaRowCount?: number }>
+  | Readonly<{
+      readonly kind: "loading";
+      readonly totalRows: number;
+      readonly ariaRowCount?: number;
+    }>
   | Readonly<{ readonly kind: "invalid" }>
   | Readonly<{ readonly kind: "empty" }>;
 
@@ -244,6 +253,8 @@ type BrunoTableInstalledClientProjectionBase = Readonly<{
     readonly findRowIndex: (rowId: string) => number | undefined;
     readonly setRequiredRange: (start: number, end: number) => void;
   }>;
+  /** Server projections keep sparse rowspace authority in their dedicated pipeline subscription. */
+  readonly rowSpaceAuthority?: "pipeline";
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   /** Stable semantic/layout revision for the installed presentation columns. */
@@ -538,6 +549,8 @@ const EMPTY_COLUMN_COMMAND: BrunoTableColumnCommandSnapshot = Object.freeze({
 export type BrunoTableRowPipelinePublication<TRow> = Readonly<{
   readonly status: BrunoTableSourceStatus;
   readonly totalRows: number;
+  /** Private accessibility count for non-authoritative loading geometry. */
+  readonly loadingAriaRowCount?: number;
   readonly version: number;
   readonly statusCode?: string;
   readonly message?: string;
@@ -1794,17 +1807,17 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnLayoutSnapshot,
       this.groupRowsWidth,
     );
-    let error = groupingSortChanged
-      ? firstNotificationFailure(notify(this.queryListeners), notify(this.sortingListeners))
-      : resetsRowsWidth
-        ? notify(this.queryListeners)
-        : undefined;
+    let error = firstNotificationFailure(
+      this.notifyColumnLayoutTransition(previousLayoutSnapshot, previousCommands),
+      this.notifyColumnStructureTransition(previousLayoutSnapshot),
+    );
     error = firstNotificationFailure(
       error,
-      firstNotificationFailure(
-        this.notifyColumnLayoutTransition(previousLayoutSnapshot, previousCommands),
-        this.notifyColumnStructureTransition(previousLayoutSnapshot),
-      ),
+      groupingSortChanged
+        ? firstNotificationFailure(notify(this.queryListeners), notify(this.sortingListeners))
+        : resetsRowsWidth
+          ? notify(this.queryListeners)
+          : undefined,
     );
     if (error !== undefined) throw error.value;
     return true;
@@ -2893,6 +2906,15 @@ function sameRowCellSnapshot(
 ): boolean {
   if (previous.kind !== next.kind || previous.column !== next.column) return false;
   if (previous.kind === "unavailable" || next.kind === "unavailable") return true;
+  const previousServerGrouped = isBrunoTableServerGroupedRow(previous.row);
+  const nextServerGrouped = isBrunoTableServerGroupedRow(next.row);
+  if (previousServerGrouped || nextServerGrouped) {
+    return (
+      previousServerGrouped &&
+      nextServerGrouped &&
+      sameServerGroupedCellDependency(previous.row, next.row, next.column)
+    );
+  }
   const previousGroupedRowCount = groupedRowCount(previous);
   const nextGroupedRowCount = groupedRowCount(next);
   if (previousGroupedRowCount !== undefined || nextGroupedRowCount !== undefined) {
@@ -2904,6 +2926,41 @@ function sameRowCellSnapshot(
   return (
     previous.row === next.row && sameAvailableCellValue(previous.value, next.value, next.column)
   );
+}
+
+function sameServerGroupedCellDependency(
+  previous: BrunoTableServerGroupedRowSnapshot,
+  next: BrunoTableServerGroupedRowSnapshot,
+  column: CompiledColumn | undefined,
+): boolean {
+  if (previous.rowCount !== next.rowCount || column === undefined) return false;
+  if (column.columnId === BRUNO_TABLE_ROWS_COLUMN_ID) {
+    return sameExactGroupedPresences(previous.groupKeys, next.groupKeys);
+  }
+  return sameExactGroupedPresence(
+    previous.presences.get(column.columnId),
+    next.presences.get(column.columnId),
+  );
+}
+
+function sameExactGroupedPresences(
+  previous: BrunoTableServerGroupedRowSnapshot["groupKeys"],
+  next: BrunoTableServerGroupedRowSnapshot["groupKeys"],
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((presence, index) => sameExactGroupedPresence(presence, next[index]))
+  );
+}
+
+function sameExactGroupedPresence(
+  previous: BrunoTableServerGroupedRowSnapshot["groupKeys"][number] | undefined,
+  next: BrunoTableServerGroupedRowSnapshot["groupKeys"][number] | undefined,
+): boolean {
+  if (previous?._tag !== next?._tag) return false;
+  return previous?._tag !== "Present" || next?._tag !== "Present"
+    ? true
+    : Object.is(previous.value, next.value);
 }
 
 function groupedRowCount(snapshot: BrunoTableRowCellSnapshot): bigint | undefined {
@@ -3004,8 +3061,12 @@ function sameSourceVersion(
 function sameBody(previous: BrunoTableBodySnapshot, next: BrunoTableBodySnapshot): boolean {
   return (
     previous.kind === next.kind &&
-    (previous.kind !== "loading" ||
-      (next.kind === "loading" && previous.totalRows === next.totalRows))
+    (previous.kind === "rows"
+      ? next.kind === "rows" && previous.ariaRowCount === next.ariaRowCount
+      : previous.kind !== "loading" ||
+        (next.kind === "loading" &&
+          previous.totalRows === next.totalRows &&
+          previous.ariaRowCount === next.ariaRowCount))
   );
 }
 
@@ -3028,7 +3089,10 @@ function bodySnapshot<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
 ): BrunoTableBodySnapshot {
   if (publication.rowSpace !== undefined) {
-    return publication.rowSpace.totalRows > 0 ? BODY_ROWS : BODY_EMPTY;
+    if (publication.rowSpace.totalRows === 0) return BODY_EMPTY;
+    return publication.loadingAriaRowCount === undefined
+      ? BODY_ROWS
+      : Object.freeze({ kind: "rows", ariaRowCount: publication.loadingAriaRowCount });
   }
   if (
     (publication.invalid?.kind === "invalid-value" ||
@@ -3042,7 +3106,13 @@ function bodySnapshot<TRow>(
   }
   if (publication.invalid !== undefined) return BODY_INVALID;
   if (publication.status === "loading" && publication.rowSpace === undefined) {
-    return Object.freeze({ kind: "loading", totalRows: publication.totalRows });
+    return Object.freeze({
+      kind: "loading",
+      totalRows: publication.totalRows,
+      ...(publication.loadingAriaRowCount === undefined
+        ? {}
+        : { ariaRowCount: publication.loadingAriaRowCount }),
+    });
   }
   return BODY_EMPTY;
 }

@@ -1,9 +1,10 @@
 import type { BrunoTableRowId } from "../public-types";
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
 import { isBrunoTableInvalidCellValue } from "./grid-runtime";
+import { BRUNO_TABLE_ROWS_COLUMN_ID } from "./grouped-row";
 import { compileColumnValueSemantics, type CompiledColumnValueSemantics } from "./value-semantics";
 
-export const BRUNO_TABLE_ROWS_COLUMN_ID = "COL_ID_BRUNO_TABLE_ROWS" as const;
+export { BRUNO_TABLE_ROWS_COLUMN_ID } from "./grouped-row";
 
 export type BrunoTableGroupedPresence =
   | Readonly<{ readonly _tag: "Missing" }>

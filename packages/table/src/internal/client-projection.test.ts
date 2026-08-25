@@ -125,6 +125,38 @@ describe("grouped presentation compilation", () => {
     expect(second.every((column, index) => column === first[index])).toBe(true);
   });
 
+  it("orders participating aggregates by durable visible Column order", () => {
+    const presentationColumns = compileColumns([
+      ...columns,
+      {
+        columnId: "COL_ID_SECOND_AGGREGATE",
+        field: "second",
+        headerName: "Second aggregate",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+
+    const groupedColumns = createBrunoTableGroupedColumns({
+      columns: presentationColumns,
+      visibleColumnIds: [
+        "COL_ID_DESK",
+        "COL_ID_SECOND_AGGREGATE",
+        "COL_ID_QUANTITY",
+        "COL_ID_REGION",
+      ],
+      groupBy: ["COL_ID_DESK"],
+      rowsColumn: compileBrunoTableGroupRowsColumn(undefined),
+    });
+
+    expect(groupedColumns.map(({ columnId }) => columnId)).toEqual([
+      "COL_ID_DESK",
+      BRUNO_TABLE_ROWS_COLUMN_ID,
+      "COL_ID_SECOND_AGGREGATE",
+      "COL_ID_QUANTITY",
+    ]);
+  });
+
   it("reuses exact result semantics across equivalent projection candidates", () => {
     const presentationColumns = compileColumns([
       {

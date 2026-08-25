@@ -1,6 +1,7 @@
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportQueryAuthority,
   LiveQueryViewportRouteBy,
   LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
@@ -110,6 +111,32 @@ export type BrunoTableAggregateResults = Readonly<{
 }>;
 
 const brunoTableAggregateAlgebraBrand: unique symbol = Symbol("BrunoTableAggregateAlgebra");
+
+const brunoTableServerBigDecimalValueTypes = new WeakSet<object>();
+
+/** @internal Nominal authority installed only by the optional Effect entry point. */
+export declare class BrunoTableServerBigDecimalValueTypeAuthority {
+  private readonly brunoTableServerBigDecimalValueTypeAuthority;
+}
+
+/** @internal Brands the one source-compatible Effect BigDecimal descriptor. */
+export function BrunoTableServerBigDecimalValueType<TValueType extends object>(
+  valueType: TValueType,
+): TValueType & BrunoTableServerBigDecimalValueTypeAuthority {
+  brunoTableServerBigDecimalValueTypes.add(valueType);
+  return Object.freeze(valueType) as TValueType & BrunoTableServerBigDecimalValueTypeAuthority;
+}
+
+/** @internal Tests runtime source-compatible aggregate authority without trusting public data. */
+export function isBrunoTableServerBigDecimalValueType(
+  valueType: unknown,
+): valueType is BrunoTableServerBigDecimalValueTypeAuthority {
+  return (
+    typeof valueType === "object" &&
+    valueType !== null &&
+    brunoTableServerBigDecimalValueTypes.has(valueType)
+  );
+}
 
 /** Exact arithmetic owned by a custom Value Type rather than a Column Definition. */
 export type BrunoTableAggregateAlgebra<TValue> = Readonly<{
@@ -960,6 +987,31 @@ export type BrunoTableColumnIdentityGuard<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = [InvalidColumnIdentity<TColumns[number]>] extends [never] ? unknown : never;
 
+type InvalidServerAggregateColumn<TColumns extends readonly unknown[]> =
+  TColumns[number] extends infer TColumn
+    ? TColumn extends { readonly aggFunc: infer TAggFunc; readonly valueType: infer TValueType }
+      ? TAggFunc extends "sum"
+        ? TValueType extends "bigint" | BrunoTableServerBigDecimalValueTypeAuthority
+          ? never
+          : TColumn
+        : TAggFunc extends "avg"
+          ? TValueType extends BrunoTableServerBigDecimalValueTypeAuthority
+            ? never
+            : TColumn
+          : never
+      : never
+    : never;
+
+/** @internal Restricts Server arithmetic to effect-view-server's exact result domains. */
+export type BrunoTableServerAggregateGuard<TColumns extends readonly unknown[]> =
+  ColumnIdPattern extends (
+    TColumns[number] extends { readonly columnId: infer TColumnId } ? TColumnId : never
+  )
+    ? unknown
+    : [InvalidServerAggregateColumn<TColumns>] extends [never]
+      ? unknown
+      : never;
+
 export type BrunoTableColumnIdOf<
   TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
 > = TColumns[number]["columnId"];
@@ -1530,8 +1582,10 @@ export type BrunoTableServerProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TViewport = unknown,
-> = Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
-  BrunoTableReadOnlyCapability & {
+> = Omit<ComponentCommonProps<TRow, TColumns, true>, "initialOrderBy"> &
+  BrunoTableReadOnlyCapability &
+  BrunoTableGroupingCapability<TRow, TColumns> & {
+    readonly columns: TColumns & BrunoTableServerAggregateGuard<NoInfer<TColumns>>;
     readonly initialOrderBy: BrunoTableSortBy<TColumns>;
     /** Server row identity is supplied authoritatively by the Viewport Source. */
     readonly getRowId?: never;
@@ -1548,7 +1602,6 @@ export type BrunoTableServerProps<
     readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
     readonly clientSource?: never;
     readonly editable?: never;
-    readonly groupRowsColumn?: never;
     readonly rowSelection?: never;
     readonly rangeSelection?: never;
     readonly onPaste?: never;
@@ -1581,5 +1634,7 @@ type BrunoTableServerQueryAuthority<
       : { readonly routeBy: TRouteBy }),
   ) => unknown;
 }
-  ? unknown
+  ? [LiveQueryViewportQueryAuthority<TViewport>] extends [never]
+    ? { readonly __brunoTableInvalidServerGroupedQueryAuthority: never }
+    : unknown
   : { readonly __brunoTableInvalidServerQueryAuthority: never };

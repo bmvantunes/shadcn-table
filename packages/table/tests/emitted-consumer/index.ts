@@ -5,6 +5,7 @@ import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
 import {
   BrunoTableBigIntColumn,
@@ -708,7 +709,7 @@ const emittedWitnessedServerProps = {
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
   onPersistChange: (state) => {
-    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, false>>> =
+    const exactState: Expect<Equal<typeof state, BrunoTablePersistedState<Order, Columns, true>>> =
       true;
     void exactState;
   },
@@ -898,6 +899,42 @@ BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedUnwitn
 const emittedBroadSource = { ...source, viewport: emittedUnsafeBroadViewport };
 // @ts-expect-error broad dictionaries cannot impersonate the bundled source-owned witness.
 BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedBroadSource });
+
+type EmittedRawOnlyViewport = Omit<typeof source.viewport, "semanticKey"> & {
+  readonly semanticKey: (query: {
+    readonly select: typeof source.completeRawSelect;
+    readonly where: LiveQueryViewportWhere<typeof source.viewport>;
+    readonly orderBy: readonly [];
+  }) => unknown;
+};
+const emittedRawOnlySource = {
+  ...source,
+  viewport: null as unknown as EmittedRawOnlyViewport,
+};
+// @ts-expect-error emitted Server grouping requires source-owned grouped-query authority.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedRawOnlySource });
+
+type EmittedRawQuery = {
+  readonly select: typeof source.completeRawSelect;
+  readonly where: LiveQueryViewportWhere<typeof source.viewport>;
+  readonly orderBy: readonly [];
+};
+type EmittedRawOnlyReplaceViewport = Omit<typeof source.viewport, "replace"> & {
+  readonly replace: (
+    request: Omit<Parameters<typeof source.viewport.replace>[0], "query"> & {
+      readonly query: EmittedRawQuery;
+    },
+  ) => ReturnType<typeof source.viewport.replace>;
+};
+const emittedRawOnlyReplaceSource = {
+  ...source,
+  viewport: null as unknown as EmittedRawOnlyReplaceViewport,
+};
+// @ts-expect-error emitted Server grouping requires source-owned grouped replacement authority.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedRawOnlyReplaceSource,
+});
 
 const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } = source;
 void omittedCompleteRawSelect;
@@ -1795,18 +1832,104 @@ const invalidServerEditing = {
   editable: true,
 } satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
 
-const emittedServerWithClientGroupingConfiguration = {
+const emittedServerWithGroupingConfiguration = {
   tableId: "orders",
   columns,
   initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
   viewportSource: source,
-  groupRowsColumn: { headerName: "Rows" },
+  groupRowsColumn: {
+    headerName: "Orders",
+    width: 144,
+    valueFormatter: ({ columnId, value }) => {
+      const exactColumnId: "COL_ID_BRUNO_TABLE_ROWS" = columnId;
+      const exactValue: bigint = value;
+      return `${exactColumnId}:${exactValue.toString()}`;
+    },
+  },
+} as const satisfies BrunoTableServerProps<Order, Columns, typeof source.viewport>;
+void emittedServerWithGroupingConfiguration;
+const emittedClientOnlyNumberArithmetic =
+  emittedExactMoneyValueType as unknown as BrunoTableValueType<
+    number,
+    "numeric",
+    "bigdecimal",
+    { readonly sum: "self" }
+  >;
+const emittedSpoofedBigDecimalCodec = {
+  ...emittedClientOnlyNumberArithmetic,
+  codecId: "@bruno/table/effect/bigdecimal" as const,
+  aggregateResults: { sum: "self" as const },
+};
+const emittedSpoofedBigDecimalColumns = [
+  {
+    columnId: "COL_ID_EMITTED_SPOOFED_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_EMITTED_SPOOFED_SUM",
+    field: "price",
+    headerName: "Spoofed sum",
+    valueType: emittedSpoofedBigDecimalCodec,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const invalidEmittedSpoofedBigDecimalServer: BrunoTableServerProps<
+  Order,
+  typeof emittedSpoofedBigDecimalColumns,
+  typeof source.viewport
+> = {
+  tableId: "orders-spoofed-bigdecimal",
+  // @ts-expect-error Emitted public codec data cannot forge Effect Server authority.
+  columns: emittedSpoofedBigDecimalColumns,
+  initialOrderBy: [{ columnId: "COL_ID_EMITTED_SPOOFED_GROUP", direction: "asc" }],
+  viewportSource: source,
+};
+void invalidEmittedSpoofedBigDecimalServer;
+const emittedClientOnlyServerAggregateColumns = [
+  {
+    columnId: "COL_ID_EMITTED_CLIENT_ONLY_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_EMITTED_CLIENT_ONLY_SUM",
+    field: "price",
+    headerName: "Client-only sum",
+    valueType: emittedClientOnlyNumberArithmetic,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const emittedServerWithClientOnlyArithmetic = {
+  tableId: "orders-client-only-arithmetic",
+  columns: emittedClientOnlyServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_EMITTED_CLIENT_ONLY_GROUP", direction: "asc" }],
+  viewportSource: source,
 } as const;
-
-// @ts-expect-error emitted Server props reject Client groupRowsColumn for non-fresh objects.
-const invalidEmittedServerGrouping: BrunoTableServerProps<Order, Columns, typeof source.viewport> =
-  emittedServerWithClientGroupingConfiguration;
-void invalidEmittedServerGrouping;
+// @ts-expect-error Emitted Server arithmetic preserves source-owned exact result domains.
+const invalidEmittedServerClientOnlyArithmetic: BrunoTableServerProps<
+  Order,
+  typeof emittedClientOnlyServerAggregateColumns,
+  typeof source.viewport
+> = emittedServerWithClientOnlyArithmetic;
+void invalidEmittedServerClientOnlyArithmetic;
+const widenedEmittedClientOnlyServerAggregateColumns: readonly (typeof emittedClientOnlyServerAggregateColumns)[number][] =
+  emittedClientOnlyServerAggregateColumns;
+const widenedEmittedClientOnlyServerProps = {
+  ...emittedServerWithClientOnlyArithmetic,
+  columns: widenedEmittedClientOnlyServerAggregateColumns,
+} as const;
+// @ts-expect-error Emitted widened columns cannot bypass Server arithmetic admission.
+const invalidWidenedEmittedServerClientOnlyArithmetic: BrunoTableServerProps<
+  Order,
+  typeof widenedEmittedClientOnlyServerAggregateColumns,
+  typeof source.viewport
+> = widenedEmittedClientOnlyServerProps;
+void invalidWidenedEmittedServerClientOnlyArithmetic;
 
 const editablePropsWithGrouping = {
   ...editableProps,

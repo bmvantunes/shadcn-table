@@ -156,6 +156,129 @@ describe("BrunoTable Server adapter publication benchmark", () => {
   );
 });
 
+const groupedAdapterDurationsMs: number[] = [];
+const groupedColumns = compileColumns([
+  {
+    columnId: "COL_ID_REGION",
+    field: "region",
+    headerName: "Region",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_MIN_VALUE",
+    field: "value",
+    headerName: "Minimum value",
+    valueType: "number",
+    aggFunc: "min",
+  },
+  {
+    columnId: "COL_ID_MAX_VALUE",
+    field: "value",
+    headerName: "Maximum value",
+    valueType: "number",
+    aggFunc: "max",
+  },
+]);
+let groupedSink:
+  | Readonly<{
+      readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+      readonly setRowData: (
+        rows: Readonly<Record<number, Readonly<Record<string, unknown>>>>,
+        keys: Readonly<Record<number, string>>,
+      ) => void;
+    }>
+  | undefined;
+let groupedQuery:
+  | Readonly<{
+      readonly aggregates: Readonly<Record<string, Readonly<{ readonly aggFunc: string }>>>;
+    }>
+  | undefined;
+let groupedReplaceCalls = 0;
+let groupedReleaseCalls = 0;
+const groupedAdapter = new BrunoTableServerRowPipelineAdapter<Readonly<Record<string, unknown>>>(
+  groupedColumns,
+  undefined,
+  [],
+  [{ columnId: "COL_ID_REGION", direction: "asc" }],
+  ["region", "value"],
+);
+const groupedViewport = {
+  semanticKey: brunoTableTestSemanticQueryKey,
+  replace(
+    request: Readonly<{ readonly query: unknown; readonly sink: NonNullable<typeof groupedSink> }>,
+  ) {
+    groupedReplaceCalls += 1;
+    groupedSink = request.sink;
+    groupedQuery = request.query as NonNullable<typeof groupedQuery>;
+    return {
+      setWindow: () => undefined,
+      release: () => {
+        groupedReleaseCalls += 1;
+      },
+    };
+  },
+};
+groupedAdapter.reconcileSource({
+  viewport: groupedViewport,
+  completeRawSelect: ["region", "value"],
+  totalRows: virtualRowCount,
+  version: 1,
+  status: "ready",
+});
+groupedAdapter.replace(groupedViewport, {
+  generation: 1,
+  navigationMode: "reset",
+  filters: [],
+  quickFilter: "",
+  orderBy: [{ columnId: "COL_ID_REGION", direction: "asc" }],
+  groupBy: ["COL_ID_REGION"],
+  groupOrderBy: [{ columnId: "COL_ID_MAX_VALUE", direction: "desc" }],
+});
+groupedSink!.setRowCount(virtualRowCount, true);
+const groupedAliases = Object.entries(groupedQuery!.aggregates);
+const groupedRowsAlias = groupedAliases.find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+const groupedMinAlias = groupedAliases.find(([, aggregate]) => aggregate.aggFunc === "min")![0];
+const groupedMaxAlias = groupedAliases.find(([, aggregate]) => aggregate.aggFunc === "max")![0];
+let groupedIteration = 0;
+
+describe("BrunoTable grouped Server adapter benchmark", () => {
+  afterAll(() => {
+    assertP99FrameBudget("Grouped Server adapter 20 Hz publication", groupedAdapterDurationsMs);
+    if (groupedReplaceCalls !== 1 || groupedReleaseCalls !== 0) {
+      throw new Error("Grouped value/window publications replaced their semantic generation.");
+    }
+  });
+
+  bench(
+    "decodes private aliases into a bounded sparse grouped window",
+    () => {
+      groupedIteration += 1;
+      const firstRow = (groupedIteration * 3571) % (virtualRowCount - windowSize);
+      const rows: Record<number, Readonly<Record<string, unknown>>> = {};
+      const keys: Record<number, string> = {};
+      for (let index = firstRow; index < firstRow + windowSize; index += 1) {
+        rows[index] = Object.freeze({
+          region: `region-${String(index)}`,
+          [groupedRowsAlias]: 3n,
+          [groupedMinAlias]: index,
+          [groupedMaxAlias]: index + 2,
+        });
+        keys[index] = `authoritative-group-${String(index)}`;
+      }
+      const startedAt = performance.now();
+      groupedAdapter.setRequiredRange(firstRow, firstRow + windowSize);
+      groupedSink!.setRowData(rows, keys);
+      groupedAdapterDurationsMs.push(performance.now() - startedAt);
+      const rowSpace = groupedAdapter.getPublication().rowSpace;
+      if (rowSpace === undefined || rowSpace.loadedRows > windowSize) {
+        throw new Error("Grouped Server adapter exceeded its bounded sparse window.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations, warmupTime: 0 },
+  );
+});
+
 const equivalenceColumnCount = 40;
 const equivalenceColumns = compileColumns(
   Array.from({ length: equivalenceColumnCount }, (_, index) => ({

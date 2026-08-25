@@ -102,6 +102,122 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.getSnapshot().rowSpace.loadedRows).toBe(0);
   });
 
+  it("admits the exact authoritative key snapshot validated from an accessor-backed map", () => {
+    const store = new BrunoTableServerViewportStore<Row>();
+    const generation = store.beginGeneration({ firstRow: 0, lastRow: 0 });
+    let reads = 0;
+    const rowKeysByIndex = {} as Record<number, string>;
+    Object.defineProperty(rowKeysByIndex, "0", {
+      enumerable: true,
+      get: () => (reads++ === 0 ? "validated-key" : "unvalidated-key"),
+    });
+
+    expect(
+      store.setRowData(generation, { 0: { symbol: "AAPL", price: 240 } }, rowKeysByIndex),
+    ).toBe(true);
+    expect(reads).toBe(1);
+    expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("validated-key");
+  });
+
+  it("keeps every authority snapshot and lookup coherent when prepublication work throws", () => {
+    const store = new BrunoTableServerViewportStore<Row>();
+    const generation = store.beginGeneration({ firstRow: 0, lastRow: 1 });
+    const stable = { symbol: "AAPL", price: 240 } as const;
+    store.setRowData(generation, { 0: stable }, { 0: "a" });
+    const before = store.getSnapshot();
+    const delivery = [
+      Object.freeze({ index: 1, row: { symbol: "MSFT", price: 410 }, rowId: "m" }),
+    ] as const;
+    const plan = store.planRowDataSnapshot(generation, delivery)!;
+
+    expect(() =>
+      store.commitRowDataPlan(plan, delivery, () => {
+        throw new Error("prepublication failure");
+      }),
+    ).toThrow("prepublication failure");
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("a");
+    expect(store.getSnapshot().rowSpace.getRow("a")).toBe(stable);
+    expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+    expect(store.findRowIndex("a")).toBe(0);
+    expect(store.findRowIndex("m")).toBeUndefined();
+
+    expect(store.setRowData(generation, { 1: delivery[0].row }, { 1: "m" })).toBe(true);
+    expect(store.getSnapshot().rowSpace.getRowId(1)).toBe("m");
+    expect(store.findRowIndex("m")).toBe(1);
+  });
+
+  it("does not let an older admission overwrite a reentrant newer delivery", () => {
+    const initial = { symbol: "INITIAL", price: 1 };
+    const older = { symbol: "OLDER", price: 2 };
+    const newest = { symbol: "NEWEST", price: 3 };
+    let generation = 0;
+    let nested = false;
+    let store: BrunoTableServerViewportStore<Row>;
+    store = new BrunoTableServerViewportStore<Row>(
+      () => undefined,
+      () => {
+        if (!nested) {
+          nested = true;
+          expect(store.setRowData(generation, { 0: newest }, { 0: "row" })).toBe(true);
+        }
+        return false;
+      },
+    );
+    generation = store.beginGeneration({ firstRow: 0, lastRow: 0 });
+    expect(store.setRowData(generation, { 0: initial }, { 0: "row" })).toBe(true);
+
+    expect(store.setRowData(generation, { 0: older }, { 0: "row" })).toBe(false);
+    expect(store.getSnapshot().rowSpace.getRow("row")).toBe(newest);
+    expect(store.findRowIndex("row")).toBe(0);
+  });
+
+  it.each(["count", "window"] as const)(
+    "does not let an older admission overwrite a reentrant %s mutation",
+    (mutation) => {
+      const row0 = { symbol: "ROW-0", price: 1 };
+      const row1 = { symbol: "ROW-1", price: 2 };
+      const outer = { symbol: "OUTER", price: 3 };
+      let generation = 0;
+      let nested = false;
+      let store: BrunoTableServerViewportStore<Row>;
+      store = new BrunoTableServerViewportStore<Row>(
+        () => undefined,
+        () => {
+          if (!nested) {
+            nested = true;
+            if (mutation === "count") {
+              expect(store.setRowCount(generation, 1, true)).toBe(true);
+            } else {
+              expect(store.setRequiredRange(generation, { firstRow: 0, lastRow: 0 })).toBe(true);
+            }
+          }
+          return false;
+        },
+      );
+      generation = store.beginGeneration({ firstRow: 0, lastRow: 1 });
+      store.setRowCount(generation, 2, true);
+      store.setRowData(generation, { 0: row0, 1: row1 }, { 0: "row-0", 1: "row-1" });
+      const notifications = vi.fn();
+      store.subscribe(notifications);
+
+      expect(store.setRowData(generation, { 0: outer }, { 0: "row-0" })).toBe(false);
+      expect(notifications).toHaveBeenCalledOnce();
+      expect(store.getSnapshot().rowSpace.getRow("row-0")).toBe(row0);
+      expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+
+      if (mutation === "count") {
+        expect(store.getSnapshot().rowSpace.totalRows).toBe(1);
+        store.setRowCount(generation, 2, true);
+      } else {
+        expect(store.getSnapshot().requiredWindow).toEqual({ firstRow: 0, lastRow: 0 });
+        store.setRequiredRange(generation, { firstRow: 0, lastRow: 1 });
+      }
+      expect(store.getSnapshot().rowSpace.getRowId(1)).toBeUndefined();
+      expect(store.findRowIndex("row-1")).toBeUndefined();
+    },
+  );
+
   it("does not let setRowCount retention hints bridge semantic generations", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const first = store.beginGeneration({ firstRow: 0, lastRow: 9 });

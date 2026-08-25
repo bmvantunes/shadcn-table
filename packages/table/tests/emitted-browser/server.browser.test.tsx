@@ -9,12 +9,17 @@ import { createInMemoryViewServerReact } from "effect-view-server/react/testing"
 import { BrunoTableServer } from "../../dist/index.mjs";
 import type { BrunoTableColumns } from "../../dist/index.mjs";
 
-type Row = Readonly<{ id: string; symbol: string }>;
+type Row = Readonly<{ id: string; symbol: string; desk: string; price: number }>;
 
 const viewportConfig = defineViewServerConfig({
   topics: {
     orders: {
-      schema: Schema.Struct({ id: ViewServerId, symbol: Schema.String }),
+      schema: Schema.Struct({
+        id: ViewServerId,
+        symbol: Schema.String,
+        desk: Schema.String,
+        price: Schema.Number,
+      }),
     },
   },
 });
@@ -23,6 +28,8 @@ type EmittedViewportSource = ReturnType<typeof viewportReact.useLiveQueryViewpor
 const completeRawSelect = Object.freeze([
   "id",
   "symbol",
+  "desk",
+  "price",
 ]) as unknown as EmittedViewportSource["completeRawSelect"];
 type EmittedSink = Readonly<{
   readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
@@ -33,14 +40,8 @@ type EmittedSink = Readonly<{
 }>;
 type EmittedBrowserViewport = Omit<
   ReturnType<typeof viewportReact.useLiveQueryViewport>["viewport"],
-  "destroy" | "replace" | "semanticKey"
-> &
-  Readonly<{
-    readonly semanticKey: (query: unknown) => unknown;
-    readonly replace: (
-      request: Readonly<{ readonly sink: EmittedSink }>,
-    ) => Readonly<{ readonly setWindow: () => void; readonly release: () => void }>;
-  }>;
+  "destroy"
+>;
 
 const columns = [
   {
@@ -52,19 +53,44 @@ const columns = [
     enableSetFilter: true,
   },
 ] satisfies BrunoTableColumns<Row>;
+const groupingColumns = [
+  {
+    columnId: "COL_ID_EMITTED_SERVER_DESK",
+    field: "desk",
+    headerName: "Desk",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_EMITTED_SERVER_MIN_PRICE",
+    field: "price",
+    headerName: "Minimum",
+    valueType: "number",
+    aggFunc: "min",
+    aggregateValueFormatter: ({ value }) => `Min ${String(value)}`,
+  },
+  {
+    columnId: "COL_ID_EMITTED_SERVER_MAX_PRICE",
+    field: "price",
+    headerName: "Maximum",
+    valueType: "number",
+    aggFunc: "max",
+    aggregateValueFormatter: ({ value }) => `Max ${String(value)}`,
+  },
+] satisfies BrunoTableColumns<Row>;
 
 afterEach(async () => cleanup());
 
 test("renders authoritative sparse slots from the emitted Server package", async () => {
   let sink: EmittedSink | undefined;
-  const viewport: EmittedBrowserViewport = {
-    semanticKey: (query) => JSON.stringify(query),
+  const viewport = {
+    semanticKey: (query: unknown) => JSON.stringify(query),
     replace(request: Readonly<{ readonly sink: NonNullable<typeof sink> }>) {
       sink = request.sink;
       sink.setRowCount(1_000, true);
       return { setWindow: () => undefined, release: () => undefined };
     },
-  };
+  } as unknown as EmittedBrowserViewport;
   const screen = await render(
     <BrunoTableServer
       tableId="TABLE_ID_EMITTED_SERVER"
@@ -92,8 +118,8 @@ test("renders and releases a live whole-result facet from the emitted package", 
   const inMemory = createInMemoryViewServerReact(viewportReact);
   await Effect.runPromise(
     inMemory.client.publishMany("orders", [
-      { id: "emitted-facet-1", symbol: "AAA" },
-      { id: "emitted-facet-2", symbol: "BBB" },
+      { id: "emitted-facet-1", symbol: "AAA", desk: "Rates", price: 10 },
+      { id: "emitted-facet-2", symbol: "BBB", desk: "Credit", price: 20 },
     ]),
   );
 
@@ -120,7 +146,12 @@ test("renders and releases a live whole-result facet from the emitted package", 
     await expect.element(dialog.getByRole("checkbox", { name: "Select AAA, 1" })).toBeVisible();
 
     await Effect.runPromise(
-      inMemory.client.publish("orders", { id: "emitted-facet-3", symbol: "AAA" }),
+      inMemory.client.publish("orders", {
+        id: "emitted-facet-3",
+        symbol: "AAA",
+        desk: "Rates",
+        price: 30,
+      }),
     );
     await expect.element(dialog.getByRole("checkbox", { name: "Select AAA, 2" })).toBeVisible();
 
@@ -133,6 +164,46 @@ test("renders and releases a live whole-result facet from the emitted package", 
             .activeSubscriptions,
       )
       .toBe(1);
+  } finally {
+    await Effect.runPromise(inMemory.close);
+  }
+});
+
+test("groups and decodes duplicate-field aggregates from the emitted package", async () => {
+  const inMemory = createInMemoryViewServerReact(viewportReact);
+  await Effect.runPromise(
+    inMemory.client.publishMany("orders", [
+      { id: "emitted-group-1", symbol: "AAA", desk: "Rates", price: 10 },
+      { id: "emitted-group-2", symbol: "BBB", desk: "Rates", price: 30 },
+    ]),
+  );
+
+  function EmittedGroupedTable() {
+    const source = viewportReact.useLiveQueryViewport("orders");
+    return (
+      <BrunoTableServer
+        tableId="TABLE_ID_EMITTED_SERVER_GROUPING"
+        columns={groupingColumns}
+        initialOrderBy={[{ columnId: "COL_ID_EMITTED_SERVER_DESK", direction: "asc" }]}
+        groupRowsColumn={{ valueFormatter: ({ value }) => `${String(value)} orders` }}
+        viewportSource={source}
+      />
+    );
+  }
+
+  try {
+    const screen = await render(
+      <inMemory.ViewServerInMemoryProvider>
+        <EmittedGroupedTable />
+      </inMemory.ViewServerInMemoryProvider>,
+    );
+    const groupRegion = screen.getByRole("region", { name: "Group By" });
+    await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+    await userEvent.click(screen.getByRole("option", { name: "Desk", exact: true }));
+    await expect.element(screen.getByRole("gridcell", { name: "Rates" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "2 orders" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "Min 10" })).toBeVisible();
+    await expect.element(screen.getByRole("gridcell", { name: "Max 30" })).toBeVisible();
   } finally {
     await Effect.runPromise(inMemory.close);
   }

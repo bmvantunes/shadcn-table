@@ -7,6 +7,7 @@ import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
 import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
@@ -376,7 +377,7 @@ const columns = [
     valueType: "bigint",
     valueGetter: ({ row }) => row.quantity * 2n,
   }),
-] satisfies BrunoTableColumns<Order>;
+] as const satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
 
@@ -450,7 +451,7 @@ describe("BrunoTableServer viewport row witness", () => {
       initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
       viewportSource: orderViewportSource,
       onPersistChange: (state) =>
-        expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, false>>(),
+        expectTypeOf(state).toEqualTypeOf<BrunoTablePersistedState<Order, Columns, true>>(),
     } as const satisfies BrunoTableServerProps<Order, Columns, typeof orderViewportSource.viewport>;
     void BrunoTableServer(matchingProps);
 
@@ -480,6 +481,39 @@ describe("BrunoTableServer viewport row witness", () => {
     const broadSource = { ...orderViewportSource, viewport: unsafeBroadViewport };
     // @ts-expect-error broad dictionaries cannot impersonate the source-owned viewport witness.
     void BrunoTableServer({ ...matchingProps, viewportSource: broadSource });
+
+    type RawOnlyViewport = Omit<typeof orderViewportSource.viewport, "semanticKey"> & {
+      readonly semanticKey: (query: {
+        readonly select: typeof orderViewportSource.completeRawSelect;
+        readonly where: LiveQueryViewportWhere<typeof orderViewportSource.viewport>;
+        readonly orderBy: readonly [];
+      }) => unknown;
+    };
+    const rawOnlySource = {
+      ...orderViewportSource,
+      viewport: null as unknown as RawOnlyViewport,
+    };
+    // @ts-expect-error Server grouping requires the source-owned grouped-query authority.
+    void BrunoTableServer({ ...matchingProps, viewportSource: rawOnlySource });
+
+    type RawQuery = {
+      readonly select: typeof orderViewportSource.completeRawSelect;
+      readonly where: LiveQueryViewportWhere<typeof orderViewportSource.viewport>;
+      readonly orderBy: readonly [];
+    };
+    type RawOnlyReplaceViewport = Omit<typeof orderViewportSource.viewport, "replace"> & {
+      readonly replace: (
+        request: Omit<Parameters<typeof orderViewportSource.viewport.replace>[0], "query"> & {
+          readonly query: RawQuery;
+        },
+      ) => ReturnType<typeof orderViewportSource.viewport.replace>;
+    };
+    const rawOnlyReplaceSource = {
+      ...orderViewportSource,
+      viewport: null as unknown as RawOnlyReplaceViewport,
+    };
+    // @ts-expect-error Server grouping requires source-owned grouped replacement authority.
+    void BrunoTableServer({ ...matchingProps, viewportSource: rawOnlyReplaceSource });
 
     const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } =
       orderViewportSource;
@@ -948,20 +982,100 @@ const groupedClientProps = {
 } satisfies BrunoTableClientProps<Order, typeof rawGroupedColumns>;
 void groupedClientProps;
 
-const serverWithClientGroupingConfiguration = {
-  tableId: "TABLE_ID_INVALID_SERVER_GROUPING",
+const serverWithGroupingConfiguration = {
+  tableId: "TABLE_ID_SERVER_GROUPING",
   columns: rawGroupedColumns,
   initialOrderBy: [{ columnId: "COL_ID_GROUP_SYMBOL", direction: "asc" }],
   viewportSource: orderViewportSource,
   groupRowsColumn,
 } as const;
-// @ts-expect-error Server grouping is outside the Client-only issue #20 capability.
-const invalidServerGroupingConfiguration: BrunoTableServerProps<
+const validServerGroupingConfiguration: BrunoTableServerProps<
   Order,
   typeof rawGroupedColumns,
   typeof orderViewportSource.viewport
-> = serverWithClientGroupingConfiguration;
-void invalidServerGroupingConfiguration;
+> = serverWithGroupingConfiguration;
+void validServerGroupingConfiguration;
+const clientOnlyNumberArithmetic = exactMoneyValueType as unknown as BrunoTableValueType<
+  number,
+  "numeric",
+  "bigdecimal",
+  { readonly sum: "self" }
+>;
+const spoofedBigDecimalCodec = {
+  ...clientOnlyNumberArithmetic,
+  codecId: "@bruno/table/effect/bigdecimal" as const,
+  aggregateResults: { sum: "self" as const },
+};
+const spoofedBigDecimalServerAggregateColumns = [
+  {
+    columnId: "COL_ID_SPOOFED_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_SPOOFED_SUM",
+    field: "price",
+    headerName: "Spoofed sum",
+    valueType: spoofedBigDecimalCodec,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const rejectedSpoofedBigDecimalServerProps: BrunoTableServerProps<
+  Order,
+  typeof spoofedBigDecimalServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = {
+  tableId: "TABLE_ID_SPOOFED_SERVER_ARITHMETIC",
+  // @ts-expect-error A public codecId literal is not Effect BigDecimal Server authority.
+  columns: spoofedBigDecimalServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_SPOOFED_GROUP", direction: "asc" }],
+  viewportSource: orderViewportSource,
+};
+void rejectedSpoofedBigDecimalServerProps;
+const clientOnlyServerAggregateColumns = [
+  {
+    columnId: "COL_ID_CLIENT_ONLY_GROUP",
+    field: "symbol",
+    headerName: "Group",
+    valueType: "text",
+    groupBy: true,
+  },
+  {
+    columnId: "COL_ID_CLIENT_ONLY_PRICE_SUM",
+    field: "price",
+    headerName: "Client-only price sum",
+    valueType: clientOnlyNumberArithmetic,
+    aggFunc: "sum",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const invalidClientArithmeticServerProps = {
+  tableId: "TABLE_ID_INVALID_SERVER_ARITHMETIC",
+  columns: clientOnlyServerAggregateColumns,
+  initialOrderBy: [{ columnId: "COL_ID_CLIENT_ONLY_GROUP", direction: "asc" }],
+  viewportSource: orderViewportSource,
+} as const;
+// @ts-expect-error Server arithmetic must use effect-view-server's exact result Value Types.
+const rejectedClientArithmeticServerProps: BrunoTableServerProps<
+  Order,
+  typeof clientOnlyServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = invalidClientArithmeticServerProps;
+void rejectedClientArithmeticServerProps;
+const widenedClientOnlyServerAggregateColumns: readonly (typeof clientOnlyServerAggregateColumns)[number][] =
+  clientOnlyServerAggregateColumns;
+const widenedClientOnlyServerProps = {
+  ...invalidClientArithmeticServerProps,
+  columns: widenedClientOnlyServerAggregateColumns,
+} as const;
+// @ts-expect-error Widening an unsupported arithmetic column must not bypass Server admission.
+const rejectedWidenedClientArithmeticServerProps: BrunoTableServerProps<
+  Order,
+  typeof widenedClientOnlyServerAggregateColumns,
+  typeof orderViewportSource.viewport
+> = widenedClientOnlyServerProps;
+void rejectedWidenedClientArithmeticServerProps;
 const groupedPersistedPreferences = {
   version: 1,
   tableId: "TABLE_ID_GROUPED_PREFERENCES",
