@@ -268,4 +268,37 @@ describe("BrunoTable editable traversal index", () => {
     expect(evaluate).toHaveBeenCalledTimes(6);
     expect(index.find(0, "COL_ID_ENABLED", 1)?.rowId).toBe("second");
   });
+
+  it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {
+    const first: Row = { id: "first", enabled: true, alternate: false };
+    const rows = new Map<string, Row>([
+      [first.id, first],
+      ["removed", { id: "removed", enabled: true, alternate: false }],
+    ]);
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const columns = makeColumns();
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
+
+    index.reconcile(columns, rowSpace(["first", "removed"]));
+    index.reconcile(columns, rowSpace(["first"]));
+    evaluate.mockClear();
+    rows.delete("removed");
+    index.reconcileRows(undefined);
+    index.reconcile(columns, rowSpace(["first"]));
+    expect(index.getCachedRowCount()).toBe(1);
+    expect(evaluate).not.toHaveBeenCalled();
+
+    for (let replacement = 0; replacement < 20; replacement += 1) {
+      const rowId = `replacement-${String(replacement)}`;
+      rows.set(rowId, { id: rowId, enabled: false, alternate: false });
+      index.reconcileRows(undefined);
+      index.reconcile(columns, rowSpace(["first", rowId]));
+      expect(index.getCachedRowCount()).toBe(2);
+      rows.delete(rowId);
+      index.reconcileRows(undefined);
+      index.reconcile(columns, rowSpace(["first"]));
+      expect(index.getCachedRowCount()).toBe(1);
+    }
+    expect(evaluate).toHaveBeenCalledTimes(40);
+  });
 });

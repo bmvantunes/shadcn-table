@@ -4972,19 +4972,24 @@ type BrunoTableCellProps = Readonly<{
 const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) {
   const { runtime, rowId, instanceId, tableId, columnIndex, column, logicalRowIndex } = props;
   const cellEdit = useContext(BrunoTableCellEditContext);
+  const potentialCellEdit =
+    column.kind === "field" && column.isEditable !== undefined && column.isEditable !== false
+      ? cellEdit
+      : undefined;
   const subscribeEdit = useMemo(
     () =>
-      cellEdit === undefined
+      potentialCellEdit === undefined
         ? (_listener: () => void) => () => undefined
-        : (listener: () => void) => cellEdit.subscribeCell(rowId, column.columnId, listener),
-    [cellEdit, column.columnId, rowId],
+        : (listener: () => void) =>
+            potentialCellEdit.subscribeCell(rowId, column.columnId, listener),
+    [potentialCellEdit, column.columnId, rowId],
   );
   const getEditSnapshot = useMemo(
     () =>
-      cellEdit === undefined
+      potentialCellEdit === undefined
         ? () => NO_CELL_EDIT_PROJECTION
-        : () => cellEdit.getCellSnapshot(rowId, column.columnId),
-    [cellEdit, column.columnId, rowId],
+        : () => potentialCellEdit.getCellSnapshot(rowId, column.columnId),
+    [potentialCellEdit, column.columnId, rowId],
   );
   const edit = useSyncExternalStore(subscribeEdit, getEditSnapshot, getEditSnapshot);
   const rowAware = cellPresentationUsesRawRow(column);

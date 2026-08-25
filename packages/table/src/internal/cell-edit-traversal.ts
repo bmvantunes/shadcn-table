@@ -83,6 +83,7 @@ export class BrunoTableCellEditTraversalIndex {
     );
     this.columns = columns;
     this.rowSpace = rowSpace;
+    if (this.allRowsDirty) this.sweepUnknownGeneration();
     if (columnsChanged) {
       this.columnIndexById.clear();
       for (const [columnIndex, column] of columns.entries()) {
@@ -228,6 +229,17 @@ export class BrunoTableCellEditTraversalIndex {
 
   public readonly getCachedVerticalRangeDestinationCount = (): number =>
     this.verticalRangeCache?.destinations.length ?? 0;
+
+  private readonly sweepUnknownGeneration = (): void => {
+    for (const [rowId, rowCache] of this.rowCacheById) {
+      const row = this.getRow(rowId);
+      if (typeof row !== "object" || row === null || rowCache.row !== row) {
+        this.removeRowCache(rowId);
+        continue;
+      }
+      rowCache.validationGeneration = this.validationGeneration;
+    }
+  };
 
   private readonly refreshRow = (rowId: string): void => {
     const rowIndex = this.rowIndexById.get(rowId);
