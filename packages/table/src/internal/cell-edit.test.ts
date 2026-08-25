@@ -411,6 +411,103 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftSnapshot("nullable", "COL_ID_REQUIRED")).toBeUndefined();
   });
 
+  it("preserves the explicit null versus undefined edit representation", () => {
+    type AmbiguousRow = Readonly<{
+      readonly id: string;
+      readonly value: number | null | undefined;
+    }>;
+    let ambiguousRow: AmbiguousRow = { id: "ambiguous", value: undefined };
+    const nullColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: true,
+        blankValue: null,
+      },
+    ] satisfies BrunoTableColumns<AmbiguousRow>);
+    const nullRuntime = new BrunoTableCellEditRuntime({
+      columns: nullColumns,
+      getRow: () => ambiguousRow,
+    });
+
+    expect(nullRuntime.start("ambiguous", "COL_ID_VALUE")).toBe(true);
+    expect(nullRuntime.commit("")).toBe(true);
+    expect(nullRuntime.getCellSnapshot("ambiguous", "COL_ID_VALUE")).toMatchObject({
+      hasDraft: true,
+      draft: null,
+    });
+
+    ambiguousRow = { id: "ambiguous", value: null };
+    const undefinedColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: true,
+        blankValue: undefined,
+      },
+    ] satisfies BrunoTableColumns<AmbiguousRow>);
+    const undefinedRuntime = new BrunoTableCellEditRuntime({
+      columns: undefinedColumns,
+      getRow: () => ambiguousRow,
+    });
+
+    expect(undefinedRuntime.start("ambiguous", "COL_ID_VALUE")).toBe(true);
+    expect(undefinedRuntime.commit("")).toBe(true);
+    expect(undefinedRuntime.getCellSnapshot("ambiguous", "COL_ID_VALUE")).toMatchObject({
+      hasDraft: true,
+      draft: undefined,
+    });
+  });
+
+  it("rejects policy-free blank input before a custom numeric text parser can coerce zero", () => {
+    const parseCanonicalText = vi.fn((text: string) => ({
+      _tag: "Success" as const,
+      value: BigInt(text),
+    }));
+    const numericTextValueType: BrunoTableValueType<bigint, "numeric", "text"> = {
+      codecId: "test/numeric-text",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "text",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "bigint"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected bigint." },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText,
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: BigInt(input) }
+          : { _tag: "Failure", message: "Expected string." },
+    };
+    const customColumns = compileColumns([
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: numericTextValueType,
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({ columns: customColumns, getRow: () => row });
+
+    expect(runtime.start("row-1", "COL_ID_QUANTITY")).toBe(true);
+    expect(runtime.commit("")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({ invalidMessage: "Enter a value." });
+    expect(parseCanonicalText).not.toHaveBeenCalled();
+  });
+
   it("keeps candidate ownership while XState reconciles a live Row Identity tombstone", () => {
     let liveRow: Row | undefined = row;
     const runtime = new BrunoTableCellEditRuntime({

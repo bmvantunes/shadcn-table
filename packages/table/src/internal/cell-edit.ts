@@ -255,7 +255,8 @@ function evaluateCandidate(
   if (
     rawText.length === 0 &&
     session.column.blankValue === undefined &&
-    session.column.semantics.editorFamily !== "text"
+    (session.column.semantics.editorFamily !== "text" ||
+      session.column.semantics.filterFamily === "numeric")
   ) {
     return Object.freeze({ kind: "invalid", message: "Enter a value." });
   }
@@ -287,12 +288,12 @@ function evaluateCandidate(
     }
   }
   const sourceValue = Reflect.get(session.row, session.column.field);
-  const changed = !session.column.semantics.equivalent(session.before, after);
+  const changed = !equivalentEditValue(session.column, session.before, after);
   return Object.freeze({
     kind: "accepted",
     cellKey: cellKey(session.rowId, session.column.columnId),
     value: after,
-    removeDraft: session.column.semantics.equivalent(after, sourceValue),
+    removeDraft: equivalentEditValue(session.column, after, sourceValue),
     ...(changed
       ? {
           change: Object.freeze({
@@ -305,6 +306,13 @@ function evaluateCandidate(
         }
       : {}),
   });
+}
+
+function equivalentEditValue(column: CompiledFieldColumn, left: unknown, right: unknown): boolean {
+  if (left === null || left === undefined || right === null || right === undefined) {
+    return Object.is(left, right);
+  }
+  return column.semantics.equivalent(left, right);
 }
 
 function getAcceptedEvaluation(

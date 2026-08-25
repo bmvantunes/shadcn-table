@@ -488,6 +488,7 @@ function nullableSafeSemantics(
             : -1
           : 1
         : semantics.compare(left, right),
+    formatCanonicalText: (value) => (value == null ? "" : semantics.formatCanonicalText(value)),
     formatDisplay: (value) => (value == null ? "" : semantics.formatDisplay(value)),
   });
 }

@@ -170,6 +170,7 @@ import {
   type BrunoTableCellEditProjection,
 } from "./cell-edit";
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
+import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
@@ -3091,12 +3092,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             />
           ) : null}
           {cellEdit === undefined ? null : (
-            <BrunoTableDetachedCellEditor
-              columns={logicalColumns}
+            <BrunoTableEditOwnedRow
+              center={columnWindow.center}
+              columnIndexOffset={columnIndexOffset}
+              editRuntime={cellEdit}
               gridElement={gridElement}
+              instanceId={instanceId}
+              logicalColumns={logicalColumns}
               navigation={navigation}
+              pinnedEnd={columnWindow.pinnedEnd}
+              pinnedStart={columnWindow.pinnedStart}
+              rowEnd={virtualWindow.rowEnd}
               rowSpace={rowSpace}
-              runtime={cellEdit}
+              rowStart={virtualWindow.rowStart}
+              tableId={tableId}
+              viewRuntime={runtime}
+              width={renderedTableWidth}
             />
           )}
         </div>
@@ -4983,10 +4994,20 @@ type BrunoTableCellProps = Readonly<{
   readonly columnIndex?: number;
   readonly column: CompiledColumn;
   readonly logicalRowIndex: number;
+  readonly renderActiveEditor?: boolean;
 }>;
 
 const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) {
-  const { runtime, rowId, instanceId, tableId, columnIndex, column, logicalRowIndex } = props;
+  const {
+    runtime,
+    rowId,
+    instanceId,
+    tableId,
+    columnIndex,
+    column,
+    logicalRowIndex,
+    renderActiveEditor = false,
+  } = props;
   const cellEdit = useContext(BrunoTableCellEditContext);
   const potentialCellEdit =
     column.kind === "field" && column.isEditable !== undefined && column.isEditable !== false
@@ -5064,7 +5085,9 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     zIndex: edit.active ? 10 : undefined,
   };
   const cellContent =
-    edit.active && cellEdit !== undefined ? null : (
+    edit.active && cellEdit !== undefined && renderActiveEditor ? (
+      <BrunoTableCellEditBoundary column={column} runtime={cellEdit} />
+    ) : edit.active && cellEdit !== undefined ? null : (
       <div
         style={{
           boxSizing: "border-box",
@@ -5105,79 +5128,125 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   );
 });
 
-const BrunoTableDetachedCellEditor = memo(function BrunoTableDetachedCellEditor({
-  columns,
+const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
+  center,
+  columnIndexOffset,
+  editRuntime,
   gridElement,
+  instanceId,
+  logicalColumns,
   navigation,
+  pinnedEnd,
+  pinnedStart,
+  rowEnd,
   rowSpace,
-  runtime,
+  rowStart,
+  tableId,
+  viewRuntime,
+  width,
 }: {
-  readonly columns: readonly CompiledColumn[];
+  readonly center: readonly CompiledColumn[];
+  readonly columnIndexOffset: number;
+  readonly editRuntime: BrunoTableCellEditRuntime;
   readonly gridElement: RefObject<HTMLDivElement | null>;
+  readonly instanceId: string;
+  readonly logicalColumns: readonly CompiledColumn[];
   readonly navigation: BrunoTableNavigationRuntime;
+  readonly pinnedEnd: readonly CompiledColumn[];
+  readonly pinnedStart: readonly CompiledColumn[];
+  readonly rowEnd: number;
   readonly rowSpace: BrunoTableLogicalRowSpace;
-  readonly runtime: BrunoTableCellEditRuntime;
+  readonly rowStart: number;
+  readonly tableId: string;
+  readonly viewRuntime: BrunoTableRuntimeView;
+  readonly width: number;
 }) {
-  const editor = useRef<HTMLDivElement>(null);
-  const previousRowIndex = useRef<number | undefined>(undefined);
+  const layer = useRef<HTMLDivElement>(null);
+  const [geometry] = useState(() => new BrunoTableCellEditGeometryController());
   const session = useSyncExternalStore(
-    runtime.subscribeSession,
-    runtime.getSessionSnapshot,
-    runtime.getSessionSnapshot,
+    editRuntime.subscribeSession,
+    editRuntime.getSessionSnapshot,
+    editRuntime.getSessionSnapshot,
   );
   const rowIndex = session.kind === "editing" ? rowSpace.findRowIndex(session.rowId) : undefined;
   useLayoutEffect(() => {
     if (session.kind !== "editing") {
-      previousRowIndex.current = undefined;
+      geometry.release();
       return;
     }
-    runtime.reconcileActiveRow();
+    editRuntime.reconcileActiveRow();
     const grid = gridElement.current;
-    const container = editor.current;
+    const container = layer.current;
     if (grid === null || container === null) return;
     if (rowIndex !== undefined) {
-      const previous = previousRowIndex.current;
-      if (previous !== undefined && previous !== rowIndex) {
-        adjustBrunoTableEditRowAnchor(grid, (rowIndex - previous) * ROW_HEIGHT);
-      }
-      previousRowIndex.current = rowIndex;
       navigation.activateBody(rowIndex, session.rowId, session.columnId);
     }
-    const cell = [
-      ...grid.querySelectorAll<HTMLElement>(
-        '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
-      ),
-    ].find(
-      (candidate) =>
-        candidate.dataset["brunoRowId"] === session.rowId &&
-        candidate.dataset["brunoColumnId"] === session.columnId,
-    );
-    if (cell !== undefined) {
-      const cellRect = cell.getBoundingClientRect();
-      const parentRect = container.offsetParent?.getBoundingClientRect();
-      if (parentRect !== undefined) {
-        positionBrunoTableDetachedEditor(container, cellRect, parentRect);
-      }
-    }
-  }, [gridElement, navigation, rowIndex, rowSpace, runtime, session]);
+    geometry.reconcile({
+      grid,
+      layer: container,
+      rowHeight: ROW_HEIGHT,
+      rowId: session.rowId,
+      rowIndex,
+    });
+  }, [
+    geometry,
+    center,
+    gridElement,
+    navigation,
+    pinnedEnd,
+    pinnedStart,
+    rowEnd,
+    rowIndex,
+    rowSpace,
+    rowStart,
+    editRuntime,
+    session,
+  ]);
+  useLayoutEffect(() => () => geometry.release(), [geometry]);
   if (session.kind !== "editing") return null;
-  const column = columns.find((candidate) => candidate.columnId === session.columnId);
-  if (column === undefined) return null;
   const detached = rowIndex === undefined;
+  const columns = [...pinnedStart, ...center, ...pinnedEnd];
+  const cancelAndFocus = () => {
+    editRuntime.cancel();
+    gridElement.current?.focus({ preventScroll: true });
+  };
   return (
     <div
-      ref={editor}
-      data-bruno-detached-cell-editor=""
+      ref={layer}
+      data-bruno-cell-edit-surface=""
+      data-bruno-edit-owned-row=""
       style={{
-        height: ROW_HEIGHT,
+        background: "Canvas",
         insetInlineStart: 0,
         position: "absolute",
         top: 0,
-        width: column.semantics.width,
+        width,
         zIndex: 12,
       }}
     >
-      <BrunoTableCellEditBoundary column={column} runtime={runtime} />
+      <table role="presentation" style={{ tableLayout: "fixed", width }}>
+        <tbody role="presentation">
+          <tr
+            aria-rowindex={(rowIndex ?? 0) + 2}
+            role="row"
+            style={{ display: "table", height: ROW_HEIGHT, tableLayout: "fixed", width }}
+          >
+            {columns.map((column) => (
+              <BrunoTableCell
+                key={column.columnId}
+                column={column}
+                columnIndex={columnIndexOffset + logicalColumns.indexOf(column)}
+                instanceId={instanceId}
+                logicalRowIndex={rowIndex ?? 0}
+                renderActiveEditor
+                rowId={session.rowId}
+                runtime={viewRuntime}
+                tableId={tableId}
+              />
+            ))}
+          </tr>
+        </tbody>
+      </table>
       {detached ? (
         <div
           role={session.rowMissing ? "alert" : "status"}
@@ -5186,7 +5255,7 @@ const BrunoTableDetachedCellEditor = memo(function BrunoTableDetachedCellEditor(
           {session.rowMissing
             ? "This row was removed from the server. Changes cannot be saved."
             : "Row no longer matches current filters"}
-          <button type="button" onClick={() => runtime.cancel()}>
+          <button type="button" onClick={cancelAndFocus}>
             Cancel editing
           </button>
         </div>
@@ -5194,20 +5263,6 @@ const BrunoTableDetachedCellEditor = memo(function BrunoTableDetachedCellEditor(
     </div>
   );
 });
-
-function adjustBrunoTableEditRowAnchor(grid: HTMLElement, delta: number): void {
-  grid.scrollTop += delta;
-}
-
-function positionBrunoTableDetachedEditor(
-  editor: HTMLElement,
-  cell: DOMRect,
-  parent: DOMRect,
-): void {
-  editor.style.insetInlineStart = `${String(cell.left - parent.left)}px`;
-  editor.style.top = `${String(cell.top - parent.top)}px`;
-  editor.style.width = `${String(cell.width)}px`;
-}
 
 function NonTabbableCellContent({ children }: { readonly children: ReactNode }) {
   const ref = useRef<HTMLSpanElement>(null);

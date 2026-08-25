@@ -258,6 +258,32 @@ const emittedInvalidNullableEditColumns = [
 ] satisfies BrunoTableColumns<EmittedNullableEditRow>;
 void emittedInvalidNullableEditColumns;
 
+const emittedInvalidStaticFalseBlankColumns = [
+  // @ts-expect-error emitted literal static-false editability rejects an edit blank policy.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: false,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidStaticFalseBlankColumns;
+const emittedInvalidStaticFalseBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error emitted Helpers cannot infer a compatible field for this invalid capability.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error emitted Helpers reject literal static-false editability with blank policy.
+    isEditable: false,
+    // @ts-expect-error emitted Helpers reject a blank policy without potential editability.
+    blankValue: null,
+  }),
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidStaticFalseBlankHelperColumns;
+
 const emittedHelperGroupedColumns = [
   BrunoTableTextColumn({
     columnId: "COL_ID_EMITTED_HELPER_GROUP",

@@ -4,6 +4,7 @@ import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "./index";
+import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import type { BrunoTableColumnId, BrunoTableColumns } from "./public-types";
 
 type Row = Readonly<{
@@ -640,10 +641,12 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await userEvent.keyboard("{F2}");
   let editor = screen.getByRole("textbox", { name: "Edit Value" });
   await userEvent.fill(editor, "Candidate survives");
+  const anchorTop = editor.element().getBoundingClientRect().top;
 
   await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 2n }], 2));
   editor = screen.getByRole("textbox", { name: "Edit Value" });
   await expect.element(editor).toHaveValue("Candidate survives");
+  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
     screen.getByRole("row").nth(2).getByRole("gridcell").first().element().id,
   );
@@ -655,6 +658,7 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .element(screen.getByRole("status"))
     .toHaveTextContent("Row no longer matches current filters");
   await expect.element(screen.getByRole("status")).toBeVisible();
+  await expect.element(screen.getByRole("gridcell", { name: "hidden", exact: true })).toBeVisible();
   await expect
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .toHaveValue("Candidate survives");
@@ -675,6 +679,99 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
   await userEvent.keyboard("{Escape}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
+
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  await screen.rerender(
+    renderTable([peer, { ...target, ordinal: 2, status: "hidden", revision: 6n }], 6),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Cancel editing" }));
+  await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
+  await expect.element(grid).toHaveFocus();
+
+  await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 7n }], 7));
+  await userEvent.click(screen.getByRole("gridcell", { name: "Target", exact: true }));
+  await userEvent.keyboard("{F2}");
+  await screen.rerender(renderTable([peer], 8));
+  const cancel = screen.getByRole("button", { name: "Cancel editing" });
+  cancel.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
+  await expect.element(grid).toHaveFocus();
+});
+
+test("coalesces a far virtualized live sort move while preserving the edit anchor", async () => {
+  type FarRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly ordinal: number;
+  }>;
+  const farColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: true,
+    },
+    {
+      columnId: "COL_ID_ORDINAL",
+      field: "ordinal",
+      headerName: "Ordinal",
+      valueType: "number",
+    },
+  ] satisfies BrunoTableColumns<FarRow>;
+  const target: FarRow = { id: "target", value: "Far target", ordinal: 0 };
+  const peers: readonly FarRow[] = Array.from({ length: 400 }, (_unused, index) => ({
+    id: `peer-${String(index)}`,
+    value: `Peer ${String(index)}`,
+    ordinal: index + 1,
+  }));
+  const table = (targetRow: FarRow, version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_FAR_SORT"
+      columns={farColumns}
+      initialOrderBy={[{ columnId: "COL_ID_ORDINAL", direction: "asc" }]}
+      clientSource={{
+        rows: [targetRow, ...peers],
+        totalRows: peers.length + 1,
+        version,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(table(target, 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_FAR_SORT" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  let editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await userEvent.fill(editor, "Far candidate");
+  const anchorTop = editor.element().getBoundingClientRect().top;
+  let scrollPublications = 0;
+  grid.element().addEventListener("scroll", () => {
+    scrollPublications += 1;
+  });
+
+  await screen.rerender(table({ ...target, ordinal: 1_000 }, 2));
+  await screen.rerender(table({ ...target, ordinal: 350 }, 3));
+  await screen.rerender(table({ ...target, ordinal: 900 }, 4));
+  await settleBrunoTableBrowserFrames();
+  editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(editor).toHaveValue("Far candidate");
+  await expect.element(editor).toHaveFocus();
+  expect(grid.element().scrollTop).toBeGreaterThan(0);
+  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
+  expect(scrollPublications).toBeLessThanOrEqual(1);
+
+  await screen.rerender(table({ ...target, ordinal: 0 }, 5));
+  await settleBrunoTableBrowserFrames();
+  editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(editor).toHaveValue("Far candidate");
+  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
 });
 
 test("compiles exact nullable blank policies without treating zero as blank", async () => {
@@ -767,6 +864,37 @@ test("compiles exact nullable blank policies without treating zero as blank", as
   await userEvent.keyboard("{Enter}");
   await expect.element(required).toHaveFocus();
   await expect.element(screen.getByRole("alert")).toHaveTextContent("Enter a value.");
+  await userEvent.keyboard("{Escape}");
+
+  let resolveWrite: (() => void) | undefined;
+  const writes: string[] = [];
+  const restoreClipboard = installClipboard(
+    (text) =>
+      new Promise<void>((resolve) => {
+        writes.push(text);
+        resolveWrite = resolve;
+      }),
+  );
+  try {
+    const row = screen.getByRole("row").nth(1);
+    await userEvent.click(row.getByRole("gridcell").nth(0));
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writes).toEqual([""]));
+    resolveWrite?.();
+
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writes).toEqual(["", "\t"]));
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(row.getByRole("gridcell").nth(0));
+    await userEvent.keyboard("{F2}");
+    await userEvent.fill(screen.getByRole("spinbutton", { name: "Edit Nullable" }), "11");
+    await userEvent.keyboard("{Enter}");
+    expect(writes).toEqual(["", "\t"]);
+    resolveWrite?.();
+  } finally {
+    restoreClipboard();
+  }
 });
 
 test("copies one immutable source-plus-draft projection for active cells and ranges", async () => {

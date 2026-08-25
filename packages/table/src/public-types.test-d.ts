@@ -2921,6 +2921,29 @@ const invalidNullableEditColumns = [
     blankValue: null,
   },
 ] satisfies BrunoTableColumns<NullableEditRow>;
+const invalidStaticFalseBlankColumns = [
+  // @ts-expect-error literal static-false editability cannot declare an edit blank policy.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: false,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<NullableEditRow>;
+const invalidStaticFalseBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error Column Helpers cannot infer a compatible field for this invalid capability.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error Column Helpers reject literal static-false editability with blank policy.
+    isEditable: false,
+    // @ts-expect-error Column Helpers reject a blank policy without potential editability.
+    blankValue: null,
+  }),
+] satisfies BrunoTableColumns<NullableEditRow>;
 
 void invalidColumnIds;
 void invalidField;
@@ -2981,3 +3004,5 @@ void invalidIncompleteSelectDomain;
 void invalidCustomNumericOperand;
 void nullableEditColumns;
 void invalidNullableEditColumns;
+void invalidStaticFalseBlankColumns;
+void invalidStaticFalseBlankHelperColumns;

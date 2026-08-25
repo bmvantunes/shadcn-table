@@ -134,12 +134,14 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     }, [column, runtime]);
     useLayoutEffect(() => {
       const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
+      const ownedSurface =
+        control.current?.closest<HTMLElement>("[data-bruno-cell-edit-surface]") ?? editor;
       const document = editor?.ownerDocument;
-      if (editor === null || document === undefined) return;
+      if (editor === null || ownedSurface === null || document === undefined) return;
       let blockedClickTarget: EventTarget | null = null;
       const commitOutsidePointer = (event: PointerEvent) => {
         blockedClickTarget = null;
-        if (event.target instanceof Node && editor.contains(event.target)) return;
+        if (event.target instanceof Node && ownedSurface.contains(event.target)) return;
         if (!runtime.commitActiveCandidate()) {
           blockedClickTarget = event.target;
           event.preventDefault();
