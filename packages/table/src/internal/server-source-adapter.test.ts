@@ -1180,10 +1180,10 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       defaultWidth: 120,
       aggregateResults: { min: "self" as const },
       decodeRuntime: (input: unknown) =>
-        typeof input === "number"
+        typeof input === "number" && Number.isFinite(input)
           ? ({ _tag: "Success", value: input } as const)
           : ({ _tag: "Failure", message: "Expected a number." } as const),
-      equivalent: Object.is,
+      equivalent: (left: number, right: number) => left === right,
       compare: (left: number, right: number) => (left === right ? 0 : left > right ? 1 : -1),
       formatCanonicalText: String,
       parseCanonicalText: (text: string) =>
@@ -1193,7 +1193,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       formatDisplay: String,
       encodePersisted: (value: number) => value,
       decodePersisted: (input: unknown) =>
-        typeof input === "number"
+        typeof input === "number" && Number.isFinite(input)
           ? ({ _tag: "Success", value: input } as const)
           : ({ _tag: "Failure", message: "Expected a number." } as const),
     } satisfies BrunoTableValueType<number>;
@@ -1864,6 +1864,8 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     adapter.stageProjection(restoredGroupedQuery);
 
     expect(adapter.getPublication().clientProjection).not.toBeNull();
+    expect(adapter.getPublication().totalRows).toBe(18);
+    expect(adapter.getPublication().loadingAriaRowCount).toBe(-1);
     expect(adapter.getResultRowCountSnapshot()).toBe(0);
     expect(adapter.getStructureSnapshot().navigationMode).toBe("restore");
     expect(transport.replace).not.toHaveBeenCalled();

@@ -441,7 +441,8 @@ describe("BrunoTableServer", () => {
       await expect
         .element(page.getByRole("status", { name: "Result rows" }))
         .toHaveTextContent("0 result rows");
-      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "19");
+      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "-1");
+      expect(page.getByRole("gridcell", { name: "Loading Desk" }).all()).toHaveLength(18);
       await expect
         .element(page.getByRole("gridcell", { name: "Loading Desk" }).first())
         .toBeVisible();
@@ -456,7 +457,8 @@ describe("BrunoTableServer", () => {
         root = hydrateRoot(host, table, { onRecoverableError: recoverable });
       });
       await vi.waitFor(() => expect(transport.requests).toHaveLength(1));
-      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "19");
+      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "-1");
+      expect(page.getByRole("gridcell", { name: "Loading Desk" }).all()).toHaveLength(18);
       expect(transport.requests[0]!.query).toMatchObject({ groupBy: ["desk"] });
       expect(recoverable).not.toHaveBeenCalled();
       const request = transport.requests[0]!;
@@ -474,8 +476,9 @@ describe("BrunoTableServer", () => {
       const maxAlias = Object.entries(aggregates).find(
         ([, aggregate]) => aggregate.aggFunc === "max",
       )![0];
+      await act(async () => request.sink.setRowCount(1, true));
+      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "2");
       await act(async () => {
-        request.sink.setRowCount(1, true);
         request.sink.setRowData(
           { 0: { desk: "Rates", [rowsAlias]: 2n, [minAlias]: 10, [maxAlias]: 20 } },
           { 0: "rates" },

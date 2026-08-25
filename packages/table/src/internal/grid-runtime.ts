@@ -215,8 +215,12 @@ export type BrunoTableSourceVersionSnapshot = Readonly<{
 }>;
 
 export type BrunoTableBodySnapshot =
-  | Readonly<{ readonly kind: "rows" }>
-  | Readonly<{ readonly kind: "loading"; readonly totalRows: number }>
+  | Readonly<{ readonly kind: "rows"; readonly ariaRowCount?: number }>
+  | Readonly<{
+      readonly kind: "loading";
+      readonly totalRows: number;
+      readonly ariaRowCount?: number;
+    }>
   | Readonly<{ readonly kind: "invalid" }>
   | Readonly<{ readonly kind: "empty" }>;
 
@@ -545,6 +549,8 @@ const EMPTY_COLUMN_COMMAND: BrunoTableColumnCommandSnapshot = Object.freeze({
 export type BrunoTableRowPipelinePublication<TRow> = Readonly<{
   readonly status: BrunoTableSourceStatus;
   readonly totalRows: number;
+  /** Private accessibility count for non-authoritative loading geometry. */
+  readonly loadingAriaRowCount?: number;
   readonly version: number;
   readonly statusCode?: string;
   readonly message?: string;
@@ -3055,8 +3061,12 @@ function sameSourceVersion(
 function sameBody(previous: BrunoTableBodySnapshot, next: BrunoTableBodySnapshot): boolean {
   return (
     previous.kind === next.kind &&
-    (previous.kind !== "loading" ||
-      (next.kind === "loading" && previous.totalRows === next.totalRows))
+    (previous.kind === "rows"
+      ? next.kind === "rows" && previous.ariaRowCount === next.ariaRowCount
+      : previous.kind !== "loading" ||
+        (next.kind === "loading" &&
+          previous.totalRows === next.totalRows &&
+          previous.ariaRowCount === next.ariaRowCount))
   );
 }
 
@@ -3079,7 +3089,10 @@ function bodySnapshot<TRow>(
   publication: BrunoTableRowPipelinePublication<TRow>,
 ): BrunoTableBodySnapshot {
   if (publication.rowSpace !== undefined) {
-    return publication.rowSpace.totalRows > 0 ? BODY_ROWS : BODY_EMPTY;
+    if (publication.rowSpace.totalRows === 0) return BODY_EMPTY;
+    return publication.loadingAriaRowCount === undefined
+      ? BODY_ROWS
+      : Object.freeze({ kind: "rows", ariaRowCount: publication.loadingAriaRowCount });
   }
   if (
     (publication.invalid?.kind === "invalid-value" ||
@@ -3093,7 +3106,13 @@ function bodySnapshot<TRow>(
   }
   if (publication.invalid !== undefined) return BODY_INVALID;
   if (publication.status === "loading" && publication.rowSpace === undefined) {
-    return Object.freeze({ kind: "loading", totalRows: publication.totalRows });
+    return Object.freeze({
+      kind: "loading",
+      totalRows: publication.totalRows,
+      ...(publication.loadingAriaRowCount === undefined
+        ? {}
+        : { ariaRowCount: publication.loadingAriaRowCount }),
+    });
   }
   return BODY_EMPTY;
 }

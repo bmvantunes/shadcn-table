@@ -1009,6 +1009,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       <LoadingRows
         runtime={runtime}
         totalRows={body.totalRows}
+        ariaRowCount={body.ariaRowCount ?? body.totalRows}
         compiledColumns={loadingColumns}
         structuralColumns={installedGroupingStructure.columns}
         focusFallback={focusFallback}
@@ -1054,6 +1055,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             queryGeneration={snapshot.queryGeneration}
             queryNavigationMode={snapshot.queryNavigationMode}
             loading={snapshot.loading}
+            ariaRowCount={body.ariaRowCount}
             renderColumnFilter={renderColumnFilter}
             enableActiveCellCopy={enableActiveCellCopy}
             rowSelection={rowSelection}
@@ -1237,6 +1239,7 @@ type BrunoTableViewportAdapterProps = {
   readonly queryGeneration: number;
   readonly queryNavigationMode: BrunoTableQueryNavigationMode;
   readonly loading: boolean;
+  readonly ariaRowCount?: number | undefined;
   readonly renderColumnFilter?: BrunoTableColumnFilterRenderer | undefined;
   readonly enableActiveCellCopy: boolean;
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
@@ -1256,6 +1259,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     queryGeneration,
     queryNavigationMode,
     loading,
+    ariaRowCount,
     renderColumnFilter,
     enableActiveCellCopy,
     rowSelection,
@@ -1336,6 +1340,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             columnLayout={adapter.columnLayout}
             queryGeneration={installedQueryGeneration}
             loading={loading}
+            ariaRowCount={ariaRowCount}
             viewportSnapshot={adapter.viewportSnapshot}
             attach={adapter.attach}
             attachBodyLayer={adapter.attachBodyLayer}
@@ -1374,6 +1379,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   columnLayout,
   queryGeneration,
   loading,
+  ariaRowCount,
   viewportSnapshot,
   attach,
   attachBodyLayer,
@@ -1406,6 +1412,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly columnLayout: BrunoTableColumnLayoutSnapshot;
   readonly queryGeneration: number;
   readonly loading: boolean;
+  readonly ariaRowCount?: number | undefined;
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly attachBodyLayer: RefCallback<HTMLElement>;
@@ -2695,7 +2702,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         aria-busy={loading || undefined}
         aria-multiselectable={cellRange === undefined ? undefined : true}
         tabIndex={0}
-        aria-rowcount={rowSpace.totalRows + 1}
+        aria-rowcount={ariaRowCount ?? rowSpace.totalRows + 1}
         aria-colcount={
           columnWindow.pinnedStart.length +
           columnWindow.centerCount +
@@ -5153,6 +5160,7 @@ const DEFAULT_LOADING_ROW_COUNT = 5;
 const LoadingRows = memo(function LoadingRows({
   runtime,
   totalRows,
+  ariaRowCount,
   compiledColumns,
   structuralColumns,
   focusFallback,
@@ -5162,6 +5170,7 @@ const LoadingRows = memo(function LoadingRows({
 }: {
   readonly runtime: BrunoTableRuntimeView;
   readonly totalRows: number;
+  readonly ariaRowCount: number;
   readonly compiledColumns: readonly CompiledColumn[];
   readonly structuralColumns?: readonly CompiledColumn[] | undefined;
   readonly focusFallback: () => void;
@@ -5197,7 +5206,7 @@ const LoadingRows = memo(function LoadingRows({
               aria-busy="true"
               aria-colcount={adapter.columns.length + (rowSelection === undefined ? 0 : 1)}
               aria-label="Loading table rows"
-              aria-rowcount={adapter.logicalRowCount}
+              aria-rowcount={ariaRowCount}
               data-bruno-scroll-owner=""
               role="grid"
               tabIndex={0}

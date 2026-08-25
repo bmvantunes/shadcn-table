@@ -127,7 +127,8 @@ describe("BrunoTableServer server rendering", () => {
     expect(markup).toContain('aria-label="Loading Rows"');
     expect(markup).toContain('aria-label="Loading Price"');
     expect(markup).not.toContain('aria-label="Loading Symbol"');
-    expect(markup).toContain('aria-rowcount="19"');
+    expect(markup.match(/aria-label="Loading Desk"/gu)).toHaveLength(18);
+    expect(markup).toContain('aria-rowcount="-1"');
     expect(markup).not.toContain('aria-rowcount="1000001"');
     expect(markup).toContain('aria-label="Result rows"');
     expect(markup).toContain(">0 result rows</output>");

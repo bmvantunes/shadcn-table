@@ -815,7 +815,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       snapshot.generation === 0 || this.generationReleased ? undefined : snapshot.rowSpace;
     const totalRows =
       retainedRowSpace?.totalRows ??
-      (projection.grouped === undefined ? this.source.totalRows : INITIAL_WINDOW.lastRow + 2);
+      (projection.grouped === undefined ? this.source.totalRows : INITIAL_WINDOW.lastRow + 1);
     const hasCoherentRows =
       retainedRowSpace !== undefined &&
       (retainedRowSpace.loadedRows > 0 ||
@@ -843,6 +843,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     return Object.freeze({
       status,
       totalRows,
+      ...(projection.grouped !== undefined &&
+      (retainedRowSpace === undefined || !snapshot.authoritativeTotalRows)
+        ? { loadingAriaRowCount: -1 }
+        : {}),
       version: this.source.version,
       ...(this.source.statusCode === undefined ? {} : { statusCode: this.source.statusCode }),
       ...(this.source.message === undefined ? {} : { message: this.source.message }),
