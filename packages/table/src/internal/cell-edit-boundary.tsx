@@ -82,11 +82,11 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
                 : Reflect.get(element, "value"),
           nativeInvalid:
             column.semantics.editorFamily === "number" &&
-            (rawNumberSeed.current !== undefined ||
-              (element instanceof HTMLInputElement &&
-                element.type === "number" &&
-                element.validity.badInput &&
-                element.value.length === 0)),
+            rawNumberSeed.current === undefined &&
+            element instanceof HTMLInputElement &&
+            element.type === "number" &&
+            element.validity.badInput &&
+            element.value.length === 0,
         }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
@@ -106,7 +106,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         ) {
           const rawText = element.value.slice(0, BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1);
           rawNumberSeed.current = rawText;
-          if (numberCandidateCanUseNativeControl(column, rawText)) {
+          if (numberCandidateCanUseNativeControl(column, element, rawText)) {
             rawNumberSeed.current = undefined;
             setRawNumberDisplay(undefined);
           } else {
@@ -236,6 +236,15 @@ function numberSeedRequiresRawBuffer(column: CompiledColumn, initialText: string
   }
 }
 
-function numberCandidateCanUseNativeControl(column: CompiledColumn, rawText: string): boolean {
-  return rawText.length === 0 || !numberSeedRequiresRawBuffer(column, rawText);
+function numberCandidateCanUseNativeControl(
+  column: CompiledColumn,
+  input: HTMLInputElement,
+  rawText: string,
+): boolean {
+  if (rawText.length === 0) return true;
+  if (numberSeedRequiresRawBuffer(column, rawText)) return false;
+  const probe = input.ownerDocument.createElement("input");
+  probe.type = "number";
+  probe.value = rawText;
+  return probe.value === rawText;
 }

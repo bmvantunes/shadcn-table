@@ -219,6 +219,26 @@ test("preserves incomplete Number replace seeds until the native control can own
   await userEvent.keyboard("{Escape}");
 
   grid.element().focus();
+  await userEvent.keyboard("+5");
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await expect.element(rawEditor).toHaveValue("+5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(rawEditor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "5", exact: true }))
+    .toBeInTheDocument();
+
+  grid.element().focus();
+  await userEvent.keyboard(".{Home}1");
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await expect.element(rawEditor).toHaveValue("1.");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(rawEditor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "1", exact: true }))
+    .toBeInTheDocument();
+
+  grid.element().focus();
   await userEvent.keyboard(".");
   rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
   await expect.element(rawEditor).toHaveValue(".");

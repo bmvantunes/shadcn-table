@@ -72,6 +72,7 @@ import type {
 import type { CompiledColumn } from "./compile-columns";
 import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
 import { yieldBrunoTableGridTabStopForNativeTraversal } from "./focus";
+import { sameBrunoTableToolbarNode } from "./toolbar-node";
 import {
   type BrunoTableHotkeyGesture,
   isBrunoTableHotkeyWorkflowOwner,
@@ -5808,7 +5809,7 @@ export class BrunoTableToolbarStore {
   };
 
   public readonly publish = (children: ReactNode): void => {
-    if (sameToolbarNode(this.snapshot.children, children)) return;
+    if (sameBrunoTableToolbarNode(this.snapshot.children, children)) return;
     this.snapshot = createToolbarSnapshot(children);
     for (const listener of this.listeners) listener();
   };
@@ -5816,39 +5817,6 @@ export class BrunoTableToolbarStore {
 
 function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
   return Object.freeze({ children, hasToolbar: hasRenderableChildren(children) });
-}
-
-function sameToolbarNode(previous: ReactNode, next: ReactNode): boolean {
-  if (Object.is(previous, next)) return true;
-  if (isValidElement(previous) && isValidElement(next)) {
-    if (previous.type !== next.type || previous.key !== next.key) return false;
-    return sameToolbarProps(
-      previous as ReactElement<Readonly<Record<string, unknown>>>,
-      next as ReactElement<Readonly<Record<string, unknown>>>,
-    );
-  }
-  if (Array.isArray(previous) && Array.isArray(next)) {
-    return (
-      previous.length === next.length &&
-      previous.every((child, index) => sameToolbarNode(child, next[index]))
-    );
-  }
-  return false;
-}
-
-function sameToolbarProps(
-  previous: ReactElement<Readonly<Record<string, unknown>>>,
-  next: ReactElement<Readonly<Record<string, unknown>>>,
-): boolean {
-  const previousKeys = Object.keys(previous.props);
-  const nextKeys = Object.keys(next.props);
-  if (previousKeys.length !== nextKeys.length) return false;
-  return previousKeys.every((key) => {
-    if (!Object.hasOwn(next.props, key)) return false;
-    return key === "children"
-      ? sameToolbarNode(previous.props[key] as ReactNode, next.props[key] as ReactNode)
-      : Object.is(previous.props[key], next.props[key]);
-  });
 }
 
 function viewportPageSize(viewport: HTMLElement): number {
