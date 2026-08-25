@@ -40,14 +40,8 @@ type EmittedSink = Readonly<{
 }>;
 type EmittedBrowserViewport = Omit<
   ReturnType<typeof viewportReact.useLiveQueryViewport>["viewport"],
-  "destroy" | "replace" | "semanticKey"
-> &
-  Readonly<{
-    readonly semanticKey: (query: unknown) => unknown;
-    readonly replace: (
-      request: Readonly<{ readonly sink: EmittedSink }>,
-    ) => Readonly<{ readonly setWindow: () => void; readonly release: () => void }>;
-  }>;
+  "destroy"
+>;
 
 const columns = [
   {
@@ -89,14 +83,14 @@ afterEach(async () => cleanup());
 
 test("renders authoritative sparse slots from the emitted Server package", async () => {
   let sink: EmittedSink | undefined;
-  const viewport: EmittedBrowserViewport = {
-    semanticKey: (query) => JSON.stringify(query),
+  const viewport = {
+    semanticKey: (query: unknown) => JSON.stringify(query),
     replace(request: Readonly<{ readonly sink: NonNullable<typeof sink> }>) {
       sink = request.sink;
       sink.setRowCount(1_000, true);
       return { setWindow: () => undefined, release: () => undefined };
     },
-  };
+  } as unknown as EmittedBrowserViewport;
   const screen = await render(
     <BrunoTableServer
       tableId="TABLE_ID_EMITTED_SERVER"

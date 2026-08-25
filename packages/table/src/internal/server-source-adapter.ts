@@ -114,6 +114,7 @@ type BrunoTableServerGroupedAdmissionIdentity = readonly Readonly<{
   readonly columnId: string;
   readonly source: string;
   readonly decoderAuthority: unknown;
+  readonly presentationObservesValue: boolean;
 }>[];
 
 export type BrunoTableServerQueryInputs = Readonly<{
@@ -162,6 +163,11 @@ type BrunoTableGroupedInvalidValue = Extract<
   { readonly kind: "invalid-value" }
 >;
 
+type BrunoTableGroupedRejectedBatch = {
+  readonly invalid: BrunoTableGroupedInvalidValue;
+  readonly pendingRowIndexes: Set<number>;
+};
+
 class BrunoTableGroupedDeliveryError extends TypeError {
   public constructor(public readonly invalid: BrunoTableGroupedInvalidValue) {
     super(invalid.message);
@@ -192,7 +198,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private queryGeneration = 0;
   private stagedInitialNavigationMode: BrunoTableQueryNavigationMode | undefined;
   private forceNextNavigationReset = false;
-  private readonly groupedInvalidsByRowIndex = new Map<number, BrunoTableGroupedInvalidValue>();
+  private readonly groupedRejectedBatchesByRowIndex = new Map<
+    number,
+    BrunoTableGroupedRejectedBatch
+  >();
   private generationNavigationMode: BrunoTableQueryNavigationMode = "reset";
   private maskedRowSpace:
     | Readonly<{
@@ -434,6 +443,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const groupedAdmissionIdentity = compileGroupedAdmissionIdentity(
       queryPlan.grouped,
       this.columnsById,
+      this.groupRowsColumn,
     );
     this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     const transport = requireViewportTransport<TRow>(viewport);
@@ -495,7 +505,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const previous = this.active;
     this.active = undefined;
     this.dispatchedWindow = undefined;
-    this.groupedInvalidsByRowIndex.clear();
+    this.groupedRejectedBatchesByRowIndex.clear();
     if (previous !== undefined) {
       this.store.invalidateGeneration(previous.token);
       this.generationReleased = true;
@@ -549,7 +559,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
                   : normalizeGroupedRows(admission.delivery, queryPlan.grouped, this.columnsById);
             } catch (error) {
               if (error instanceof BrunoTableGroupedDeliveryError) {
-                this.rejectGroupedDelivery(error.invalid);
+                this.rejectGroupedDelivery(
+                  error.invalid,
+                  admission.delivery.map(({ index }) => index),
+                );
                 return;
               }
               throw error;
@@ -569,7 +582,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       });
     } catch (error) {
       this.store.invalidateGeneration(activeToken);
-      this.groupedInvalidsByRowIndex.clear();
+      this.groupedRejectedBatchesByRowIndex.clear();
       this.generationReleased = true;
       this.suppressStorePublication = false;
       this.alignObservedStoreSnapshot();
@@ -662,7 +675,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const previous = this.active;
     this.active = undefined;
     this.dispatchedWindow = undefined;
-    this.groupedInvalidsByRowIndex.clear();
+    this.groupedRejectedBatchesByRowIndex.clear();
     this.forceNextNavigationReset = true;
     if (previous !== undefined) {
       this.store.invalidateGeneration(previous.token);
@@ -683,9 +696,16 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       BrunoTableRowPipelinePublication<TRow>["invalid"],
       { readonly kind: "invalid-value" }
     >,
+    rejectedRowIndexes: readonly number[],
   ): void {
     const previous = this.resolveGroupedInvalid();
-    this.groupedInvalidsByRowIndex.set(invalid.rowIndex, invalid);
+    const existing = this.groupedRejectedBatchesByRowIndex.get(invalid.rowIndex);
+    const pendingRowIndexes = new Set(existing?.pendingRowIndexes);
+    for (const rowIndex of rejectedRowIndexes) pendingRowIndexes.add(rowIndex);
+    this.groupedRejectedBatchesByRowIndex.set(
+      invalid.rowIndex,
+      Object.freeze({ invalid, pendingRowIndexes }),
+    );
     if (this.suppressStorePublication) return;
     if (Object.is(previous, this.resolveGroupedInvalid())) return;
     this.publication = this.createPublication();
@@ -694,7 +714,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
 
   private resolveGroupedInvalid(): BrunoTableGroupedInvalidValue | undefined {
     let first: BrunoTableGroupedInvalidValue | undefined;
-    for (const invalid of this.groupedInvalidsByRowIndex.values()) {
+    for (const { invalid } of this.groupedRejectedBatchesByRowIndex.values()) {
       if (
         first === undefined ||
         invalid.rowIndex < first.rowIndex ||
@@ -708,10 +728,15 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
 
   private clearGroupedInvalidsWhere(predicate: (rowIndex: number) => boolean): boolean {
     let changed = false;
-    for (const rowIndex of this.groupedInvalidsByRowIndex.keys()) {
-      if (!predicate(rowIndex)) continue;
-      this.groupedInvalidsByRowIndex.delete(rowIndex);
-      changed = true;
+    for (const [rejectedRowIndex, batch] of this.groupedRejectedBatchesByRowIndex) {
+      for (const rowIndex of batch.pendingRowIndexes) {
+        if (!predicate(rowIndex)) continue;
+        batch.pendingRowIndexes.delete(rowIndex);
+        changed = true;
+      }
+      if (batch.pendingRowIndexes.size === 0) {
+        this.groupedRejectedBatchesByRowIndex.delete(rejectedRowIndex);
+      }
     }
     return changed;
   }
@@ -757,7 +782,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.active = undefined;
     this.dispatchedWindow = undefined;
     this.store.invalidateGeneration(active.token);
-    this.groupedInvalidsByRowIndex.clear();
+    this.groupedRejectedBatchesByRowIndex.clear();
     this.generationReleased = true;
     this.publication = this.createPublication();
     let invalidationFailed = false;
@@ -1039,7 +1064,7 @@ function readGroupedPresence(
     return Object.freeze({ _tag: "Missing" });
   }
   const input = Reflect.get(row, field);
-  if (input === null || input === undefined)
+  if (!forceBigInt && (input === null || input === undefined))
     return Object.freeze({ _tag: "Present", value: input });
   const decoded = forceBigInt
     ? typeof input === "bigint"
@@ -1364,6 +1389,7 @@ function snapshotServerQueryInputs(
 function compileGroupedAdmissionIdentity(
   grouped: BrunoTableCompiledServerGroupedProjection | undefined,
   columnsById: ReadonlyMap<string, CompiledColumn>,
+  groupRowsColumn: BrunoTableCompiledGroupRowsColumn,
 ): BrunoTableServerGroupedAdmissionIdentity | undefined {
   if (grouped === undefined) return undefined;
   const identity = [
@@ -1374,6 +1400,9 @@ function compileGroupedAdmissionIdentity(
         columnId,
         source: field,
         decoderAuthority: column?.semantics.decodeRuntimeAuthority,
+        presentationObservesValue:
+          groupRowsObservesGroupKeys(groupRowsColumn) ||
+          (column?.kind === "field" && groupedRoleObservesValue(column, "groupKey")),
       });
     }),
     ...grouped.aggregates.map(({ columnId, alias, aggFunc }) => {
@@ -1384,6 +1413,8 @@ function compileGroupedAdmissionIdentity(
         source: alias,
         decoderAuthority:
           aggFunc === "countDistinct" ? "bigint" : column?.semantics.decodeRuntimeAuthority,
+        presentationObservesValue:
+          column?.kind === "field" && groupedRoleObservesValue(column, "aggregate"),
       });
     }),
   ];
@@ -1405,6 +1436,7 @@ function sameGroupedAdmissionIdentity(
           entry.role === candidate.role &&
           entry.columnId === candidate.columnId &&
           entry.source === candidate.source &&
+          entry.presentationObservesValue === candidate.presentationObservesValue &&
           Object.is(entry.decoderAuthority, candidate.decoderAuthority)
         );
       }))

@@ -29,7 +29,7 @@ type RuntimeValueTypeDescriptor = {
   readonly defaultWidth: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: RuntimeAggregateAlgebra;
-  readonly serverAggregateAuthority?: "effect-bigdecimal";
+  readonly serverAggregateAuthority?: "core-bigint" | "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly decodeRuntimeAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
@@ -51,7 +51,7 @@ export type CompiledColumnValueSemantics = {
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
-  readonly serverAggregateAuthority?: "effect-bigdecimal";
+  readonly serverAggregateAuthority?: "core-bigint" | "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   /** Stable private authority used to invalidate decoded Server projections. */
   readonly decodeRuntimeAuthority: unknown;
@@ -487,6 +487,7 @@ function createBigIntValueType(): RuntimeValueTypeDescriptor {
     editorLayout: "inline",
     defaultWidth: 140,
     aggregateResults: builtInBigIntAggregateResults,
+    serverAggregateAuthority: "core-bigint",
     aggregateAlgebra: Object.freeze({
       add: (left, right) => assertBigInt(left) + assertBigInt(right),
     }),

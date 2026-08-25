@@ -349,12 +349,24 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
 
     publicationNotification.mockClear();
     request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [maxAlias]: 21 } },
+      { 0: "rates" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 0 });
+    expect(adapter.getPublication().rowSpace?.getRow("rates")).not.toBe(coherentRow);
+    expect(adapter.getPublication().rowSpace?.getRow("credit")).toBe(coherentCredit);
+
+    request.sink.setRowData(
       { 1: { desk: "Credit", [rowsAlias]: 5n, [maxAlias]: 41 } },
       { 1: "credit" },
     );
-    expect(adapter.getPublication().invalid).toMatchObject({ rowIndex: 0 });
-    expect(publicationNotification).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(publicationNotification).toHaveBeenCalledTimes(2);
 
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 3n, [maxAlias]: "invalid" } },
+      { 0: "rates" },
+    );
     expect(() =>
       request.sink.setRowData(
         { 2: { desk: "Out of range", [rowsAlias]: 1n, [maxAlias]: 10 } },
@@ -2360,6 +2372,155 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     run("none");
     run("role");
     run("rows");
+  });
+
+  it("starts a clean admission generation when a grouped callback begins observing exact values", () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    const tokenType = {
+      codecId: "test/grouped-late-callback-token",
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) => left.id === right.id,
+      compare: (left: Token, right: Token) => left.id - right.id,
+      formatCanonicalText: (value: Token) => String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay: (value: Token) => String(value.id),
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    };
+    const makeColumns = (observes: boolean) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_KEY",
+          field: "key",
+          headerName: "Key",
+          valueType: tokenType,
+          groupBy: true,
+          ...(observes
+            ? { groupKeyValueFormatter: ({ value }: { readonly value: Token }) => value.label }
+            : {}),
+        },
+      ] as never);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      makeColumns(false),
+      undefined,
+      [],
+      [{ columnId: "COL_ID_KEY", direction: "asc" }],
+      ["key"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["key"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_KEY", direction: "asc" as const }],
+      groupBy: ["COL_ID_KEY"],
+      groupOrderBy: [{ columnId: "COL_ID_KEY", direction: "asc" as const }],
+    };
+    adapter.replace(transport.viewport, groupedQuery);
+    const firstRequest = transport.getRequest()!;
+    const rowsAlias = Object.entries(
+      (firstRequest.query as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+    ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+    firstRequest.sink.setRowData(
+      { 0: { key: { id: 1, label: "OLD" }, [rowsAlias]: 1n } },
+      { 0: "group" },
+    );
+    firstRequest.sink.setRowData(
+      { 0: { key: { id: 1, label: "LATEST" }, [rowsAlias]: 1n } },
+      { 0: "group" },
+    );
+    const retained = adapter.getPublication().rowSpace?.getCellValue("group", "COL_ID_KEY") as
+      | Token
+      | undefined;
+    expect(retained?.label).toBe("OLD");
+
+    adapter.reconcileColumns(makeColumns(true), undefined);
+    adapter.replace(transport.viewport, { ...groupedQuery, generation: 1 });
+
+    expect(transport.replace).toHaveBeenCalledTimes(2);
+    expect(transport.release).toHaveBeenCalledOnce();
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+  });
+
+  it("rejects nullish countDistinct aggregates before grouped admission", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_DISTINCT_PRICE",
+        field: "price",
+        headerName: "Distinct price",
+        valueType: "number",
+        aggFunc: "countDistinct",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "price"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "price"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+    });
+    const request = transport.getRequest()!;
+    const aggregates = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const distinctAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "countDistinct",
+    )![0];
+
+    for (const value of [null, undefined]) {
+      request.sink.setRowData(
+        { 0: { desk: "Rates", [rowsAlias]: 1n, [distinctAlias]: value } },
+        { 0: "rates" },
+      );
+      expect(adapter.getPublication().invalid).toMatchObject({
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId: "COL_ID_DISTINCT_PRICE",
+        message: "Expected an exact bigint aggregate.",
+      });
+      expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    }
   });
 
   it("never publishes a new source envelope with old-generation rows", () => {

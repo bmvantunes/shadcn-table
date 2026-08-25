@@ -293,17 +293,7 @@ const browserLeasedCompleteRawSelect = Object.freeze([
   "price",
   "desk",
 ]) as unknown as ActualLeasedViewportSource["completeRawSelect"];
-type BrowserViewportMethods = Readonly<{
-  readonly semanticKey: (query: unknown) => unknown;
-  readonly replace: (
-    request: Readonly<{ readonly query: unknown; readonly sink: Sink }>,
-  ) => Readonly<{
-    readonly setWindow: (window: Readonly<{ firstRow: number; lastRow: number }>) => void;
-    readonly release: () => void;
-  }>;
-}>;
-type BrowserViewportFor<TViewport> = Omit<TViewport, "destroy" | "replace" | "semanticKey"> &
-  BrowserViewportMethods;
+type BrowserViewportFor<TViewport> = Omit<TViewport, "destroy">;
 type BrowserViewport = BrowserViewportFor<ActualViewportSource["viewport"]>;
 type BrowserLeasedViewport = BrowserViewportFor<ActualLeasedViewportSource["viewport"]>;
 
@@ -342,7 +332,7 @@ function makeViewport(totalRows = 100, publishCount = true) {
   const windows: Array<Readonly<{ readonly firstRow: number; readonly lastRow: number }>> = [];
   const releases = vi.fn();
   const semanticKey = vi.fn(brunoTableTestSemanticQueryKey);
-  const viewport: BrowserViewport = {
+  const viewport = {
     semanticKey,
     replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink }>) {
       requests.push(request);
@@ -354,7 +344,7 @@ function makeViewport(totalRows = 100, publishCount = true) {
         release: releases,
       };
     },
-  };
+  } as unknown as BrowserViewport;
   return {
     viewport,
     requests,
@@ -369,7 +359,7 @@ function makeLeasedViewport(totalRows = 100) {
   const windows: Array<Readonly<{ readonly firstRow: number; readonly lastRow: number }>> = [];
   const releases = vi.fn();
   const semanticKey = vi.fn(brunoTableTestSemanticQueryKey);
-  const viewport: BrowserLeasedViewport = {
+  const viewport = {
     semanticKey,
     replace(request: Readonly<{ readonly query: unknown; readonly sink: Sink }>) {
       requests.push(request);
@@ -381,7 +371,7 @@ function makeLeasedViewport(totalRows = 100) {
         release: releases,
       };
     },
-  };
+  } as unknown as BrowserLeasedViewport;
   return { viewport, requests, windows, releases, semanticKey };
 }
 

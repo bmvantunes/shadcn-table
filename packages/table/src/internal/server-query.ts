@@ -316,7 +316,7 @@ function compileServerAggregate(
   if (
     (aggFunc === "sum" || aggFunc === "avg") &&
     column.semantics.serverAggregateAuthority !== "effect-bigdecimal" &&
-    !(aggFunc === "sum" && column.semantics.codecId === "@bruno/table/bigint")
+    !(aggFunc === "sum" && column.semantics.serverAggregateAuthority === "core-bigint")
   ) {
     throw new TypeError(
       `BrunoTable Server aggregate has no source-compatible exact result Value Type: ${column.columnId}`,

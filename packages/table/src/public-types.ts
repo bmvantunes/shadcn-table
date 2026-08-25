@@ -1,6 +1,7 @@
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportQueryAuthority,
   LiveQueryViewportRouteBy,
   LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
@@ -1633,5 +1634,7 @@ type BrunoTableServerQueryAuthority<
       : { readonly routeBy: TRouteBy }),
   ) => unknown;
 }
-  ? unknown
+  ? [LiveQueryViewportQueryAuthority<TViewport>] extends [never]
+    ? { readonly __brunoTableInvalidServerGroupedQueryAuthority: never }
+    : unknown
   : { readonly __brunoTableInvalidServerQueryAuthority: never };

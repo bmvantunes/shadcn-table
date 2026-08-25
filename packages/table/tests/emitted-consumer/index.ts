@@ -5,6 +5,7 @@ import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
 import {
   BrunoTableBigIntColumn,
@@ -898,6 +899,42 @@ BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedUnwitn
 const emittedBroadSource = { ...source, viewport: emittedUnsafeBroadViewport };
 // @ts-expect-error broad dictionaries cannot impersonate the bundled source-owned witness.
 BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedBroadSource });
+
+type EmittedRawOnlyViewport = Omit<typeof source.viewport, "semanticKey"> & {
+  readonly semanticKey: (query: {
+    readonly select: typeof source.completeRawSelect;
+    readonly where: LiveQueryViewportWhere<typeof source.viewport>;
+    readonly orderBy: readonly [];
+  }) => unknown;
+};
+const emittedRawOnlySource = {
+  ...source,
+  viewport: null as unknown as EmittedRawOnlyViewport,
+};
+// @ts-expect-error emitted Server grouping requires source-owned grouped-query authority.
+BrunoTableServer({ ...emittedWitnessedServerProps, viewportSource: emittedRawOnlySource });
+
+type EmittedRawQuery = {
+  readonly select: typeof source.completeRawSelect;
+  readonly where: LiveQueryViewportWhere<typeof source.viewport>;
+  readonly orderBy: readonly [];
+};
+type EmittedRawOnlyReplaceViewport = Omit<typeof source.viewport, "replace"> & {
+  readonly replace: (
+    request: Omit<Parameters<typeof source.viewport.replace>[0], "query"> & {
+      readonly query: EmittedRawQuery;
+    },
+  ) => ReturnType<typeof source.viewport.replace>;
+};
+const emittedRawOnlyReplaceSource = {
+  ...source,
+  viewport: null as unknown as EmittedRawOnlyReplaceViewport,
+};
+// @ts-expect-error emitted Server grouping requires source-owned grouped replacement authority.
+BrunoTableServer({
+  ...emittedWitnessedServerProps,
+  viewportSource: emittedRawOnlyReplaceSource,
+});
 
 const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } = source;
 void omittedCompleteRawSelect;

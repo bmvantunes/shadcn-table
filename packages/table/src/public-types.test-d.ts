@@ -7,6 +7,7 @@ import { SourceAdapter } from "effect-view-server/source-adapter";
 import type {
   LiveQueryViewportBaseRow,
   LiveQueryViewportCompleteRawSelect,
+  LiveQueryViewportWhere,
 } from "effect-view-server/react/viewport-base-row";
 import type { ReactElement, ReactNode } from "react";
 import type { LiveQueryResult } from "effect-view-server/config/query";
@@ -480,6 +481,39 @@ describe("BrunoTableServer viewport row witness", () => {
     const broadSource = { ...orderViewportSource, viewport: unsafeBroadViewport };
     // @ts-expect-error broad dictionaries cannot impersonate the source-owned viewport witness.
     void BrunoTableServer({ ...matchingProps, viewportSource: broadSource });
+
+    type RawOnlyViewport = Omit<typeof orderViewportSource.viewport, "semanticKey"> & {
+      readonly semanticKey: (query: {
+        readonly select: typeof orderViewportSource.completeRawSelect;
+        readonly where: LiveQueryViewportWhere<typeof orderViewportSource.viewport>;
+        readonly orderBy: readonly [];
+      }) => unknown;
+    };
+    const rawOnlySource = {
+      ...orderViewportSource,
+      viewport: null as unknown as RawOnlyViewport,
+    };
+    // @ts-expect-error Server grouping requires the source-owned grouped-query authority.
+    void BrunoTableServer({ ...matchingProps, viewportSource: rawOnlySource });
+
+    type RawQuery = {
+      readonly select: typeof orderViewportSource.completeRawSelect;
+      readonly where: LiveQueryViewportWhere<typeof orderViewportSource.viewport>;
+      readonly orderBy: readonly [];
+    };
+    type RawOnlyReplaceViewport = Omit<typeof orderViewportSource.viewport, "replace"> & {
+      readonly replace: (
+        request: Omit<Parameters<typeof orderViewportSource.viewport.replace>[0], "query"> & {
+          readonly query: RawQuery;
+        },
+      ) => ReturnType<typeof orderViewportSource.viewport.replace>;
+    };
+    const rawOnlyReplaceSource = {
+      ...orderViewportSource,
+      viewport: null as unknown as RawOnlyReplaceViewport,
+    };
+    // @ts-expect-error Server grouping requires source-owned grouped replacement authority.
+    void BrunoTableServer({ ...matchingProps, viewportSource: rawOnlyReplaceSource });
 
     const { completeRawSelect: omittedCompleteRawSelect, ...sourceWithoutCompleteRawSelect } =
       orderViewportSource;

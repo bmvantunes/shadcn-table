@@ -635,15 +635,15 @@ if (declaresDirectDependency("@tanstack/pacer")) {
   throw new Error("React-bound BrunoTable pacing must not depend directly on TanStack Pacer core.");
 }
 
-if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.7") {
+if (packageJson.devDependencies?.["effect-view-server"] !== "4.2.8") {
   throw new Error(
-    "The View Server integration is not pinned to the audited public 4.2.7 contract.",
+    "The View Server integration is not pinned to the audited public 4.2.8 contract.",
   );
 }
 
 if (
   !hasExactStringRecord(packageJson.inlinedDependencies, {
-    "effect-view-server": "4.2.7",
+    "effect-view-server": "4.2.8",
   })
 ) {
   throw new Error("The audited View Server value semantics are not explicitly inlined.");
