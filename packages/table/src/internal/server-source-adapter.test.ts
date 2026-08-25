@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
-import { compileColumns } from "./compile-columns";
+import { compileColumns, type CompiledColumn } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
 import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
@@ -982,6 +982,134 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       revision: "new",
     });
   });
+
+  it.each(["groupKey", "aggregate"] as const)(
+    "starts a clean grouped generation when %s retention semantics change",
+    (role) => {
+      type Token = Readonly<{ readonly id: number; readonly label: string }>;
+      const decodeRuntime = (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const);
+      const equivalent = (left: Token, right: Token) => left.id === right.id;
+      const formatDisplay = (value: Token) => String(value.id);
+      const valueType = (observeLabel: boolean) => ({
+        codecId: "test/grouped-retention-authority",
+        codecVersion: 1,
+        filterFamily: "equality" as const,
+        editorFamily: "text" as const,
+        cellAlign: "start" as const,
+        editorLayout: "inline" as const,
+        defaultWidth: 120,
+        aggregateResults: { min: "self" as const },
+        decodeRuntime,
+        equivalent,
+        compare: (left: Token, right: Token) =>
+          left.id === right.id ? 0 : left.id < right.id ? -1 : 1,
+        formatCanonicalText: (value: Token) =>
+          observeLabel ? `${String(value.id)}:${value.label}` : String(value.id),
+        parseCanonicalText: (text: string) =>
+          ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+        formatDisplay,
+        encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+        decodePersisted: decodeRuntime,
+      });
+      const createColumns = (observeLabel: boolean) =>
+        compileColumns(
+          role === "groupKey"
+            ? [
+                {
+                  columnId: "COL_ID_TOKEN",
+                  field: "token",
+                  headerName: "Token",
+                  valueType: valueType(observeLabel),
+                  groupBy: true,
+                },
+              ]
+            : [
+                {
+                  columnId: "COL_ID_GROUP",
+                  field: "group",
+                  headerName: "Group",
+                  valueType: "text",
+                  groupBy: true,
+                },
+                {
+                  columnId: "COL_ID_TOKEN",
+                  field: "token",
+                  headerName: "Token",
+                  valueType: valueType(observeLabel),
+                  aggFunc: "min",
+                },
+              ],
+        ) as readonly CompiledColumn[];
+      const initialColumns = createColumns(false);
+      const transport = makeViewport<Record<string, unknown>>();
+      const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+        initialColumns,
+        undefined,
+        [],
+        [{ columnId: role === "groupKey" ? "COL_ID_TOKEN" : "COL_ID_GROUP", direction: "asc" }],
+        role === "groupKey" ? ["token"] : ["group", "token"],
+      );
+      adapter.reconcileSource({
+        viewport: transport.viewport,
+        completeRawSelect: role === "groupKey" ? ["token"] : ["group", "token"],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      });
+      const groupedQuery = {
+        ...query,
+        orderBy: [
+          {
+            columnId: role === "groupKey" ? "COL_ID_TOKEN" : "COL_ID_GROUP",
+            direction: "asc" as const,
+          },
+        ],
+        groupBy: [role === "groupKey" ? "COL_ID_TOKEN" : "COL_ID_GROUP"],
+        groupOrderBy: [
+          {
+            columnId: role === "groupKey" ? "COL_ID_TOKEN" : "COL_ID_GROUP",
+            direction: "asc" as const,
+          },
+        ],
+      };
+      adapter.replace(transport.viewport, groupedQuery);
+      const firstRequest = transport.getRequest()!;
+      const aggregateQuery = (
+        firstRequest.query as { aggregates: Record<string, { aggFunc: string }> }
+      ).aggregates;
+      const rowsAlias = Object.entries(aggregateQuery).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const tokenAlias = Object.entries(aggregateQuery).find(
+        ([, aggregate]) => aggregate.aggFunc === "min",
+      )?.[0];
+      const oldToken = { id: 1, label: "OLD" } as const;
+      const newToken = { id: 1, label: "NEW" } as const;
+      const delivery = (token: Token) =>
+        role === "groupKey"
+          ? { token, [rowsAlias]: 1n }
+          : { group: "Rates", [rowsAlias]: 1n, [tokenAlias!]: token };
+      firstRequest.sink.setRowCount(1, true);
+      firstRequest.sink.setRowData({ 0: delivery(oldToken) }, { 0: "rates" });
+      firstRequest.sink.setRowData({ 0: delivery(newToken) }, { 0: "rates" });
+      expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_TOKEN")).toBe(
+        oldToken,
+      );
+
+      adapter.reconcileColumns(createColumns(true), undefined);
+      adapter.replace(transport.viewport, groupedQuery);
+      expect(transport.replace).toHaveBeenCalledTimes(2);
+      expect(transport.release).toHaveBeenCalledOnce();
+      expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+      transport.getRequest()!.sink.setRowData({ 0: delivery(newToken) }, { 0: "rates" });
+      expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_TOKEN")).toBe(
+        newToken,
+      );
+    },
+  );
 
   it("preserves exact bigint, optional, and Effect BigDecimal grouped result domains", () => {
     type ExactRow = Readonly<{
@@ -2245,7 +2373,11 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
   });
 
   it("retains grouped equivalent values only when no active role callback can observe them", () => {
-    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    type Token = Readonly<{
+      readonly id: number;
+      readonly label: string;
+      readonly canonical: string;
+    }>;
     const tokenType = {
       codecId: "test/grouped-callback-token",
       codecVersion: 1,
@@ -2256,22 +2388,34 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       defaultWidth: 120,
       aggregateResults: { min: "self" as const },
       decodeRuntime: (input: unknown) =>
-        typeof input === "object" && input !== null && "id" in input && "label" in input
+        typeof input === "object" &&
+        input !== null &&
+        "id" in input &&
+        "label" in input &&
+        "canonical" in input
           ? ({ _tag: "Success", value: input as Token } as const)
           : ({ _tag: "Failure", message: "Expected token." } as const),
       equivalent: (left: Token, right: Token) => left.id === right.id,
       compare: (left: Token, right: Token) => left.id - right.id,
-      formatCanonicalText: (value: Token) => String(value.id),
+      formatCanonicalText: (value: Token) => value.canonical,
       parseCanonicalText: (text: string) =>
-        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+        ({ _tag: "Success", value: { id: Number(text), label: text, canonical: text } }) as const,
       formatDisplay: (value: Token) => String(value.id),
-      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      encodePersisted: (value: Token) => ({
+        id: value.id,
+        label: value.label,
+        canonical: value.canonical,
+      }),
       decodePersisted: (input: unknown) =>
-        typeof input === "object" && input !== null && "id" in input && "label" in input
+        typeof input === "object" &&
+        input !== null &&
+        "id" in input &&
+        "label" in input &&
+        "canonical" in input
           ? ({ _tag: "Success", value: input as Token } as const)
           : ({ _tag: "Failure", message: "Expected token." } as const),
     };
-    const run = (observer: "none" | "role" | "rows"): void => {
+    const run = (observer: "none" | "role" | "rows" | "canonical"): void => {
       const tokenColumns = compileColumns([
         {
           columnId: "COL_ID_KEY",
@@ -2346,9 +2490,17 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       request.sink.setRowData(
         {
           0: {
-            key: { id: 1, label: "OLD KEY" },
+            key: {
+              id: 1,
+              label: observer === "role" || observer === "rows" ? "OLD KEY" : "KEY",
+              canonical: observer === "canonical" ? "OLD KEY" : "1",
+            },
             [rowsAlias]: 1n,
-            [aggregateAlias]: { id: 2, label: "OLD AGGREGATE" },
+            [aggregateAlias]: {
+              id: 2,
+              label: observer === "role" ? "OLD AGGREGATE" : "AGGREGATE",
+              canonical: observer === "canonical" ? "OLD AGGREGATE" : "2",
+            },
           },
         },
         { 0: "group" },
@@ -2357,21 +2509,31 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       request.sink.setRowData(
         {
           0: {
-            key: { id: 1, label: "NEW KEY" },
+            key: {
+              id: 1,
+              label: observer === "role" || observer === "rows" ? "NEW KEY" : "KEY",
+              canonical: observer === "canonical" ? "NEW KEY" : "1",
+            },
             [rowsAlias]: 1n,
-            [aggregateAlias]: { id: 2, label: "NEW AGGREGATE" },
+            [aggregateAlias]: {
+              id: 2,
+              label: observer === "role" ? "NEW AGGREGATE" : "AGGREGATE",
+              canonical: observer === "canonical" ? "NEW AGGREGATE" : "2",
+            },
           },
         },
         { 0: "group" },
       );
       const next = adapter.getPublication().rowSpace?.getRow("group");
-      if (observer === "role" || observer === "rows") expect(next).not.toBe(previous);
+      if (observer === "role" || observer === "rows" || observer === "canonical")
+        expect(next).not.toBe(previous);
       else expect(next).toBe(previous);
     };
 
     run("none");
     run("role");
     run("rows");
+    run("canonical");
   });
 
   it("starts a clean admission generation when a grouped callback begins observing exact values", () => {
@@ -2460,7 +2622,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
   });
 
-  it("rejects nullish countDistinct aggregates before grouped admission", () => {
+  it("requires own exact non-negative countDistinct and own positive Rows results", () => {
     const groupedColumns = compileColumns([
       {
         columnId: "COL_ID_DESK",
@@ -2508,7 +2670,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       ([, aggregate]) => aggregate.aggFunc === "countDistinct",
     )![0];
 
-    for (const value of [null, undefined]) {
+    for (const value of [null, undefined, -1n]) {
       request.sink.setRowData(
         { 0: { desk: "Rates", [rowsAlias]: 1n, [distinctAlias]: value } },
         { 0: "rates" },
@@ -2521,6 +2683,35 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       });
       expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
     }
+
+    request.sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "rates" });
+    expect(adapter.getPublication().invalid).toMatchObject({
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_DISTINCT_PRICE",
+    });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+
+    const inheritedRows = Object.assign(Object.create({ [rowsAlias]: 1n }), {
+      desk: "Rates",
+      [distinctAlias]: 0n,
+    }) as Record<string, unknown>;
+    request.sink.setRowData({ 0: inheritedRows }, { 0: "rates" });
+    expect(adapter.getPublication().invalid).toMatchObject({
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_BRUNO_TABLE_ROWS",
+    });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+
+    request.sink.setRowData(
+      { 0: { desk: "Rates", [rowsAlias]: 1n, [distinctAlias]: 0n } },
+      { 0: "rates" },
+    );
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_DISTINCT_PRICE")).toBe(
+      0n,
+    );
   });
 
   it("never publishes a new source envelope with old-generation rows", () => {

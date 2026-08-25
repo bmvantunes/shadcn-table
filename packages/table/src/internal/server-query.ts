@@ -217,9 +217,7 @@ function compileGroupedQueryPlan(
     "__proto__",
     "prototype",
     "constructor",
-    ...columns.flatMap((column) =>
-      column.kind === "field" ? [column.field] : Array.from(column.fields),
-    ),
+    ...groupKeys.map(({ field }) => field),
   ]);
   const nextAlias = (base: string): string => {
     let candidate = base;

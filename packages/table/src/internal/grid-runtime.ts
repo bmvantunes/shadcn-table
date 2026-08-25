@@ -1801,17 +1801,17 @@ export class BrunoTableGridRuntime<TRow> {
       this.columnLayoutSnapshot,
       this.groupRowsWidth,
     );
-    let error = groupingSortChanged
-      ? firstNotificationFailure(notify(this.queryListeners), notify(this.sortingListeners))
-      : resetsRowsWidth
-        ? notify(this.queryListeners)
-        : undefined;
+    let error = firstNotificationFailure(
+      this.notifyColumnLayoutTransition(previousLayoutSnapshot, previousCommands),
+      this.notifyColumnStructureTransition(previousLayoutSnapshot),
+    );
     error = firstNotificationFailure(
       error,
-      firstNotificationFailure(
-        this.notifyColumnLayoutTransition(previousLayoutSnapshot, previousCommands),
-        this.notifyColumnStructureTransition(previousLayoutSnapshot),
-      ),
+      groupingSortChanged
+        ? firstNotificationFailure(notify(this.queryListeners), notify(this.sortingListeners))
+        : resetsRowsWidth
+          ? notify(this.queryListeners)
+          : undefined,
     );
     if (error !== undefined) throw error.value;
     return true;

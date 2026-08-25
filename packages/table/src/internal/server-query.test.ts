@@ -162,7 +162,7 @@ describe("compileBrunoTableServerQueryPlan", () => {
     expect(reorderedPlan.grouped.aggregates).toEqual(originalPlan.grouped.aggregates);
   });
 
-  it("resolves private aggregate alias field collisions deterministically across reorders", () => {
+  it("ignores dormant field collisions while suffixing active Group Key collisions", () => {
     const input = {
       filters: [],
       quickFilter: "",
@@ -199,15 +199,46 @@ describe("compileBrunoTableServerQueryPlan", () => {
       collisionColumns[2]!,
     ]);
     const collisionSelect = [...completeRawSelect, maxBaseAlias, `${maxBaseAlias}_1`] as const;
+    const original = compileBrunoTableServerQueryPlan(groupedColumns, input, completeRawSelect);
     const first = compileBrunoTableServerQueryPlan(collisionColumns, input, collisionSelect);
     const second = compileBrunoTableServerQueryPlan(reordered, input, collisionSelect);
     const alias = first.grouped.aggregates.find(
       ({ columnId }) => columnId === "COL_ID_MAX_QUANTITY",
     )!.alias;
 
-    expect(alias).toBe(`${maxBaseAlias}_2`);
+    expect(alias).toBe(maxBaseAlias);
+    expect(first.query).toEqual(original.query);
+    expect(first.grouped).toEqual(original.grouped);
     expect(second.query).toEqual(first.query);
     expect(second.grouped.aggregates).toEqual(first.grouped.aggregates);
+
+    const activeCollisionColumns = compileColumns([
+      {
+        columnId: "COL_ID_ALIAS_GROUP",
+        field: maxBaseAlias,
+        headerName: "Alias group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_ROWS_ALIAS_GROUP",
+        field: "__bruno_table_rows",
+        headerName: "Rows alias group",
+        valueType: "text",
+        groupBy: true,
+      },
+      groupedColumns[3]!,
+    ]);
+    const active = compileBrunoTableServerQueryPlan(
+      activeCollisionColumns,
+      {
+        ...input,
+        groupBy: ["COL_ID_ALIAS_GROUP", "COL_ID_ROWS_ALIAS_GROUP"],
+      },
+      [maxBaseAlias, "__bruno_table_rows", "quantity"],
+    );
+    expect(active.grouped.rowsAlias).toBe("__bruno_table_rows_1");
+    expect(active.grouped.aggregates[0]?.alias).toBe(`${maxBaseAlias}_1`);
   });
 
   it("rejects empty and non-field sorting at the runtime boundary", () => {

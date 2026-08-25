@@ -114,6 +114,7 @@ type BrunoTableServerGroupedAdmissionIdentity = readonly Readonly<{
   readonly columnId: string;
   readonly source: string;
   readonly decoderAuthority: unknown;
+  readonly retentionAuthority: CompiledColumn["semantics"]["groupedRetentionAuthority"] | "bigint";
   readonly presentationObservesValue: boolean;
 }>[];
 
@@ -1031,6 +1032,7 @@ function normalizeGroupedRows<TRow>(
           index,
           aggregate.columnId,
           aggregate.aggFunc === "countDistinct",
+          true,
         );
         values.set(aggregate.columnId, presence._tag === "Present" ? presence.value : undefined);
         presences.set(aggregate.columnId, presence);
@@ -1055,19 +1057,30 @@ function readGroupedPresence(
   rowIndex: number,
   columnId: string,
   forceBigInt = false,
+  requiredResult = false,
 ): BrunoTableGroupedPresence {
   if (
     typeof row !== "object" ||
     row === null ||
     !Object.prototype.propertyIsEnumerable.call(row, field)
   ) {
-    return Object.freeze({ _tag: "Missing" });
+    if (!requiredResult) return Object.freeze({ _tag: "Missing" });
+    throw new BrunoTableGroupedDeliveryError(
+      Object.freeze({
+        kind: "invalid-value",
+        rowIndex,
+        columnId,
+        message: forceBigInt
+          ? "Expected an exact bigint aggregate."
+          : "Expected a grouped aggregate result.",
+      }),
+    );
   }
   const input = Reflect.get(row, field);
   if (!forceBigInt && (input === null || input === undefined))
     return Object.freeze({ _tag: "Present", value: input });
   const decoded = forceBigInt
-    ? typeof input === "bigint"
+    ? typeof input === "bigint" && input >= 0n
       ? { _tag: "Success" as const, value: input }
       : { _tag: "Failure" as const, message: "Expected an exact bigint aggregate." }
     : column?.semantics.decodeRuntime(input);
@@ -1085,7 +1098,12 @@ function readGroupedPresence(
 }
 
 function readRequiredBigInt(row: unknown, alias: string, rowIndex: number): bigint {
-  const value = typeof row === "object" && row !== null ? Reflect.get(row, alias) : undefined;
+  const value =
+    typeof row === "object" &&
+    row !== null &&
+    Object.prototype.propertyIsEnumerable.call(row, alias)
+      ? Reflect.get(row, alias)
+      : undefined;
   if (typeof value !== "bigint" || value <= 0n) {
     throw new BrunoTableGroupedDeliveryError(
       Object.freeze({
@@ -1166,7 +1184,9 @@ function groupedPresenceEquivalent(
   try {
     return (
       column.semantics.equivalent(left.value, right.value) &&
-      column.semantics.formatDisplay(left.value) === column.semantics.formatDisplay(right.value)
+      column.semantics.formatDisplay(left.value) === column.semantics.formatDisplay(right.value) &&
+      column.semantics.formatCanonicalText(left.value) ===
+        column.semantics.formatCanonicalText(right.value)
     );
   } catch {
     return false;
@@ -1400,6 +1420,7 @@ function compileGroupedAdmissionIdentity(
         columnId,
         source: field,
         decoderAuthority: column?.semantics.decodeRuntimeAuthority,
+        retentionAuthority: column?.semantics.groupedRetentionAuthority ?? ("bigint" as const),
         presentationObservesValue:
           groupRowsObservesGroupKeys(groupRowsColumn) ||
           (column?.kind === "field" && groupedRoleObservesValue(column, "groupKey")),
@@ -1413,6 +1434,10 @@ function compileGroupedAdmissionIdentity(
         source: alias,
         decoderAuthority:
           aggFunc === "countDistinct" ? "bigint" : column?.semantics.decodeRuntimeAuthority,
+        retentionAuthority:
+          aggFunc === "countDistinct"
+            ? ("bigint" as const)
+            : (column?.semantics.groupedRetentionAuthority ?? ("bigint" as const)),
         presentationObservesValue:
           column?.kind === "field" && groupedRoleObservesValue(column, "aggregate"),
       });
@@ -1437,9 +1462,25 @@ function sameGroupedAdmissionIdentity(
           entry.columnId === candidate.columnId &&
           entry.source === candidate.source &&
           entry.presentationObservesValue === candidate.presentationObservesValue &&
-          Object.is(entry.decoderAuthority, candidate.decoderAuthority)
+          Object.is(entry.decoderAuthority, candidate.decoderAuthority) &&
+          sameGroupedRetentionAuthority(entry.retentionAuthority, candidate.retentionAuthority)
         );
       }))
+  );
+}
+
+function sameGroupedRetentionAuthority(
+  previous: BrunoTableServerGroupedAdmissionIdentity[number]["retentionAuthority"],
+  next: BrunoTableServerGroupedAdmissionIdentity[number]["retentionAuthority"],
+): boolean {
+  return (
+    previous === next ||
+    (previous !== "bigint" &&
+      next !== "bigint" &&
+      Object.is(previous.equivalent, next.equivalent) &&
+      Object.is(previous.formatCanonicalText, next.formatCanonicalText) &&
+      Object.is(previous.formatDisplay, next.formatDisplay) &&
+      previous.numberFormat === next.numberFormat)
   );
 }
 

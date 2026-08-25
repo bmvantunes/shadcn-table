@@ -32,6 +32,9 @@ type RuntimeValueTypeDescriptor = {
   readonly serverAggregateAuthority?: "core-bigint" | "effect-bigdecimal";
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   readonly decodeRuntimeAuthority?: unknown;
+  readonly equivalentAuthority?: unknown;
+  readonly formatCanonicalTextAuthority?: unknown;
+  readonly formatDisplayAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -55,6 +58,13 @@ export type CompiledColumnValueSemantics = {
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   /** Stable private authority used to invalidate decoded Server projections. */
   readonly decodeRuntimeAuthority: unknown;
+  /** Stable private authority for grouped representative retention and Copy observability. */
+  readonly groupedRetentionAuthority: Readonly<{
+    readonly equivalent: unknown;
+    readonly formatCanonicalText: unknown;
+    readonly formatDisplay: unknown;
+    readonly numberFormat: string | undefined;
+  }>;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
   readonly formatCanonicalText: (value: unknown) => string;
@@ -161,6 +171,7 @@ export function compileColumnValueSemantics(
   }
 
   let formatDisplay = (value: unknown) => descriptor.formatDisplay(value);
+  let numberFormatAuthority: string | undefined;
   if (format !== undefined) {
     if (!isRecord(format)) {
       throw new ValueSemanticsConfigurationError(
@@ -175,6 +186,7 @@ export function compileColumnValueSemantics(
       }
     }
     const formatSnapshot = Object.freeze({ ...format }) as BrunoTableNumberFormat;
+    numberFormatAuthority = snapshotNumberFormatAuthority(formatSnapshot);
     let formatter: Intl.NumberFormat;
     try {
       formatter = new Intl.NumberFormat(BRUNO_TABLE_NUMBER_DISPLAY_LOCALE, formatSnapshot);
@@ -203,6 +215,13 @@ export function compileColumnValueSemantics(
       : { serverAggregateAuthority: descriptor.serverAggregateAuthority }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
+    groupedRetentionAuthority: Object.freeze({
+      equivalent: descriptor.equivalentAuthority ?? descriptor.equivalent,
+      formatCanonicalText:
+        descriptor.formatCanonicalTextAuthority ?? descriptor.formatCanonicalText,
+      formatDisplay: descriptor.formatDisplayAuthority ?? descriptor.formatDisplay,
+      numberFormat: numberFormatAuthority,
+    }),
     equivalent: (left, right) => descriptor.equivalent(left, right),
     compare: (left, right) => descriptor.compare(left, right),
     formatCanonicalText: (value) => descriptor.formatCanonicalText(value),
@@ -299,6 +318,9 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
       : {}),
     decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
     decodeRuntimeAuthority: decodeRuntimeFunction,
+    equivalentAuthority: equivalentFunction,
+    formatCanonicalTextAuthority: formatCanonicalTextFunction,
+    formatDisplayAuthority: formatDisplayFunction,
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
     compare: (left, right) =>
@@ -313,6 +335,17 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
+}
+
+function snapshotNumberFormatAuthority(format: BrunoTableNumberFormat): string {
+  return Object.keys(format)
+    .filter((key) => Reflect.get(format, key) !== undefined)
+    .sort()
+    .map((key) => {
+      const value = Reflect.get(format, key);
+      return `${key}:${typeof value}:${String(value)}`;
+    })
+    .join("|");
 }
 
 function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {

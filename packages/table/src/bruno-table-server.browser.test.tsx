@@ -1237,6 +1237,208 @@ describe("BrunoTableServer", () => {
     }
   });
 
+  test("copies the latest canonical grouped value after an equivalent live delivery", async () => {
+    type Token = Readonly<{ readonly id: number; readonly canonical: string }>;
+    type TokenRow = Readonly<{ readonly desk: Token }>;
+    const decodeRuntime = (input: unknown) =>
+      typeof input === "object" && input !== null && "id" in input && "canonical" in input
+        ? ({ _tag: "Success", value: input as Token } as const)
+        : ({ _tag: "Failure", message: "Expected token." } as const);
+    const equivalent = (left: Token, right: Token) => left.id === right.id;
+    const formatDisplay = (value: Token) => String(value.id);
+    const tokenType = (observeCanonical: boolean) =>
+      ({
+        codecId: "test/browser-grouped-copy-token",
+        codecVersion: 1,
+        filterFamily: "equality" as const,
+        editorFamily: "text" as const,
+        cellAlign: "start" as const,
+        editorLayout: "inline" as const,
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent,
+        compare: (left: Token, right: Token) =>
+          left.id === right.id ? 0 : left.id < right.id ? -1 : 1,
+        formatCanonicalText: (value: Token) =>
+          observeCanonical ? value.canonical : String(value.id),
+        parseCanonicalText: (text: string) =>
+          ({ _tag: "Success", value: { id: 1, canonical: text } }) as const,
+        formatDisplay,
+        encodePersisted: (value: Token) => ({ id: value.id, canonical: value.canonical }),
+        decodePersisted: decodeRuntime,
+      }) satisfies BrunoTableValueType<Token>;
+    const canonicalColumns = (observeCanonical: boolean) =>
+      [
+        {
+          columnId: "COL_ID_CANONICAL_KEY",
+          field: "desk",
+          headerName: "Desk",
+          valueType: tokenType(observeCanonical),
+          groupBy: true,
+        },
+      ] as const satisfies BrunoTableColumns<TokenRow>;
+    const CanonicalServerTable = BrunoTableServer as unknown as (props: {
+      readonly tableId: string;
+      readonly columns: readonly unknown[];
+      readonly initialOrderBy: readonly unknown[];
+      readonly viewportSource: unknown;
+    }) => ReactNode;
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const transport = makeViewport(1, false);
+      const renderTable = (observeCanonical: boolean) => (
+        <CanonicalServerTable
+          tableId="TABLE_ID_SERVER_GROUPED_CANONICAL_COPY"
+          columns={canonicalColumns(observeCanonical)}
+          initialOrderBy={[{ columnId: "COL_ID_CANONICAL_KEY", direction: "asc" }]}
+          viewportSource={{
+            viewport: transport.viewport,
+            useWholeResult: browserWholeResult,
+            completeRawSelect: ["desk"],
+            totalRows: 1,
+            version: 1,
+            status: "ready",
+          }}
+        />
+      );
+      const screen = await render(renderTable(false));
+      const groupRegion = screen.getByRole("region", { name: "Group By" });
+      await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+      await userEvent.click(screen.getByRole("option", { name: "Desk", exact: true }));
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+      const request = transport.requests[1]!;
+      const aggregates = (
+        request.query as {
+          aggregates: Record<string, { aggFunc: string }>;
+        }
+      ).aggregates;
+      const rowsAlias = Object.entries(aggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const sink = request.sink as unknown as Sink<Record<string, unknown>>;
+      sink.setRowCount(1, true);
+      sink.setRowData(
+        { 0: { desk: { id: 1, canonical: "OLD" }, [rowsAlias]: 1n } },
+        { 0: "canonical-group" },
+      );
+      sink.setRowData(
+        { 0: { desk: { id: 1, canonical: "NEW" }, [rowsAlias]: 1n } },
+        { 0: "canonical-group" },
+      );
+      await screen.rerender(renderTable(true));
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
+      const replacement = transport.requests[2]!;
+      const replacementAggregates = (
+        replacement.query as { aggregates: Record<string, { aggFunc: string }> }
+      ).aggregates;
+      const replacementRowsAlias = Object.entries(replacementAggregates).find(
+        ([, aggregate]) => aggregate.aggFunc === "count",
+      )![0];
+      const replacementSink = replacement.sink as unknown as Sink<Record<string, unknown>>;
+      replacementSink.setRowCount(1, true);
+      replacementSink.setRowData(
+        { 0: { desk: { id: 1, canonical: "NEW" }, [replacementRowsAlias]: 1n } },
+        { 0: "canonical-group" },
+      );
+      const grid = screen.getByRole("grid", {
+        name: "Data for TABLE_ID_SERVER_GROUPED_CANONICAL_COPY",
+      });
+      grid.element().focus();
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "1", exact: true }).nth(0).element().id,
+        ),
+      );
+      const copy = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "c",
+        [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
+      });
+      grid.element().dispatchEvent(copy);
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("NEW"));
+      expect(transport.requests).toHaveLength(3);
+      expect(transport.releases).toHaveBeenCalledTimes(2);
+    } finally {
+      if (clipboardDescriptor === undefined)
+        delete (navigator as { clipboard?: Clipboard }).clipboard;
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  test("hides the active grouped-sort aggregate with one coherent Server replacement", async () => {
+    const tableId = "TABLE_ID_SERVER_GROUPED_HIDE_SORT";
+    const transport = makeViewport(1, false);
+    let runtime: BrunoTableGridRuntime<Row> | undefined;
+    const removeLifetime = installBrunoTableToolbarLifetimeListener((event) => {
+      if (
+        event.tableId === tableId &&
+        event.kind === "runtime-create" &&
+        event.identity instanceof BrunoTableGridRuntime
+      ) {
+        runtime = event.identity;
+      }
+    });
+    try {
+      const screen = await render(
+        <BrunoTableServer
+          {...serverProps(transport.viewport, "ready")}
+          tableId={tableId}
+          columns={serverGroupingColumns}
+          initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+        />,
+      );
+      const groupRegion = screen.getByRole("region", { name: "Group By" });
+      await userEvent.click(groupRegion.getByRole("combobox", { name: "Add Group" }));
+      await userEvent.click(screen.getByRole("option", { name: "Desk", exact: true }));
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(2));
+      expect(runtime).toBeDefined();
+      expect(
+        runtime?.getView().dispatchGridCommand({
+          type: "column.sort.toggle",
+          columnId: "COL_ID_MAX_PRICE",
+          multi: false,
+        }),
+      ).toBe(true);
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
+      expect(runtime?.getView().getQuerySnapshot().groupOrderBy).toEqual([
+        { columnId: "COL_ID_MAX_PRICE", direction: "asc" },
+      ]);
+
+      expect(
+        runtime?.getView().dispatchGridCommand({
+          type: "column.visibility.commit",
+          columnId: "COL_ID_MAX_PRICE",
+          visible: false,
+        }),
+      ).toBe(true);
+      await vi.waitFor(() => expect(transport.requests).toHaveLength(4));
+      expect(transport.releases).toHaveBeenCalledTimes(3);
+      expect(runtime?.getView().getQuerySnapshot().groupOrderBy).toEqual([
+        { columnId: "COL_ID_DESK", direction: "asc" },
+      ]);
+      const finalQuery = transport.requests[3]!.query as {
+        aggregates: Record<string, { aggFunc: string; field?: string }>;
+      };
+      expect(
+        Object.values(finalQuery.aggregates).some((aggregate) => aggregate.field === "price"),
+      ).toBe(true);
+      expect(
+        Object.values(finalQuery.aggregates).filter((aggregate) => aggregate.field === "price"),
+      ).toHaveLength(1);
+      await expect
+        .element(screen.getByRole("columnheader", { name: /Maximum/u }))
+        .not.toBeInTheDocument();
+    } finally {
+      removeLifetime();
+    }
+  });
+
   test("keeps grouped lifecycle rows and replaces grouped filter, external, and source generations", async () => {
     const first = makeLeasedViewport(1);
     const second = makeLeasedViewport(1);
