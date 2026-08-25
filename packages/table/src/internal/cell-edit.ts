@@ -318,6 +318,7 @@ const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, h
 
 export class BrunoTableCellEditRuntime {
   private columns: readonly CompiledColumn[];
+  private fieldColumnsById: ReadonlyMap<string, CompiledFieldColumn>;
   private readonly getRow: (rowId: string) => unknown;
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
   private readonly actor = createActor(brunoTableCellEditMachine);
@@ -344,6 +345,7 @@ export class BrunoTableCellEditRuntime {
     }>,
   ) {
     this.columns = options.columns;
+    this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
     this.onCommit = options.onCommit ?? (() => undefined);
     this.actor.subscribe(() => this.publishActorDecision());
@@ -417,6 +419,7 @@ export class BrunoTableCellEditRuntime {
     if (this.columns === columns) return;
     this.cancel();
     this.columns = columns;
+    this.fieldColumnsById = indexFieldColumns(columns);
   };
 
   public readonly commitActiveCandidate = (): boolean => {
@@ -429,10 +432,7 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly isEditable = (rowId: string, columnId: string): boolean => {
-    const column = this.columns.find(
-      (candidate): candidate is CompiledFieldColumn =>
-        candidate.kind === "field" && candidate.columnId === columnId,
-    );
+    const column = this.fieldColumnsById.get(columnId);
     if (column === undefined || column.isEditable === undefined || column.isEditable === false) {
       return false;
     }
@@ -455,7 +455,7 @@ export class BrunoTableCellEditRuntime {
     producedText = "",
   ): boolean => {
     if (this.getSessionSnapshot().kind !== "idle") return false;
-    const column = this.columns.find((candidate) => candidate.columnId === columnId);
+    const column = this.fieldColumnsById.get(columnId);
     const row = this.getRow(rowId);
     this.actor.send({
       type: "START",
@@ -559,6 +559,16 @@ export class BrunoTableCellEditRuntime {
     if (this.activeCellKey === key || (this.cellSubscriberCounts.get(key) ?? 0) > 0) return;
     this.cellStores.delete(key);
   };
+}
+
+function indexFieldColumns(
+  columns: readonly CompiledColumn[],
+): ReadonlyMap<string, CompiledFieldColumn> {
+  const indexed = new Map<string, CompiledFieldColumn>();
+  for (const column of columns) {
+    if (column.kind === "field") indexed.set(column.columnId, column);
+  }
+  return indexed;
 }
 
 function cellKey(rowId: string, columnId: string): string {

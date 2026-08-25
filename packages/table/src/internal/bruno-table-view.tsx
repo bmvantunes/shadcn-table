@@ -71,6 +71,7 @@ import type {
 
 import type { CompiledColumn } from "./compile-columns";
 import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
+import { yieldBrunoTableGridTabStopForNativeTraversal } from "./focus";
 import {
   type BrunoTableHotkeyGesture,
   isBrunoTableHotkeyWorkflowOwner,
@@ -276,13 +277,6 @@ function readBrunoTableMenuDirection(element?: Element | null): "ltr" | "rtl" {
   return getComputedStyle(grid ?? ownerDocument.documentElement).direction === "rtl"
     ? "rtl"
     : "ltr";
-}
-
-function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
-  grid.tabIndex = -1;
-  setTimeout(() => {
-    if (grid.isConnected) grid.tabIndex = 0;
-  }, 0);
 }
 
 function isNodeInBrunoTableRealm(owner: HTMLElement, target: EventTarget | null): target is Node {
@@ -2863,7 +2857,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         isNodeInBrunoTableRealm(grid, event.target) &&
         grid.contains(event.target)
       ) {
-        yieldGridTabStopForNativeTraversal(grid);
+        yieldBrunoTableGridTabStopForNativeTraversal(grid);
       }
     },
     headerMenu: runHeaderMenu,

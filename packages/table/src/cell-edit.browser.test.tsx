@@ -155,6 +155,14 @@ test("uses only browser-produced composition text and respects prevented nested 
       inputType: "insertCompositionText",
     }),
   );
+  grid.element().dispatchEvent(
+    new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      data: "pasted",
+      inputType: "insertFromPaste",
+    }),
+  );
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();
   grid
     .element()
@@ -182,6 +190,20 @@ test("preserves incomplete Number replace seeds until the native control can own
   let editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
   await expect.element(editor).toHaveAttribute("placeholder", "-");
+  const forwardDelete = new InputEvent("beforeinput", {
+    bubbles: true,
+    cancelable: true,
+    inputType: "deleteContentForward",
+  });
+  expect(editor.element().dispatchEvent(forwardDelete)).toBe(false);
+  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
+  await userEvent.keyboard("{Backspace}");
+  await expect.element(editor).not.toHaveAttribute("aria-valuetext");
+  await userEvent.keyboard("{Escape}");
+  grid.element().focus();
+  await userEvent.keyboard("-");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
   await userEvent.keyboard("5");
   await expect.element(editor).toHaveValue(-5);
   await userEvent.keyboard("{Escape}");
@@ -207,6 +229,15 @@ test("preserves incomplete Number replace seeds until the native control can own
   await expect
     .element(screen.getByRole("gridcell", { name: "10", exact: true }))
     .toBeInTheDocument();
+
+  await userEvent.keyboard("{F2}");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("13{ArrowLeft}2");
+  await expect.element(editor).toHaveValue(123);
+  await userEvent.keyboard("{End}{Delete}");
+  await expect.element(editor).toHaveValue(123);
+  await userEvent.keyboard("{Escape}");
 });
 
 test("gates outside pointer, sorting, and filtering before their actions", async () => {

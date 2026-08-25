@@ -12,6 +12,7 @@ import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
+import { yieldBrunoTableGridTabStopForNativeTraversal } from "./focus";
 import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 type BrunoTableCellEditBoundaryProps = Readonly<{
@@ -48,23 +49,13 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     const reconcileRawNumberSeed = useCallback(
       (event: InputEvent, input: HTMLInputElement) => {
         const seed = rawNumberSeed.current;
+        if (seed === undefined) return;
         if (!event.inputType.startsWith("insert") && !event.inputType.startsWith("delete")) {
           return;
         }
-        const current = seed ?? input.value;
-        const selectionStart =
-          seed === undefined ? (input.selectionStart ?? current.length) : current.length;
-        const selectionEnd =
-          seed === undefined ? (input.selectionEnd ?? selectionStart) : current.length;
-        const candidate = (
-          event.inputType.startsWith("delete")
-            ? `${current.slice(0, Math.max(0, selectionStart - 1))}${current.slice(selectionEnd)}`
-            : typeof event.data === "string"
-              ? `${current.slice(0, selectionStart)}${event.data}${current.slice(selectionEnd)}`
-              : current
-        ).slice(0, BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1);
-        if (candidate.length === 0) {
+        if (event.inputType.startsWith("delete")) {
           event.preventDefault();
+          if (event.inputType.includes("Forward")) return;
           rawNumberSeed.current = undefined;
           setRawNumberDisplay(undefined);
           input.value = "";
@@ -72,15 +63,17 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           input.removeAttribute("placeholder");
           return;
         }
+        const candidate = `${seed}${event.data ?? ""}`.slice(
+          0,
+          BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1,
+        );
         if (column.semantics.parseCanonicalText(candidate)._tag === "Success") {
-          if (seed !== undefined) {
-            event.preventDefault();
-            input.value = candidate;
-            rawNumberSeed.current = undefined;
-            setRawNumberDisplay(undefined);
-            input.removeAttribute("aria-valuetext");
-            input.removeAttribute("placeholder");
-          }
+          event.preventDefault();
+          input.value = candidate;
+          rawNumberSeed.current = undefined;
+          setRawNumberDisplay(undefined);
+          input.removeAttribute("aria-valuetext");
+          input.removeAttribute("placeholder");
           return;
         }
         event.preventDefault();
@@ -108,7 +101,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
         if (grid !== null) {
           grid.focus({ preventScroll: true });
-          yieldGridTabStopForNativeTraversal(grid);
+          yieldBrunoTableGridTabStopForNativeTraversal(grid);
         }
         return false;
       },
@@ -268,13 +261,6 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       </div>
     );
   });
-
-function yieldGridTabStopForNativeTraversal(grid: HTMLElement): void {
-  grid.tabIndex = -1;
-  setTimeout(() => {
-    if (grid.isConnected) grid.tabIndex = 0;
-  }, 0);
-}
 
 function numberSeedRequiresRawBuffer(column: CompiledColumn, initialText: string): boolean {
   if (column.semantics.editorFamily !== "number" || initialText.length === 0) return false;
