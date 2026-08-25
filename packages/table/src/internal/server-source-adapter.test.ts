@@ -5,8 +5,8 @@ import { compileColumns, type CompiledColumn } from "./compile-columns";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 import { BrunoTableServerRowPipelineAdapter } from "./server-source-adapter";
 import { brunoTableTestSemanticQueryKey } from "./server-semantic-key.test-support";
-import { BrunoTableBigDecimalColumn } from "../effect";
-import type { BrunoTableColumns } from "../public-types";
+import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "../effect";
+import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 
 type Row = Readonly<{ readonly symbol: string; readonly price: number }>;
 
@@ -68,6 +68,64 @@ function makeViewport<TRow = Row>() {
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("rejects unsupported Server arithmetic before construction or column reconciliation", () => {
+    const unsupportedColumns = compileColumns([
+      {
+        columnId: "COL_ID_GROUP",
+        field: "symbol",
+        headerName: "Group",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_UNSUPPORTED_SUM",
+        field: "price",
+        headerName: "Unsupported sum",
+        valueType: Object.assign({}, BrunoTableBigDecimalValueType, {
+          codecId: "example/client-only-arithmetic",
+        }),
+        aggFunc: "sum",
+      },
+    ]);
+    expect(
+      () =>
+        new BrunoTableServerRowPipelineAdapter<Row>(
+          unsupportedColumns,
+          undefined,
+          [],
+          [{ columnId: "COL_ID_GROUP", direction: "asc" }],
+          completeRawSelect,
+        ),
+    ).toThrow(
+      "BrunoTable Server aggregate has no source-compatible exact result Value Type: COL_ID_UNSUPPORTED_SUM",
+    );
+
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    expect(() => adapter.reconcileColumns(unsupportedColumns, undefined)).toThrow(
+      "BrunoTable Server aggregate has no source-compatible exact result Value Type: COL_ID_UNSUPPORTED_SUM",
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    expect(transport.getRequest()?.query).toEqual({
+      select: ["symbol", "price"],
+      where: [],
+      orderBy: [{ field: "symbol", direction: "asc" }],
+    });
+  });
+
   it("does not infer grouped rows from a legitimate raw values Map field", () => {
     type RawMapRow = Readonly<{
       readonly symbol: string;
@@ -1112,10 +1170,38 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
   );
 
   it("preserves exact bigint, optional, and Effect BigDecimal grouped result domains", () => {
+    const optionalNumberValueType = {
+      codecId: "test/optional-number",
+      codecVersion: 1,
+      filterFamily: "numeric" as const,
+      editorFamily: "number" as const,
+      cellAlign: "end" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      aggregateResults: { min: "self" as const },
+      decodeRuntime: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected a number." } as const),
+      equivalent: Object.is,
+      compare: (left: number, right: number) => (left === right ? 0 : left > right ? 1 : -1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text: string) =>
+        Number.isFinite(Number(text))
+          ? ({ _tag: "Success", value: Number(text) } as const)
+          : ({ _tag: "Failure", message: "Expected a number." } as const),
+      formatDisplay: String,
+      encodePersisted: (value: number) => value,
+      decodePersisted: (input: unknown) =>
+        typeof input === "number"
+          ? ({ _tag: "Success", value: input } as const)
+          : ({ _tag: "Failure", message: "Expected a number." } as const),
+    } satisfies BrunoTableValueType<number>;
     type ExactRow = Readonly<{
       desk: string | null;
       quantity: bigint;
       amount: BigDecimal.BigDecimal;
+      optionalScore: number | null;
     }>;
     const exactColumns = compileColumns([
       {
@@ -1138,6 +1224,13 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
         headerName: "Average amount",
         aggFunc: "avg",
       }),
+      {
+        columnId: "COL_ID_OPTIONAL_SCORE",
+        field: "optionalScore",
+        headerName: "Minimum optional score",
+        valueType: optionalNumberValueType,
+        aggFunc: "min",
+      },
     ] satisfies BrunoTableColumns<ExactRow>);
     const transport = makeViewport<Record<string, unknown>>();
     const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
@@ -1145,11 +1238,11 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       undefined,
       [],
       [{ columnId: "COL_ID_DESK", direction: "asc" }],
-      ["desk", "quantity", "amount"],
+      ["desk", "quantity", "amount", "optionalScore"],
     );
     adapter.reconcileSource({
       viewport: transport.viewport,
-      completeRawSelect: ["desk", "quantity", "amount"],
+      completeRawSelect: ["desk", "quantity", "amount", "optionalScore"],
       totalRows: 1,
       version: 1,
       status: "ready",
@@ -1170,26 +1263,126 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       (alias) => groupedQuery.aggregates[alias]!.aggFunc === "sum",
     )!;
     const amountAlias = aliases.find((alias) => groupedQuery.aggregates[alias]!.aggFunc === "avg")!;
+    const optionalScoreAlias = aliases.find(
+      (alias) => groupedQuery.aggregates[alias]!.aggFunc === "min",
+    )!;
     const amount = BigDecimal.fromStringUnsafe("12.3400");
+    const validDelivery = {
+      desk: null,
+      [rowsAlias]: 2n,
+      [quantityAlias]: 9007199254740993n,
+      [amountAlias]: amount,
+      [optionalScoreAlias]: null,
+    };
     request.sink.setRowCount(1, true);
-    request.sink.setRowData(
-      {
-        0: {
-          desk: null,
-          [rowsAlias]: 2n,
-          [quantityAlias]: 9007199254740993n,
-          [amountAlias]: amount,
-        },
-      },
-      { 0: "exact-group" },
-    );
+    request.sink.setRowData({ 0: validDelivery }, { 0: "exact-group" });
 
     const rowSpace = adapter.getPublication().rowSpace!;
+    const coherentRow = rowSpace.getRow("exact-group");
     expect(rowSpace.getCellValue("exact-group", "COL_ID_DESK")).toBeNull();
     expect(rowSpace.getCellValue("exact-group", "COL_ID_QUANTITY")).toBe(9007199254740993n);
     const admittedAmount = rowSpace.getCellValue("exact-group", "COL_ID_AMOUNT");
     expect(BigDecimal.isBigDecimal(admittedAmount)).toBe(true);
     expect(BigDecimal.format(admittedAmount as BigDecimal.BigDecimal)).toBe("12.34");
+    expect(rowSpace.getCellValue("exact-group", "COL_ID_OPTIONAL_SCORE")).toBeNull();
+
+    for (const [alias, columnId] of [
+      [quantityAlias, "COL_ID_QUANTITY"],
+      [amountAlias, "COL_ID_AMOUNT"],
+    ] as const) {
+      for (const invalid of [null, undefined]) {
+        expect(() =>
+          request.sink.setRowData(
+            { 0: { ...validDelivery, [alias]: invalid } },
+            { 0: "exact-group" },
+          ),
+        ).not.toThrow();
+        expect(adapter.getPublication().invalid).toMatchObject({
+          kind: "invalid-value",
+          rowIndex: 0,
+          columnId,
+        });
+        expect(adapter.getPublication().rowSpace?.getRow("exact-group")).toBe(coherentRow);
+        request.sink.setRowData({ 0: validDelivery }, { 0: "exact-group" });
+        expect(adapter.getPublication().invalid).toBeUndefined();
+      }
+    }
+  });
+
+  it("contains throwing grouped accessors as deterministic invalid deliveries", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        aggFunc: "sum",
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk", "quantity"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk", "quantity"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+    });
+    const request = transport.getRequest()!;
+    const aggregates = (request.query as { aggregates: Record<string, { aggFunc: string }> })
+      .aggregates;
+    const rowsAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "count",
+    )![0];
+    const quantityAlias = Object.entries(aggregates).find(
+      ([, aggregate]) => aggregate.aggFunc === "sum",
+    )![0];
+    const valid = { desk: "Rates", [rowsAlias]: 2n, [quantityAlias]: 3n };
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData({ 0: valid }, { 0: "rates" });
+    const coherentRow = adapter.getPublication().rowSpace?.getRow("rates");
+
+    for (const [field, columnId] of [
+      ["desk", "COL_ID_DESK"],
+      [rowsAlias, "COL_ID_BRUNO_TABLE_ROWS"],
+      [quantityAlias, "COL_ID_QUANTITY"],
+    ] as const) {
+      const throwing = { ...valid };
+      Object.defineProperty(throwing, field, {
+        enumerable: true,
+        get: () => {
+          throw new Error("hostile grouped accessor");
+        },
+      });
+      expect(() => request.sink.setRowData({ 0: throwing }, { 0: "rates" })).not.toThrow();
+      expect(adapter.getPublication().invalid).toMatchObject({
+        kind: "invalid-value",
+        rowIndex: 0,
+        columnId,
+      });
+      expect(adapter.getPublication().rowSpace?.getRow("rates")).toBe(coherentRow);
+      request.sink.setRowData({ 0: valid }, { 0: "rates" });
+      expect(adapter.getPublication().invalid).toBeUndefined();
+    }
   });
 
   it("keeps bigint semantic keys distinct from numeric-looking strings", () => {

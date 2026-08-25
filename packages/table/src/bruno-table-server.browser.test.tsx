@@ -441,6 +441,7 @@ describe("BrunoTableServer", () => {
       await expect
         .element(page.getByRole("status", { name: "Result rows" }))
         .toHaveTextContent("0 result rows");
+      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "19");
       await expect
         .element(page.getByRole("gridcell", { name: "Loading Desk" }).first())
         .toBeVisible();
@@ -455,6 +456,7 @@ describe("BrunoTableServer", () => {
         root = hydrateRoot(host, table, { onRecoverableError: recoverable });
       });
       await vi.waitFor(() => expect(transport.requests).toHaveLength(1));
+      await expect.element(page.getByRole("grid")).toHaveAttribute("aria-rowcount", "19");
       expect(transport.requests[0]!.query).toMatchObject({ groupBy: ["desk"] });
       expect(recoverable).not.toHaveBeenCalled();
       const request = transport.requests[0]!;

@@ -26,6 +26,7 @@ import {
   sanitizeClientInitialOrderBy,
 } from "./grid-query";
 import {
+  assertBrunoTableServerAggregateAuthorities,
   columnUsesRawRowPresentation,
   compileBrunoTableServerProjectionFields,
   compileBrunoTableServerQueryPlan,
@@ -238,6 +239,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     completeRawSelect?: unknown,
     groupRowsColumn?: unknown,
   ) {
+    assertBrunoTableServerAggregateAuthorities(columns);
     this.columns = columns;
     this.rowEquivalencePlan = compileRowEquivalencePlan(columns);
     this.quickFilterFields = snapshotBrunoTableQuickFilterFields(quickFilterFields);
@@ -337,6 +339,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     quickFilterFields: readonly string[] | undefined,
     groupRowsColumn: BrunoTableCompiledGroupRowsColumn = this.groupRowsColumn,
   ): BrunoTableQueryConfiguration {
+    assertBrunoTableServerAggregateAuthorities(columns);
     const groupRowsChanged = groupRowsColumn !== this.groupRowsColumn;
     this.groupRowsColumn = groupRowsColumn;
     const nextQuickFilterFields =
@@ -810,7 +813,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     const snapshot = this.store.getSnapshot();
     const retainedRowSpace =
       snapshot.generation === 0 || this.generationReleased ? undefined : snapshot.rowSpace;
-    const totalRows = retainedRowSpace?.totalRows ?? this.source.totalRows;
+    const totalRows =
+      retainedRowSpace?.totalRows ??
+      (projection.grouped === undefined ? this.source.totalRows : INITIAL_WINDOW.lastRow + 2);
     const hasCoherentRows =
       retainedRowSpace !== undefined &&
       (retainedRowSpace.loadedRows > 0 ||
@@ -1033,6 +1038,7 @@ function normalizeGroupedRows<TRow>(
           aggregate.columnId,
           aggregate.aggFunc === "countDistinct",
           true,
+          aggregate.aggFunc === "min" || aggregate.aggFunc === "max",
         );
         values.set(aggregate.columnId, presence._tag === "Present" ? presence.value : undefined);
         presences.set(aggregate.columnId, presence);
@@ -1058,12 +1064,10 @@ function readGroupedPresence(
   columnId: string,
   forceBigInt = false,
   requiredResult = false,
+  allowNullishResult = false,
 ): BrunoTableGroupedPresence {
-  if (
-    typeof row !== "object" ||
-    row === null ||
-    !Object.prototype.propertyIsEnumerable.call(row, field)
-  ) {
+  const property = readGroupedProperty(row, field, rowIndex, columnId);
+  if (property._tag === "Missing") {
     if (!requiredResult) return Object.freeze({ _tag: "Missing" });
     throw new BrunoTableGroupedDeliveryError(
       Object.freeze({
@@ -1076,8 +1080,12 @@ function readGroupedPresence(
       }),
     );
   }
-  const input = Reflect.get(row, field);
-  if (!forceBigInt && (input === null || input === undefined))
+  const input = property.value;
+  if (
+    !forceBigInt &&
+    (input === null || input === undefined) &&
+    (!requiredResult || allowNullishResult)
+  )
     return Object.freeze({ _tag: "Present", value: input });
   const decoded = forceBigInt
     ? typeof input === "bigint" && input >= 0n
@@ -1098,12 +1106,8 @@ function readGroupedPresence(
 }
 
 function readRequiredBigInt(row: unknown, alias: string, rowIndex: number): bigint {
-  const value =
-    typeof row === "object" &&
-    row !== null &&
-    Object.prototype.propertyIsEnumerable.call(row, alias)
-      ? Reflect.get(row, alias)
-      : undefined;
+  const property = readGroupedProperty(row, alias, rowIndex, BRUNO_TABLE_ROWS_COLUMN_ID);
+  const value = property._tag === "Present" ? property.value : undefined;
   if (typeof value !== "bigint" || value <= 0n) {
     throw new BrunoTableGroupedDeliveryError(
       Object.freeze({
@@ -1115,6 +1119,39 @@ function readRequiredBigInt(row: unknown, alias: string, rowIndex: number): bigi
     );
   }
   return value;
+}
+
+type BrunoTableGroupedProperty =
+  | Readonly<{ readonly _tag: "Missing" }>
+  | Readonly<{ readonly _tag: "Present"; readonly value: unknown }>;
+
+const MISSING_GROUPED_PROPERTY: BrunoTableGroupedProperty = Object.freeze({ _tag: "Missing" });
+
+function readGroupedProperty(
+  row: unknown,
+  field: string,
+  rowIndex: number,
+  columnId: string,
+): BrunoTableGroupedProperty {
+  try {
+    if (
+      typeof row !== "object" ||
+      row === null ||
+      !Object.prototype.propertyIsEnumerable.call(row, field)
+    ) {
+      return MISSING_GROUPED_PROPERTY;
+    }
+    return Object.freeze({ _tag: "Present", value: Reflect.get(row, field) });
+  } catch {
+    throw new BrunoTableGroupedDeliveryError(
+      Object.freeze({
+        kind: "invalid-value",
+        rowIndex,
+        columnId,
+        message: "Unable to read grouped result.",
+      }),
+    );
+  }
 }
 
 function groupedRowsEquivalent(

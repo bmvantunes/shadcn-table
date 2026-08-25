@@ -307,10 +307,31 @@ function compileServerAggregate(
   column: CompiledFieldColumn,
   alias: string,
 ): BrunoTableCompiledServerGroupedProjection["aggregates"][number] {
+  assertBrunoTableServerAggregateAuthority(column);
   const aggFunc = column.aggFunc;
   if (aggFunc === undefined) {
     throw new TypeError(`BrunoTable Server aggregate is missing its function: ${column.columnId}`);
   }
+  return Object.freeze({
+    alias,
+    columnId: column.columnId,
+    field: column.field,
+    aggFunc,
+  });
+}
+
+export function assertBrunoTableServerAggregateAuthorities(
+  columns: readonly CompiledColumn[],
+): void {
+  for (const column of columns) {
+    if (column.kind === "field" && column.aggFunc !== undefined) {
+      assertBrunoTableServerAggregateAuthority(column);
+    }
+  }
+}
+
+function assertBrunoTableServerAggregateAuthority(column: CompiledFieldColumn): void {
+  const aggFunc = column.aggFunc;
   if (
     (aggFunc === "sum" || aggFunc === "avg") &&
     column.semantics.serverAggregateAuthority !== "effect-bigdecimal" &&
@@ -320,12 +341,6 @@ function compileServerAggregate(
       `BrunoTable Server aggregate has no source-compatible exact result Value Type: ${column.columnId}`,
     );
   }
-  return Object.freeze({
-    alias,
-    columnId: column.columnId,
-    field: column.field,
-    aggFunc,
-  });
 }
 
 export function compileBrunoTableServerFacetQuery(
