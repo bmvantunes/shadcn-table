@@ -5,6 +5,7 @@ import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
 import {
   BrunoTableCellEditTraversalIndex,
   type BrunoTableCellEditTraversalDestination,
+  type BrunoTableCellEditTraversalRange,
   type BrunoTableCellEditTraversalRowSpace,
 } from "./cell-edit-traversal";
 
@@ -447,6 +448,14 @@ export class BrunoTableCellEditRuntime {
     direction: -1 | 1,
   ): BrunoTableCellEditTraversalDestination | undefined =>
     this.traversalIndex.find(rowIndex, columnId, direction);
+
+  public readonly findRangeTraversalDestination = (
+    range: BrunoTableCellEditTraversalRange,
+    rowId: string,
+    columnId: string,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined =>
+    this.traversalIndex.findRange(range, rowId, columnId, direction);
 
   public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
     if (this.columns === columns) return;

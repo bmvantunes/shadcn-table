@@ -11,6 +11,18 @@ export type BrunoTableCellEditTraversalDestination = Readonly<{
   readonly columnId: string;
 }>;
 
+export type BrunoTableCellEditTraversalRange =
+  | Readonly<{
+      readonly axis: "horizontal";
+      readonly rowId: string;
+      readonly columnIds: readonly string[];
+    }>
+  | Readonly<{
+      readonly axis: "vertical";
+      readonly columnId: string;
+      readonly rowIds: readonly string[];
+    }>;
+
 type PredicateCellCache = Readonly<{
   readonly column: CompiledFieldColumn;
   readonly draftRevision: number;
@@ -20,6 +32,7 @@ type PredicateCellCache = Readonly<{
 type RowCache = {
   row: object;
   readonly predicates: Map<string, PredicateCellCache>;
+  readonly eligiblePredicateColumnIds: Set<string>;
 };
 
 export class BrunoTableCellEditTraversalIndex {
@@ -29,7 +42,7 @@ export class BrunoTableCellEditTraversalIndex {
   private readonly rowIndexById = new Map<string, number>();
   private readonly columnIndexById = new Map<string, number>();
   private readonly rowCacheById = new Map<string, RowCache>();
-  private readonly eligiblePredicateColumnsByRow = new Map<number, readonly number[]>();
+  private readonly eligiblePredicateRowIdsByColumnId = new Map<string, Set<string>>();
   private staticColumnIndexes: readonly number[] = [];
   private predicateColumns: readonly Readonly<{
     readonly column: CompiledFieldColumn;
@@ -37,7 +50,15 @@ export class BrunoTableCellEditTraversalIndex {
   }>[] = [];
   private validRowIndexes: number[] = [];
   private eligiblePredicateRowIndexes: number[] = [];
-  private readonly dirtyRowIds = new Set<string>();
+  private readonly dirtyColumnIdsByRowId = new Map<string, Set<string>>();
+  private verticalRangeCache:
+    | {
+        readonly range: Extract<BrunoTableCellEditTraversalRange, { readonly axis: "vertical" }>;
+        readonly rangeIndexByRowId: ReadonlyMap<string, number>;
+        readonly destinations: BrunoTableCellEditTraversalDestination[];
+      }
+    | undefined;
+  private allRowsDirty = false;
 
   public constructor(
     private readonly getRow: (rowId: string) => unknown,
@@ -55,11 +76,20 @@ export class BrunoTableCellEditTraversalIndex {
   ): void => {
     const columnsChanged = this.columns !== columns;
     const projectionChanged = this.rowSpace !== rowSpace;
-    if (!columnsChanged && !projectionChanged && this.dirtyRowIds.size === 0) return;
+    if (
+      !columnsChanged &&
+      !projectionChanged &&
+      !this.allRowsDirty &&
+      this.dirtyColumnIdsByRowId.size === 0
+    ) {
+      return;
+    }
+    const previousPredicateColumns = new Map(
+      this.predicateColumns.map(({ column }) => [column.columnId, column]),
+    );
     this.columns = columns;
     this.rowSpace = rowSpace;
     if (columnsChanged) {
-      this.rowCacheById.clear();
       this.columnIndexById.clear();
       for (const [columnIndex, column] of columns.entries()) {
         this.columnIndexById.set(column.columnId, columnIndex);
@@ -72,11 +102,11 @@ export class BrunoTableCellEditTraversalIndex {
           ? [{ column, columnIndex }]
           : [],
       );
+      this.reconcilePredicateColumns(previousPredicateColumns);
     }
 
-    if (!columnsChanged && !projectionChanged) {
-      this.reconcileRows(this.dirtyRowIds);
-      this.dirtyRowIds.clear();
+    if (!columnsChanged && !projectionChanged && !this.allRowsDirty) {
+      this.reconcileDirtyCells();
       return;
     }
 
@@ -86,7 +116,6 @@ export class BrunoTableCellEditTraversalIndex {
     this.rowIndexById.clear();
     const validRowIndexes: number[] = [];
     const eligiblePredicateRowIndexes: number[] = [];
-    this.eligiblePredicateColumnsByRow.clear();
     for (const [rowIndex, rowId] of rowIds.entries()) {
       if (rowId === undefined) continue;
       this.rowIndexById.set(rowId, rowIndex);
@@ -98,54 +127,42 @@ export class BrunoTableCellEditTraversalIndex {
       if (rowCache === undefined) {
         const row = this.getRow(rowId);
         if (typeof row !== "object" || row === null) continue;
-        rowCache = { row, predicates: new Map() };
+        rowCache = this.createRowCache(rowId, row);
         this.rowCacheById.set(rowId, rowCache);
       }
       validRowIndexes.push(rowIndex);
-      const eligibleColumnIndexes: number[] = [];
-      for (const { column, columnIndex } of this.predicateColumns) {
-        const draftRevision = this.getDraftRevision(rowId, column.columnId);
-        const cached = rowCache.predicates.get(column.columnId);
-        const eligible =
-          cached?.column === column && cached.draftRevision === draftRevision
-            ? cached.eligible
-            : this.evaluatePredicate(rowId, rowCache.row, column);
-        if (
-          cached?.column !== column ||
-          cached.draftRevision !== draftRevision ||
-          cached.eligible !== eligible
-        ) {
-          rowCache.predicates.set(column.columnId, { column, draftRevision, eligible });
-        }
-        if (eligible) eligibleColumnIndexes.push(columnIndex);
-      }
-      if (eligibleColumnIndexes.length > 0) {
-        this.eligiblePredicateColumnsByRow.set(rowIndex, eligibleColumnIndexes);
-        eligiblePredicateRowIndexes.push(rowIndex);
-      }
+      if (rowCache.eligiblePredicateColumnIds.size > 0) eligiblePredicateRowIndexes.push(rowIndex);
     }
     this.rowIds = rowIds;
     this.validRowIndexes = validRowIndexes;
     this.eligiblePredicateRowIndexes = eligiblePredicateRowIndexes;
-    this.dirtyRowIds.clear();
+    this.allRowsDirty = false;
+    this.dirtyColumnIdsByRowId.clear();
+    this.verticalRangeCache = undefined;
   };
 
   public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (changedRowIds === undefined) {
+      for (const rowId of this.rowCacheById.keys()) this.removeRowCache(rowId);
       this.rowCacheById.clear();
-      const columns = this.columns;
-      const rowSpace = this.rowSpace;
-      if (columns !== undefined && rowSpace !== undefined) {
-        this.rowSpace = undefined;
-        this.reconcile(columns, rowSpace);
-      }
+      this.eligiblePredicateRowIndexes = [];
+      this.allRowsDirty = true;
+      this.verticalRangeCache = undefined;
       return;
     }
-    for (const rowId of changedRowIds) this.refreshRow(rowId);
+    for (const rowId of changedRowIds) {
+      this.refreshRow(rowId);
+      this.reconcileVerticalRangeRow(rowId);
+    }
   };
 
-  public readonly invalidateCell = (rowId: string, _columnId: string): void => {
-    this.dirtyRowIds.add(rowId);
+  public readonly invalidateCell = (rowId: string, columnId: string): void => {
+    let columnIds = this.dirtyColumnIdsByRowId.get(rowId);
+    if (columnIds === undefined) {
+      columnIds = new Set();
+      this.dirtyColumnIdsByRowId.set(rowId, columnIds);
+    }
+    columnIds.add(columnId);
   };
 
   public readonly find = (
@@ -156,7 +173,7 @@ export class BrunoTableCellEditTraversalIndex {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
     if (columns === undefined || rowSpace === undefined) return undefined;
-    if (this.dirtyRowIds.size > 0) this.reconcile(columns, rowSpace);
+    if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
     const columnIndex = this.columnIndexById.get(columnId);
     if (columnIndex === undefined || this.rowIds[rowIndex] === undefined) return undefined;
     const staticCandidate = this.findStaticCandidate(rowIndex, columnIndex, direction);
@@ -175,47 +192,156 @@ export class BrunoTableCellEditTraversalIndex {
       : Object.freeze({ rowIndex: destination.rowIndex, rowId, columnId: column.columnId });
   };
 
+  public readonly findRange = (
+    range: BrunoTableCellEditTraversalRange,
+    currentRowId: string,
+    currentColumnId: string,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined => {
+    const columns = this.columns;
+    const rowSpace = this.rowSpace;
+    if (columns === undefined || rowSpace === undefined) return undefined;
+    if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
+    if (range.axis === "vertical")
+      return this.findVerticalRangeDestination(range, currentRowId, currentColumnId, direction);
+    const destinations = this.horizontalRangeDestinations(range);
+    if (destinations.length < 2) return undefined;
+    const currentIndex = destinations.findIndex(
+      (destination) =>
+        destination.rowId === currentRowId && destination.columnId === currentColumnId,
+    );
+    const nextIndex =
+      currentIndex < 0
+        ? direction > 0
+          ? 0
+          : destinations.length - 1
+        : (currentIndex + direction + destinations.length) % destinations.length;
+    return destinations[nextIndex];
+  };
+
   public readonly getCachedRowCount = (): number => this.rowCacheById.size;
 
   private readonly refreshRow = (rowId: string): void => {
     const rowIndex = this.rowIndexById.get(rowId);
     if (rowIndex === undefined) {
-      this.rowCacheById.delete(rowId);
+      this.removeRowCache(rowId);
       return;
     }
     if (this.predicateColumns.length === 0) return;
     const row = this.getRow(rowId);
     if (typeof row !== "object" || row === null) {
-      this.rowCacheById.delete(rowId);
+      this.removeRowCache(rowId);
       removeSorted(this.validRowIndexes, rowIndex);
       removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
-      this.eligiblePredicateColumnsByRow.delete(rowIndex);
       return;
     }
     let rowCache = this.rowCacheById.get(rowId);
     if (rowCache === undefined || rowCache.row !== row) {
-      rowCache = { row, predicates: new Map() };
+      this.removeRowCache(rowId);
+      rowCache = this.createRowCache(rowId, row);
       this.rowCacheById.set(rowId, rowCache);
     }
     insertSorted(this.validRowIndexes, rowIndex);
-    const eligibleColumnIndexes: number[] = [];
-    for (const { column, columnIndex } of this.predicateColumns) {
-      const draftRevision = this.getDraftRevision(rowId, column.columnId);
-      const cached = rowCache.predicates.get(column.columnId);
-      const eligible =
-        cached?.column === column && cached.draftRevision === draftRevision
-          ? cached.eligible
-          : this.evaluatePredicate(rowId, row, column);
-      rowCache.predicates.set(column.columnId, { column, draftRevision, eligible });
-      if (eligible) eligibleColumnIndexes.push(columnIndex);
-    }
-    if (eligibleColumnIndexes.length === 0) {
-      this.eligiblePredicateColumnsByRow.delete(rowIndex);
+    if (rowCache.eligiblePredicateColumnIds.size === 0) {
       removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
       return;
     }
-    this.eligiblePredicateColumnsByRow.set(rowIndex, eligibleColumnIndexes);
     insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
+  };
+
+  private readonly createRowCache = (rowId: string, row: object): RowCache => {
+    const cache: RowCache = {
+      row,
+      predicates: new Map(),
+      eligiblePredicateColumnIds: new Set(),
+    };
+    for (const { column } of this.predicateColumns) this.evaluateCell(rowId, cache, column);
+    return cache;
+  };
+
+  private readonly evaluateCell = (
+    rowId: string,
+    rowCache: RowCache,
+    column: CompiledFieldColumn,
+  ): void => {
+    const draftRevision = this.getDraftRevision(rowId, column.columnId);
+    const eligible = this.evaluatePredicate(rowId, rowCache.row, column);
+    rowCache.predicates.set(column.columnId, { column, draftRevision, eligible });
+    if (eligible) {
+      rowCache.eligiblePredicateColumnIds.add(column.columnId);
+      let rowIds = this.eligiblePredicateRowIdsByColumnId.get(column.columnId);
+      if (rowIds === undefined) {
+        rowIds = new Set();
+        this.eligiblePredicateRowIdsByColumnId.set(column.columnId, rowIds);
+      }
+      rowIds.add(rowId);
+    } else {
+      rowCache.eligiblePredicateColumnIds.delete(column.columnId);
+      this.eligiblePredicateRowIdsByColumnId.get(column.columnId)?.delete(rowId);
+    }
+  };
+
+  private readonly reconcilePredicateColumns = (
+    previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  ): void => {
+    const nextColumns = new Map<string, CompiledFieldColumn>(
+      this.predicateColumns.map(({ column }) => [column.columnId, column]),
+    );
+    const changedColumnIds = new Set<string>();
+    for (const [columnId, column] of previousColumns) {
+      if (nextColumns.get(columnId) !== column) changedColumnIds.add(columnId);
+    }
+    for (const [columnId, column] of nextColumns) {
+      if (previousColumns.get(columnId) !== column) changedColumnIds.add(columnId);
+    }
+    if (changedColumnIds.size === 0) return;
+    for (const [rowId, rowCache] of this.rowCacheById) {
+      for (const columnId of changedColumnIds) {
+        rowCache.predicates.delete(columnId);
+        rowCache.eligiblePredicateColumnIds.delete(columnId);
+        this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(rowId);
+        const column = nextColumns.get(columnId);
+        if (column !== undefined) this.evaluateCell(rowId, rowCache, column);
+      }
+    }
+    for (const columnId of changedColumnIds) {
+      if (!nextColumns.has(columnId)) this.eligiblePredicateRowIdsByColumnId.delete(columnId);
+    }
+  };
+
+  private readonly reconcileDirtyCells = (): void => {
+    for (const [rowId, columnIds] of this.dirtyColumnIdsByRowId) {
+      const rowIndex = this.rowIndexById.get(rowId);
+      const rowCache = this.rowCacheById.get(rowId);
+      const row = this.getRow(rowId);
+      if (rowIndex === undefined || typeof row !== "object" || row === null) {
+        this.refreshRow(rowId);
+        continue;
+      }
+      if (rowCache === undefined || rowCache.row !== row) {
+        this.refreshRow(rowId);
+        continue;
+      }
+      for (const columnId of columnIds) {
+        const column = this.predicateColumns.find(
+          (candidate) => candidate.column.columnId === columnId,
+        )?.column;
+        if (column !== undefined) this.evaluateCell(rowId, rowCache, column);
+      }
+      if (rowCache.eligiblePredicateColumnIds.size === 0)
+        removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
+      else insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
+    }
+    for (const rowId of this.dirtyColumnIdsByRowId.keys()) this.reconcileVerticalRangeRow(rowId);
+    this.dirtyColumnIdsByRowId.clear();
+  };
+
+  private readonly removeRowCache = (rowId: string): void => {
+    const cache = this.rowCacheById.get(rowId);
+    if (cache === undefined) return;
+    for (const columnId of cache.eligiblePredicateColumnIds)
+      this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(rowId);
+    this.rowCacheById.delete(rowId);
   };
 
   private readonly findStaticCandidate = (
@@ -241,19 +367,136 @@ export class BrunoTableCellEditTraversalIndex {
     columnIndex: number,
     direction: -1 | 1,
   ): TraversalCoordinate | undefined => {
-    const sameRowColumn = adjacentValue(
-      this.eligiblePredicateColumnsByRow.get(rowIndex) ?? [],
-      columnIndex,
-      direction,
-    );
+    const sameRowColumn = this.findPredicateColumn(rowIndex, columnIndex, direction);
     if (sameRowColumn !== undefined) return { rowIndex, columnIndex: sameRowColumn };
     const destinationRow = adjacentValue(this.eligiblePredicateRowIndexes, rowIndex, direction);
     if (destinationRow === undefined) return undefined;
-    const columns = this.eligiblePredicateColumnsByRow.get(destinationRow) ?? [];
-    const destinationColumn = direction > 0 ? columns[0] : columns.at(-1);
+    const destinationColumn = this.findPredicateColumn(
+      destinationRow,
+      direction > 0 ? -1 : (this.columns?.length ?? 0),
+      direction,
+    );
     return destinationColumn === undefined
       ? undefined
       : { rowIndex: destinationRow, columnIndex: destinationColumn };
+  };
+
+  private readonly findPredicateColumn = (
+    rowIndex: number,
+    columnIndex: number,
+    direction: -1 | 1,
+  ): number | undefined => {
+    const columns = this.columns ?? [];
+    const rowId = this.rowIds[rowIndex];
+    if (rowId === undefined) return undefined;
+    for (
+      let candidate = columnIndex + direction;
+      candidate >= 0 && candidate < columns.length;
+      candidate += direction
+    ) {
+      const column = columns[candidate];
+      if (
+        column?.kind === "field" &&
+        typeof column.isEditable === "function" &&
+        this.eligiblePredicateRowIdsByColumnId.get(column.columnId)?.has(rowId) === true
+      ) {
+        return candidate;
+      }
+    }
+    return undefined;
+  };
+
+  private readonly horizontalRangeDestinations = (
+    range: Extract<BrunoTableCellEditTraversalRange, { readonly axis: "horizontal" }>,
+  ): readonly BrunoTableCellEditTraversalDestination[] => {
+    const rowIndex = this.rowIndexById.get(range.rowId);
+    if (rowIndex === undefined) return [];
+    return range.columnIds.flatMap((columnId) =>
+      this.isCellEligible(range.rowId, columnId)
+        ? [Object.freeze({ rowIndex, rowId: range.rowId, columnId })]
+        : [],
+    );
+  };
+
+  private readonly verticalRangeDestinations = (
+    range: Extract<BrunoTableCellEditTraversalRange, { readonly axis: "vertical" }>,
+  ): readonly BrunoTableCellEditTraversalDestination[] => {
+    if (this.verticalRangeCache?.range === range) return this.verticalRangeCache.destinations;
+    const destinations = range.rowIds.flatMap((rowId) => {
+      const rowIndex = this.rowIndexById.get(rowId);
+      return rowIndex !== undefined && this.isCellEligible(rowId, range.columnId)
+        ? [Object.freeze({ rowIndex, rowId, columnId: range.columnId })]
+        : [];
+    });
+    this.verticalRangeCache = {
+      range,
+      rangeIndexByRowId: new Map(range.rowIds.map((rowId, index) => [rowId, index])),
+      destinations,
+    };
+    return destinations;
+  };
+
+  private readonly findVerticalRangeDestination = (
+    range: Extract<BrunoTableCellEditTraversalRange, { readonly axis: "vertical" }>,
+    currentRowId: string,
+    currentColumnId: string,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined => {
+    const destinations = this.verticalRangeDestinations(range);
+    const cache = this.verticalRangeCache;
+    if (cache === undefined || destinations.length < 2) return undefined;
+    const rangeIndex = cache.rangeIndexByRowId.get(currentRowId);
+    if (rangeIndex === undefined || currentColumnId !== range.columnId)
+      return direction > 0 ? destinations[0] : destinations.at(-1);
+    let low = 0;
+    let high = destinations.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      const middleRangeIndex = cache.rangeIndexByRowId.get(destinations[middle]!.rowId);
+      if ((middleRangeIndex ?? Number.POSITIVE_INFINITY) < rangeIndex) low = middle + 1;
+      else high = middle;
+    }
+    const present = destinations[low]?.rowId === currentRowId;
+    if (!present) return direction > 0 ? destinations[0] : destinations.at(-1);
+    const nextIndex = (low + direction + destinations.length) % destinations.length;
+    return destinations[nextIndex];
+  };
+
+  private readonly reconcileVerticalRangeRow = (rowId: string): void => {
+    const cache = this.verticalRangeCache;
+    const rangeIndex = cache?.rangeIndexByRowId.get(rowId);
+    if (cache === undefined || rangeIndex === undefined) return;
+    let low = 0;
+    let high = cache.destinations.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      const middleRangeIndex = cache.rangeIndexByRowId.get(cache.destinations[middle]!.rowId);
+      if ((middleRangeIndex ?? Number.POSITIVE_INFINITY) < rangeIndex) low = middle + 1;
+      else high = middle;
+    }
+    const present = cache.destinations[low]?.rowId === rowId;
+    const rowIndex = this.rowIndexById.get(rowId);
+    const eligible = rowIndex !== undefined && this.isCellEligible(rowId, cache.range.columnId);
+    if (!eligible && present) {
+      cache.destinations.splice(low, 1);
+      return;
+    }
+    if (!eligible || rowIndex === undefined) return;
+    const destination = Object.freeze({ rowIndex, rowId, columnId: cache.range.columnId });
+    if (present) cache.destinations[low] = destination;
+    else cache.destinations.splice(low, 0, destination);
+  };
+
+  private readonly isCellEligible = (rowId: string, columnId: string): boolean => {
+    if (!this.rowIndexById.has(rowId)) return false;
+    const columnIndex = this.columnIndexById.get(columnId);
+    const column = columnIndex === undefined ? undefined : this.columns?.[columnIndex];
+    if (column?.kind !== "field") return false;
+    if (column.isEditable === true) return true;
+    return (
+      typeof column.isEditable === "function" &&
+      this.eligiblePredicateRowIdsByColumnId.get(columnId)?.has(rowId) === true
+    );
   };
 }
 

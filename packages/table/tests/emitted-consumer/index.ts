@@ -1814,6 +1814,32 @@ const widenedEditableProps = {
   },
 } satisfies EmittedEditableClientProps<typeof widenedColumns>;
 
+const emittedNonEditableColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const emittedInvalidNamedEditableProps = {
+  tableId: "emitted-invalid-editable",
+  columns: emittedNonEditableColumns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  editable: true,
+  getRowVersion: (row: Order) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+} as const;
+// @ts-expect-error emitted named props preserve the exact potentially-editable tuple proof.
+const emittedInvalidNamedEditableAssignment: BrunoTableClientProps<
+  Order,
+  typeof emittedNonEditableColumns,
+  bigint
+> = emittedInvalidNamedEditableProps;
+void emittedInvalidNamedEditableAssignment;
+
 const invalidProps = {
   tableId: "orders",
   columns,

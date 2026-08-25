@@ -127,6 +127,15 @@ describe("BrunoTable editable traversal index", () => {
       columnId: "COL_ID_ENABLED",
     });
 
+    index.reconcile(columns.toReversed(), rowSpace(["third", "second", "first"]));
+    expect(evaluate).toHaveBeenCalledTimes(6);
+    expect(index.find(0, "COL_ID_ENABLED", -1)).toEqual({
+      rowIndex: 0,
+      rowId: "third",
+      columnId: "COL_ID_ALTERNATE",
+    });
+    index.reconcile(columns, rowSpace(["first", "second", "third"]));
+
     const replacement: Row = { ...second, enabled: false, alternate: true };
     rows.set(second.id, replacement);
     index.reconcileRows(new Set(["second"]));
@@ -155,6 +164,46 @@ describe("BrunoTable editable traversal index", () => {
     rows.delete("second");
     index.reconcileRows(new Set(["second"]));
     expect(index.getCachedRowCount()).toBe(2);
+  });
+
+  it("cycles exact horizontal and vertical range eligibility from indexed evidence", () => {
+    const rangeRows = new Map<string, Row>([
+      ["first", { id: "first", enabled: true, alternate: false }],
+      ["middle", { id: "middle", enabled: false, alternate: false }],
+      ["last", { id: "last", enabled: true, alternate: true }],
+    ]);
+    const columns = makeColumns();
+    const index = new BrunoTableCellEditTraversalIndex(
+      (rowId) => rangeRows.get(rowId),
+      () => 0,
+      (_rowId, row, column) =>
+        column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
+    );
+    index.reconcile(columns, rowSpace([...rangeRows.keys()]));
+    const vertical = Object.freeze({
+      axis: "vertical" as const,
+      columnId: "COL_ID_ENABLED",
+      rowIds: Object.freeze(["first", "middle", "last"]),
+    });
+    const horizontal = Object.freeze({
+      axis: "horizontal" as const,
+      rowId: "last",
+      columnIds: Object.freeze(["COL_ID_ENABLED", "COL_ID_ALTERNATE"]),
+    });
+
+    expect(index.findRange(vertical, "first", "COL_ID_ENABLED", 1)?.rowId).toBe("last");
+    expect(index.findRange(vertical, "last", "COL_ID_ENABLED", 1)?.rowId).toBe("first");
+    expect(index.findRange(vertical, "first", "COL_ID_ENABLED", -1)?.rowId).toBe("last");
+    expect(index.findRange(horizontal, "last", "COL_ID_ENABLED", 1)?.columnId).toBe(
+      "COL_ID_ALTERNATE",
+    );
+    expect(index.findRange(horizontal, "last", "COL_ID_ALTERNATE", 1)?.columnId).toBe(
+      "COL_ID_ENABLED",
+    );
+
+    rangeRows.set("middle", { id: "middle", enabled: true, alternate: false });
+    index.reconcileRows(new Set(["middle"]));
+    expect(index.findRange(vertical, "first", "COL_ID_ENABLED", 1)?.rowId).toBe("middle");
   });
 
   it("reevaluates only 150 predicate cells for one changed row in a 5,000 by 150 index", () => {
@@ -187,5 +236,31 @@ describe("BrunoTable editable traversal index", () => {
 
     expect(evaluate).toHaveBeenCalledTimes(150);
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe("row-2500");
+  });
+
+  it("invalidates an unknown full publication without rebuilding the superseded projection", () => {
+    const rows = new Map<string, Row>([
+      ["first", { id: "first", enabled: false, alternate: false }],
+      ["second", { id: "second", enabled: true, alternate: false }],
+    ]);
+    const evaluate = vi.fn((_rowId: string, row: object, column: CompiledFieldColumn) =>
+      column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
+    );
+    const columns = makeColumns();
+    const index = new BrunoTableCellEditTraversalIndex(
+      (rowId) => rows.get(rowId),
+      () => 0,
+      evaluate,
+    );
+    const projection = rowSpace(["first", "second"]);
+    index.reconcile(columns, projection);
+    expect(evaluate).toHaveBeenCalledTimes(4);
+
+    rows.set("first", { id: "first", enabled: true, alternate: false });
+    rows.set("second", { id: "second", enabled: false, alternate: false });
+    index.reconcileRows(undefined);
+    expect(evaluate).toHaveBeenCalledTimes(4);
+    expect(index.find(0, "COL_ID_ENABLED", 1)).toBeUndefined();
+    expect(evaluate).toHaveBeenCalledTimes(8);
   });
 });

@@ -2603,6 +2603,14 @@ const invalidClientWithoutEditableColumnsAssignment: BrunoTableEditingCapability
 > = invalidClientWithoutEditableColumns;
 void invalidClientWithoutEditableColumnsAssignment;
 
+// @ts-expect-error the named Client props alias preserves the exact potentially-editable tuple proof.
+const invalidNamedClientWithoutEditableColumns: BrunoTableClientProps<
+  Order,
+  typeof nonEditableColumns,
+  bigint
+> = invalidClientWithoutEditableColumns;
+void invalidNamedClientWithoutEditableColumns;
+
 const editableClientWithGrouping = {
   tableId: "orders",
   columns,

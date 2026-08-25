@@ -1619,7 +1619,8 @@ export type BrunoTableClientProps<
   | BrunoTableReadOnlyClientProps<TRow, TColumns>
   | (BrunoTableClientSourceProps<TRow, TColumns> &
       Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
-      BrunoTableEditableCapability<TRow, TColumns, TRowVersion>);
+      BrunoTableEditableCapability<TRow, TColumns, TRowVersion> &
+      BrunoTablePotentiallyEditableColumnRequirement<TColumns>);
 
 export type BrunoTableServerProps<
   TRow,

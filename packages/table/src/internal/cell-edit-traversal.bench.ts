@@ -11,7 +11,7 @@ const rows = Array.from(
   { length: rowCount },
   (_unused, rowIndex): Row => ({
     id: `row-${String(rowIndex)}`,
-    editable: rowIndex === rowCount - 1,
+    editable: rowIndex === 0 || rowIndex === rowCount - 1,
   }),
 );
 const rowsById = new Map(rows.map((row) => [row.id, row]));
@@ -28,12 +28,38 @@ const rowSpace = Object.freeze({
   totalRows: rowCount,
   getRowId: (rowIndex: number) => rows[rowIndex]?.id,
 });
-const index = new BrunoTableCellEditTraversalIndex(
-  (rowId) => rowsById.get(rowId),
-  () => 0,
-  (_rowId: string, row: object, _column: CompiledFieldColumn) => (row as Row).editable,
-);
-index.reconcile(columns, rowSpace);
+function createIndex() {
+  const created = new BrunoTableCellEditTraversalIndex(
+    (rowId) => rowsById.get(rowId),
+    () => 0,
+    (_rowId: string, row: object, _column: CompiledFieldColumn) => (row as Row).editable,
+  );
+  created.reconcile(columns, rowSpace);
+  return created;
+}
+const traversalIndex = createIndex();
+const reconciliationIndex = createIndex();
+const rangeIndex = createIndex();
+const forwardRowIds = rows.map((row) => row.id);
+const reverseRowIds = forwardRowIds.toReversed();
+const forwardRowSpace = Object.freeze({
+  totalRows: rowCount,
+  getRowId: (rowIndex: number) => forwardRowIds[rowIndex],
+});
+const reverseRowSpace = Object.freeze({
+  totalRows: rowCount,
+  getRowId: (rowIndex: number) => reverseRowIds[rowIndex],
+});
+const verticalRange = Object.freeze({
+  axis: "vertical" as const,
+  columnId: columns[0]!.columnId,
+  rowIds: Object.freeze(forwardRowIds),
+});
+const horizontalRange = Object.freeze({
+  axis: "horizontal" as const,
+  rowId: rows.at(-1)!.id,
+  columnIds: Object.freeze(columns.map((column) => column.columnId)),
+});
 
 function percentile99(samples: readonly number[]): number {
   const sorted = [...samples].sort((left, right) => left - right);
@@ -42,10 +68,25 @@ function percentile99(samples: readonly number[]): number {
 
 describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz reference)", () => {
   const samples: number[] = [];
+  const reconciliationSamples: number[] = [];
+  const rangeSamples: number[] = [];
+  const horizontalRangeSamples: number[] = [];
 
   afterAll(() => {
     const traversalP99Ms = percentile99(samples);
-    if (samples.length !== 100 || traversalP99Ms > referenceFrameBudgetMs) {
+    const reconciliationP99Ms = percentile99(reconciliationSamples);
+    const rangeP99Ms = percentile99(rangeSamples);
+    const horizontalRangeP99Ms = percentile99(horizontalRangeSamples);
+    if (
+      samples.length !== 100 ||
+      reconciliationSamples.length !== 100 ||
+      rangeSamples.length !== 100 ||
+      horizontalRangeSamples.length !== 100 ||
+      traversalP99Ms > referenceFrameBudgetMs ||
+      reconciliationP99Ms > referenceFrameBudgetMs ||
+      rangeP99Ms > referenceFrameBudgetMs ||
+      horizontalRangeP99Ms > referenceFrameBudgetMs
+    ) {
       throw new Error("The editable traversal index missed its sample count or frame budget.");
     }
     console.log(
@@ -55,6 +96,9 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         rowCount,
         columnCount,
         traversalP99Ms,
+        reconciliationP99Ms,
+        rangeP99Ms,
+        horizontalRangeP99Ms,
         traversalP99WithinReference: traversalP99Ms <= referenceFrameBudgetMs,
       }),
     );
@@ -64,16 +108,62 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
     "finds far forward, reverse, and terminal destinations across 750,000 predicate cells",
     () => {
       const startedAt = performance.now();
-      const forward = index.find(0, columns[0]!.columnId, 1);
-      const reverse = index.find(rowCount - 1, columns.at(-1)!.columnId, -1);
-      const terminal = index.find(rowCount - 1, columns.at(-1)!.columnId, 1);
+      const forward = traversalIndex.find(0, columns.at(-1)!.columnId, 1);
+      const reverse = traversalIndex.find(rowCount - 1, columns[0]!.columnId, -1);
+      const terminal = traversalIndex.find(rowCount - 1, columns.at(-1)!.columnId, 1);
       samples.push(performance.now() - startedAt);
-      if (
-        forward?.rowIndex !== rowCount - 1 ||
-        reverse?.rowIndex !== rowCount - 1 ||
-        terminal !== undefined
-      ) {
+      if (forward?.rowIndex !== rowCount - 1 || reverse?.rowIndex !== 0 || terminal !== undefined) {
         throw new Error("Unexpected editable traversal result.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  let reversed = false;
+  bench(
+    "remaps a sorted or filtered 5,000-row projection without revisiting 750,000 predicates",
+    () => {
+      const startedAt = performance.now();
+      reconciliationIndex.reconcile(columns, reversed ? forwardRowSpace : reverseRowSpace);
+      reconciliationSamples.push(performance.now() - startedAt);
+      reversed = !reversed;
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  rangeIndex.reconcile(columns, forwardRowSpace);
+  rangeIndex.findRange(verticalRange, rows.at(-1)!.id, columns[0]!.columnId, 1);
+  bench(
+    "cycles a cached 5,000-row vertical editable range exactly",
+    () => {
+      const startedAt = performance.now();
+      const destination = rangeIndex.findRange(
+        verticalRange,
+        rows.at(-1)!.id,
+        columns[0]!.columnId,
+        1,
+      );
+      rangeSamples.push(performance.now() - startedAt);
+      if (destination?.rowId !== rows[0]!.id) {
+        throw new Error("Unexpected vertical range traversal result.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "cycles a 150-column horizontal editable range exactly",
+    () => {
+      const startedAt = performance.now();
+      const destination = rangeIndex.findRange(
+        horizontalRange,
+        rows.at(-1)!.id,
+        columns[0]!.columnId,
+        1,
+      );
+      horizontalRangeSamples.push(performance.now() - startedAt);
+      if (destination?.columnId !== columns[1]!.columnId) {
+        throw new Error("Unexpected horizontal range traversal result.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },

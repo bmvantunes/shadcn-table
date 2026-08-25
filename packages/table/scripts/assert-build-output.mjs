@@ -13,11 +13,7 @@ assertReactCompilerStrictness(transformSync);
 
 class UninspectableWildcardExportError extends Error {}
 // Never weaken the global rule or infer keyboard ownership from a lookalike path.
-const keyboardEvidenceModuleCapabilities = new Map([
-  ["internal/hotkey-adapter.ts", "adapter"],
-  ["internal/bruno-table-view.tsx", "native-evidence"],
-  ["internal/cell-edit-boundary.tsx", "native-evidence"],
-]);
+const keyboardEvidenceModuleCapabilities = new Map([["internal/hotkey-adapter.ts", "adapter"]]);
 
 function normalizeProductionModulePath(sourcePath) {
   return sourcePath.replaceAll("\\", "/").replace(/^\.\/+|\/+$/gu, "");
@@ -34,9 +30,9 @@ for (const [sourcePath, expectedMode] of [
   ["internal/hotkey-adapter.ts", "adapter"],
   ["internal\\hotkey-adapter.ts", "adapter"],
   ["./internal/hotkey-adapter.ts", "adapter"],
-  ["internal/bruno-table-view.tsx", "native-evidence"],
-  ["internal\\bruno-table-view.tsx", "native-evidence"],
-  ["./internal/cell-edit-boundary.tsx", "native-evidence"],
+  ["internal/bruno-table-view.tsx", "production"],
+  ["internal\\bruno-table-view.tsx", "production"],
+  ["./internal/cell-edit-boundary.tsx", "production"],
   ["nested/internal/hotkey-adapter.ts", "production"],
   ["nested/internal/bruno-table-view.tsx", "production"],
   ["internal/cell-edit-boundary.tsx.backup", "production"],

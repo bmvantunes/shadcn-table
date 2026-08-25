@@ -341,6 +341,27 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
   await expect.element(screen.getByRole("button", { name: "After grid summary" })).toHaveFocus();
 });
 
+test("traverses editable cells from Navigation Mode and yields natively only at both terminals", async () => {
+  const { grid, screen } = await renderEditableTable();
+
+  await userEvent.keyboard("{Tab}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "4", exact: true }).element().id,
+  );
+  await expect.element(grid).toHaveFocus();
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "Ada", exact: true }).element().id,
+  );
+
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  await expect.element(screen.getByRole("button", { name: "Sort rows, 1 active" })).toHaveFocus();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "last", exact: true }));
+  await userEvent.keyboard("{Tab}");
+  await expect.element(screen.getByRole("button", { name: "After grid summary" })).toHaveFocus();
+});
+
 test("supports reverse commit movement and exits backward at the first eligible cell", async () => {
   const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowDown}{ArrowRight}{F2}{Shift>}{Enter}{/Shift}");

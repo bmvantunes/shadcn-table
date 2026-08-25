@@ -215,9 +215,18 @@ describe("BrunoTable Cell Edit Session", () => {
     });
 
     expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)?.columnId).toBe("COL_ID_SCORE");
+    const range = Object.freeze({
+      axis: "horizontal" as const,
+      rowId: row.id,
+      columnIds: Object.freeze(["COL_ID_START", "COL_ID_SCORE"]),
+    });
+    expect(runtime.findRangeTraversalDestination(range, row.id, "COL_ID_START", 1)?.columnId).toBe(
+      "COL_ID_SCORE",
+    );
     expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
     expect(runtime.commit("7")).toBe(true);
     expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)).toBeUndefined();
+    expect(runtime.findRangeTraversalDestination(range, row.id, "COL_ID_START", 1)).toBeUndefined();
     runtime.dispose();
   });
 

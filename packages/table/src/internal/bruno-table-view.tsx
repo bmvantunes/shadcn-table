@@ -2577,29 +2577,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const range = cellRange.getSnapshot().range;
     if (active?.region !== "body" || active.rowId === undefined || range === undefined)
       return false;
-    const coordinates =
-      range.axis === "horizontal"
-        ? range.columnIds.map((columnId) => ({ rowId: range.rowId, columnId }))
-        : range.rowIds.map((rowId) => ({ rowId, columnId: range.columnId }));
-    const eligible = coordinates.filter((coordinate) =>
-      cellEdit.isEditable(coordinate.rowId, coordinate.columnId),
+    const destination = cellEdit.findRangeTraversalDestination(
+      range,
+      active.rowId,
+      active.columnId,
+      direction,
     );
-    if (eligible.length < 2) return false;
-    const currentIndex = eligible.findIndex(
-      (coordinate) => coordinate.rowId === active.rowId && coordinate.columnId === active.columnId,
-    );
-    const nextIndex =
-      currentIndex < 0
-        ? direction > 0
-          ? 0
-          : eligible.length - 1
-        : (currentIndex + direction + eligible.length) % eligible.length;
-    const destination = eligible[nextIndex];
     if (destination === undefined) return false;
-    const rowIndex = rowSpace.findRowIndex(destination.rowId);
-    if (rowIndex === undefined) return false;
-    navigation.activateBody(rowIndex, destination.rowId, destination.columnId);
-    revealCell(rowIndex, destination.columnId, "body", destination.rowId);
+    navigation.activateBody(destination.rowIndex, destination.rowId, destination.columnId);
+    revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
     return true;
   };
   const runActivation = (
@@ -2700,7 +2686,21 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (cellEdit === undefined || !ownsGridSurface(event)) {
       return;
     }
-    if (moveWithinEditableRange(direction)) event.preventDefault();
+    if (moveWithinEditableRange(direction)) {
+      event.preventDefault();
+      return;
+    }
+    const active = navigation.getSnapshot();
+    if (active?.region !== "body") return;
+    const destination = cellEdit.findTraversalDestination(
+      active.rowIndex,
+      active.columnId,
+      direction,
+    );
+    if (destination === undefined) return;
+    event.preventDefault();
+    navigation.activateBody(destination.rowIndex, destination.rowId, destination.columnId);
+    revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
   };
   const startReplaceFromProducedText = (producedText: string): boolean => {
     if (cellEdit === undefined || producedText.length === 0) return false;
