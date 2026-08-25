@@ -2,6 +2,11 @@ import { batch, Store } from "@tanstack/store";
 import { assign, createActor, createMachine } from "xstate";
 
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
+import {
+  BrunoTableCellEditTraversalIndex,
+  type BrunoTableCellEditTraversalDestination,
+  type BrunoTableCellEditTraversalRowSpace,
+} from "./cell-edit-traversal";
 
 type Listener = () => void;
 
@@ -325,6 +330,9 @@ export class BrunoTableCellEditRuntime {
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
+  private readonly draftRevisions = new Map<string, number>();
+  private readonly publishedDraftEvidence = new Map<string, DraftEntry>();
+  private readonly traversalIndex: BrunoTableCellEditTraversalIndex;
   private activeCellKey: string | undefined;
   private activeCandidate:
     | Readonly<{
@@ -348,6 +356,11 @@ export class BrunoTableCellEditRuntime {
     this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
     this.onCommit = options.onCommit ?? (() => undefined);
+    this.traversalIndex = new BrunoTableCellEditTraversalIndex(
+      this.getRow,
+      (rowId, columnId) => this.draftRevisions.get(cellKey(rowId, columnId)) ?? 0,
+      (rowId, row, column) => this.evaluateEditable(rowId, row, column),
+    );
     this.actor.subscribe(() => this.publishActorDecision());
     this.actor.start();
   }
@@ -415,6 +428,26 @@ export class BrunoTableCellEditRuntime {
   public readonly requestMovement = (movement: BrunoTableCellEditMovement): boolean =>
     this.movementCommand?.(movement) === true;
 
+  public readonly reconcileTraversal = (
+    columns: readonly CompiledColumn[],
+    rowSpace: BrunoTableCellEditTraversalRowSpace,
+  ): void => {
+    this.traversalIndex.reconcile(columns, rowSpace);
+  };
+
+  public readonly reconcileTraversalRows = (
+    changedRowIds: ReadonlySet<string> | undefined,
+  ): void => {
+    this.traversalIndex.reconcileRows(changedRowIds);
+  };
+
+  public readonly findTraversalDestination = (
+    rowIndex: number,
+    columnId: string,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined =>
+    this.traversalIndex.find(rowIndex, columnId, direction);
+
   public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
     if (this.columns === columns) return;
     this.cancel();
@@ -438,8 +471,17 @@ export class BrunoTableCellEditRuntime {
     }
     const row = this.getRow(rowId);
     if (typeof row !== "object" || row === null) return false;
+    return this.evaluateEditable(rowId, row, column);
+  };
+
+  private readonly evaluateEditable = (
+    rowId: string,
+    row: object,
+    column: CompiledFieldColumn,
+  ): boolean => {
+    if (column.isEditable === undefined || column.isEditable === false) return false;
     if (typeof column.isEditable !== "function") return true;
-    const draft = this.actor.getSnapshot().context.drafts.get(cellKey(rowId, columnId));
+    const draft = this.actor.getSnapshot().context.drafts.get(cellKey(rowId, column.columnId));
     const value = draft === undefined ? Reflect.get(row, column.field) : draft.value;
     try {
       return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
@@ -512,7 +554,9 @@ export class BrunoTableCellEditRuntime {
     const nextKey = next.kind === "editing" ? cellKey(next.rowId, next.columnId) : undefined;
     this.activeCellKey = nextKey;
     if (nextKey !== undefined && !this.cellStores.has(nextKey)) this.installCellStore(nextKey);
-    const affectedKeys = new Set(this.actor.getSnapshot().context.affectedCellKeys);
+    const actorContext = this.actor.getSnapshot().context;
+    const affectedKeys = new Set(actorContext.affectedCellKeys);
+    for (const key of affectedKeys) this.reconcileDraftRevision(key, actorContext.drafts);
     if (previousKey !== undefined) affectedKeys.add(previousKey);
     if (nextKey !== undefined) affectedKeys.add(nextKey);
     batch(() => {
@@ -551,13 +595,40 @@ export class BrunoTableCellEditRuntime {
     if (store === undefined) return;
     const next = this.createCellProjection(key);
     const previous = store.get();
-    if (previous.active === next.active && Object.is(previous.draft, next.draft)) return;
+    if (
+      previous.active === next.active &&
+      previous.hasDraft === next.hasDraft &&
+      Object.is(previous.draft, next.draft)
+    ) {
+      return;
+    }
     store.setState(() => next);
   };
 
   private readonly releaseUnusedCellStore = (key: string): void => {
     if (this.activeCellKey === key || (this.cellSubscriberCounts.get(key) ?? 0) > 0) return;
     this.cellStores.delete(key);
+  };
+
+  private readonly reconcileDraftRevision = (
+    key: string,
+    drafts: ReadonlyMap<string, DraftEntry>,
+  ): void => {
+    const previous = this.publishedDraftEvidence.get(key);
+    const next = drafts.get(key);
+    if (
+      (previous === undefined) === (next === undefined) &&
+      Object.is(previous?.value, next?.value)
+    ) {
+      return;
+    }
+    if (next === undefined) this.publishedDraftEvidence.delete(key);
+    else this.publishedDraftEvidence.set(key, next);
+    if (next === undefined) this.draftRevisions.delete(key);
+    else this.draftRevisions.set(key, (this.draftRevisions.get(key) ?? 0) + 1);
+    const identity = parseCellKey(key);
+    if (identity !== undefined)
+      this.traversalIndex.invalidateCell(identity.rowId, identity.columnId);
   };
 }
 
@@ -573,6 +644,19 @@ function indexFieldColumns(
 
 function cellKey(rowId: string, columnId: string): string {
   return `${rowId.length}:${rowId}${columnId}`;
+}
+
+function parseCellKey(
+  key: string,
+): Readonly<{ readonly rowId: string; readonly columnId: string }> | undefined {
+  const separator = key.indexOf(":");
+  if (separator <= 0) return undefined;
+  const rowIdLength = Number(key.slice(0, separator));
+  if (!Number.isSafeInteger(rowIdLength) || rowIdLength < 0) return undefined;
+  const rowStart = separator + 1;
+  const columnStart = rowStart + rowIdLength;
+  if (columnStart > key.length) return undefined;
+  return { rowId: key.slice(rowStart, columnStart), columnId: key.slice(columnStart) };
 }
 
 function boundedMessage(message: string): string {

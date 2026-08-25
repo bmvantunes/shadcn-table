@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
 import { BrunoTableBigDecimalValueType } from "../effect";
+import type { BrunoTableValueType } from "../public-types";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
@@ -137,6 +138,86 @@ describe("BrunoTable Cell Edit Session", () => {
 
     unsubscribeQuantity();
     unsubscribeScore();
+    runtime.dispose();
+  });
+
+  it("publishes draft presence independently from an undefined draft value", () => {
+    type OptionalRow = Readonly<{ readonly id: string; readonly optional: string | undefined }>;
+    const optionalValueType: BrunoTableValueType<string | undefined, "equality", "text"> = {
+      codecId: "test/undefined",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 100,
+      decodeRuntime: (input) =>
+        typeof input === "string" || input === undefined
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected optional text." },
+      equivalent: Object.is,
+      compare: (left, right) => (Object.is(left, right) ? 0 : left === undefined ? -1 : 1),
+      formatCanonicalText: (value) => value ?? "undefined",
+      parseCanonicalText: () => ({ _tag: "Success", value: undefined }),
+      formatDisplay: (value) => value ?? "undefined",
+      encodePersisted: () => null,
+      decodePersisted: () => ({ _tag: "Success", value: undefined }),
+    };
+    const optionalRow: OptionalRow = { id: "optional", optional: "source" };
+    const optionalColumns = compileColumns([
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        valueType: optionalValueType,
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: optionalColumns,
+      getRow: () => optionalRow,
+    });
+    const subscriber = vi.fn();
+    const unsubscribe = runtime.subscribeCell("optional", "COL_ID_OPTIONAL", subscriber);
+
+    expect(runtime.start("optional", "COL_ID_OPTIONAL")).toBe(true);
+    expect(runtime.commit("undefined")).toBe(true);
+    const projection = runtime.getCellSnapshot("optional", "COL_ID_OPTIONAL");
+    expect(projection).toMatchObject({ active: false, hasDraft: true, draft: undefined });
+    expect(Object.hasOwn(projection, "draft")).toBe(true);
+    expect(subscriber).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    runtime.dispose();
+  });
+
+  it("invalidates predicate traversal from the actor-owned draft revision", () => {
+    const draftColumns = compileColumns([
+      {
+        columnId: "COL_ID_START",
+        field: "quantity",
+        headerName: "Start",
+        valueType: "bigint",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: ({ value }: { readonly value: number }) => value < 5,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({ columns: draftColumns, getRow: () => row });
+    runtime.reconcileTraversal(draftColumns, {
+      totalRows: 1,
+      getRowId: (rowIndex) => (rowIndex === 0 ? row.id : undefined),
+    });
+
+    expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)?.columnId).toBe("COL_ID_SCORE");
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)).toBeUndefined();
     runtime.dispose();
   });
 

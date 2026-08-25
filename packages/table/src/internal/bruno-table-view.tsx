@@ -2686,30 +2686,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
     if (cellEdit === undefined) return false;
     const direction = movement === "tab-forward" ? 1 : -1;
-    const columnIndex = logicalColumns.findIndex((column) => column.columnId === active.columnId);
-    if (columnIndex < 0) return false;
-    const totalCells = rowSpace.totalRows * logicalColumns.length;
-    const currentOffset = active.rowIndex * logicalColumns.length + columnIndex;
-    for (
-      let offset = currentOffset + direction;
-      offset >= 0 && offset < totalCells;
-      offset += direction
-    ) {
-      const rowIndex = Math.floor(offset / logicalColumns.length);
-      const column = logicalColumns[offset % logicalColumns.length];
-      const rowId = rowSpace.getRowId(rowIndex);
-      if (
-        column === undefined ||
-        rowId === undefined ||
-        !cellEdit.isEditable(rowId, column.columnId)
-      ) {
-        continue;
-      }
-      navigation.activateBody(rowIndex, rowId, column.columnId);
-      revealCell(rowIndex, column.columnId, "body", rowId);
-      return true;
-    }
-    return false;
+    const destination = cellEdit.findTraversalDestination(
+      active.rowIndex,
+      active.columnId,
+      direction,
+    );
+    if (destination === undefined) return false;
+    navigation.activateBody(destination.rowIndex, destination.rowId, destination.columnId);
+    revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
+    return true;
   };
   const runEditableTab = (event: BrunoTableHotkeyGesture, direction: -1 | 1): void => {
     if (cellEdit === undefined || !ownsGridSurface(event)) {
@@ -2782,6 +2767,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       grid.removeEventListener("compositionend", handleCompositionEnd);
     };
   }, [cellEdit]);
+  useLayoutEffect(() => {
+    if (cellEdit === undefined) return;
+    cellEdit.reconcileTraversal(logicalColumns, rowSpace);
+    return runtime.subscribeRowChanges(cellEdit.reconcileTraversalRows);
+  }, [cellEdit, logicalColumns, rowSpace, runtime]);
   useEffect(
     () =>
       cellEdit === undefined

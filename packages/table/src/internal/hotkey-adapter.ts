@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 
 import type { Hotkey, RegisterableHotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
+import type { BrunoTableCellEditMovement } from "./cell-edit";
 import type { BrunoTableNavigationCommand } from "./navigation";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
@@ -527,9 +528,7 @@ export function useBrunoTableCellEditorHotkeys(
   target: RefObject<HTMLElement | null>,
   commands: Readonly<{
     readonly cancel: () => void;
-    readonly commit: (
-      movement: "enter-forward" | "enter-backward" | "tab-forward" | "tab-backward",
-    ) => boolean;
+    readonly commit: (movement: BrunoTableCellEditMovement) => boolean;
   }>,
 ): void {
   const commandsRef = useRef(commands);

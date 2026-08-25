@@ -6,7 +6,7 @@ import type {
   BrunoTableClientProps,
   BrunoTableColumns,
   BrunoTableEditableClientProps,
-  BrunoTablePersistedState,
+  BrunoTableJsonValue,
   BrunoTableReadOnlyClientProps,
 } from "./public-types";
 import {
@@ -255,26 +255,12 @@ function BrunoTableClientInstance<
   ]);
 
   useLayoutEffect(() => {
-    if (props.editable === true) {
-      const notify = props.onPersistChange;
-      if (notify === undefined) {
-        runtime.setOnPersistChange(undefined);
-        return;
-      }
-      runtime.setOnPersistChange((state) =>
-        notify(state as BrunoTablePersistedState<TRow, TColumns, false>),
-      );
-      return;
-    }
-    const notify = props.onPersistChange;
-    if (notify === undefined) {
-      runtime.setOnPersistChange(undefined);
-      return;
-    }
-    runtime.setOnPersistChange((state) =>
-      notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
+    runtime.setOnPersistChange(
+      props.onPersistChange as
+        | ((state: Readonly<Record<string, BrunoTableJsonValue>>) => void)
+        | undefined,
     );
-  }, [props.editable, props.onPersistChange, runtime]);
+  }, [props.onPersistChange, runtime]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);

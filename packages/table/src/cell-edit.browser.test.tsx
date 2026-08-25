@@ -342,9 +342,11 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
 });
 
 test("supports reverse commit movement and exits backward at the first eligible cell", async () => {
-  const { screen } = await renderEditableTable();
+  const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowDown}{ArrowRight}{F2}{Shift>}{Enter}{/Shift}");
-  await expect.element(screen.getByRole("textbox", { name: "Edit Score" })).not.toBeInTheDocument();
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "4", exact: true }).element().id,
+  );
   await userEvent.click(screen.getByRole("gridcell", { name: "Ada", exact: true }));
   await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
   await expect.element(screen.getByRole("button", { name: "Sort rows, 1 active" })).toHaveFocus();
@@ -403,6 +405,138 @@ test("reveals an off-screen editable destination while skipping ineligible cells
     screen.getByRole("gridcell", { name: "revealed", exact: true }).element().id,
   );
   expect(grid.element().scrollLeft).toBeGreaterThan(0);
+});
+
+test("reveals an exact far predicate destination in both directions before native terminal Tab", async () => {
+  type TallRow = Readonly<{
+    readonly id: string;
+    readonly start: string;
+    readonly destination: string;
+    readonly ordinal: number;
+  }>;
+  const tallRows: readonly TallRow[] = Array.from({ length: 300 }, (_unused, ordinal) => ({
+    id: `row-${String(ordinal)}`,
+    start: ordinal === 0 ? "begin" : `start-${String(ordinal)}`,
+    destination: ordinal === 299 ? "far destination" : `destination-${String(ordinal)}`,
+    ordinal,
+  }));
+  const tallColumns = [
+    {
+      columnId: "COL_ID_START",
+      field: "start",
+      headerName: "Start",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: TallRow }) => row.ordinal === 0,
+    },
+    {
+      columnId: "COL_ID_DESTINATION",
+      field: "destination",
+      headerName: "Destination",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: TallRow }) => row.ordinal === 299,
+    },
+    {
+      columnId: "COL_ID_ORDINAL",
+      field: "ordinal",
+      headerName: "Ordinal",
+      valueType: "number",
+    },
+  ] satisfies BrunoTableColumns<TallRow>;
+  const screen = await render(
+    <>
+      <BrunoTableClient
+        tableId="TABLE_ID_CELL_EDIT_TALL"
+        columns={tallColumns}
+        initialOrderBy={[{ columnId: "COL_ID_ORDINAL", direction: "asc" }]}
+        clientSource={{
+          rows: tallRows,
+          totalRows: tallRows.length,
+          version: 1,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={() => 1n}
+        onSaveEdits={() => Promise.resolve()}
+      />
+      <details>
+        <summary role="button">After tall grid</summary>
+      </details>
+    </>,
+  );
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_TALL" });
+  grid.element().focus();
+
+  await userEvent.keyboard("{F2}{Tab}");
+  const destination = screen.getByRole("gridcell", { name: "far destination", exact: true });
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(destination.element().id);
+  expect(grid.element().scrollTop).toBeGreaterThan(0);
+
+  await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
+  const start = screen.getByRole("gridcell", { name: "begin", exact: true });
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(start.element().id);
+  await userEvent.keyboard("{F2}{Tab}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "far destination", exact: true }))
+    .toBeInTheDocument();
+  await userEvent.keyboard("{F2}");
+  await expect.element(screen.getByRole("textbox", { name: "Edit Destination" })).toHaveFocus();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(screen.getByRole("button", { name: "After tall grid" })).toHaveFocus();
+});
+
+test("reconciles predicate traversal from a live row replacement", async () => {
+  type LiveRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly ordinal: number;
+    readonly editable: boolean;
+  }>;
+  const liveColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: LiveRow }) => row.ordinal === 0 || row.editable,
+    },
+    {
+      columnId: "COL_ID_ORDINAL",
+      field: "ordinal",
+      headerName: "Ordinal",
+      valueType: "number",
+    },
+  ] satisfies BrunoTableColumns<LiveRow>;
+  const renderTable = (liveRows: readonly LiveRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_LIVE"
+      columns={liveColumns}
+      initialOrderBy={[{ columnId: "COL_ID_ORDINAL", direction: "asc" }]}
+      clientSource={{
+        rows: liveRows,
+        totalRows: liveRows.length,
+        version,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const initialRows: readonly LiveRow[] = [
+    { id: "first", value: "first value", ordinal: 0, editable: false },
+    { id: "second", value: "second value", ordinal: 1, editable: false },
+  ];
+  const screen = await render(renderTable(initialRows, 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_LIVE" });
+  grid.element().focus();
+  await screen.rerender(renderTable([initialRows[0]!, { ...initialRows[1]!, editable: true }], 2));
+
+  await userEvent.keyboard("{F2}{Tab}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("gridcell", { name: "second value", exact: true }).element().id,
+  );
 });
 
 test("ordinary Enter moves exactly one row even when that destination is not editable", async () => {
