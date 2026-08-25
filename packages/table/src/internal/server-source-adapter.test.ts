@@ -1081,6 +1081,7 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
   it("discards grouped admission superseded by a reentrant authoritative count", () => {
     type Token = Readonly<{ readonly id: number; readonly label: string }>;
     let reenterCount = false;
+    let decodeFailureCount: number | undefined;
     let sink:
       | Readonly<{
           readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
@@ -1094,10 +1095,17 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
       cellAlign: "start" as const,
       editorLayout: "inline" as const,
       defaultWidth: 120,
-      decodeRuntime: (input: unknown) =>
-        typeof input === "object" && input !== null && "id" in input && "label" in input
+      decodeRuntime: (input: unknown) => {
+        if (typeof input === "object" && input !== null && "failAfterCount" in input) {
+          const count = decodeFailureCount;
+          decodeFailureCount = undefined;
+          if (count !== undefined) sink?.setRowCount(count, true);
+          return { _tag: "Failure", message: "Expected token." } as const;
+        }
+        return typeof input === "object" && input !== null && "id" in input && "label" in input
           ? ({ _tag: "Success", value: input as Token } as const)
-          : ({ _tag: "Failure", message: "Expected token." } as const),
+          : ({ _tag: "Failure", message: "Expected token." } as const);
+      },
       equivalent: (left: Token, right: Token) => {
         if (reenterCount) {
           reenterCount = false;
@@ -1176,6 +1184,31 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     ).toBe("ONE");
     request.sink.setRowCount(2, true);
     expect(adapter.getPublication().rowSpace?.getRowId(1)).toBeUndefined();
+
+    request.sink.setRowData({ 1: { key: { id: 2, label: "TWO" }, [rowsAlias]: 1n } }, { 1: "two" });
+    decodeFailureCount = 1;
+    expect(() =>
+      request.sink.setRowData(
+        { 1: { key: { failAfterCount: true }, [rowsAlias]: 1n } },
+        { 1: "two" },
+      ),
+    ).not.toThrow();
+    expect(adapter.getPublication().invalid).toBeUndefined();
+    expect(adapter.getPublication().rowSpace?.totalRows).toBe(1);
+    expect(adapter.getPublication().rowSpace?.getRowId(1)).toBeUndefined();
+
+    decodeFailureCount = 1;
+    request.sink.setRowData(
+      { 0: { key: { failAfterCount: true }, [rowsAlias]: 1n } },
+      { 0: "one" },
+    );
+    expect(adapter.getPublication().invalid).toMatchObject({
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_KEY",
+    });
+    request.sink.setRowData({ 0: { key: { id: 1, label: "ONE" }, [rowsAlias]: 1n } }, { 0: "one" });
+    expect(adapter.getPublication().invalid).toBeUndefined();
   });
 
   it("retains one grouped generation across definition-only aggregate reorder", () => {
@@ -2388,6 +2421,311 @@ describe("BrunoTableServerRowPipelineAdapter", () => {
     const recovered = makeViewport();
     expect(() => adapter.replace(recovered.viewport, query)).not.toThrow();
     expect(recovered.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a newer replacement that reenters before the outer controller installs", () => {
+    type Request = Readonly<{
+      readonly query: unknown;
+      readonly sink: Readonly<{
+        readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+        readonly setRowData: (
+          rows: Readonly<Record<number, Row>>,
+          keys: Readonly<Record<number, string>>,
+        ) => void;
+      }>;
+    }>;
+    const requests: Request[] = [];
+    const controllers: Array<
+      Readonly<{
+        readonly setWindow: ReturnType<typeof vi.fn>;
+        readonly release: ReturnType<typeof vi.fn>;
+      }>
+    > = [];
+    let adapter: BrunoTableServerRowPipelineAdapter<Row>;
+    let nested = false;
+    const viewport = {
+      semanticKey: brunoTableTestSemanticQueryKey,
+      replace(request: Request) {
+        requests.push(request);
+        const controller = Object.freeze({ setWindow: vi.fn(), release: vi.fn() });
+        controllers.push(controller);
+        if (!nested) {
+          nested = true;
+          adapter.replace(viewport, {
+            ...query,
+            generation: 1,
+            navigationMode: "reset",
+            orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
+          });
+        }
+        return controller;
+      },
+    };
+    adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport,
+      completeRawSelect,
+      totalRows: 2,
+      version: 1,
+      status: "ready",
+    });
+
+    expect(() => adapter.replace(viewport, query)).not.toThrow();
+
+    expect(requests).toHaveLength(2);
+    expect(controllers[0]!.release).toHaveBeenCalledOnce();
+    expect(controllers[1]!.release).not.toHaveBeenCalled();
+    requests[0]!.sink.setRowCount(1, true);
+    requests[0]!.sink.setRowData({ 0: { symbol: "OUTER", price: 1 } }, { 0: "outer" });
+    expect(adapter.getPublication().rowSpace?.loadedRows).toBe(0);
+    requests[1]!.sink.setRowCount(1, true);
+    requests[1]!.sink.setRowData({ 0: { symbol: "NEWEST", price: 2 } }, { 0: "newest" });
+    expect(adapter.getPublication().rowSpace?.getRowId(0)).toBe("newest");
+    expect(adapter.getPublication().rowSpace?.getRow("newest")?.symbol).toBe("NEWEST");
+
+    adapter.setRequiredRange(20, 30);
+    expect(controllers[0]!.setWindow).not.toHaveBeenCalled();
+    expect(controllers[1]!.setWindow).toHaveBeenCalledOnce();
+    expect(adapter.getStructureSnapshot().generation).toBe(1);
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("reset");
+  });
+
+  it("keeps newer projection authority when outer query input snapshotting reenters", () => {
+    const groupedColumns = compileColumns([
+      {
+        columnId: "COL_ID_DESK",
+        field: "desk",
+        headerName: "Desk",
+        valueType: "text",
+        groupBy: true,
+      },
+    ]);
+    const transport = makeViewport<Record<string, unknown>>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Record<string, unknown>>(
+      groupedColumns,
+      undefined,
+      [],
+      [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      ["desk"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["desk"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    const groupedQuery = {
+      ...query,
+      generation: 1,
+      navigationMode: "projection-reset" as const,
+      orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+      groupBy: ["COL_ID_DESK"],
+      groupOrderBy: [{ columnId: "COL_ID_DESK", direction: "asc" as const }],
+    };
+    let nested = false;
+    const routeBy = {} as Record<string, unknown>;
+    Object.defineProperty(routeBy, "desk", {
+      enumerable: true,
+      get: () => {
+        if (!nested) {
+          nested = true;
+          adapter.replace(transport.viewport, groupedQuery);
+        }
+        return "outer";
+      },
+    });
+
+    adapter.replace(
+      transport.viewport,
+      {
+        ...query,
+        orderBy: [{ columnId: "COL_ID_DESK", direction: "asc" }],
+      },
+      {
+        routeBy,
+        externalFilters: undefined,
+        visibleColumnIds: undefined,
+      },
+    );
+
+    expect(transport.replace).toHaveBeenCalledOnce();
+    const request = transport.getRequest()!;
+    expect(request.query).toHaveProperty("groupBy", ["desk"]);
+    const rowsAlias = Object.entries(
+      (request.query as { aggregates: Record<string, { aggFunc: string }> }).aggregates,
+    ).find(([, aggregate]) => aggregate.aggFunc === "count")![0];
+    request.sink.setRowCount(1, true);
+    request.sink.setRowData({ 0: { desk: "Rates", [rowsAlias]: 1n } }, { 0: "rates" });
+    expect(adapter.getPublication().clientProjection).toMatchObject({
+      groupBy: ["COL_ID_DESK"],
+    });
+    expect(adapter.getPublication().rowSpace?.getCellValue("rates", "COL_ID_DESK")).toBe("Rates");
+  });
+
+  it("keeps newer raw projection equality when outer query input snapshotting reenters", () => {
+    type Token = Readonly<{ readonly id: number; readonly label: string }>;
+    type TokenRow = Readonly<{ readonly token: Token }>;
+    const valueType = (observeLabel: boolean) => ({
+      codecId: `test/reentrant-raw-${observeLabel ? "label" : "id"}`,
+      codecVersion: 1,
+      filterFamily: "equality" as const,
+      editorFamily: "text" as const,
+      cellAlign: "start" as const,
+      editorLayout: "inline" as const,
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+      equivalent: (left: Token, right: Token) =>
+        left.id === right.id && (!observeLabel || left.label === right.label),
+      compare: (left: Token, right: Token) => left.id - right.id,
+      formatCanonicalText: (value: Token) =>
+        observeLabel ? `${String(value.id)}:${value.label}` : String(value.id),
+      parseCanonicalText: (text: string) =>
+        ({ _tag: "Success", value: { id: Number(text), label: text } }) as const,
+      formatDisplay: (value: Token) => (observeLabel ? value.label : String(value.id)),
+      encodePersisted: (value: Token) => ({ id: value.id, label: value.label }),
+      decodePersisted: (input: unknown) =>
+        typeof input === "object" && input !== null && "id" in input && "label" in input
+          ? ({ _tag: "Success", value: input as Token } as const)
+          : ({ _tag: "Failure", message: "Expected token." } as const),
+    });
+    const tokenColumns = compileColumns([
+      {
+        columnId: "COL_ID_TOKEN_ID",
+        field: "token",
+        headerName: "Token identity",
+        valueType: valueType(false),
+      },
+      {
+        columnId: "COL_ID_TOKEN_LABEL",
+        field: "token",
+        headerName: "Token label",
+        valueType: valueType(true),
+      },
+    ] as never);
+    const rawQuery = {
+      ...query,
+      orderBy: [{ columnId: "COL_ID_TOKEN_ID", direction: "asc" as const }],
+    };
+    const transport = makeViewport<TokenRow>();
+    const adapter = new BrunoTableServerRowPipelineAdapter<TokenRow>(
+      tokenColumns,
+      undefined,
+      [],
+      rawQuery.orderBy,
+      ["token"],
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect: ["token"],
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+    let nested = false;
+    const routeBy = {} as Record<string, unknown>;
+    Object.defineProperty(routeBy, "desk", {
+      enumerable: true,
+      get: () => {
+        if (!nested) {
+          nested = true;
+          adapter.replace(transport.viewport, rawQuery, {
+            routeBy: undefined,
+            externalFilters: undefined,
+            visibleColumnIds: ["COL_ID_TOKEN_ID"],
+          });
+        }
+        return "outer";
+      },
+    });
+
+    adapter.replace(transport.viewport, rawQuery, {
+      routeBy,
+      externalFilters: undefined,
+      visibleColumnIds: ["COL_ID_TOKEN_ID", "COL_ID_TOKEN_LABEL"],
+    });
+
+    expect(transport.replace).toHaveBeenCalledOnce();
+    const request = transport.getRequest()!;
+    expect(request.query).toEqual({
+      select: ["token"],
+      where: [],
+      orderBy: [{ field: "token", direction: "asc" }],
+    });
+    request.sink.setRowCount(1, true);
+    const first = { token: { id: 1, label: "OLD" } } as const;
+    request.sink.setRowData({ 0: first }, { 0: "token" });
+    expect(adapter.getPublication().rowSpace?.getRow("token")).toBe(first);
+
+    request.sink.setRowData({ 0: { token: { id: 1, label: "NEW" } } }, { 0: "token" });
+    expect(adapter.getPublication().rowSpace?.getRow("token")).toBe(first);
+  });
+
+  it("does not invalidate a newer replacement when a superseded outer transport throws", () => {
+    type Request = Readonly<{
+      readonly sink: Readonly<{
+        readonly setRowCount: (count: number, keepRenderedRows?: boolean) => void;
+        readonly setRowData: (
+          rows: Readonly<Record<number, Row>>,
+          keys: Readonly<Record<number, string>>,
+        ) => void;
+      }>;
+    }>;
+    const requests: Request[] = [];
+    const nestedController = Object.freeze({ setWindow: vi.fn(), release: vi.fn() });
+    const failure = new Error("superseded outer replacement failed");
+    let adapter: BrunoTableServerRowPipelineAdapter<Row>;
+    let nested = false;
+    const viewport = {
+      semanticKey: brunoTableTestSemanticQueryKey,
+      replace(request: Request) {
+        requests.push(request);
+        if (!nested) {
+          nested = true;
+          adapter.replace(viewport, {
+            ...query,
+            generation: 1,
+            navigationMode: "reset",
+            orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
+          });
+          throw failure;
+        }
+        return nestedController;
+      },
+    };
+    adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport,
+      completeRawSelect,
+      totalRows: 1,
+      version: 1,
+      status: "ready",
+    });
+
+    expect(() => adapter.replace(viewport, query)).toThrow(failure);
+
+    expect(requests).toHaveLength(2);
+    expect(nestedController.release).not.toHaveBeenCalled();
+    requests[1]!.sink.setRowCount(1, true);
+    requests[1]!.sink.setRowData({ 0: { symbol: "NEWEST", price: 2 } }, { 0: "newest" });
+    expect(adapter.getPublication().rowSpace?.getRowId(0)).toBe("newest");
+    expect(adapter.getStructureSnapshot().generation).toBe(1);
+    expect(adapter.getStructureSnapshot().navigationMode).toBe("reset");
   });
 
   it("invalidates a generation whose source semantic identity throws", () => {

@@ -203,6 +203,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     inputs: EMPTY_SERVER_QUERY_INPUTS,
   });
   private lastReplacedViewport: unknown;
+  private replacementRevision = 0;
   private queryGeneration = 0;
   private stagedInitialNavigationMode: BrunoTableQueryNavigationMode | undefined;
   private forceNextNavigationReset = false;
@@ -434,7 +435,9 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     query: BrunoTableServerRuntimeQuery,
     inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
   ): void {
-    const { nextInputs, queryPlan } = this.prepareProjection(query, inputs);
+    const prepared = this.prepareProjection(query, inputs);
+    const { nextInputs, queryPlan } = prepared;
+    this.installPreparedProjection(prepared);
     this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     this.stagedInitialNavigationMode = query.navigationMode;
     this.generationNavigationMode = query.navigationMode;
@@ -449,15 +452,17 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     inputs: BrunoTableServerQueryInputs = EMPTY_SERVER_QUERY_INPUTS,
     resetWhenInputsChange = false,
   ): void {
-    const { nextInputs, queryPlan } = this.prepareProjection(query, inputs);
+    const replacementRevision = ++this.replacementRevision;
+    const prepared = this.prepareProjection(query, inputs);
+    const { nextInputs, queryPlan } = prepared;
     const groupedAdmissionIdentity = compileGroupedAdmissionIdentity(
       queryPlan.grouped,
       this.columnsById,
       this.groupRowsColumn,
     );
     const groupedSortIdentity = snapshotGroupedSortIdentity(queryPlan.grouped, query.groupOrderBy);
-    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     const transport = requireViewportTransport<TRow>(viewport);
+    if (replacementRevision !== this.replacementRevision) return;
     let semanticKey: ActiveGeneration["semanticKey"];
     try {
       semanticKey = Object.freeze({
@@ -465,8 +470,10 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         query: transport.semanticKey(queryPlan.query),
       });
     } catch (error) {
+      if (replacementRevision !== this.replacementRevision) throw error;
       this.invalidateAfterSemanticKeyFailure(error);
     }
+    if (replacementRevision !== this.replacementRevision) return;
     const semanticKeyUnchanged = sameSemanticKey(this.active?.semanticKey, semanticKey);
     const admissionIdentityCompatible = sameGroupedAdmissionIdentity(
       this.active?.groupedAdmissionIdentity,
@@ -485,6 +492,8 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         groupedAdmissionIdentity,
       );
     if (semanticKeyUnchanged && admissionIdentityCompatible && groupedSortIdentityCompatible) {
+      this.installPreparedProjection(prepared);
+      this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
       const active = this.active;
       if (active !== undefined) {
         const {
@@ -502,11 +511,11 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
           ...(groupedSortIdentity === undefined ? {} : { groupedSortIdentity }),
           ...(query.rowsWidth === undefined ? {} : { rowsWidth: query.rowsWidth }),
         });
+        this.forceNextNavigationReset = false;
         this.publication = this.createPublication();
         this.reconcileStructureSnapshot();
         notify(this.listeners);
       }
-      this.forceNextNavigationReset = false;
       return;
     }
     let semanticInputsChanged = false;
@@ -520,8 +529,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
           semanticKey.query,
         );
     } catch (error) {
+      if (replacementRevision !== this.replacementRevision) throw error;
       this.invalidateAfterSemanticKeyFailure(error);
     }
+    if (replacementRevision !== this.replacementRevision) return;
+    this.installPreparedProjection(prepared);
+    this.installProjectionIntent(queryPlan, nextInputs, query.rowsWidth, query.navigationMode);
     const nextNavigationMode =
       semanticInputsChanged ||
       this.forceNextNavigationReset ||
@@ -541,12 +554,14 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       try {
         previous.controller.release();
       } catch (error) {
+        if (replacementRevision !== this.replacementRevision) throw error;
         this.publication = this.createPublication();
         preservePrimaryFailure(() => this.reconcileStructureSnapshot());
         preservePrimaryFailure(() => this.publishResultRowCount(this.resolveResultRowCount()));
         preservePrimaryFailure(() => notify(this.listeners));
         throw error;
       }
+      if (replacementRevision !== this.replacementRevision) return;
     }
     this.generationReleased = false;
     this.suppressStorePublication = true;
@@ -591,7 +606,11 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
                   ? admission.delivery
                   : normalizeGroupedRows(admission.delivery, queryPlan.grouped, this.columnsById);
             } catch (error) {
-              if (revision !== deliveryRevision || !this.store.isActiveGeneration(activeToken))
+              if (
+                revision !== deliveryRevision ||
+                !this.store.isActiveGeneration(activeToken) ||
+                this.store.isSupersededRowDataPlan(admission)
+              )
                 return;
               if (error instanceof BrunoTableGroupedDeliveryError) {
                 this.rejectGroupedDelivery(
@@ -618,6 +637,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
         }),
       });
     } catch (error) {
+      if (
+        replacementRevision !== this.replacementRevision ||
+        !this.store.isActiveGeneration(activeToken)
+      ) {
+        throw error;
+      }
       this.store.invalidateGeneration(activeToken);
       this.groupedRejectedBatchesByRowIndex.clear();
       this.generationReleased = true;
@@ -628,6 +653,13 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       this.publishResultRowCount(this.resolveResultRowCount());
       notify(this.listeners);
       throw error;
+    }
+    if (
+      replacementRevision !== this.replacementRevision ||
+      !this.store.isActiveGeneration(activeToken)
+    ) {
+      preservePrimaryFailure(() => controller.release());
+      return;
     }
     this.active = Object.freeze({
       token: activeToken,
@@ -663,10 +695,22 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       visibleColumnIds === snappedInputs.visibleColumnIds
         ? snappedInputs
         : Object.freeze({ ...snappedInputs, visibleColumnIds });
-    this.rowEquivalencePlan = compileRowEquivalencePlan(this.columns, nextInputs.visibleColumnIds);
+    const rowEquivalencePlan = compileRowEquivalencePlan(this.columns, nextInputs.visibleColumnIds);
     const queryPlan = this.compilePlan(query, nextInputs);
-    if ("select" in queryPlan.query) this.projectionFields = queryPlan.query.select;
-    return Object.freeze({ nextInputs, queryPlan });
+    const projectionFields = "select" in queryPlan.query ? queryPlan.query.select : undefined;
+    return Object.freeze({ nextInputs, queryPlan, rowEquivalencePlan, projectionFields });
+  }
+
+  private installPreparedProjection(
+    prepared: Readonly<{
+      readonly rowEquivalencePlan: RowEquivalencePlan;
+      readonly projectionFields: readonly string[] | undefined;
+    }>,
+  ): void {
+    this.rowEquivalencePlan = prepared.rowEquivalencePlan;
+    if (prepared.projectionFields !== undefined) {
+      this.projectionFields = prepared.projectionFields;
+    }
   }
 
   private compilePlan(query: BrunoTableServerRuntimeQuery, candidate: BrunoTableServerQueryInputs) {
@@ -815,6 +859,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   };
 
   public release(): void {
+    this.replacementRevision += 1;
     const active = this.active;
     if (active === undefined) return;
     this.active = undefined;
