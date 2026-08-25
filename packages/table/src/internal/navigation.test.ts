@@ -281,6 +281,46 @@ describe("BrunoTableNavigationRuntime", () => {
     });
   });
 
+  it("reconciles an admission-only generation by pending Group Row Identity before display index", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    const groupedServerRows = (rowIds: readonly (string | undefined)[]) => ({
+      totalRows: rowIds.length,
+      getRowId: (index: number) => rowIds[index],
+      findRowIndex: (rowId: string) => {
+        const index = rowIds.indexOf(rowId);
+        return index < 0 ? undefined : index;
+      },
+      missingRowIdentityBehavior: "fallback-to-display-index" as const,
+    });
+    const initial = groupedServerRows(["first", "active"]);
+    navigation.installCommittedQuery(1, "projection-reset", initial, columns);
+    navigation.move("down");
+
+    navigation.installCommittedQuery(
+      2,
+      "reconcile",
+      groupedServerRows([undefined, undefined]),
+      columns,
+    );
+    expect(navigation.getSnapshot()).toBeUndefined();
+    navigation.setShape(groupedServerRows(["active", "first"]), columns);
+
+    expect(navigation.getSnapshot()).toMatchObject({
+      region: "body",
+      rowIndex: 0,
+      rowId: "active",
+      columnId: "COL_ID_NAME",
+    });
+  });
+
   it("retains known moved Server identities and reconciles loading-slot arrivals", () => {
     const columns = compileColumns([
       {

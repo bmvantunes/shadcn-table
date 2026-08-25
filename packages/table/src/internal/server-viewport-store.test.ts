@@ -147,6 +147,31 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.findRowIndex("m")).toBe(1);
   });
 
+  it("does not let an older admission overwrite a reentrant newer delivery", () => {
+    const initial = { symbol: "INITIAL", price: 1 };
+    const older = { symbol: "OLDER", price: 2 };
+    const newest = { symbol: "NEWEST", price: 3 };
+    let generation = 0;
+    let nested = false;
+    let store: BrunoTableServerViewportStore<Row>;
+    store = new BrunoTableServerViewportStore<Row>(
+      () => undefined,
+      () => {
+        if (!nested) {
+          nested = true;
+          expect(store.setRowData(generation, { 0: newest }, { 0: "row" })).toBe(true);
+        }
+        return false;
+      },
+    );
+    generation = store.beginGeneration({ firstRow: 0, lastRow: 0 });
+    expect(store.setRowData(generation, { 0: initial }, { 0: "row" })).toBe(true);
+
+    expect(store.setRowData(generation, { 0: older }, { 0: "row" })).toBe(false);
+    expect(store.getSnapshot().rowSpace.getRow("row")).toBe(newest);
+    expect(store.findRowIndex("row")).toBe(0);
+  });
+
   it("does not let setRowCount retention hints bridge semantic generations", () => {
     const store = new BrunoTableServerViewportStore<Row>();
     const first = store.beginGeneration({ firstRow: 0, lastRow: 9 });

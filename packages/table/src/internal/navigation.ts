@@ -67,6 +67,7 @@ export class BrunoTableNavigationRuntime {
   private activeCell: BrunoTableActiveCell | undefined;
   private bodyInitializationBlocked = false;
   private pendingQueryFallbackRowIndex: number | undefined;
+  private pendingQueryRowId: string | undefined;
   private installedQueryGeneration: number | undefined;
 
   public readonly getSnapshot = (): BrunoTableActiveCell | undefined => this.activeCell;
@@ -95,12 +96,14 @@ export class BrunoTableNavigationRuntime {
 
   public readonly reset = (): void => {
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     this.bodyInitializationBlocked = false;
     this.setActive(undefined);
   };
 
   public readonly clearForQuery = (): void => {
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
   };
@@ -157,6 +160,7 @@ export class BrunoTableNavigationRuntime {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
     const activeCell = this.activeCell;
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     this.rowSpace = rowSpace;
     this.columns = columns;
     const column =
@@ -192,6 +196,7 @@ export class BrunoTableNavigationRuntime {
   ): void => {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     this.rowSpace = rowSpace;
     this.columns = columns;
     const column = columns[0];
@@ -217,6 +222,7 @@ export class BrunoTableNavigationRuntime {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
     const activeCell = this.activeCell;
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     this.rowSpace = rowSpace;
     this.columns = columns;
     const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
@@ -236,6 +242,7 @@ export class BrunoTableNavigationRuntime {
     const rowSpace = isRowIdArray(rows) ? rowSpaceFromArray(rows) : rows;
     const activeCell = this.activeCell;
     this.pendingQueryFallbackRowIndex = undefined;
+    this.pendingQueryRowId = undefined;
     const column = columns.find((candidate) => candidate.columnId === activeCell?.columnId);
     this.rowSpace = rowSpace;
     this.columns = columns;
@@ -278,6 +285,7 @@ export class BrunoTableNavigationRuntime {
         return;
       }
       this.pendingQueryFallbackRowIndex = fallbackRowIndex;
+      this.pendingQueryRowId = rowId;
     }
     this.bodyInitializationBlocked = true;
     this.setActive(undefined);
@@ -391,6 +399,7 @@ export class BrunoTableNavigationRuntime {
         (activeSlotRowId !== undefined && activeSlotRowId !== this.activeCell.rowId))
     ) {
       this.pendingQueryFallbackRowIndex = undefined;
+      this.pendingQueryRowId = undefined;
       this.setActive(undefined);
       return;
     }
@@ -405,10 +414,26 @@ export class BrunoTableNavigationRuntime {
     if (this.bodyInitializationBlocked) {
       const pendingRowIndex = this.pendingQueryFallbackRowIndex;
       if (pendingRowIndex === undefined || rowSpace.totalRows === 0) return;
+      const pendingRowId = this.pendingQueryRowId;
+      const matchingPendingRowIndex =
+        pendingRowId === undefined ? undefined : rowSpace.findRowIndex(pendingRowId);
+      if (pendingRowId !== undefined && matchingPendingRowIndex !== undefined) {
+        this.pendingQueryFallbackRowIndex = undefined;
+        this.pendingQueryRowId = undefined;
+        this.bodyInitializationBlocked = false;
+        this.setActive({
+          region: "body",
+          rowIndex: matchingPendingRowIndex,
+          rowId: pendingRowId,
+          columnId: column.columnId,
+        });
+        return;
+      }
       const fallbackRowIndex = Math.max(0, Math.min(rowSpace.totalRows - 1, pendingRowIndex));
       const fallbackRowId = rowSpace.getRowId(fallbackRowIndex);
       if (fallbackRowId === undefined) return;
       this.pendingQueryFallbackRowIndex = undefined;
+      this.pendingQueryRowId = undefined;
       this.bodyInitializationBlocked = false;
       this.setActive({
         region: "body",

@@ -1295,7 +1295,7 @@ describe("BrunoTableServer", () => {
       value: { writeText },
     });
     try {
-      const transport = makeViewport(1, false);
+      const transport = makeViewport(2, false);
       const renderTable = (observeCanonical: boolean) => (
         <CanonicalServerTable
           tableId="TABLE_ID_SERVER_GROUPED_CANONICAL_COPY"
@@ -1305,7 +1305,7 @@ describe("BrunoTableServer", () => {
             viewport: transport.viewport,
             useWholeResult: browserWholeResult,
             completeRawSelect: ["desk"],
-            totalRows: 1,
+            totalRows: 2,
             version: 1,
             status: "ready",
           }}
@@ -1326,14 +1326,30 @@ describe("BrunoTableServer", () => {
         ([, aggregate]) => aggregate.aggFunc === "count",
       )![0];
       const sink = request.sink as unknown as Sink<Record<string, unknown>>;
-      sink.setRowCount(1, true);
+      sink.setRowCount(2, true);
       sink.setRowData(
-        { 0: { desk: { id: 1, canonical: "OLD" }, [rowsAlias]: 1n } },
-        { 0: "canonical-group" },
+        {
+          0: { desk: { id: 1, canonical: "OLD-1" }, [rowsAlias]: 1n },
+          1: { desk: { id: 2, canonical: "OLD-2" }, [rowsAlias]: 1n },
+        },
+        { 0: "canonical-group-1", 1: "canonical-group-2" },
       );
       sink.setRowData(
-        { 0: { desk: { id: 1, canonical: "NEW" }, [rowsAlias]: 1n } },
-        { 0: "canonical-group" },
+        {
+          0: { desk: { id: 1, canonical: "NEW-1" }, [rowsAlias]: 1n },
+          1: { desk: { id: 2, canonical: "NEW-2" }, [rowsAlias]: 1n },
+        },
+        { 0: "canonical-group-1", 1: "canonical-group-2" },
+      );
+      const grid = screen.getByRole("grid", {
+        name: "Data for TABLE_ID_SERVER_GROUPED_CANONICAL_COPY",
+      });
+      grid.element().focus();
+      await userEvent.keyboard("{ArrowDown}");
+      await vi.waitFor(() =>
+        expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+          screen.getByRole("gridcell", { name: "2", exact: true }).nth(0).element().id,
+        ),
       );
       await screen.rerender(renderTable(true));
       await vi.waitFor(() => expect(transport.requests).toHaveLength(3));
@@ -1345,18 +1361,18 @@ describe("BrunoTableServer", () => {
         ([, aggregate]) => aggregate.aggFunc === "count",
       )![0];
       const replacementSink = replacement.sink as unknown as Sink<Record<string, unknown>>;
-      replacementSink.setRowCount(1, true);
+      replacementSink.setRowCount(2, true);
       replacementSink.setRowData(
-        { 0: { desk: { id: 1, canonical: "NEW" }, [replacementRowsAlias]: 1n } },
-        { 0: "canonical-group" },
+        {
+          0: { desk: { id: 2, canonical: "NEW-2" }, [replacementRowsAlias]: 1n },
+          1: { desk: { id: 1, canonical: "NEW-1" }, [replacementRowsAlias]: 1n },
+        },
+        { 0: "canonical-group-2", 1: "canonical-group-1" },
       );
-      const grid = screen.getByRole("grid", {
-        name: "Data for TABLE_ID_SERVER_GROUPED_CANONICAL_COPY",
-      });
       grid.element().focus();
       await vi.waitFor(() =>
         expect(grid.element().getAttribute("aria-activedescendant")).toBe(
-          screen.getByRole("gridcell", { name: "1", exact: true }).nth(0).element().id,
+          screen.getByRole("gridcell", { name: "2", exact: true }).nth(0).element().id,
         ),
       );
       const copy = new KeyboardEvent("keydown", {
@@ -1366,7 +1382,7 @@ describe("BrunoTableServer", () => {
         [detectPlatform() === "mac" ? "metaKey" : "ctrlKey"]: true,
       });
       grid.element().dispatchEvent(copy);
-      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("NEW"));
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("NEW-2"));
       expect(transport.requests).toHaveLength(3);
       expect(transport.releases).toHaveBeenCalledTimes(2);
     } finally {

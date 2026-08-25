@@ -13,6 +13,7 @@ export type BrunoTableServerViewportDeliverySnapshot<TRow> = readonly Readonly<{
 
 export type BrunoTableServerViewportAdmissionPlan<TRow> = Readonly<{
   readonly generation: number;
+  readonly admissionRevision: number;
   readonly requiredWindow: BrunoTableServerViewportWindow;
   readonly authoritativeTotalRows: boolean;
   readonly totalRows: number;
@@ -41,6 +42,7 @@ const EMPTY_AFFECTED_ROW_IDS: ReadonlySet<string> = new Set();
 
 export class BrunoTableServerViewportStore<TRow> {
   private generation = 0;
+  private admissionRevision = 0;
   private structureVersion = 0;
   private authoritativeTotalRows = false;
   private requiredWindow: BrunoTableServerViewportWindow = Object.freeze({
@@ -221,6 +223,7 @@ export class BrunoTableServerViewportStore<TRow> {
     }
     const plan = Object.freeze({
       generation,
+      admissionRevision: ++this.admissionRevision,
       requiredWindow: this.requiredWindow,
       authoritativeTotalRows: this.authoritativeTotalRows,
       totalRows: this.snapshot.rowSpace.totalRows,
@@ -228,6 +231,10 @@ export class BrunoTableServerViewportStore<TRow> {
     });
     this.admissionPlans.add(plan);
     return plan;
+  }
+
+  public isSupersededRowDataPlan(plan: BrunoTableServerViewportAdmissionPlan<TRow>): boolean {
+    return plan.admissionRevision !== this.admissionRevision;
   }
 
   public setRowDataSnapshot(
@@ -252,6 +259,7 @@ export class BrunoTableServerViewportStore<TRow> {
     if (!this.admissionPlans.delete(plan)) return false;
     if (
       plan.generation !== this.generation ||
+      plan.admissionRevision !== this.admissionRevision ||
       plan.requiredWindow !== this.requiredWindow ||
       plan.authoritativeTotalRows !== this.authoritativeTotalRows ||
       plan.totalRows !== this.snapshot.rowSpace.totalRows ||
@@ -304,6 +312,7 @@ export class BrunoTableServerViewportStore<TRow> {
       if (delivered !== undefined && row !== previous) affectedRowIds.add(rowId);
       if (row !== undefined) rowsById.set(rowId, row);
     }
+    if (plan.admissionRevision !== this.admissionRevision) return false;
     const totalRows = this.authoritativeTotalRows
       ? this.snapshot.rowSpace.totalRows
       : admitted.reduce(
