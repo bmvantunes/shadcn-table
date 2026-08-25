@@ -46,45 +46,6 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         : undefined;
     const rawNumberSeed = useRef(initialRawNumberSeed);
     const [rawNumberDisplay, setRawNumberDisplay] = useState(initialRawNumberSeed);
-    const reconcileRawNumberSeed = useCallback(
-      (event: InputEvent, input: HTMLInputElement) => {
-        const seed = rawNumberSeed.current;
-        if (seed === undefined) return;
-        if (!event.inputType.startsWith("insert") && !event.inputType.startsWith("delete")) {
-          return;
-        }
-        if (event.inputType.startsWith("delete")) {
-          event.preventDefault();
-          if (event.inputType.includes("Forward")) return;
-          rawNumberSeed.current = undefined;
-          setRawNumberDisplay(undefined);
-          input.value = "";
-          input.removeAttribute("aria-valuetext");
-          input.removeAttribute("placeholder");
-          return;
-        }
-        const candidate = `${seed}${event.data ?? ""}`.slice(
-          0,
-          BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1,
-        );
-        if (column.semantics.parseCanonicalText(candidate)._tag === "Success") {
-          event.preventDefault();
-          input.value = candidate;
-          rawNumberSeed.current = undefined;
-          setRawNumberDisplay(undefined);
-          input.removeAttribute("aria-valuetext");
-          input.removeAttribute("placeholder");
-          return;
-        }
-        event.preventDefault();
-        rawNumberSeed.current = candidate;
-        setRawNumberDisplay(candidate);
-        input.value = "";
-        input.setAttribute("aria-valuetext", candidate);
-        input.setAttribute("placeholder", candidate);
-      },
-      [column.semantics],
-    );
     const cancel = useCallback(() => {
       const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
       runtime.cancel();
@@ -116,17 +77,16 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           rawText:
             element instanceof HTMLInputElement && element.type === "checkbox"
               ? String(element.checked)
-              : element instanceof HTMLInputElement &&
-                  element.type === "number" &&
-                  rawNumberSeed.current !== undefined &&
-                  element.value.length === 0
+              : column.semantics.editorFamily === "number" && rawNumberSeed.current !== undefined
                 ? rawNumberSeed.current
                 : Reflect.get(element, "value"),
           nativeInvalid:
-            element instanceof HTMLInputElement &&
-            element.type === "number" &&
-            ((rawNumberSeed.current !== undefined && element.value.length === 0) ||
-              (element.validity.badInput && element.value.length === 0)),
+            column.semantics.editorFamily === "number" &&
+            (rawNumberSeed.current !== undefined ||
+              (element instanceof HTMLInputElement &&
+                element.type === "number" &&
+                element.validity.badInput &&
+                element.value.length === 0)),
         }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
@@ -138,29 +98,28 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       ) {
         element.select();
       }
-      const handleBeforeInput = (event: InputEvent) => {
-        if (element instanceof HTMLInputElement && element.type === "number") {
-          reconcileRawNumberSeed(event, element);
-        }
-      };
       const handleInput = () => {
         if (
           element instanceof HTMLInputElement &&
-          element.type === "number" &&
-          (element.value.length > 0 || !element.validity.badInput)
+          column.semantics.editorFamily === "number" &&
+          rawNumberSeed.current !== undefined
         ) {
-          rawNumberSeed.current = undefined;
-          setRawNumberDisplay(undefined);
+          const rawText = element.value.slice(0, BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1);
+          rawNumberSeed.current = rawText;
+          if (numberCandidateCanUseNativeControl(column, rawText)) {
+            rawNumberSeed.current = undefined;
+            setRawNumberDisplay(undefined);
+          } else {
+            setRawNumberDisplay(rawText);
+          }
         }
       };
-      element.addEventListener("beforeinput", handleBeforeInput);
       element.addEventListener("input", handleInput);
       return () => {
-        element.removeEventListener("beforeinput", handleBeforeInput);
         element.removeEventListener("input", handleInput);
         unregister();
       };
-    }, [reconcileRawNumberSeed, runtime]);
+    }, [column, runtime]);
     useLayoutEffect(() => {
       const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
       const document = editor?.ownerDocument;
@@ -223,8 +182,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            aria-valuetext={rawNumberDisplay}
-            defaultValue={initialRawNumberSeed === undefined ? session.initialText : ""}
+            defaultValue={session.initialText}
             maxLength={BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH}
             inputMode={
               column.semantics.editorFamily === "number" ||
@@ -233,10 +191,17 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
                 ? "decimal"
                 : undefined
             }
-            placeholder={rawNumberDisplay}
-            step={column.semantics.editorFamily === "number" ? "any" : undefined}
+            step={
+              column.semantics.editorFamily === "number" && rawNumberDisplay === undefined
+                ? "any"
+                : undefined
+            }
             style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
-            type={column.semantics.editorFamily === "number" ? "number" : "text"}
+            type={
+              column.semantics.editorFamily === "number" && rawNumberDisplay === undefined
+                ? "number"
+                : "text"
+            }
           />
         )}
         {invalidMessage === undefined ? null : (
@@ -269,4 +234,8 @@ function numberSeedRequiresRawBuffer(column: CompiledColumn, initialText: string
   } catch {
     return true;
   }
+}
+
+function numberCandidateCanUseNativeControl(column: CompiledColumn, rawText: string): boolean {
+  return rawText.length === 0 || !numberSeedRequiresRawBuffer(column, rawText);
 }

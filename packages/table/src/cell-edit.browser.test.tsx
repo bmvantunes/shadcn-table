@@ -1,3 +1,4 @@
+import { detectPlatform } from "@tanstack/react-hotkeys";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -187,32 +188,42 @@ test("uses only browser-produced composition text and respects prevented nested 
 test("preserves incomplete Number replace seeds until the native control can own them", async () => {
   const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowRight}-");
-  let editor = screen.getByRole("spinbutton", { name: "Edit Score" });
-  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
-  await expect.element(editor).toHaveAttribute("placeholder", "-");
-  const forwardDelete = new InputEvent("beforeinput", {
-    bubbles: true,
-    cancelable: true,
-    inputType: "deleteContentForward",
-  });
-  expect(editor.element().dispatchEvent(forwardDelete)).toBe(false);
-  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
+  let rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await expect.element(rawEditor).toHaveValue("-");
+  await userEvent.keyboard("{End}{Delete}");
+  await expect.element(rawEditor).toHaveValue("-");
   await userEvent.keyboard("{Backspace}");
-  await expect.element(editor).not.toHaveAttribute("aria-valuetext");
+  let editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(editor).toHaveValue(null);
   await userEvent.keyboard("{Escape}");
+
   grid.element().focus();
-  await userEvent.keyboard("-");
+  await userEvent.keyboard("e");
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await userEvent.keyboard("12");
+  await expect.element(rawEditor).toHaveValue("e12");
+  await userEvent.keyboard("{Home}{Delete}");
   editor = screen.getByRole("spinbutton", { name: "Edit Score" });
-  await expect.element(editor).toHaveAttribute("aria-valuetext", "-");
-  await userEvent.keyboard("5");
+  await expect.element(editor).toHaveValue(12);
+  await userEvent.keyboard("{Escape}");
+
+  grid.element().focus();
+  await userEvent.keyboard("e12");
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+  );
+  await userEvent.keyboard("-5");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await expect.element(editor).toHaveValue(-5);
   await userEvent.keyboard("{Escape}");
 
   grid.element().focus();
   await userEvent.keyboard(".");
-  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
-  await expect.element(editor).toHaveAttribute("aria-valuetext", ".");
+  rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
+  await expect.element(rawEditor).toHaveValue(".");
   await userEvent.keyboard("5");
+  editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await expect.element(editor).toHaveValue(0.5);
   await userEvent.keyboard("{Escape}");
 

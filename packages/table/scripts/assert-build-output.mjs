@@ -306,6 +306,15 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       mode: "adapter",
     },
     {
+      source: `const nativeEditor = <input onKeyDown={(e) => e.key} />;`,
+      lang: "tsx",
+      mode: "native-evidence",
+    },
+    {
+      source: `element.addEventListener("keydown", (ev) => ev.ctrlKey);`,
+      mode: "native-evidence",
+    },
+    {
       source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
       mode: "native-evidence",
     },
@@ -795,6 +804,7 @@ function findImportedBinding(ast, source, importedName) {
 
 function assertKeyboardBoundary(ast, label, mode) {
   let violation;
+  const keyboardEvidenceReceivers = collectKeyboardEvidenceReceivers(ast);
   walkSyntaxTree(ast, (node, ancestors) => {
     if (violation !== undefined) return;
     const parent = ancestors.at(-1);
@@ -840,7 +850,8 @@ function assertKeyboardBoundary(ast, label, mode) {
       (mode === "adapter" || mode === "native-evidence") &&
       ((node.type === "MemberExpression" &&
         isKeyboardInterpretationProperty(memberPropertyName(node)) &&
-        (mode === "adapter" || isKeyboardEvidenceReceiver(node.object))) ||
+        (mode === "adapter" ||
+          keyboardEvidenceReceivers.has(memberReceiverIdentifier(node.object)))) ||
         (node.type === "Property" &&
           parent?.type === "ObjectPattern" &&
           isKeyboardInterpretationProperty(propertyName(node))))
@@ -868,8 +879,48 @@ function assertKeyboardBoundary(ast, label, mode) {
   }
 }
 
-function isKeyboardEvidenceReceiver(node) {
-  return node.type === "Identifier" && /event$/iu.test(node.name);
+function collectKeyboardEvidenceReceivers(ast) {
+  const receivers = new Set();
+  walkSyntaxTree(ast, (node, ancestors) => {
+    if (
+      node.type !== "FunctionDeclaration" &&
+      node.type !== "FunctionExpression" &&
+      node.type !== "ArrowFunctionExpression"
+    ) {
+      return;
+    }
+    const parameter = node.params[0];
+    if (parameter?.type !== "Identifier") return;
+    const ownsKeyboardHandler = ancestors.some((ancestor) => {
+      if (keyboardHandlerPropertyName(ancestor) !== undefined) return true;
+      if (ancestor.type !== "CallExpression" || ancestor.callee.type !== "MemberExpression") {
+        return false;
+      }
+      const method = memberPropertyName(ancestor.callee);
+      return (
+        (method === "addEventListener" || method === "removeEventListener") &&
+        isKeyboardEventType(staticStringValue(ancestor.arguments[0]))
+      );
+    });
+    if (ownsKeyboardHandler || syntaxTreeContainsIdentifier(parameter, "KeyboardEvent")) {
+      receivers.add(parameter.name);
+    }
+  });
+  return receivers;
+}
+
+function syntaxTreeContainsIdentifier(ast, identifierName) {
+  let found = false;
+  walkSyntaxTree(ast, (node) => {
+    if (node.type === "Identifier" && node.name === identifierName) found = true;
+  });
+  return found;
+}
+
+function memberReceiverIdentifier(node) {
+  let receiver = node;
+  while (receiver.type === "MemberExpression") receiver = receiver.object;
+  return receiver.type === "Identifier" ? receiver.name : undefined;
 }
 
 function assertKeyboardBoundaryViolationDetected(ast, mode) {
