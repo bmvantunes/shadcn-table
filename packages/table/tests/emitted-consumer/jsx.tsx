@@ -27,6 +27,11 @@ const columns = [
     headerName: "Name",
     valueType: "text",
     isEditable: true,
+    validate: ({ row, value }) => {
+      row.revision satisfies bigint;
+      value satisfies string;
+      return value.length > 0 ? undefined : "Name is required.";
+    },
   },
   BrunoTableComputedColumn({
     columnId: "COL_ID_DOUBLE_SCORE",
@@ -102,6 +107,41 @@ const validClient = (
   />
 );
 void validClient;
+
+const validEmittedEditableClient = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_JSX_EDITABLE"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    editable
+    getRowVersion={(row) => row.revision}
+    onSaveEdits={(changes) => {
+      changes[0].expectedVersion satisfies bigint;
+      changes[0].changes[0].after satisfies string;
+      return Promise.resolve();
+    }}
+  />
+);
+void validEmittedEditableClient;
+
+const invalidEmittedEditableWithoutPotentialColumn = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_EDITABLE_WITHOUT_POTENTIAL_COLUMN"
+    columns={nonsortableColumns}
+    initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Literal columns without editability make the editable overload unavailable.
+    editable
+    // @ts-expect-error No emitted editable overload admits a Row Version extractor.
+    getRowVersion={(row: Row) => row.revision}
+    // @ts-expect-error No emitted editable overload admits a Save handler.
+    onSaveEdits={() => Promise.resolve()}
+  />
+);
+void invalidEmittedEditableWithoutPotentialColumn;
 
 const emittedServerSource = createViewServerReact(
   defineViewServerConfig({

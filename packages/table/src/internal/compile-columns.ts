@@ -39,6 +39,7 @@ export type CompiledFieldColumn = CompiledColumnBase & {
   readonly groupBy: boolean;
   readonly aggFunc?: BrunoTableAggFunc;
   readonly isEditable?: boolean | RuntimeCallback;
+  readonly validate?: RuntimeCallback;
   readonly groupKeyValueFormatter?: RuntimeCallback;
   readonly groupKeyCellClassName?: string | RuntimeCallback;
   readonly groupKeyCellRenderer?: RuntimeCallback;
@@ -90,6 +91,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasEnableSetFilter = Object.hasOwn(candidate, "enableSetFilter");
   const hasEnableSorting = Object.hasOwn(candidate, "enableSorting");
   const hasIsEditable = Object.hasOwn(candidate, "isEditable");
+  const hasValidate = Object.hasOwn(candidate, "validate");
   const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
   const hasCellClassName = Object.hasOwn(candidate, "cellClassName");
   const hasCellRenderer = Object.hasOwn(candidate, "cellRenderer");
@@ -256,6 +258,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         `BrunoTable isEditable must be a boolean or function when provided: ${columnId}`,
       );
     }
+    const validate = hasValidate ? candidate["validate"] : undefined;
+    if (hasValidate && typeof validate !== "function") {
+      throw new ColumnConfigurationError(
+        `BrunoTable validate must be a function when provided: ${columnId}`,
+      );
+    }
 
     const enableFilter = hasEnableFilter ? candidate["enableFilter"] : true;
     if (typeof enableFilter !== "boolean") {
@@ -333,6 +341,7 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
         : {}),
+      ...(typeof validate === "function" ? { validate: validate as RuntimeCallback } : {}),
       ...(aggFunc === undefined ? {} : { aggFunc }),
       ...groupPresentation.compiled,
       ...aggregatePresentation.compiled,
@@ -387,6 +396,11 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   if (hasIsEditable) {
     throw new ColumnConfigurationError(
       `BrunoTable computed columns cannot declare isEditable: ${columnId}`,
+    );
+  }
+  if (hasValidate) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot declare validate: ${columnId}`,
     );
   }
 

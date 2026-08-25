@@ -626,6 +626,7 @@ type FieldColumn<
     readonly valueType: TValueType;
     readonly enableSorting?: boolean;
     readonly isEditable?: boolean | ((parameters: ValueParams<TRow, TRow[TField]>) => boolean);
+    readonly validate?: (parameters: ValueParams<TRow, TRow[TField]>) => string | undefined;
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
@@ -697,6 +698,7 @@ type ComputedColumn<
     readonly enableFilter?: never;
     readonly enableSorting?: never;
     readonly isEditable?: never;
+    readonly validate?: never;
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };
 
@@ -1521,7 +1523,7 @@ export type BrunoTableEditableCapability<
     : {
         readonly editable: true;
         readonly getRowVersion: (row: TRow) => TRowVersion;
-        readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
+        readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, NoInfer<TRowVersion>>;
       } & BrunoTableNoGroupingCapability;
 
 export type BrunoTableEditingCapability<
@@ -1562,21 +1564,62 @@ type ComponentCommonProps<
     ? { readonly initialOrderBy?: never }
     : { readonly initialOrderBy: BrunoTableSortBy<TColumns> });
 
-export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  ComponentCommonProps<TRow, TColumns, true>,
-  "initialOrderBy"
-> &
+type BrunoTableClientSourceProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
+  readonly getRowId: (row: TRow) => BrunoTableRowId;
+  readonly clientSource: BrunoTableClientSource<TRow>;
+  readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+  /** Enables session-only Row Selection for ordinary Client source rows. */
+  readonly rowSelection?: true;
+  readonly externalFilters?: never;
+  readonly viewportSource?: never;
+};
+
+type BrunoTablePotentiallyEditableColumnRequirement<TColumns extends readonly unknown[]> =
+  number extends TColumns["length"]
+    ? unknown
+    : Extract<
+          TColumns[number],
+          { readonly isEditable: true | ((...parameters: never[]) => boolean) }
+        > extends never
+      ? { readonly columns: never }
+      : unknown;
+
+export type BrunoTableReadOnlyClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableClientSourceProps<TRow, TColumns> &
+  Omit<ComponentCommonProps<TRow, TColumns, true>, "initialOrderBy"> &
   BrunoTableReadOnlyCapability &
-  BrunoTableGroupingCapability<TRow, TColumns> & {
-    readonly initialOrderBy: BrunoTableSortBy<TColumns>;
-    readonly getRowId: (row: TRow) => BrunoTableRowId;
-    readonly clientSource: BrunoTableClientSource<TRow>;
-    readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
-    /** Enables session-only Row Selection for ordinary Client source rows. */
-    readonly rowSelection?: true;
-    readonly externalFilters?: never;
-    readonly viewportSource?: never;
-  };
+  BrunoTableGroupingCapability<TRow, TColumns>;
+
+export type BrunoTableEditableClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TGetRowVersion extends (row: TRow) => unknown,
+> = BrunoTableClientSourceProps<TRow, TColumns> &
+  Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
+  Omit<
+    BrunoTableEditableCapability<TRow, TColumns, ReturnType<TGetRowVersion>>,
+    "getRowVersion" | "onSaveEdits"
+  > & {
+    readonly getRowVersion: TGetRowVersion;
+    readonly onSaveEdits: BrunoTableSaveEditsHandler<
+      TRow,
+      TColumns,
+      NoInfer<ReturnType<TGetRowVersion>>
+    >;
+  } & BrunoTablePotentiallyEditableColumnRequirement<TColumns>;
+
+export type BrunoTableClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = unknown,
+> =
+  | BrunoTableReadOnlyClientProps<TRow, TColumns>
+  | (BrunoTableClientSourceProps<TRow, TColumns> &
+      Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
+      BrunoTableEditableCapability<TRow, TColumns, TRowVersion>);
 
 export type BrunoTableServerProps<
   TRow,

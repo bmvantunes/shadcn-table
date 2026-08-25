@@ -10,6 +10,7 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
+import { getBrunoTableSelectCanonicalOptions } from "./select-value-type-provenance";
 import { isBrunoTableServerBigDecimalValueType } from "../public-types";
 
 type SemanticsOverrides = {
@@ -51,6 +52,7 @@ export type CompiledColumnValueSemantics = {
   readonly editorFamily: BrunoTableEditorFamily;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
+  readonly selectCanonicalOptions?: readonly string[];
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
@@ -194,6 +196,10 @@ export function compileColumnValueSemantics(
     }
     formatDisplay = (value) => formatter.format(assertFiniteNumber(value));
   }
+  const selectCanonicalOptions =
+    descriptor.editorFamily === "select"
+      ? getBrunoTableSelectCanonicalOptions(selection)
+      : undefined;
 
   return Object.freeze({
     codecId: descriptor.codecId,
@@ -202,6 +208,7 @@ export function compileColumnValueSemantics(
     editorFamily: descriptor.editorFamily,
     cellAlign,
     editorLayout,
+    ...(selectCanonicalOptions === undefined ? {} : { selectCanonicalOptions }),
     width,
     aggregateResults: descriptor.aggregateResults,
     ...(descriptor.aggregateAlgebra === undefined

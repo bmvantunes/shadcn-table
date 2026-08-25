@@ -33,6 +33,11 @@ const columns = [
     headerName: "Name",
     valueType: "text",
     isEditable: true,
+    validate: ({ row, value }) => {
+      row.revision satisfies bigint;
+      value satisfies string;
+      return value.length > 0 ? undefined : "Name is required.";
+    },
   },
   BrunoTableComputedColumn({
     columnId: "COL_ID_DOUBLE_SCORE",
@@ -131,6 +136,69 @@ const validClientRowSelection = (
   />
 );
 void validClientRowSelection;
+
+const validEditableClient = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_EDITABLE"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    editable
+    getRowVersion={(row) => row.revision}
+    onSaveEdits={(changes) => {
+      changes[0].expectedVersion satisfies bigint;
+      changes[0].changes[0].after satisfies string;
+      return Promise.resolve();
+    }}
+  />
+);
+void validEditableClient;
+
+const invalidEditableWithoutVersion = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_EDITABLE_WITHOUT_VERSION"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Editable Client Tables require getRowVersion.
+    editable
+    // @ts-expect-error Without getRowVersion there is no valid Save Change Set Row Version.
+    onSaveEdits={() => Promise.resolve()}
+  />
+);
+void invalidEditableWithoutVersion;
+
+const invalidReadOnlySaveHandler = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_READ_ONLY_SAVE_HANDLER"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Read-only Client Tables reject edit-only props.
+    onSaveEdits={() => Promise.resolve()}
+  />
+);
+void invalidReadOnlySaveHandler;
+
+const invalidEditableWithoutPotentialColumn = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_EDITABLE_WITHOUT_POTENTIAL_COLUMN"
+    columns={nonsortableColumns}
+    initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Literal columns without editability make the editable overload unavailable.
+    editable
+    // @ts-expect-error No editable overload admits a Row Version extractor.
+    getRowVersion={(row: Row) => row.revision}
+    // @ts-expect-error No editable overload admits a Save handler.
+    onSaveEdits={() => Promise.resolve()}
+  />
+);
+void invalidEditableWithoutPotentialColumn;
 
 const serverTypeReact = createViewServerReact(
   defineViewServerConfig({

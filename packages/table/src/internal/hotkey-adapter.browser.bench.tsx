@@ -79,7 +79,7 @@ beforeAll(async () => {
   if (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
       BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT !==
-    60
+    61
   ) {
     throw new Error("The Browser benchmark registration-definition bound changed unexpectedly.");
   }

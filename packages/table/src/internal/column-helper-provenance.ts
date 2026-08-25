@@ -11,6 +11,7 @@ const semanticCallbackKeys = [
   "cellClassName",
   "cellRenderer",
   "isEditable",
+  "validate",
   "groupKeyValueFormatter",
   "groupKeyCellClassName",
   "groupKeyCellRenderer",

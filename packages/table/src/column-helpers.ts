@@ -1,5 +1,9 @@
 import { BrunoTableComputedColumn } from "./public-types";
 import { attachBrunoTableColumnHelperProvenance } from "./internal/column-helper-provenance";
+import {
+  attachBrunoTableSelectValueTypeProvenance,
+  getBrunoTableSelectValueTypeFingerprint,
+} from "./internal/select-value-type-provenance";
 
 import type {
   BrunoTableBuiltInValueType,
@@ -24,15 +28,7 @@ import type {
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
-const selectValueTypeFingerprints = new WeakMap<object, readonly string[]>();
-
-export function getBrunoTableSelectValueTypeFingerprint(
-  valueType: unknown,
-): readonly string[] | undefined {
-  return typeof valueType === "object" && valueType !== null
-    ? selectValueTypeFingerprints.get(valueType)
-    : undefined;
-}
+export { getBrunoTableSelectValueTypeFingerprint };
 
 type FieldOfKind<TRow, TValueKind> = {
   readonly [TField in BrunoTableFieldKey<TRow>]: [BrunoTableNonNullish<TRow[TField]>] extends [
@@ -1137,7 +1133,7 @@ function createSelectValueType(
       return decodeOption(decodeSelectPrimitive(input["value"]));
     },
   };
-  selectValueTypeFingerprints.set(descriptor, Object.freeze([kind, ...canonicalOptions]));
+  attachBrunoTableSelectValueTypeProvenance(descriptor, kind, canonicalOptions);
   return Object.freeze(descriptor);
 }
 

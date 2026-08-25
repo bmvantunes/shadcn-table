@@ -5,7 +5,9 @@ import type { ReactNode } from "react";
 import type {
   BrunoTableClientProps,
   BrunoTableColumns,
+  BrunoTableEditableClientProps,
   BrunoTablePersistedState,
+  BrunoTableReadOnlyClientProps,
 } from "./public-types";
 import {
   BrunoTableToolbar,
@@ -38,6 +40,7 @@ import {
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./internal/row-selection";
 import { BrunoTableCellRangeRuntime } from "./internal/cell-range-clipboard";
+import { BrunoTableCellEditRuntime } from "./internal/cell-edit";
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
@@ -56,24 +59,54 @@ export type {
   BrunoTableGridFilterCommandCapability,
 } from "./internal/toolbar-capabilities";
 
+export function BrunoTableClient<
+  TRow,
+  const TColumns extends BrunoTableColumns<TRow>,
+  TGetRowVersion extends (row: TRow) => unknown = (row: TRow) => unknown,
+>(props: BrunoTableEditableClientProps<TRow, TColumns, TGetRowVersion>): ReactNode;
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
-  props: BrunoTableClientProps<TRow, TColumns>,
+  props: BrunoTableReadOnlyClientProps<TRow, TColumns>,
+): ReactNode;
+export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>, TRowVersion>(
+  props: BrunoTableClientProps<TRow, TColumns, TRowVersion>,
 ): ReactNode {
   const tableId = requireBrunoTableId(props.tableId);
-  return <BrunoTableClientInstance key={tableId} props={props} tableId={tableId} />;
+  return (
+    <BrunoTableClientInstance
+      key={`${tableId}:${props.editable === true ? "editable" : "readonly"}`}
+      props={props}
+      tableId={tableId}
+    />
+  );
 }
 
-function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns<TRow>>({
+function BrunoTableClientInstance<
+  TRow,
+  const TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+>({
   props,
   tableId,
 }: Readonly<{
-  readonly props: BrunoTableClientProps<TRow, TColumns>;
+  readonly props: BrunoTableClientProps<TRow, TColumns, TRowVersion>;
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
+  const editable = props.editable === true;
+  if (
+    editable &&
+    !compiledColumns.some(
+      (column) =>
+        column.kind === "field" && column.isEditable !== undefined && column.isEditable !== false,
+    )
+  ) {
+    throw new TypeError(
+      "BrunoTable editable Client Tables require at least one potentially editable column.",
+    );
+  }
   const normalizedGroupRowsColumn = useMemo(
-    () => compileBrunoTableGroupRowsColumn(props.groupRowsColumn),
-    [props.groupRowsColumn],
+    () => compileBrunoTableGroupRowsColumn(editable ? undefined : props.groupRowsColumn),
+    [editable, props.groupRowsColumn],
   );
   const {
     cellClassName: groupRowsCellClassName,
@@ -126,7 +159,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
       tableId,
       {
         initialPersistedState: props.initialPersistedState,
-        grouping: true,
+        grouping: !editable,
         groupRowsWidth: groupRowsColumn.width,
         beforeGroupingChange: (entering) => {
           cellRange.clear();
@@ -143,6 +176,14 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     }
     return created;
   });
+  const [cellEdit] = useState(() =>
+    editable
+      ? new BrunoTableCellEditRuntime({
+          columns: compiledColumns,
+          getRow: runtime.getRowSnapshot,
+        })
+      : undefined,
+  );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
   const [projectionStore] = useState(
@@ -153,6 +194,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
     projectionStore.setRowSelection(rowSelection);
   }, [projectionStore, rowSelection]);
   useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
+  useLayoutEffect(() => cellEdit?.reconcileColumns(compiledColumns), [cellEdit, compiledColumns]);
 
   useLayoutEffect(() => {
     const previouslyEnabled = previousRowSelectionEnabled.current;
@@ -173,11 +215,13 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   const gridOwnedControls = useMemo(
     () => (
       <>
-        <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
+        {editable ? null : (
+          <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
+        )}
         <BrunoTableActiveFilters />
       </>
     ),
-    [compiledColumns, runtimeView],
+    [compiledColumns, editable, runtimeView],
   );
 
   useLayoutEffect(() => {
@@ -211,13 +255,26 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   ]);
 
   useLayoutEffect(() => {
+    if (props.editable === true) {
+      const notify = props.onPersistChange;
+      if (notify === undefined) {
+        runtime.setOnPersistChange(undefined);
+        return;
+      }
+      runtime.setOnPersistChange((state) =>
+        notify(state as BrunoTablePersistedState<TRow, TColumns, false>),
+      );
+      return;
+    }
     const notify = props.onPersistChange;
-    runtime.setOnPersistChange(
-      notify === undefined
-        ? undefined
-        : (state) => notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
+    if (notify === undefined) {
+      runtime.setOnPersistChange(undefined);
+      return;
+    }
+    runtime.setOnPersistChange((state) =>
+      notify(state as BrunoTablePersistedState<TRow, TColumns, true>),
     );
-  }, [props.onPersistChange, runtime]);
+  }, [props.editable, props.onPersistChange, runtime]);
 
   useLayoutEffect(() => {
     toolbar.publish(props.children);
@@ -232,6 +289,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
+  useLayoutEffect(() => () => cellEdit?.dispose(), [cellEdit]);
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider
@@ -249,6 +307,7 @@ function BrunoTableClientInstance<TRow, const TColumns extends BrunoTableColumns
           rowPipelineAdapter={rowPipelineAdapter}
           rowSelection={rowSelection}
           cellRange={cellRange}
+          cellEdit={cellEdit}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />
