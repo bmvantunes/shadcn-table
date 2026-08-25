@@ -23,15 +23,9 @@ export type BrunoTableCellEditTraversalRange =
       readonly rowIds: readonly string[];
     }>;
 
-type PredicateCellCache = Readonly<{
-  readonly column: CompiledFieldColumn;
-  readonly draftRevision: number;
-  readonly eligible: boolean;
-}>;
-
 type RowCache = {
   row: object;
-  readonly predicates: Map<string, PredicateCellCache>;
+  validationGeneration: number;
   readonly eligiblePredicateColumnIds: Set<string>;
 };
 
@@ -59,10 +53,10 @@ export class BrunoTableCellEditTraversalIndex {
       }
     | undefined;
   private allRowsDirty = false;
+  private validationGeneration = 0;
 
   public constructor(
     private readonly getRow: (rowId: string) => unknown,
-    private readonly getDraftRevision: (rowId: string, columnId: string) => number,
     private readonly evaluatePredicate: (
       rowId: string,
       row: object,
@@ -124,11 +118,19 @@ export class BrunoTableCellEditTraversalIndex {
         continue;
       }
       let rowCache = this.rowCacheById.get(rowId);
-      if (rowCache === undefined) {
+      if (rowCache === undefined || rowCache.validationGeneration !== this.validationGeneration) {
         const row = this.getRow(rowId);
-        if (typeof row !== "object" || row === null) continue;
-        rowCache = this.createRowCache(rowId, row);
-        this.rowCacheById.set(rowId, rowCache);
+        if (typeof row !== "object" || row === null) {
+          this.removeRowCache(rowId);
+          continue;
+        }
+        if (rowCache === undefined || rowCache.row !== row) {
+          this.removeRowCache(rowId);
+          rowCache = this.createRowCache(rowId, row);
+          this.rowCacheById.set(rowId, rowCache);
+        } else {
+          rowCache.validationGeneration = this.validationGeneration;
+        }
       }
       validRowIndexes.push(rowIndex);
       if (rowCache.eligiblePredicateColumnIds.size > 0) eligiblePredicateRowIndexes.push(rowIndex);
@@ -143,11 +145,8 @@ export class BrunoTableCellEditTraversalIndex {
 
   public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (changedRowIds === undefined) {
-      for (const rowId of this.rowCacheById.keys()) this.removeRowCache(rowId);
-      this.rowCacheById.clear();
-      this.eligiblePredicateRowIndexes = [];
+      this.validationGeneration += 1;
       this.allRowsDirty = true;
-      this.verticalRangeCache = undefined;
       return;
     }
     for (const rowId of changedRowIds) {
@@ -163,6 +162,12 @@ export class BrunoTableCellEditTraversalIndex {
       this.dirtyColumnIdsByRowId.set(rowId, columnIds);
     }
     columnIds.add(columnId);
+  };
+
+  public readonly reconcileRange = (range: BrunoTableCellEditTraversalRange | undefined): void => {
+    if (range?.axis !== "vertical" || this.verticalRangeCache?.range !== range) {
+      this.verticalRangeCache = undefined;
+    }
   };
 
   public readonly find = (
@@ -221,6 +226,9 @@ export class BrunoTableCellEditTraversalIndex {
 
   public readonly getCachedRowCount = (): number => this.rowCacheById.size;
 
+  public readonly getCachedVerticalRangeDestinationCount = (): number =>
+    this.verticalRangeCache?.destinations.length ?? 0;
+
   private readonly refreshRow = (rowId: string): void => {
     const rowIndex = this.rowIndexById.get(rowId);
     if (rowIndex === undefined) {
@@ -252,7 +260,7 @@ export class BrunoTableCellEditTraversalIndex {
   private readonly createRowCache = (rowId: string, row: object): RowCache => {
     const cache: RowCache = {
       row,
-      predicates: new Map(),
+      validationGeneration: this.validationGeneration,
       eligiblePredicateColumnIds: new Set(),
     };
     for (const { column } of this.predicateColumns) this.evaluateCell(rowId, cache, column);
@@ -264,9 +272,7 @@ export class BrunoTableCellEditTraversalIndex {
     rowCache: RowCache,
     column: CompiledFieldColumn,
   ): void => {
-    const draftRevision = this.getDraftRevision(rowId, column.columnId);
     const eligible = this.evaluatePredicate(rowId, rowCache.row, column);
-    rowCache.predicates.set(column.columnId, { column, draftRevision, eligible });
     if (eligible) {
       rowCache.eligiblePredicateColumnIds.add(column.columnId);
       let rowIds = this.eligiblePredicateRowIdsByColumnId.get(column.columnId);
@@ -297,7 +303,6 @@ export class BrunoTableCellEditTraversalIndex {
     if (changedColumnIds.size === 0) return;
     for (const [rowId, rowCache] of this.rowCacheById) {
       for (const columnId of changedColumnIds) {
-        rowCache.predicates.delete(columnId);
         rowCache.eligiblePredicateColumnIds.delete(columnId);
         this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(rowId);
         const column = nextColumns.get(columnId);

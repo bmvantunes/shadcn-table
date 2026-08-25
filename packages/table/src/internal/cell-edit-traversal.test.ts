@@ -47,7 +47,7 @@ describe("BrunoTable editable traversal index", () => {
     ]);
     const getRow = vi.fn();
     const evaluate = vi.fn();
-    const index = new BrunoTableCellEditTraversalIndex(getRow, () => 0, evaluate);
+    const index = new BrunoTableCellEditTraversalIndex(getRow, evaluate);
 
     index.reconcile(columns, rowSpace(["first", "second"]));
 
@@ -73,7 +73,6 @@ describe("BrunoTable editable traversal index", () => {
     );
     const index = new BrunoTableCellEditTraversalIndex(
       (rowId) => rows.get(rowId),
-      () => 0,
       evaluate as never,
     );
     const projection = rowSpace([...rows.keys()]);
@@ -104,13 +103,11 @@ describe("BrunoTable editable traversal index", () => {
       [second.id, second],
       [third.id, third],
     ]);
-    const revisions = new Map<string, number>();
     const evaluate = vi.fn((_rowId: string, row: Row, column: CompiledFieldColumn) =>
       column.columnId === "COL_ID_ENABLED" ? row.enabled : row.alternate,
     );
     const index = new BrunoTableCellEditTraversalIndex(
       (rowId) => rows.get(rowId),
-      (rowId, columnId) => revisions.get(`${rowId}:${columnId}`) ?? 0,
       evaluate as never,
     );
     const columns = makeColumns();
@@ -146,7 +143,6 @@ describe("BrunoTable editable traversal index", () => {
       columnId: "COL_ID_ALTERNATE",
     });
 
-    revisions.set("second:COL_ID_ALTERNATE", 1);
     index.invalidateCell("second", "COL_ID_ALTERNATE");
     expect(index.find(0, "COL_ID_ENABLED", 1)).toEqual({
       rowIndex: 1,
@@ -175,7 +171,6 @@ describe("BrunoTable editable traversal index", () => {
     const columns = makeColumns();
     const index = new BrunoTableCellEditTraversalIndex(
       (rowId) => rangeRows.get(rowId),
-      () => 0,
       (_rowId, row, column) =>
         column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
     );
@@ -194,6 +189,7 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.findRange(vertical, "first", "COL_ID_ENABLED", 1)?.rowId).toBe("last");
     expect(index.findRange(vertical, "last", "COL_ID_ENABLED", 1)?.rowId).toBe("first");
     expect(index.findRange(vertical, "first", "COL_ID_ENABLED", -1)?.rowId).toBe("last");
+    expect(index.getCachedVerticalRangeDestinationCount()).toBe(2);
     expect(index.findRange(horizontal, "last", "COL_ID_ENABLED", 1)?.columnId).toBe(
       "COL_ID_ALTERNATE",
     );
@@ -204,6 +200,17 @@ describe("BrunoTable editable traversal index", () => {
     rangeRows.set("middle", { id: "middle", enabled: true, alternate: false });
     index.reconcileRows(new Set(["middle"]));
     expect(index.findRange(vertical, "first", "COL_ID_ENABLED", 1)?.rowId).toBe("middle");
+
+    index.reconcileRange(horizontal);
+    expect(index.getCachedVerticalRangeDestinationCount()).toBe(0);
+    rangeRows.set("middle", { id: "middle", enabled: false, alternate: false });
+    index.reconcileRows(new Set(["middle"]));
+    expect(index.getCachedVerticalRangeDestinationCount()).toBe(0);
+
+    index.findRange(vertical, "first", "COL_ID_ENABLED", 1);
+    expect(index.getCachedVerticalRangeDestinationCount()).toBe(2);
+    index.reconcileRange(undefined);
+    expect(index.getCachedVerticalRangeDestinationCount()).toBe(0);
   });
 
   it("reevaluates only 150 predicate cells for one changed row in a 5,000 by 150 index", () => {
@@ -223,11 +230,7 @@ describe("BrunoTable editable traversal index", () => {
       })),
     );
     const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
-    const index = new BrunoTableCellEditTraversalIndex(
-      (rowId) => rows.get(rowId),
-      () => 0,
-      evaluate,
-    );
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
     index.reconcile(columns, rowSpace([...rows.keys()]));
     evaluate.mockClear();
 
@@ -238,7 +241,7 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe("row-2500");
   });
 
-  it("invalidates an unknown full publication without rebuilding the superseded projection", () => {
+  it("validates row references after an unknown publication without rebuilding unchanged rows", () => {
     const rows = new Map<string, Row>([
       ["first", { id: "first", enabled: false, alternate: false }],
       ["second", { id: "second", enabled: true, alternate: false }],
@@ -247,20 +250,22 @@ describe("BrunoTable editable traversal index", () => {
       column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
     );
     const columns = makeColumns();
-    const index = new BrunoTableCellEditTraversalIndex(
-      (rowId) => rows.get(rowId),
-      () => 0,
-      evaluate,
-    );
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
     const projection = rowSpace(["first", "second"]);
     index.reconcile(columns, projection);
     expect(evaluate).toHaveBeenCalledTimes(4);
 
-    rows.set("first", { id: "first", enabled: true, alternate: false });
-    rows.set("second", { id: "second", enabled: false, alternate: false });
     index.reconcileRows(undefined);
     expect(evaluate).toHaveBeenCalledTimes(4);
-    expect(index.find(0, "COL_ID_ENABLED", 1)).toBeUndefined();
-    expect(evaluate).toHaveBeenCalledTimes(8);
+    index.reconcile(columns, rowSpace(["second", "first"]));
+    expect(evaluate).toHaveBeenCalledTimes(4);
+
+    rows.set("first", { id: "first", enabled: true, alternate: false });
+    index.reconcileRows(undefined);
+    index.reconcile(columns, rowSpace(["second"]));
+    expect(evaluate).toHaveBeenCalledTimes(4);
+    index.reconcile(columns, rowSpace(["first", "second"]));
+    expect(evaluate).toHaveBeenCalledTimes(6);
+    expect(index.find(0, "COL_ID_ENABLED", 1)?.rowId).toBe("second");
   });
 });

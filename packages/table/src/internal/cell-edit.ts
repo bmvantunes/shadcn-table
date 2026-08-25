@@ -331,7 +331,6 @@ export class BrunoTableCellEditRuntime {
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
-  private readonly draftRevisions = new Map<string, number>();
   private readonly publishedDraftEvidence = new Map<string, DraftEntry>();
   private readonly traversalIndex: BrunoTableCellEditTraversalIndex;
   private activeCellKey: string | undefined;
@@ -357,10 +356,8 @@ export class BrunoTableCellEditRuntime {
     this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
     this.onCommit = options.onCommit ?? (() => undefined);
-    this.traversalIndex = new BrunoTableCellEditTraversalIndex(
-      this.getRow,
-      (rowId, columnId) => this.draftRevisions.get(cellKey(rowId, columnId)) ?? 0,
-      (rowId, row, column) => this.evaluateEditable(rowId, row, column),
+    this.traversalIndex = new BrunoTableCellEditTraversalIndex(this.getRow, (rowId, row, column) =>
+      this.evaluateEditable(rowId, row, column),
     );
     this.actor.subscribe(() => this.publishActorDecision());
     this.actor.start();
@@ -440,6 +437,12 @@ export class BrunoTableCellEditRuntime {
     changedRowIds: ReadonlySet<string> | undefined,
   ): void => {
     this.traversalIndex.reconcileRows(changedRowIds);
+  };
+
+  public readonly reconcileTraversalRange = (
+    range: BrunoTableCellEditTraversalRange | undefined,
+  ): void => {
+    this.traversalIndex.reconcileRange(range);
   };
 
   public readonly findTraversalDestination = (
@@ -633,8 +636,6 @@ export class BrunoTableCellEditRuntime {
     }
     if (next === undefined) this.publishedDraftEvidence.delete(key);
     else this.publishedDraftEvidence.set(key, next);
-    if (next === undefined) this.draftRevisions.delete(key);
-    else this.draftRevisions.set(key, (this.draftRevisions.get(key) ?? 0) + 1);
     const identity = parseCellKey(key);
     if (identity !== undefined)
       this.traversalIndex.invalidateCell(identity.rowId, identity.columnId);

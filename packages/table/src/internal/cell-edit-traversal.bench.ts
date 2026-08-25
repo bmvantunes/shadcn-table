@@ -28,17 +28,23 @@ const rowSpace = Object.freeze({
   totalRows: rowCount,
   getRowId: (rowIndex: number) => rows[rowIndex]?.id,
 });
-function createIndex() {
+function createIndex(onPredicateEvaluation?: () => void) {
   const created = new BrunoTableCellEditTraversalIndex(
     (rowId) => rowsById.get(rowId),
-    () => 0,
-    (_rowId: string, row: object, _column: CompiledFieldColumn) => (row as Row).editable,
+    (_rowId: string, row: object, _column: CompiledFieldColumn) => {
+      onPredicateEvaluation?.();
+      return (row as Row).editable;
+    },
   );
   created.reconcile(columns, rowSpace);
   return created;
 }
 const traversalIndex = createIndex();
-const reconciliationIndex = createIndex();
+let reconciliationPredicateEvaluations = 0;
+const reconciliationIndex = createIndex(() => {
+  reconciliationPredicateEvaluations += 1;
+});
+reconciliationPredicateEvaluations = 0;
 const rangeIndex = createIndex();
 const forwardRowIds = rows.map((row) => row.id);
 const reverseRowIds = forwardRowIds.toReversed();
@@ -123,10 +129,15 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   bench(
     "remaps a sorted or filtered 5,000-row projection without revisiting 750,000 predicates",
     () => {
+      reconciliationPredicateEvaluations = 0;
       const startedAt = performance.now();
+      reconciliationIndex.reconcileRows(undefined);
       reconciliationIndex.reconcile(columns, reversed ? forwardRowSpace : reverseRowSpace);
       reconciliationSamples.push(performance.now() - startedAt);
       reversed = !reversed;
+      if (reconciliationPredicateEvaluations !== 0) {
+        throw new Error("Projection remapping revisited cached predicate evidence.");
+      }
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );

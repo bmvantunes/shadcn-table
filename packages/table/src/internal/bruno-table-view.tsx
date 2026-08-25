@@ -2772,6 +2772,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     cellEdit.reconcileTraversal(logicalColumns, rowSpace);
     return runtime.subscribeRowChanges(cellEdit.reconcileTraversalRows);
   }, [cellEdit, logicalColumns, rowSpace, runtime]);
+  useLayoutEffect(() => {
+    if (cellEdit === undefined || cellRange === undefined) {
+      cellEdit?.reconcileTraversalRange(undefined);
+      return;
+    }
+    const reconcileRange = () => {
+      cellEdit.reconcileTraversalRange(cellRange.getSnapshot().range);
+    };
+    reconcileRange();
+    return cellRange.subscribe(reconcileRange);
+  }, [cellEdit, cellRange]);
   useEffect(
     () =>
       cellEdit === undefined
