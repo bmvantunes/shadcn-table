@@ -613,6 +613,34 @@ type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
   readonly row: Pick<TRow, TFields[number]>;
 };
 
+type EditableBlankRepresentation<TValue> = null extends TValue
+  ? undefined extends TValue
+    ? {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: null | undefined;
+      }
+    : {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: null;
+      }
+  : undefined extends TValue
+    ? {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: undefined;
+      }
+    : { readonly blankValue?: never };
+
+type FieldEditingCapability<TRow, TValue> =
+  | {
+      readonly isEditable?: false;
+      readonly blankValue?: never;
+      readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+    }
+  | ({
+      readonly isEditable: boolean | ((parameters: ValueParams<TRow, TValue>) => boolean);
+      readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+    } & EditableBlankRepresentation<TValue>);
+
 type FieldColumn<
   TRow,
   TField extends FieldKey<TRow>,
@@ -625,12 +653,11 @@ type FieldColumn<
     readonly headerName: string;
     readonly valueType: TValueType;
     readonly enableSorting?: boolean;
-    readonly isEditable?: boolean | ((parameters: ValueParams<TRow, TRow[TField]>) => boolean);
-    readonly validate?: (parameters: ValueParams<TRow, TRow[TField]>) => string | undefined;
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
-  } & FieldColumnFilteringCapability &
+  } & FieldEditingCapability<TRow, TRow[TField]> &
+  FieldColumnFilteringCapability &
   GroupKeyPresentation<TRow[TField], TColumnId, TField> &
   AggregatePresentation<TRow[TField], TValueType, TColumnId, TField>;
 
@@ -698,6 +725,7 @@ type ComputedColumn<
     readonly enableFilter?: never;
     readonly enableSorting?: never;
     readonly isEditable?: never;
+    readonly blankValue?: never;
     readonly validate?: never;
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };

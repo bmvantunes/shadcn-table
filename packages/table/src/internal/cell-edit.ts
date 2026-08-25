@@ -26,6 +26,7 @@ type ActiveSession = Readonly<{
   readonly before: unknown;
   readonly initialText: string;
   readonly selectInitialText: boolean;
+  readonly rowMissing: boolean;
   readonly invalidMessage?: string;
 }>;
 
@@ -71,7 +72,8 @@ type CellEditEvent =
       readonly rawText: string;
       readonly nativeInvalid: boolean;
     }>
-  | Readonly<{ readonly type: "CANCEL" }>;
+  | Readonly<{ readonly type: "CANCEL" }>
+  | Readonly<{ readonly type: "RECONCILE_ROW"; readonly row: unknown }>;
 
 const brunoTableCellEditMachine = createMachine({
   id: "brunoTableCellEditSession",
@@ -107,6 +109,17 @@ const brunoTableCellEditMachine = createMachine({
     },
     editing: {
       on: {
+        RECONCILE_ROW: {
+          actions: assign({
+            session: ({ context, event }) => {
+              const session = context.session;
+              if (session === undefined) return undefined;
+              return typeof event.row === "object" && event.row !== null
+                ? Object.freeze({ ...session, row: event.row, rowMissing: false })
+                : Object.freeze({ ...session, rowMissing: true });
+            },
+          }),
+        },
         COMMIT: {
           target: "validating",
           actions: assign({
@@ -203,8 +216,11 @@ function prepareSession(
       initialText:
         event.mode === "replace"
           ? event.producedText
-          : column.semantics.formatCanonicalText(before),
+          : before === null || before === undefined
+            ? ""
+            : column.semantics.formatCanonicalText(before),
       selectInitialText: event.mode === "current",
+      rowMissing: false,
     });
   } catch {
     return undefined;
@@ -221,6 +237,12 @@ function evaluateCandidate(
   if (session === undefined) {
     return Object.freeze({ kind: "invalid", message: "The value is invalid." });
   }
+  if (session.rowMissing) {
+    return Object.freeze({
+      kind: "invalid",
+      message: "This row was removed from the server. Changes cannot be saved.",
+    });
+  }
   if (rawText.length > BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH) {
     return Object.freeze({
       kind: "invalid",
@@ -230,7 +252,17 @@ function evaluateCandidate(
   if (nativeInvalid) {
     return Object.freeze({ kind: "invalid", message: "Enter a valid number." });
   }
-  const parsed = session.column.semantics.parseCanonicalText(rawText);
+  if (
+    rawText.length === 0 &&
+    session.column.blankValue === undefined &&
+    session.column.semantics.editorFamily !== "text"
+  ) {
+    return Object.freeze({ kind: "invalid", message: "Enter a value." });
+  }
+  const parsed =
+    rawText.length === 0 && session.column.blankValue !== undefined
+      ? ({ _tag: "Success", value: session.column.blankValue.value } as const)
+      : session.column.semantics.parseCanonicalText(rawText);
   if (parsed._tag === "Failure") {
     return Object.freeze({ kind: "invalid", message: boundedMessage(parsed.message) });
   }
@@ -322,6 +354,7 @@ export type BrunoTableCellEditSessionSnapshot =
       readonly columnId: string;
       readonly initialText: string;
       readonly selectInitialText: boolean;
+      readonly rowMissing: boolean;
       readonly invalidMessage?: string;
     }>;
 
@@ -337,6 +370,14 @@ export type BrunoTableCellEditMovement =
   | "tab-backward";
 const IDLE_SESSION: BrunoTableCellEditSessionSnapshot = Object.freeze({ kind: "idle" });
 const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, hasDraft: false });
+type ActiveCandidateSnapshot = Readonly<{
+  readonly rawText: string;
+  readonly nativeInvalid: boolean;
+}>;
+const EMPTY_CANDIDATE: ActiveCandidateSnapshot = Object.freeze({
+  rawText: "",
+  nativeInvalid: false,
+});
 
 export class BrunoTableCellEditRuntime {
   private columns: readonly CompiledColumn[];
@@ -346,6 +387,7 @@ export class BrunoTableCellEditRuntime {
   private readonly actor = createActor(brunoTableCellEditMachine);
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
   private readonly draftStore = new Store<ReadonlyMap<string, DraftEntry>>(new Map());
+  private readonly candidateStore = new Store<ActiveCandidateSnapshot>(EMPTY_CANDIDATE);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
   private readonly traversalIndex: BrunoTableCellEditTraversalIndex;
@@ -353,10 +395,6 @@ export class BrunoTableCellEditRuntime {
   private activeCellKey: string | undefined;
   private activeCandidate:
     | Readonly<{
-        readonly read: () => Readonly<{
-          readonly rawText: string;
-          readonly nativeInvalid: boolean;
-        }>;
         readonly restoreFocus: () => void;
       }>
     | undefined;
@@ -420,11 +458,33 @@ export class BrunoTableCellEditRuntime {
   public readonly getDraftMemorySnapshot = (): ReadonlyMap<string, unknown> =>
     this.draftStore.get();
 
+  public readonly captureDraftCommandReader = (): ((
+    rowId: string,
+    columnId: string,
+  ) => Readonly<{ readonly hasDraft: boolean; readonly value?: unknown }>) => {
+    const drafts = this.draftStore.get();
+    return (rowId, columnId) => {
+      const draft = drafts.get(cellKey(rowId, columnId));
+      return draft === undefined
+        ? Object.freeze({ hasDraft: false })
+        : Object.freeze({ hasDraft: true, value: draft.value });
+    };
+  };
+
+  public readonly getActiveCandidateSnapshot = (): ActiveCandidateSnapshot =>
+    this.candidateStore.get();
+
+  public readonly updateActiveCandidate = (rawText: string, nativeInvalid: boolean): void => {
+    const next = Object.freeze({ rawText, nativeInvalid });
+    const previous = this.candidateStore.get();
+    if (previous.rawText === rawText && previous.nativeInvalid === nativeInvalid) return;
+    this.candidateStore.setState(() => next);
+  };
+
   public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
 
   public readonly registerActiveCandidate = (
     candidate: Readonly<{
-      readonly read: () => Readonly<{ readonly rawText: string; readonly nativeInvalid: boolean }>;
       readonly restoreFocus: () => void;
     }>,
   ): (() => void) => {
@@ -459,6 +519,13 @@ export class BrunoTableCellEditRuntime {
     this.traversalIndex.reconcileRows(changedRowIds);
   };
 
+  public readonly reconcileActiveRow = (): void => {
+    const session = this.actor.getSnapshot().context.session;
+    if (session !== undefined) {
+      this.actor.send({ type: "RECONCILE_ROW", row: this.getRow(session.rowId) });
+    }
+  };
+
   public readonly reconcileTraversalRange = (
     range: BrunoTableCellEditTraversalRange | undefined,
   ): void => {
@@ -490,7 +557,7 @@ export class BrunoTableCellEditRuntime {
   public readonly commitActiveCandidate = (): boolean => {
     const candidate = this.activeCandidate;
     if (candidate === undefined) return this.getSessionSnapshot().kind === "idle";
-    const candidateValue = candidate.read();
+    const candidateValue = this.candidateStore.get();
     const accepted = this.commit(candidateValue.rawText, candidateValue.nativeInvalid);
     if (!accepted) candidate.restoreFocus();
     return accepted;
@@ -566,6 +633,7 @@ export class BrunoTableCellEditRuntime {
   public readonly dispose = (): void => {
     this.actor.stop();
     this.draftStore.setState(() => new Map());
+    this.candidateStore.setState(() => EMPTY_CANDIDATE);
     this.cellStores.clear();
     this.cellSubscriberCounts.clear();
   };
@@ -583,11 +651,17 @@ export class BrunoTableCellEditRuntime {
             columnId: session.column.columnId,
             initialText: session.initialText,
             selectInitialText: session.selectInitialText,
+            rowMissing: session.rowMissing,
             ...(session.invalidMessage === undefined
               ? {}
               : { invalidMessage: session.invalidMessage }),
           });
     const nextKey = next.kind === "editing" ? cellKey(next.rowId, next.columnId) : undefined;
+    if (previousKey === undefined && next.kind === "editing") {
+      this.candidateStore.setState(() =>
+        Object.freeze({ rawText: next.initialText, nativeInvalid: false }),
+      );
+    }
     this.activeCellKey = nextKey;
     if (nextKey !== undefined && !this.cellStores.has(nextKey)) this.installCellStore(nextKey);
     const actorContext = this.actor.getSnapshot().context;
@@ -710,6 +784,7 @@ function sameSessionSnapshot(
     previous.columnId === next.columnId &&
     previous.initialText === next.initialText &&
     previous.selectInitialText === next.selectInitialText &&
+    previous.rowMissing === next.rowMissing &&
     previous.invalidMessage === next.invalidMessage
   );
 }

@@ -9,6 +9,39 @@ import type { BrunoTableColumns } from "../public-types";
 import { ColumnConfigurationError, compileColumns } from "./compile-columns";
 
 describe("compileColumns", () => {
+  it("preserves an exact nullable blank representation through Column Helpers", () => {
+    const definitions = [
+      BrunoTableNumberColumn({
+        columnId: "COL_ID_OPTIONAL_SCORE",
+        field: "score",
+        headerName: "Optional score",
+        isEditable: true,
+        blankValue: undefined,
+      }),
+    ] satisfies BrunoTableColumns<{ readonly score: number | undefined }>;
+
+    const [compiled] = compileColumns(definitions);
+
+    expect(compiled?.kind === "field" ? compiled.blankValue : undefined).toEqual({
+      value: undefined,
+    });
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_READ_ONLY_BLANK",
+          field: "score",
+          headerName: "Read-only blank",
+          valueType: "number",
+          blankValue: null,
+        },
+      ]),
+    ).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable blankValue requires a potentially editable field column: COL_ID_READ_ONLY_BLANK",
+      ),
+    );
+  });
+
   it("rejects mutated helper structural evidence before compiling presentation callbacks", () => {
     const callback = () => "helper-owned";
     const [helperColumn] = [

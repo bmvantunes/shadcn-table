@@ -72,6 +72,22 @@ async function renderEditableTable() {
   return { grid, onSaveEdits, screen };
 }
 
+function copyGesture(): string {
+  return detectPlatform() === "mac" ? "{Meta>}c{/Meta}" : "{Control>}c{/Control}";
+}
+
+function installClipboard(writeText: (text: string) => Promise<void>): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: vi.fn(writeText) },
+  });
+  return () => {
+    if (descriptor === undefined) delete (navigator as { clipboard?: Clipboard }).clipboard;
+    else Object.defineProperty(navigator, "clipboard", descriptor);
+  };
+}
+
 afterEach(async () => {
   await cleanup();
   vi.restoreAllMocks();
@@ -558,6 +574,236 @@ test("reconciles predicate traversal from a live row replacement", async () => {
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
     screen.getByRole("gridcell", { name: "second value", exact: true }).element().id,
   );
+});
+
+test("keeps one Row Identity edit session through sort, filter, deletion, and return", async () => {
+  type LiveEditRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly ordinal: number;
+    readonly status: string;
+    readonly revision: bigint;
+  }>;
+  const liveEditColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: true,
+    },
+    {
+      columnId: "COL_ID_ORDINAL",
+      field: "ordinal",
+      headerName: "Ordinal",
+      valueType: "number",
+    },
+    {
+      columnId: "COL_ID_STATUS",
+      field: "status",
+      headerName: "Status",
+      valueType: "text",
+      enableFilter: true,
+    },
+  ] satisfies BrunoTableColumns<LiveEditRow>;
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (liveRows: readonly LiveEditRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_IDENTITY"
+      columns={liveEditColumns}
+      initialOrderBy={[{ columnId: "COL_ID_ORDINAL", direction: "asc" }]}
+      initialFilters={[{ columnId: "COL_ID_STATUS", type: "equals", filter: "keep" }]}
+      clientSource={{ rows: liveRows, totalRows: liveRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const target: LiveEditRow = {
+    id: "target",
+    value: "Target",
+    ordinal: 0,
+    status: "keep",
+    revision: 1n,
+  };
+  const peer: LiveEditRow = {
+    id: "peer",
+    value: "Peer",
+    ordinal: 1,
+    status: "keep",
+    revision: 1n,
+  };
+  const screen = await render(renderTable([target, peer], 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_IDENTITY" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  let editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await userEvent.fill(editor, "Candidate survives");
+
+  await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 2n }], 2));
+  editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(editor).toHaveValue("Candidate survives");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(
+    screen.getByRole("row").nth(2).getByRole("gridcell").first().element().id,
+  );
+
+  await screen.rerender(
+    renderTable([peer, { ...target, ordinal: 2, status: "hidden", revision: 3n }], 3),
+  );
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent("Row no longer matches current filters");
+  await expect.element(screen.getByRole("status")).toBeVisible();
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Value" }))
+    .toHaveValue("Candidate survives");
+
+  await screen.rerender(renderTable([peer], 4));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("This row was removed from the server. Changes cannot be saved.");
+  await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).toHaveFocus();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+
+  await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 5n }], 5));
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Value" }))
+    .toHaveValue("Candidate survives");
+  await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
+});
+
+test("compiles exact nullable blank policies without treating zero as blank", async () => {
+  type NullableRow = Readonly<{
+    readonly id: string;
+    readonly nullable: number | null;
+    readonly optional: number | undefined;
+    readonly ambiguous: number | null | undefined;
+    readonly required: number;
+  }>;
+  const nullableColumns = [
+    {
+      columnId: "COL_ID_NULLABLE",
+      field: "nullable",
+      headerName: "Nullable",
+      valueType: "number",
+      isEditable: true,
+      blankValue: null,
+      cellRenderer: ({ value }) => (value === null ? "NULL" : String(value)),
+    },
+    {
+      columnId: "COL_ID_OPTIONAL",
+      field: "optional",
+      headerName: "Optional",
+      valueType: "number",
+      isEditable: true,
+      blankValue: undefined,
+      cellRenderer: ({ value }) => (value === undefined ? "UNDEFINED" : String(value)),
+    },
+    {
+      columnId: "COL_ID_AMBIGUOUS",
+      field: "ambiguous",
+      headerName: "Ambiguous",
+      valueType: "number",
+      isEditable: true,
+      blankValue: null,
+      cellRenderer: ({ value }) => (value === null ? "NULL" : String(value)),
+    },
+    {
+      columnId: "COL_ID_REQUIRED",
+      field: "required",
+      headerName: "Required",
+      valueType: "number",
+      isEditable: true,
+      cellRenderer: ({ value }) => `REQUIRED ${String(value)}`,
+    },
+  ] satisfies BrunoTableColumns<NullableRow>;
+  const nullableRow: NullableRow = {
+    id: "nullable",
+    nullable: 7,
+    optional: 8,
+    ambiguous: 9,
+    required: 0,
+  };
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_NULLABLE"
+      columns={nullableColumns}
+      initialOrderBy={[{ columnId: "COL_ID_REQUIRED", direction: "asc" }]}
+      clientSource={{ rows: [nullableRow], totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+
+  for (const [sourceText, expectedText, expectedCount] of [
+    ["7", "NULL", 1],
+    ["8", "UNDEFINED", 1],
+    ["9", "NULL", 2],
+  ] as const) {
+    await userEvent.click(screen.getByRole("gridcell", { name: sourceText, exact: true }));
+    await userEvent.keyboard("{F2}");
+    const editor = screen.getByRole("spinbutton");
+    await userEvent.clear(editor);
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() =>
+      expect(screen.getByRole("gridcell", { name: expectedText, exact: true }).all()).toHaveLength(
+        expectedCount,
+      ),
+    );
+  }
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "REQUIRED 0", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const required = screen.getByRole("spinbutton", { name: "Edit Required" });
+  await expect.element(required).toHaveValue(0);
+  await userEvent.clear(required);
+  await userEvent.keyboard("{Enter}");
+  await expect.element(required).toHaveFocus();
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Enter a value.");
+});
+
+test("copies one immutable source-plus-draft projection for active cells and ranges", async () => {
+  let resolveWrite: (() => void) | undefined;
+  const writes: string[] = [];
+  const restoreClipboard = installClipboard(
+    (text) =>
+      new Promise<void>((resolve) => {
+        writes.push(text);
+        resolveWrite = resolve;
+      }),
+  );
+  try {
+    const { grid, screen } = await renderEditableTable();
+    await userEvent.keyboard("{F2}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Draft Ada");
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("gridcell", { name: "Draft Ada", exact: true }));
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writes).toEqual(["Draft Ada"]));
+    resolveWrite?.();
+
+    grid.element().focus();
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writes).toEqual(["Draft Ada", "Draft Ada\t4"]));
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("gridcell", { name: "Draft Ada", exact: true }));
+    await userEvent.keyboard("{F2}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Later draft");
+    await userEvent.keyboard("{Enter}");
+    expect(writes).toEqual(["Draft Ada", "Draft Ada\t4"]);
+    resolveWrite?.();
+  } finally {
+    restoreClipboard();
+  }
 });
 
 test("ordinary Enter moves exactly one row even when that destination is not editable", async () => {

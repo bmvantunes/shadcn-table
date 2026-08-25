@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
 import { BrunoTableBigDecimalValueType } from "../effect";
-import type { BrunoTableValueType } from "../public-types";
+import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
@@ -352,5 +352,115 @@ describe("BrunoTable Cell Edit Session", () => {
         BigDecimal.fromStringUnsafe("12345678901234567890.00000000000000000002"),
       ),
     ).toBe(true);
+  });
+
+  it("resolves explicit nullish blank representations before scalar parsing", () => {
+    type NullableRow = Readonly<{
+      readonly id: string;
+      readonly nullable: number | null;
+      readonly optional: number | undefined;
+      readonly required: number;
+    }>;
+    const nullableRow: NullableRow = {
+      id: "nullable",
+      nullable: 5,
+      optional: 6,
+      required: 7,
+    };
+    const nullableColumns = compileColumns([
+      {
+        columnId: "COL_ID_NULLABLE",
+        field: "nullable",
+        headerName: "Nullable",
+        valueType: "number",
+        isEditable: true,
+        blankValue: null,
+      },
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        valueType: "number",
+        isEditable: true,
+        blankValue: undefined,
+      },
+      {
+        columnId: "COL_ID_REQUIRED",
+        field: "required",
+        headerName: "Required",
+        valueType: "number",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<NullableRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: nullableColumns,
+      getRow: () => nullableRow,
+    });
+
+    expect(runtime.start("nullable", "COL_ID_NULLABLE")).toBe(true);
+    expect(runtime.commit("")).toBe(true);
+    expect(runtime.getDraftSnapshot("nullable", "COL_ID_NULLABLE")).toBe(null);
+    expect(runtime.start("nullable", "COL_ID_OPTIONAL")).toBe(true);
+    expect(runtime.commit("")).toBe(true);
+    expect(runtime.getCellSnapshot("nullable", "COL_ID_OPTIONAL")).toMatchObject({
+      hasDraft: true,
+      draft: undefined,
+    });
+    expect(runtime.start("nullable", "COL_ID_REQUIRED")).toBe(true);
+    expect(runtime.commit("")).toBe(false);
+    expect(runtime.getDraftSnapshot("nullable", "COL_ID_REQUIRED")).toBeUndefined();
+  });
+
+  it("keeps candidate ownership while XState reconciles a live Row Identity tombstone", () => {
+    let liveRow: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => liveRow,
+    });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("7", false);
+    liveRow = { ...row, score: 5 };
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing", rowMissing: false });
+    expect(runtime.getActiveCandidateSnapshot()).toEqual({
+      rawText: "7",
+      nativeInvalid: false,
+    });
+
+    liveRow = undefined;
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing", rowMissing: true });
+    expect(runtime.commit("7")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This row was removed from the server. Changes cannot be saved.",
+      rowMissing: true,
+    });
+
+    liveRow = { ...row, score: 6 };
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing", rowMissing: false });
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+  });
+
+  it("captures one immutable draft command reader while later drafts publish", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("5")).toBe(true);
+    const firstCommand = runtime.captureDraftCommandReader();
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("6")).toBe(true);
+
+    expect(firstCommand("row-1", "COL_ID_SCORE")).toEqual({
+      hasDraft: true,
+      value: 5,
+    });
+    expect(runtime.captureDraftCommandReader()("row-1", "COL_ID_SCORE")).toEqual({
+      hasDraft: true,
+      value: 6,
+    });
   });
 });

@@ -36,6 +36,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       runtime.getSessionSnapshot,
     );
     const invalidMessage = session.kind === "editing" ? session.invalidMessage : undefined;
+    const candidate = runtime.getActiveCandidateSnapshot();
     const errorId = invalidMessage === undefined ? undefined : generatedErrorId;
     const selectInitialTextOnMount = useRef(
       session.kind === "editing" && session.selectInitialText,
@@ -43,9 +44,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     const initialRawNumberSeed =
       session.kind === "editing" &&
       column.semantics.editorFamily === "number" &&
-      session.initialText.length > 0 &&
-      (!session.selectInitialText || numberSeedRequiresRawBuffer(column, session.initialText))
-        ? session.initialText
+      candidate.rawText.length > 0 &&
+      (!session.selectInitialText || numberSeedRequiresRawBuffer(column, candidate.rawText))
+        ? candidate.rawText
         : undefined;
     const rawNumberSeed = useRef(initialRawNumberSeed);
     const [rawNumberDisplay, setRawNumberDisplay] = useState(initialRawNumberSeed);
@@ -76,21 +77,6 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       const element = control.current;
       if (element === null) return;
       const unregister = runtime.registerActiveCandidate({
-        read: () => ({
-          rawText:
-            element instanceof HTMLInputElement && element.type === "checkbox"
-              ? String(element.checked)
-              : column.semantics.editorFamily === "number" && rawNumberSeed.current !== undefined
-                ? rawNumberSeed.current
-                : Reflect.get(element, "value"),
-          nativeInvalid:
-            column.semantics.editorFamily === "number" &&
-            rawNumberSeed.current === undefined &&
-            element instanceof HTMLInputElement &&
-            element.type === "number" &&
-            element.validity.badInput &&
-            element.value.length === 0,
-        }),
         restoreFocus: () => element.focus({ preventScroll: true }),
       });
       if (
@@ -124,6 +110,21 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             setRawNumberDisplay(rawText);
           }
         }
+        const rawText =
+          element instanceof HTMLInputElement && element.type === "checkbox"
+            ? String(element.checked)
+            : column.semantics.editorFamily === "number" && rawNumberSeed.current !== undefined
+              ? rawNumberSeed.current
+              : String(Reflect.get(element, "value"));
+        runtime.updateActiveCandidate(
+          rawText,
+          column.semantics.editorFamily === "number" &&
+            rawNumberSeed.current === undefined &&
+            element instanceof HTMLInputElement &&
+            element.type === "number" &&
+            element.validity.badInput &&
+            element.value.length === 0,
+        );
       };
       element.addEventListener("input", handleInput);
       return () => {
@@ -168,7 +169,10 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultChecked={session.initialText === "true"}
+            defaultChecked={candidate.rawText === "true"}
+            onChange={(event) =>
+              runtime.updateActiveCandidate(String(event.currentTarget.checked), false)
+            }
             type="checkbox"
           />
         ) : column.semantics.editorFamily === "select" &&
@@ -178,7 +182,8 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultValue={session.initialText}
+            defaultValue={candidate.rawText}
+            onChange={(event) => runtime.updateActiveCandidate(event.currentTarget.value, false)}
             style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
           >
             {column.semantics.selectCanonicalOptions.map((option) => (
@@ -193,7 +198,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultValue={session.initialText}
+            defaultValue={candidate.rawText}
             maxLength={BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH}
             inputMode={
               column.semantics.editorFamily === "number" ||

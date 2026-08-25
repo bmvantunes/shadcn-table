@@ -193,6 +193,71 @@ type Order = {
   readonly hiddenLabel: string;
 };
 
+type EmittedNullableEditRow = Readonly<{
+  readonly id: string;
+  readonly nullable: number | null;
+  readonly optional: number | undefined;
+  readonly ambiguous: number | null | undefined;
+  readonly required: number;
+}>;
+
+const emittedNullableEditColumns = [
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedNullableEditColumns;
+
+const emittedInvalidNullableEditColumns = [
+  // @ts-expect-error emitted nullable fields require their exact blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  // @ts-expect-error emitted non-nullish fields reject a blank representation.
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidNullableEditColumns;
+
 const emittedHelperGroupedColumns = [
   BrunoTableTextColumn({
     columnId: "COL_ID_EMITTED_HELPER_GROUP",

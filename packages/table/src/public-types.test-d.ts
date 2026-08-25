@@ -2861,6 +2861,67 @@ const invalidCustomNumericOperand = [
   { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: 10 },
 ] satisfies BrunoTableFilterExpressions<AmountRow, typeof customValueColumns>;
 
+type NullableEditRow = Readonly<{
+  readonly id: string;
+  readonly nullable: number | null;
+  readonly optional: number | undefined;
+  readonly ambiguous: number | null | undefined;
+  readonly required: number;
+}>;
+const nullableEditColumns = [
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<NullableEditRow>;
+const invalidNullableEditColumns = [
+  // @ts-expect-error editable nullable fields require their exact blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  // @ts-expect-error non-nullish fields cannot declare a blank representation.
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<NullableEditRow>;
+
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
@@ -2918,3 +2979,5 @@ void invalidHelperComputedDependency;
 void invalidCustomComputedDependency;
 void invalidIncompleteSelectDomain;
 void invalidCustomNumericOperand;
+void nullableEditColumns;
+void invalidNullableEditColumns;
