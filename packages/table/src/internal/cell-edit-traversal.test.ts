@@ -580,6 +580,48 @@ describe("BrunoTable editable traversal index", () => {
     expect(missingCase.index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("late-0");
   });
 
+  it("charges still-missing late rows against every production slice", () => {
+    const rowCount = 40;
+    const columnCount = 40;
+    const rowIds = Array.from({ length: rowCount }, (_unused, rowIndex) => `missing-${rowIndex}`);
+    const rows = new Map<string, Row>(
+      rowIds.map((id) => [id, { id, enabled: true, alternate: false }]),
+    );
+    const columns = compileColumns(
+      Array.from({ length: columnCount }, (_unused, columnIndex) => ({
+        columnId: `COL_ID_MISSING_${String(columnIndex)}`,
+        field: "enabled" as const,
+        headerName: `Missing ${String(columnIndex)}`,
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      })),
+    );
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(
+      getRow,
+      (_rowId, row) => (row as Row).enabled,
+      true,
+    );
+    const projection = rowSpace(rowIds);
+    index.reconcile(columns, projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+
+    index.reconcileRows(undefined);
+    index.reconcile(columns, projection);
+    index.buildNextSlice(rowCount * 2 * 16, Number.POSITIVE_INFINITY);
+    rows.clear();
+    index.reconcileRows(new Set(rowIds));
+    getRow.mockClear();
+
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(getRow).toHaveBeenCalledTimes(2);
+    expect(index.isReady()).toBe(false);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(index.getCachedRowCount()).toBe(0);
+    expect(index.isReady()).toBe(true);
+  });
+
   it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {
     const first: Row = { id: "first", enabled: true, alternate: false };
     const rows = new Map<string, Row>([

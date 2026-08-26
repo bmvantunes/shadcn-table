@@ -289,6 +289,8 @@ export class BrunoTableCellEditTraversalIndex {
       if (built > 0 && remainingPredicateCells < predicateColumnCount) break;
       if (rowIndex === undefined) {
         this.pendingDetachedRowCursor += 1;
+        remainingPredicateCells -= predicateColumnCount;
+        built += 1;
         const rowId = detachedRowId!;
         if (this.pendingDirtyRowIds.has(rowId)) {
           this.removeRowCache(rowId);
@@ -298,11 +300,11 @@ export class BrunoTableCellEditTraversalIndex {
           }
         }
         this.pendingDirtyRowIds.delete(rowId);
-        remainingPredicateCells -= predicateColumnCount;
-        built += 1;
         continue;
       }
       this.pendingRowCursor += 1;
+      remainingPredicateCells -= predicateColumnCount;
+      built += 1;
       const rowId = this.rowIds[rowIndex];
       if (rowId === undefined) continue;
       removeSorted(this.validRowIndexes, rowIndex);
@@ -320,8 +322,6 @@ export class BrunoTableCellEditTraversalIndex {
       if (rowCache.eligiblePredicateColumnIds.size > 0) {
         insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
       }
-      remainingPredicateCells -= predicateColumnCount;
-      built += 1;
     }
     if (this.pendingRowCursor >= this.pendingRowIndexes.length) {
       this.pendingRowIndexes = [];

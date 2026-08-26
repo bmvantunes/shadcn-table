@@ -1,7 +1,10 @@
 import { bench, describe } from "vite-plus/test";
 
 import { compileColumns, type CompiledFieldColumn } from "./compile-columns";
-import { BrunoTableCellEditTraversalIndex } from "./cell-edit-traversal";
+import {
+  BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT,
+  BrunoTableCellEditTraversalIndex,
+} from "./cell-edit-traversal";
 
 const referenceFrameBudgetMs = 8.33;
 const rowCount = 5_000;
@@ -339,6 +342,69 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
           discoveryP99Ms,
           rebuildSliceCount: rebuildSamples.length,
           rebuildP99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "paces 5,000 late projected rows that disappear before rebuilding",
+    () => {
+      const missingRowsById = new Map(rows.map((row) => [row.id, { ...row, editable: true }]));
+      let rowReads = 0;
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => {
+          rowReads += 1;
+          return missingRowsById.get(rowId);
+        },
+        () => {
+          predicateEvaluations += 1;
+          return true;
+        },
+        true,
+      );
+      index.reconcile(columns, rowSpace);
+      while (index.buildNextSlice());
+      predicateEvaluations = 0;
+      index.reconcileRows(undefined);
+      index.reconcile(columns, rowSpace);
+      index.buildNextSlice(rowCount * 2 * 16, Number.POSITIVE_INFINITY);
+      missingRowsById.clear();
+      index.reconcileRows(new Set(rows.map((row) => row.id)));
+      rowReads = 0;
+
+      const sliceSamples: number[] = [];
+      const firstSliceStartedAt = performance.now();
+      const hasMoreWork = index.buildNextSlice();
+      sliceSamples.push(performance.now() - firstSliceStartedAt);
+      const maximumRowsPerSlice = Math.floor(
+        BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT / columnCount,
+      );
+      if (!hasMoreWork || index.isReady() || rowReads > maximumRowsPerSlice) {
+        throw new Error("Missing projected rows bypassed the production slice budget.");
+      }
+      while (!index.isReady()) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      const p99Ms = assertBudgetSamples("missing projected-row teardown slice", sliceSamples);
+      if (
+        predicateEvaluations !== 0 ||
+        index.getCachedRowCount() !== 0 ||
+        index.find(0, columns[0]!.columnId, 1) !== undefined
+      ) {
+        throw new Error("Missing projected-row teardown did not converge exactly.");
+      }
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable missing projected-row production slices",
+          rowReads,
+          sliceCount: sliceSamples.length,
+          p99Ms,
           referenceFrameBudgetMs,
         }),
       );
