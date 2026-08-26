@@ -83,12 +83,32 @@ const documentEscapeRegistrations = new WeakMap<
 
 function activeDocumentEscapeRegistration(
   document: Document | undefined,
+  eventTarget: EventTarget | null,
 ): BrunoTableDocumentEscapeRegistration | undefined {
   if (document === undefined) return undefined;
-  for (const registration of documentEscapeRegistrations.get(document) ?? []) {
-    if (registration.isActive()) return registration;
+  const registrations = documentEscapeRegistrations.get(document) ?? [];
+  const DocumentElement = document.defaultView?.Element;
+  const targetBoundary =
+    DocumentElement !== undefined && eventTarget instanceof DocumentElement
+      ? eventTarget.closest("[data-bruno-table]")
+      : null;
+  if (targetBoundary !== null) {
+    for (const registration of registrations) {
+      if (
+        registration.isActive() &&
+        registration.owner.current?.closest("[data-bruno-table]") === targetBoundary
+      ) {
+        return registration;
+      }
+    }
   }
-  return undefined;
+  let soleActiveRegistration: BrunoTableDocumentEscapeRegistration | undefined;
+  for (const registration of registrations) {
+    if (!registration.isActive()) continue;
+    if (soleActiveRegistration !== undefined) return undefined;
+    soleActiveRegistration = registration;
+  }
+  return soleActiveRegistration;
 }
 
 function createBrunoTableGridHotkeyBindings(
@@ -501,7 +521,10 @@ export function useBrunoTableGridHotkeys(
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
       if (index < BRUNO_TABLE_ESCAPE_HOTKEYS.length) {
         const registration = documentEscapeRegistrationRef.current;
-        const activeRegistration = activeDocumentEscapeRegistration(target.current?.ownerDocument);
+        const activeRegistration = activeDocumentEscapeRegistration(
+          target.current?.ownerDocument,
+          event.target,
+        );
         if (activeRegistration !== undefined) {
           if (activeRegistration !== registration) return;
         } else if (!ownsTarget) return;

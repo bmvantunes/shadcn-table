@@ -181,6 +181,19 @@ test("does not exempt another Table Instance's detached Cancel control", async (
   await expect.element(firstEditor).toHaveAttribute("aria-invalid", "true");
   await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
   expect(secondGrid.getByRole("spinbutton", { name: "Edit Score" }).all()).toHaveLength(1);
+
+  const siblingEscape = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key: "Escape",
+  });
+  foreignCancel.element().dispatchEvent(siblingEscape);
+  expect(siblingEscape.defaultPrevented).toBe(true);
+  await expect
+    .element(secondGrid.getByRole("spinbutton", { name: "Edit Score" }))
+    .not.toBeInTheDocument();
+  await expect.element(firstEditor).toBeVisible();
+  await expect.element(firstEditor).toHaveAttribute("aria-invalid", "true");
 });
 
 test("does not exempt a nested Table Instance's detached Cancel control", async () => {
@@ -273,6 +286,34 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
   await vi.waitFor(() => expect(outerEditorElement.getAttribute("aria-invalid")).toBe("true"));
   await expect.element(nestedCancel).toBeVisible();
   await expect.element(nestedEditor).toBeVisible();
+
+  const nestedEscape = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key: "Escape",
+  });
+  nestedCancel.element().dispatchEvent(nestedEscape);
+  expect(nestedEscape.defaultPrevented).toBe(true);
+  await expect.element(nestedEditor).not.toBeInTheDocument();
+  await expect.element(outerEditor).toBeVisible();
+  await expect.element(outerEditor).toHaveAttribute("aria-invalid", "true");
+});
+
+test("uses the sole active Table Instance as the document Escape fallback", async () => {
+  const { screen } = await renderEditableTable();
+  await userEvent.keyboard("{Enter}");
+  const editor = screen.getByRole("textbox", { name: "Edit Name" });
+  await expect.element(editor).toBeVisible();
+
+  const documentEscape = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key: "Escape",
+  });
+  document.body.dispatchEvent(documentEscape);
+
+  expect(documentEscape.defaultPrevented).toBe(true);
+  await expect.element(editor).not.toBeInTheDocument();
 });
 
 test("cancels before a live blank-policy change can reinterpret the active candidate", async () => {
