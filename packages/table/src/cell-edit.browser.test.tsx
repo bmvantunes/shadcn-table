@@ -299,6 +299,174 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
   await expect.element(outerEditor).toHaveAttribute("aria-invalid", "true");
 });
 
+test("does not retarget after a valid outside commit into a sibling Table Instance", async () => {
+  const screen = await render(
+    <>
+      <BrunoTableClient
+        tableId="TABLE_ID_OUTSIDE_COMMIT_A"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+      <BrunoTableClient
+        tableId="TABLE_ID_OUTSIDE_COMMIT_B"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    </>,
+  );
+  const firstGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTSIDE_COMMIT_A" });
+  const secondGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTSIDE_COMMIT_B" });
+  firstGrid.element().focus();
+  await userEvent.keyboard("{ArrowRight}{F2}");
+  const editor = firstGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.fill(editor, "5");
+  const secondName = secondGrid.getByRole("gridcell", { name: "Ada", exact: true });
+
+  await userEvent.click(secondName);
+
+  await expect.element(editor).not.toBeInTheDocument();
+  const committedScore = firstGrid.getByRole("gridcell", { name: "5", exact: true });
+  expect(firstGrid.element().getAttribute("aria-activedescendant")).toBe(
+    committedScore.element().id,
+  );
+  expect(secondGrid.element().getAttribute("aria-activedescendant")).toBe(secondName.element().id);
+});
+
+test("does not retarget after a valid outside commit into a nested Table Instance", async () => {
+  const NestedTable = () => (
+    <BrunoTableClient
+      tableId="TABLE_ID_NESTED_OUTSIDE_COMMIT"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const outerColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      pinned: "start",
+    },
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      isEditable: true,
+      validate: ({ value }) => (value <= 10 ? undefined : "Score must be at most 10."),
+    },
+    {
+      columnId: "COL_ID_NOTE",
+      field: "note",
+      headerName: "Note",
+      valueType: "text",
+      isEditable: true,
+      pinned: "end",
+      cellRenderer: NestedTable,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_OUTER_OUTSIDE_COMMIT"
+      columns={outerColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_OUTSIDE_COMMIT" });
+  const nestedGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_NESTED_OUTSIDE_COMMIT" });
+  outerGrid.element().focus();
+  await userEvent.keyboard("{ArrowRight}{F2}");
+  const editor = outerGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.fill(editor, "5");
+  const nestedName = nestedGrid.getByRole("gridcell", { name: "Ada", exact: true });
+
+  await userEvent.click(nestedName);
+
+  await expect.element(editor).not.toBeInTheDocument();
+  const committedScore = outerGrid.getByRole("gridcell", { name: "5", exact: true });
+  expect(outerGrid.element().getAttribute("aria-activedescendant")).toBe(
+    committedScore.element().id,
+  );
+  expect(nestedGrid.element().getAttribute("aria-activedescendant")).toBe(nestedName.element().id);
+});
+
+test("keeps the validation explanation inside the scrollport across collision changes", async () => {
+  const manyRows = Array.from(
+    { length: 40 },
+    (_, index): Row => ({
+      id: `row-${String(index)}`,
+      name: `Person ${String(index)}`,
+      score: index,
+      note: `note-${String(index)}`,
+      revision: BigInt(index + 1),
+    }),
+  );
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_VALIDATION_COLLISION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: manyRows, totalRows: manyRows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_VALIDATION_COLLISION" });
+  const lowerCell = grid.getByRole("gridcell", { name: "18", exact: true });
+  lowerCell.element().scrollIntoView({ block: "end" });
+  await settleBrunoTableBrowserFrames();
+  await userEvent.click(lowerCell);
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.fill(editor, "99");
+  await userEvent.keyboard("{Enter}");
+  const alert = screen.getByRole("alert", { name: "" });
+  const lowerEditorRect = editor.element().getBoundingClientRect();
+  let alertRect = alert.element().getBoundingClientRect();
+  let gridRect = grid.element().getBoundingClientRect();
+  expect(alertRect.top).toBeGreaterThanOrEqual(gridRect.top);
+  expect(alertRect.bottom).toBeLessThanOrEqual(gridRect.bottom);
+  expect(alertRect.bottom).toBeLessThanOrEqual(lowerEditorRect.top);
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveAttribute("aria-describedby", alert.element().id);
+
+  grid.element().scrollTop += 240;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  const upperEditorRect = editor.element().getBoundingClientRect();
+  alertRect = alert.element().getBoundingClientRect();
+  gridRect = grid.element().getBoundingClientRect();
+  expect(alertRect.top).toBeGreaterThanOrEqual(gridRect.top);
+  expect(alertRect.bottom).toBeLessThanOrEqual(gridRect.bottom);
+  expect(alertRect.top).toBeGreaterThanOrEqual(upperEditorRect.bottom);
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveValue(99);
+});
+
 test("uses the sole active Table Instance as the document Escape fallback", async () => {
   const { screen } = await renderEditableTable();
   await userEvent.keyboard("{Enter}");

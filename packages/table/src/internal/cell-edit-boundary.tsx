@@ -32,6 +32,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     yieldGridTabStop,
   }: BrunoTableCellEditBoundaryProps): ReactElement | null {
     const control = useRef<HTMLElement>(null);
+    const error = useRef<HTMLDivElement>(null);
     const attachControl = useCallback((element: HTMLElement | null) => {
       control.current = element;
     }, []);
@@ -144,6 +145,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       const document = editor?.ownerDocument;
       if (editor === null || document === undefined) return;
       const editSurface = editor.closest<HTMLElement>("[data-bruno-cell-edit-surface]");
+      const tableBoundary = editor.closest<HTMLElement>("[data-bruno-table]");
       let blockedClickTarget: EventTarget | null = null;
       const commitOutsidePointer = (event: PointerEvent) => {
         blockedClickTarget = null;
@@ -169,7 +171,11 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           );
           const rowId = cell?.dataset["brunoRowId"];
           const columnId = cell?.dataset["brunoColumnId"];
-          if (rowId !== undefined && columnId !== undefined) {
+          if (
+            rowId !== undefined &&
+            columnId !== undefined &&
+            cell?.closest("[data-bruno-table]") === tableBoundary
+          ) {
             onCommittedOutsideCellPointer?.(rowId, columnId);
           }
         }
@@ -188,6 +194,39 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         document.removeEventListener("click", suppressRejectedClick, true);
       };
     }, [onCommittedOutsideCellPointer, runtime]);
+    useLayoutEffect(() => {
+      const errorElement = error.current;
+      const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
+      const grid = editor?.closest<HTMLElement>('[role="grid"]') ?? null;
+      const view = grid?.ownerDocument.defaultView;
+      if (
+        errorElement === null ||
+        editor === null ||
+        grid === null ||
+        view === null ||
+        view === undefined
+      )
+        return;
+      let frame: number | undefined;
+      const position = () => {
+        frame = undefined;
+        positionValidationExplanation(errorElement, editor, grid);
+      };
+      const schedule = () => {
+        if (frame !== undefined) return;
+        frame = view.requestAnimationFrame(position);
+      };
+      position();
+      grid.addEventListener("scroll", schedule, { passive: true });
+      const resizeObserver = new view.ResizeObserver(schedule);
+      resizeObserver.observe(grid);
+      resizeObserver.observe(editor);
+      return () => {
+        grid.removeEventListener("scroll", schedule);
+        resizeObserver.disconnect();
+        if (frame !== undefined) view.cancelAnimationFrame(frame);
+      };
+    }, [invalidMessage]);
     if (session.kind !== "editing") return null;
     const blankValue = column.kind === "field" ? column.blankValue : undefined;
     const booleanEditorValues = column.semantics.booleanEditorCanonicalValues;
@@ -308,6 +347,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         )}
         {invalidMessage === undefined ? null : (
           <div
+            ref={error}
             id={errorId}
             role="alert"
             style={{
@@ -315,6 +355,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
               border: "1px solid currentColor",
               insetInlineStart: 0,
               maxWidth: 320,
+              overflowY: "auto",
               padding: 4,
               position: "absolute",
               top: "100%",
@@ -328,6 +369,40 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       </div>
     );
   });
+
+function positionValidationExplanation(
+  error: HTMLDivElement,
+  editor: HTMLElement,
+  grid: HTMLElement,
+): void {
+  error.style.removeProperty("bottom");
+  error.style.setProperty("top", "100%");
+  error.style.removeProperty("max-height");
+  error.style.removeProperty("transform");
+  const gridRect = grid.getBoundingClientRect();
+  const editorRect = editor.getBoundingClientRect();
+  const contentHeight = error.scrollHeight;
+  const spaceBelow = Math.max(0, gridRect.bottom - editorRect.bottom);
+  const spaceAbove = Math.max(0, editorRect.top - gridRect.top);
+  const placeAbove = spaceBelow < contentHeight && spaceAbove > spaceBelow;
+  const availableHeight = Math.max(0, Math.floor(placeAbove ? spaceAbove : spaceBelow));
+  if (placeAbove) {
+    error.style.removeProperty("top");
+    error.style.setProperty("bottom", "100%");
+  }
+  error.style.setProperty("max-height", `${String(availableHeight)}px`);
+
+  const errorRect = error.getBoundingClientRect();
+  const horizontalOffset =
+    errorRect.left < gridRect.left
+      ? gridRect.left - errorRect.left
+      : errorRect.right > gridRect.right
+        ? gridRect.right - errorRect.right
+        : 0;
+  if (horizontalOffset !== 0) {
+    error.style.setProperty("transform", `translateX(${String(horizontalOffset)}px)`);
+  }
+}
 
 function numberSeedRequiresRawBuffer(column: CompiledColumn, initialText: string): boolean {
   if (column.semantics.editorFamily !== "number" || initialText.length === 0) return false;
