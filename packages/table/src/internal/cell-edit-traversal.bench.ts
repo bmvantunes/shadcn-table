@@ -57,6 +57,16 @@ const authorityIndex = createIndex(() => {
 });
 authorityPredicateEvaluations = 0;
 const rangeIndex = createIndex();
+let initialBuildPredicateEvaluations = 0;
+const initialBuildIndex = new BrunoTableCellEditTraversalIndex(
+  (rowId) => rowsById.get(rowId),
+  () => {
+    initialBuildPredicateEvaluations += 1;
+    return true;
+  },
+  true,
+);
+initialBuildIndex.reconcile(columns, rowSpace);
 const forwardRowIds = rows.map((row) => row.id);
 const reverseRowIds = forwardRowIds.toReversed();
 const forwardRowSpace = Object.freeze({
@@ -90,6 +100,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   const horizontalRangeSamples: number[] = [];
   const equivalentAuthoritySamples: number[] = [];
   const changedAuthoritySamples: number[] = [];
+  const initialBuildSliceSamples: number[] = [];
 
   afterAll(() => {
     const assertSamples = (name: string, values: readonly number[]): number => {
@@ -117,6 +128,16 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       "changed predicate-authority reconciliation",
       changedAuthoritySamples,
     );
+    const initialBuildSliceP99Ms = assertSamples(
+      "initial predicate-index slice",
+      initialBuildSliceSamples,
+    );
+    if (
+      initialBuildPredicateEvaluations !== rowCount * columnCount ||
+      !initialBuildIndex.isReady()
+    ) {
+      throw new Error("Incremental predicate-index construction did not finish exactly.");
+    }
     console.log(
       JSON.stringify({
         benchmark: "BrunoTable exact editable traversal index",
@@ -129,10 +150,21 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         horizontalRangeP99Ms,
         equivalentAuthorityP99Ms,
         changedAuthorityP99Ms,
+        initialBuildSliceP99Ms,
         traversalP99WithinReference: traversalP99Ms <= referenceFrameBudgetMs,
       }),
     );
   });
+
+  bench(
+    "builds the exact 750,000-cell predicate index in bounded post-paint slices",
+    () => {
+      const startedAt = performance.now();
+      initialBuildIndex.buildNextSlice(rowCount / 100);
+      initialBuildSliceSamples.push(performance.now() - startedAt);
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
 
   bench(
     "finds far forward, reverse, and terminal destinations across 750,000 predicate cells",

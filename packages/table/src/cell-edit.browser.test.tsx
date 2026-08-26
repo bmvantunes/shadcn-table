@@ -126,6 +126,148 @@ test("commits through one parse-validation gate and preserves invalid editor evi
   expect(grid.element()).toHaveFocus();
 });
 
+test("preserves browser-incompatible current Number seeds and caret across equivalent recompiles", async () => {
+  type SeedRow = Readonly<{ readonly id: string; readonly value: number }>;
+  const decode = (input: unknown) =>
+    typeof input === "number" && Number.isFinite(input)
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected number." } as const);
+  const format = (value: number) => (value === 1 ? "+1" : "01");
+  const parse = (text: string) => decode(Number(text));
+  const equivalent = Object.is;
+  const compare = (left: number, right: number) => (left === right ? 0 : left < right ? -1 : 1);
+  const createColumns = () => {
+    const valueType: BrunoTableValueType<number, "numeric", "number"> = {
+      codecId: "test/browser-incompatible-number-seed",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "number",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: decode,
+      equivalent,
+      compare,
+      formatCanonicalText: format,
+      parseCanonicalText: parse,
+      formatDisplay: format,
+      encodePersisted: String,
+      decodePersisted: (input) => decode(Number(input)),
+    };
+    return [
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType,
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<SeedRow>;
+  };
+  const table = (seedRows: readonly SeedRow[], columns: ReturnType<typeof createColumns>) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_NUMBER_CURRENT_SEED"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{ rows: seedRows, totalRows: seedRows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const seedRows = [
+    { id: "plus", value: 1 },
+    { id: "leading-zero", value: 2 },
+  ] as const;
+  const screen = await render(table(seedRows, createColumns()));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_NUMBER_CURRENT_SEED" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  const plusEditor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(plusEditor).toHaveValue("+1");
+  const plusInput = plusEditor.element() as HTMLInputElement;
+  plusInput.setSelectionRange(1, 1);
+
+  await screen.rerender(table(seedRows, createColumns()));
+
+  expect(screen.getByRole("textbox", { name: "Edit Value" }).element()).toBe(plusInput);
+  expect(plusInput.selectionStart).toBe(1);
+  expect(plusInput.selectionEnd).toBe(1);
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("gridcell", { name: "01", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const leadingZeroEditor = screen.getByRole("spinbutton", { name: "Edit Value" });
+  await expect.element(leadingZeroEditor).toHaveValue(1);
+  expect((leadingZeroEditor.element() as HTMLInputElement).value).toBe("01");
+});
+
+test("contains hostile value equivalence without losing the raw candidate or focus", async () => {
+  type HostileRow = Readonly<{ readonly id: string; readonly value: number }>;
+  let comparisons = 0;
+  const valueType: BrunoTableValueType<number, "numeric", "number"> = {
+    codecId: "test/hostile-browser-equivalence",
+    codecVersion: 1,
+    filterFamily: "numeric",
+    editorFamily: "number",
+    cellAlign: "end",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime: (input) =>
+      typeof input === "number" && Number.isFinite(input)
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected number." },
+    equivalent: (left, right) => {
+      comparisons += 1;
+      if (comparisons === 2) throw new Error("hostile source comparison");
+      return Object.is(left, right);
+    },
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: Number(text) }),
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: (input) => ({ _tag: "Success", value: Number(input) }),
+  };
+  const hostileColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType,
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<HostileRow>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_HOSTILE_EQUIVALENCE"
+      columns={hostileColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{
+        rows: [{ id: "hostile", value: 4 }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  screen.getByRole("grid", { name: "Data for TABLE_ID_HOSTILE_EQUIVALENCE" }).element().focus();
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Value" });
+  await userEvent.fill(editor, "5");
+  await userEvent.keyboard("{Enter}");
+
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveValue(5);
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("The value is invalid.");
+  expect(screen.getByRole("gridcell", { name: "4", exact: true }).all()).toHaveLength(1);
+});
+
 test("does not exempt another Table Instance's detached Cancel control", async () => {
   const renderTables = (secondRows: readonly Row[]) => (
     <>
@@ -1222,28 +1364,51 @@ test("reveals an exact far predicate destination in both directions before nativ
     readonly id: string;
     readonly start: string;
     readonly destination: string;
+    readonly filler: string;
     readonly ordinal: number;
   }>;
-  const tallRows: readonly TallRow[] = Array.from({ length: 300 }, (_unused, ordinal) => ({
-    id: `row-${String(ordinal)}`,
-    start: ordinal === 0 ? "begin" : `start-${String(ordinal)}`,
-    destination: ordinal === 299 ? "far destination" : `destination-${String(ordinal)}`,
-    ordinal,
-  }));
+  const predicateEvaluations = vi.fn();
+  const lastOrdinal = 4_999;
+  const tallRows: readonly TallRow[] = Array.from(
+    { length: lastOrdinal + 1 },
+    (_unused, ordinal) => ({
+      id: `row-${String(ordinal)}`,
+      start: ordinal === 0 ? "begin" : `start-${String(ordinal)}`,
+      destination: ordinal === lastOrdinal ? "far destination" : `destination-${String(ordinal)}`,
+      filler: "-",
+      ordinal,
+    }),
+  );
   const tallColumns = [
     {
       columnId: "COL_ID_START",
       field: "start",
       headerName: "Start",
       valueType: "text",
-      isEditable: ({ row }: { readonly row: TallRow }) => row.ordinal === 0,
+      isEditable: ({ row }: { readonly row: TallRow }) => {
+        predicateEvaluations();
+        return row.ordinal === 0;
+      },
     },
+    ...Array.from({ length: 148 }, (_unused, index) => ({
+      columnId: `COL_ID_PREDICATE_FILLER_${String(index)}` as BrunoTableColumnId,
+      field: "filler" as const,
+      headerName: `Predicate filler ${String(index)}`,
+      valueType: "text" as const,
+      isEditable: () => {
+        predicateEvaluations();
+        return false;
+      },
+    })),
     {
       columnId: "COL_ID_DESTINATION",
       field: "destination",
       headerName: "Destination",
       valueType: "text",
-      isEditable: ({ row }: { readonly row: TallRow }) => row.ordinal === 299,
+      isEditable: ({ row }: { readonly row: TallRow }) => {
+        predicateEvaluations();
+        return row.ordinal === lastOrdinal;
+      },
     },
     {
       columnId: "COL_ID_ORDINAL",
@@ -1277,7 +1442,13 @@ test("reveals an exact far predicate destination in both directions before nativ
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_TALL" });
   grid.element().focus();
 
+  expect(predicateEvaluations.mock.calls.length).toBeLessThan(tallRows.length * 150);
   await userEvent.keyboard("{F2}{Tab}");
+  await expect.element(screen.getByRole("textbox", { name: "Edit Start" })).toHaveFocus();
+  await vi.waitFor(() =>
+    expect(predicateEvaluations.mock.calls.length).toBeGreaterThanOrEqual(tallRows.length * 150),
+  );
+  await userEvent.keyboard("{Tab}");
   const destination = screen.getByRole("gridcell", { name: "far destination", exact: true });
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(destination.element().id);
   expect(grid.element().scrollTop).toBeGreaterThan(0);
@@ -1595,7 +1766,7 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
     },
   ] satisfies BrunoTableColumns<FarRow>;
   const target: FarRow = { id: "target", value: "Far target", ordinal: 0 };
-  const peers: readonly FarRow[] = Array.from({ length: 400 }, (_unused, index) => ({
+  const peers: readonly FarRow[] = Array.from({ length: 120_000 }, (_unused, index) => ({
     id: `peer-${String(index)}`,
     value: `Peer ${String(index)}`,
     ordinal: index + 1,
@@ -1644,14 +1815,15 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
   grid.element().dispatchEvent(new Event("scroll"));
   const scrolledAnchorTop = anchorTop - grid.element().scrollTop;
 
-  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 1_000 }, 2));
-  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 350 }, 3));
-  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 900 }, 4));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 200_000 }, 2));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 110_000 }, 3));
+  flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 150_000 }, 4));
   await settleBrunoTableBrowserFrames();
   editor = screen.getByRole("textbox", { name: "Edit Value" });
   await expect.element(editor).toHaveValue("Far candidate");
   await expect.element(editor).toHaveFocus();
   expect(grid.element().scrollTop).toBeGreaterThan(0);
+  expect(grid.element().scrollTop).toBeLessThanOrEqual(4_000_000);
   expect(
     Math.abs(editor.element().getBoundingClientRect().top - scrolledAnchorTop),
   ).toBeLessThanOrEqual(1);

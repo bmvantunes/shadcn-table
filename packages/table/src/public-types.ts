@@ -235,7 +235,7 @@ export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
  */
 type BrunoTableEditorCapability<
   TValue,
-  TEditorFamily extends BrunoTableEditorFamily,
+  TEditorFamily extends Exclude<BrunoTableEditorFamily, "select">,
 > = TEditorFamily extends "boolean"
   ? {
       readonly editorFamily: "boolean";
@@ -250,7 +250,10 @@ type BrunoTableEditorCapability<
 export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
-  TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
+  TEditorFamily extends Exclude<BrunoTableEditorFamily, "select"> = Exclude<
+    BrunoTableEditorFamily,
+    "select"
+  >,
   TAggregateResults extends BrunoTableAggregateResults = never,
 > = {
   readonly codecId: string;
@@ -700,7 +703,7 @@ type RawCustomFieldValueType<
 > = BrunoTableValueType<
   NonNullish<TValue>,
   BrunoTableFilterFamily,
-  BrunoTableEditorFamily,
+  Exclude<BrunoTableEditorFamily, "select">,
   TAggregateResults
 >;
 
@@ -921,7 +924,7 @@ export type BrunoTableComputedColumnDefinition<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue> | ErasedValueType,
 > = ComputedColumn<TRow, TFields, TValue, TValueType>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
@@ -936,7 +939,7 @@ export type BrunoTableComputedColumnInput<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue> | ErasedValueType,
 > = ComputedColumnOptions<TRow, TFields, TValue, TValueType> &
   ComputedColumnDependencies<TRow, TFields, TValue>;
 

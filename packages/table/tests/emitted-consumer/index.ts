@@ -60,6 +60,10 @@ type Equal<TLeft, TRight> =
 
 type Expect<TValue extends true> = TValue;
 
+// @ts-expect-error Select editor option provenance is supplied only by BrunoTableSelectColumn.
+type EmittedUnsupportedCustomSelect = BrunoTableValueType<string, "select", "select">;
+void (0 as unknown as EmittedUnsupportedCustomSelect);
+
 type ExactMoney = Readonly<{ readonly minorUnits: bigint }>;
 const emittedExactMoneyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
   add: (left, right) => ({ minorUnits: left.minorUnits + right.minorUnits }),

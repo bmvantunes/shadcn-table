@@ -642,6 +642,57 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.cancel()).toBe(true);
   });
 
+  it("contains hostile edit equality for both before and live-source comparisons", () => {
+    for (const failureAt of [1, 2] as const) {
+      let equalityCalls = 0;
+      const valueType: BrunoTableValueType<string> = {
+        codecId: `test/hostile-edit-equality-${String(failureAt)}`,
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime: (input) =>
+          typeof input === "string"
+            ? { _tag: "Success", value: input }
+            : { _tag: "Failure", message: "Expected text." },
+        equivalent: () => {
+          equalityCalls += 1;
+          if (equalityCalls === failureAt) throw new Error("equality escaped");
+          return false;
+        },
+        compare: () => 0,
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: (input) => ({ _tag: "Success", value: String(input) }),
+      };
+      const liveRow = { value: "source" };
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileColumns([
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            headerName: "Value",
+            valueType,
+            isEditable: true,
+          },
+        ]),
+        getRow: () => liveRow,
+      });
+
+      expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("candidate")).toBe(false);
+      expect(runtime.getSessionSnapshot()).toMatchObject({
+        kind: "editing",
+        invalidMessage: "The value is invalid.",
+      });
+      expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    }
+  });
+
   it("keeps candidate ownership while XState reconciles a live Row Identity tombstone", () => {
     let liveRow: Row | undefined = row;
     const runtime = new BrunoTableCellEditRuntime({

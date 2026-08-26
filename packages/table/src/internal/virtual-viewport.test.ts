@@ -298,6 +298,44 @@ describe("BrunoTableViewportRuntime", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("applies edit-anchor deltas through authoritative segmented logical coordinates", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(200_000, columns);
+    viewport.attach(element);
+    viewport.revealCell(120_000, "COL_ID_NAME");
+    callbacks.shift()!(0);
+    const before = viewport.getSnapshot().virtualWindow.rowStart;
+
+    viewport.adjustVerticalByLogical(36_000);
+    callbacks.shift()!(0);
+
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeGreaterThan(before + 900);
+    expect(element.scrollTop).toBeLessThanOrEqual(BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT);
+  });
+
   it("frame-batches pinned-aware scrollbar geometry onto only the overlay subtree", () => {
     const columns = compileColumns([
       {

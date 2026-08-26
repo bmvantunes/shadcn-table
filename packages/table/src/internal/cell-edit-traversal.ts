@@ -29,6 +29,8 @@ type RowCache = {
   readonly eligiblePredicateColumnIds: Set<string>;
 };
 
+const SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT = 1_024;
+
 function hasSamePredicateAuthority(
   left: CompiledFieldColumn,
   right: CompiledFieldColumn | undefined,
@@ -61,6 +63,8 @@ export class BrunoTableCellEditTraversalIndex {
     | undefined;
   private allRowsDirty = false;
   private validationGeneration = 0;
+  private pendingRowIndexes: number[] = [];
+  private pendingRowCursor = 0;
 
   public constructor(
     private readonly getRow: (rowId: string) => unknown,
@@ -69,12 +73,13 @@ export class BrunoTableCellEditTraversalIndex {
       row: object,
       column: CompiledFieldColumn,
     ) => boolean,
+    private readonly incrementalBuild = false,
   ) {}
 
   public readonly reconcile = (
     columns: readonly CompiledColumn[],
     rowSpace: BrunoTableCellEditTraversalRowSpace,
-  ): void => {
+  ): boolean => {
     const columnsChanged = this.columns !== columns;
     const projectionChanged = this.rowSpace !== rowSpace;
     if (
@@ -83,7 +88,7 @@ export class BrunoTableCellEditTraversalIndex {
       !this.allRowsDirty &&
       this.dirtyColumnIdsByRowId.size === 0
     ) {
-      return;
+      return !this.isReady();
     }
     const previousPredicateColumns = new Map(
       this.predicateColumns.map(({ column }) => [column.columnId, column]),
@@ -109,7 +114,7 @@ export class BrunoTableCellEditTraversalIndex {
 
     if (!columnsChanged && !projectionChanged && !this.allRowsDirty) {
       this.reconcileDirtyCells();
-      return;
+      return !this.isReady();
     }
 
     const rowIds = Array.from({ length: rowSpace.totalRows }, (_, rowIndex) =>
@@ -118,6 +123,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.rowIndexById.clear();
     const validRowIndexes: number[] = [];
     const eligiblePredicateRowIndexes: number[] = [];
+    const pendingRowIndexes: number[] = [];
     for (const [rowIndex, rowId] of rowIds.entries()) {
       if (rowId === undefined) continue;
       this.rowIndexById.set(rowId, rowIndex);
@@ -134,8 +140,8 @@ export class BrunoTableCellEditTraversalIndex {
         }
         if (rowCache === undefined || rowCache.row !== row) {
           this.removeRowCache(rowId);
-          rowCache = this.createRowCache(rowId, row);
-          this.rowCacheById.set(rowId, rowCache);
+          pendingRowIndexes.push(rowIndex);
+          continue;
         } else {
           rowCache.validationGeneration = this.validationGeneration;
         }
@@ -146,10 +152,50 @@ export class BrunoTableCellEditTraversalIndex {
     this.rowIds = rowIds;
     this.validRowIndexes = validRowIndexes;
     this.eligiblePredicateRowIndexes = eligiblePredicateRowIndexes;
+    this.pendingRowIndexes = pendingRowIndexes;
+    this.pendingRowCursor = 0;
     this.allRowsDirty = false;
     this.dirtyColumnIdsByRowId.clear();
     this.verticalRangeCache = undefined;
+    if (
+      !this.incrementalBuild ||
+      pendingRowIndexes.length * this.predicateColumns.length <=
+        SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
+    ) {
+      this.buildNextSlice(Number.MAX_SAFE_INTEGER);
+    }
+    return !this.isReady();
   };
+
+  public readonly buildNextSlice = (maximumRows: number): boolean => {
+    const count = Math.max(1, Math.floor(maximumRows));
+    for (let built = 0; built < count; built += 1) {
+      const rowIndex = this.pendingRowIndexes[this.pendingRowCursor];
+      if (rowIndex === undefined) break;
+      this.pendingRowCursor += 1;
+      const rowId = this.rowIds[rowIndex];
+      if (rowId === undefined) continue;
+      const row = this.getRow(rowId);
+      if (typeof row !== "object" || row === null) continue;
+      const existing = this.rowCacheById.get(rowId);
+      const rowCache =
+        existing?.row === row && existing.validationGeneration === this.validationGeneration
+          ? existing
+          : this.createRowCache(rowId, row);
+      if (rowCache !== existing) this.rowCacheById.set(rowId, rowCache);
+      insertSorted(this.validRowIndexes, rowIndex);
+      if (rowCache.eligiblePredicateColumnIds.size > 0) {
+        insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
+      }
+    }
+    if (this.pendingRowCursor >= this.pendingRowIndexes.length) {
+      this.pendingRowIndexes = [];
+      this.pendingRowCursor = 0;
+    }
+    return !this.isReady();
+  };
+
+  public readonly isReady = (): boolean => this.pendingRowCursor >= this.pendingRowIndexes.length;
 
   public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (changedRowIds === undefined) {
@@ -185,7 +231,7 @@ export class BrunoTableCellEditTraversalIndex {
   ): BrunoTableCellEditTraversalDestination | undefined => {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
-    if (columns === undefined || rowSpace === undefined) return undefined;
+    if (columns === undefined || rowSpace === undefined || !this.isReady()) return undefined;
     if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
     const columnIndex = this.columnIndexById.get(columnId);
     if (columnIndex === undefined || this.rowIds[rowIndex] === undefined) return undefined;
@@ -213,7 +259,7 @@ export class BrunoTableCellEditTraversalIndex {
   ): BrunoTableCellEditTraversalDestination | undefined => {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
-    if (columns === undefined || rowSpace === undefined) return undefined;
+    if (columns === undefined || rowSpace === undefined || !this.isReady()) return undefined;
     if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
     if (range.axis === "vertical")
       return this.findVerticalRangeDestination(range, currentRowId, currentColumnId, direction);

@@ -2294,6 +2294,10 @@ const exactEqualityValueType = {
   filterFamily: "equality",
 } satisfies BrunoTableValueType<ExactAmount, "equality", "text">;
 
+// @ts-expect-error Select editor option provenance is supplied only by BrunoTableSelectColumn.
+type UnsupportedCustomSelect = BrunoTableValueType<string, "select", "select">;
+void (0 as unknown as UnsupportedCustomSelect);
+
 const optedInEqualitySetColumns = [
   {
     columnId: "COL_ID_AMOUNT",

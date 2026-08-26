@@ -1,4 +1,5 @@
 type EditGeometryInput = Readonly<{
+  readonly adjustVerticalByLogical: (delta: number) => number | undefined;
   readonly grid: HTMLElement;
   readonly layer: HTMLElement;
   readonly rowId: string;
@@ -70,9 +71,7 @@ export class BrunoTableCellEditGeometryController {
     if (rowIndex !== undefined && this.appliedRowIndex !== undefined) {
       const requestedDelta = (rowIndex - this.appliedRowIndex) * input.rowHeight;
       if (requestedDelta !== 0) {
-        const before = grid.scrollTop;
-        grid.scrollTop = before + requestedDelta;
-        this.observedScrollTop = grid.scrollTop;
+        this.observedScrollTop = input.adjustVerticalByLogical(requestedDelta) ?? grid.scrollTop;
       }
       this.appliedRowIndex = rowIndex;
     } else if (rowIndex !== undefined) {

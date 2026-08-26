@@ -71,6 +71,7 @@ import type {
   RefCallback,
   RefObject,
 } from "react";
+import { useQueuer } from "@tanstack/react-pacer";
 
 import type { BrunoTableColumnId } from "../public-types";
 
@@ -1384,6 +1385,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             attachScrollbarOverlay={adapter.attachScrollbarOverlay}
             subscribeViewportEnvironment={adapter.subscribeViewportEnvironment}
             scrollByLogical={adapter.scrollByLogical}
+            adjustVerticalByLogical={adapter.adjustVerticalByLogical}
             previewColumnWidth={adapter.previewColumnWidth}
             clearColumnWidthPreview={adapter.clearColumnWidthPreview}
             focusFallback={focusFallback}
@@ -1424,6 +1426,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   attachScrollbarOverlay,
   subscribeViewportEnvironment,
   scrollByLogical,
+  adjustVerticalByLogical,
   previewColumnWidth,
   clearColumnWidthPreview,
   focusFallback,
@@ -1458,6 +1461,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly attachScrollbarOverlay: (element: HTMLElement | null) => void;
   readonly subscribeViewportEnvironment: (listener: () => void) => () => void;
   readonly scrollByLogical: (delta: number) => boolean;
+  readonly adjustVerticalByLogical: (delta: number) => number | undefined;
   readonly previewColumnWidth: (columnId: string, width: number) => void;
   readonly clearColumnWidthPreview: (publishSnapshot?: boolean) => void;
   readonly focusFallback: () => void;
@@ -1475,6 +1479,24 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
+  const traversalQueueRef = useRef<{
+    readonly addItem: (item: number) => boolean;
+    readonly clear: () => void;
+  } | null>(null);
+  const traversalBuildVersionRef = useRef(0);
+  const traversalQueue = useQueuer<number>(
+    (version) => {
+      if (version !== traversalBuildVersionRef.current) return;
+      if (cellEdit?.buildTraversalSlice(64)) traversalQueueRef.current?.addItem(version);
+    },
+    { key: "bruno-table-editable-traversal", maxSize: 1, started: true, wait: 1 },
+  );
+  useLayoutEffect(() => {
+    traversalQueueRef.current = traversalQueue;
+    return () => {
+      if (traversalQueueRef.current === traversalQueue) traversalQueueRef.current = null;
+    };
+  }, [traversalQueue]);
   const yieldGridTabStop = useBrunoTableGridTabStopHandoff();
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
@@ -2712,6 +2734,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (cellEdit === undefined || !ownsGridSurface(event)) {
       return;
     }
+    if (!cellEdit.isTraversalReady()) {
+      event.preventDefault();
+      return;
+    }
     if (moveWithinEditableRange(direction)) {
       event.preventDefault();
       return;
@@ -2795,13 +2821,25 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   }, [cellEdit]);
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
-    cellEdit.reconcileTraversal(logicalColumns, rowSpace);
+    const buildVersion = traversalBuildVersionRef.current + 1;
+    traversalBuildVersionRef.current = buildVersion;
+    traversalQueue.clear();
+    if (cellEdit.reconcileTraversal(logicalColumns, rowSpace)) {
+      traversalQueue.addItem(buildVersion);
+    }
     cellEdit.reconcileActiveRow();
-    return runtime.subscribeRowChanges((changedRowIds) => {
+    const unsubscribe = runtime.subscribeRowChanges((changedRowIds) => {
       cellEdit.reconcileTraversalRows(changedRowIds);
       cellEdit.reconcileActiveRow(changedRowIds);
     });
-  }, [cellEdit, logicalColumns, rowSpace, runtime]);
+    return () => {
+      unsubscribe();
+      if (traversalBuildVersionRef.current === buildVersion) {
+        traversalBuildVersionRef.current += 1;
+        traversalQueue.clear();
+      }
+    };
+  }, [cellEdit, logicalColumns, rowSpace, runtime, traversalQueue]);
   useLayoutEffect(() => {
     if (cellEdit === undefined || cellRange === undefined) {
       cellEdit?.reconcileTraversalRange(undefined);
@@ -3116,6 +3154,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           {cellEdit === undefined ? null : (
             <BrunoTableEditOwnedRow
               attachPinnedEditorHost={attachPinnedEditorHost}
+              adjustVerticalByLogical={adjustVerticalByLogical}
               center={columnWindow.center}
               centerStartIndex={columnWindow.centerStartIndex}
               columnIndexOffset={columnIndexOffset}
@@ -5325,6 +5364,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
 
 const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   attachPinnedEditorHost,
+  adjustVerticalByLogical,
   center,
   centerStartIndex,
   columnIndexOffset,
@@ -5349,6 +5389,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   yieldGridTabStop,
 }: {
   readonly attachPinnedEditorHost: RefCallback<HTMLElement>;
+  readonly adjustVerticalByLogical: (delta: number) => number | undefined;
   readonly center: readonly CompiledColumn[];
   readonly centerStartIndex: number;
   readonly columnIndexOffset: number;
@@ -5393,6 +5434,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
       navigation.activateBody(rowIndex, session.rowId, session.columnId);
     }
     geometry.reconcile({
+      adjustVerticalByLogical,
       grid,
       layer: container,
       rowHeight: ROW_HEIGHT,
@@ -5401,6 +5443,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
     });
   }, [
     geometry,
+    adjustVerticalByLogical,
     center,
     gridElement,
     navigation,

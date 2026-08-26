@@ -282,6 +282,16 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         `BrunoTable validate requires a potentially editable field column: ${columnId}`,
       );
     }
+    if (
+      isEditable !== undefined &&
+      isEditable !== false &&
+      semantics.editorFamily === "select" &&
+      semantics.selectEditAuthority === undefined
+    ) {
+      throw new ColumnConfigurationError(
+        `BrunoTable custom Value Types cannot use the Select editor family for editing; use BrunoTableSelectColumn. Column: ${columnId}`,
+      );
+    }
 
     const enableFilter = hasEnableFilter ? candidate["enableFilter"] : true;
     if (typeof enableFilter !== "boolean") {

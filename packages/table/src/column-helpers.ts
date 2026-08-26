@@ -31,6 +31,13 @@ export type BrunoTableSelectValue = string | number | bigint | boolean;
 
 export { getBrunoTableSelectValueTypeFingerprint };
 
+type InternalSelectValueType<TValue> = Omit<
+  BrunoTableValueType<TValue, "select", "text">,
+  "editorFamily"
+> & {
+  readonly editorFamily: "select";
+};
+
 type FieldOfKind<TRow, TValueKind> = {
   readonly [TField in BrunoTableFieldKey<TRow>]: [BrunoTableNonNullish<TRow[TField]>] extends [
     never,
@@ -99,7 +106,8 @@ type FieldInput<
   TField extends BrunoTableFieldKey<TRow>,
   TValueType extends
     | BrunoTableBuiltInValueType
-    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>,
+    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>
+    | InternalSelectValueType<BrunoTableNonNullish<TRow[TField]>>,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = DistributiveOmit<
   BrunoTableFieldColumnInput<TRow, TField, TValueType, void, TColumnId>,
@@ -110,7 +118,10 @@ type ComputedOptions<
   TRow,
   TFields extends BrunoTableNonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | BrunoTableValueType<TValue>
+    | InternalSelectValueType<TValue>,
 > = Omit<
   BrunoTableComputedColumnInput<TRow, TFields, TValue, TValueType>,
   "fields" | "valueGetter" | "valueType"
@@ -762,7 +773,7 @@ export const BrunoTableBooleanColumn: BuiltInColumnHelper<
 type NonEmptySelectOptions<TValue extends BrunoTableSelectValue = BrunoTableSelectValue> =
   readonly [TValue, ...TValue[]];
 
-type SelectValueType<TValue> = BrunoTableValueType<TValue, "select", "select">;
+type SelectValueType<TValue> = InternalSelectValueType<TValue>;
 
 type SelectBuiltIn<TValue> = {
   readonly valueType: SelectValueType<TValue>;
@@ -1174,9 +1185,7 @@ function validateRuntimeColumnOptions(
   }
 }
 
-function createSelectValueType(
-  options: readonly unknown[],
-): BrunoTableValueType<unknown, "select", "select"> {
+function createSelectValueType(options: readonly unknown[]): SelectValueType<unknown> {
   const kind = typeof options[0];
   if (!isSelectPrimitiveKind(kind) || options.some((option) => typeof option !== kind)) {
     throw new TypeError(
@@ -1214,7 +1223,7 @@ function createSelectValueType(
       : ({ _tag: "Success", value: option } as const);
   };
 
-  const descriptor: BrunoTableValueType<unknown, "select", "select"> = {
+  const descriptor: SelectValueType<unknown> = {
     codecId: "@bruno/table/select",
     codecVersion: 1,
     filterFamily: "select",

@@ -402,12 +402,17 @@ function evaluateCandidate(
     }
   }
   const sourceValue = Reflect.get(session.row, session.column.field);
-  const changed = !equivalentEditValue(session.column, session.before, after);
+  const equivalentBefore = safeEquivalentEditValue(session.column, session.before, after);
+  const equivalentSource = safeEquivalentEditValue(session.column, after, sourceValue);
+  if (equivalentBefore === undefined || equivalentSource === undefined) {
+    return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+  }
+  const changed = !equivalentBefore;
   return Object.freeze({
     kind: "accepted",
     cellKey: cellKey(session.rowId, session.column.columnId),
     value: after,
-    removeDraft: equivalentEditValue(session.column, after, sourceValue),
+    removeDraft: equivalentSource,
     ...(changed
       ? {
           change: Object.freeze({
@@ -422,11 +427,20 @@ function evaluateCandidate(
   });
 }
 
-function equivalentEditValue(column: CompiledFieldColumn, left: unknown, right: unknown): boolean {
-  if (left === null || left === undefined || right === null || right === undefined) {
-    return Object.is(left, right);
+function safeEquivalentEditValue(
+  column: CompiledFieldColumn,
+  left: unknown,
+  right: unknown,
+): boolean | undefined {
+  try {
+    if (left === null || left === undefined || right === null || right === undefined) {
+      return Object.is(left, right);
+    }
+    const result: unknown = column.semantics.equivalent(left, right);
+    return typeof result === "boolean" ? result : undefined;
+  } catch {
+    return undefined;
   }
-  return column.semantics.equivalent(left, right);
 }
 
 function getAcceptedEvaluation(
@@ -527,14 +541,17 @@ export class BrunoTableCellEditRuntime {
       readonly columns: readonly CompiledColumn[];
       readonly getRow: (rowId: string) => unknown;
       readonly onCommit?: (change: BrunoTableCellEditChange) => void;
+      readonly incrementalTraversal?: boolean;
     }>,
   ) {
     this.columns = options.columns;
     this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
     this.onCommit = options.onCommit ?? (() => undefined);
-    this.traversalIndex = new BrunoTableCellEditTraversalIndex(this.getRow, (rowId, row, column) =>
-      this.evaluateEditable(rowId, row, column),
+    this.traversalIndex = new BrunoTableCellEditTraversalIndex(
+      this.getRow,
+      (rowId, row, column) => this.evaluateEditable(rowId, row, column),
+      options.incrementalTraversal === true,
     );
     this.actor.subscribe(() => this.publishActorDecision());
     this.actor.start();
@@ -643,9 +660,12 @@ export class BrunoTableCellEditRuntime {
   public readonly reconcileTraversal = (
     columns: readonly CompiledColumn[],
     rowSpace: BrunoTableCellEditTraversalRowSpace,
-  ): void => {
-    this.traversalIndex.reconcile(columns, rowSpace);
-  };
+  ): boolean => this.traversalIndex.reconcile(columns, rowSpace);
+
+  public readonly buildTraversalSlice = (maximumRows: number): boolean =>
+    this.traversalIndex.buildNextSlice(maximumRows);
+
+  public readonly isTraversalReady = (): boolean => this.traversalIndex.isReady();
 
   public readonly reconcileTraversalRows = (
     changedRowIds: ReadonlySet<string> | undefined,

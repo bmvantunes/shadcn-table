@@ -184,6 +184,7 @@ function BrunoTableClientInstance<
       ? new BrunoTableCellEditRuntime({
           columns: compiledColumns,
           getRow: runtime.getRowSnapshot,
+          incrementalTraversal: true,
         })
       : undefined,
   );

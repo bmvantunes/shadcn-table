@@ -683,6 +683,38 @@ describe("compiled Column Value Semantics", () => {
     });
   });
 
+  it("rejects a custom Select editor family without helper-owned option provenance", () => {
+    const unsupported = {
+      codecId: "test/custom-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success", value: String(input) }),
+      equivalent: Object.is,
+      compare: () => 0,
+      formatCanonicalText: String,
+      parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input: unknown) => ({ _tag: "Success", value: String(input) }),
+    };
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_UNSUPPORTED_SELECT",
+          field: "value",
+          headerName: "Unsupported Select",
+          valueType: unsupported as never,
+          isEditable: true,
+        },
+      ]),
+    ).toThrow("custom Value Types cannot use the Select editor family");
+  });
+
   it("rejects malformed helper and presentation configuration", () => {
     const callSelectAtRuntime = BrunoTableSelectColumn as unknown as (
       options: Readonly<Record<string, unknown>>,
