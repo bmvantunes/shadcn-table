@@ -390,6 +390,7 @@ describe("BrunoTable editable traversal index", () => {
 
     for (const [rowId, row] of rows) rows.set(rowId, { ...row, enabled: false });
     const allRowIds = new Set(rows.keys());
+    rows.delete("known-0");
     index.reconcileRows(allRowIds);
     expect(evaluate).not.toHaveBeenCalled();
     expect(index.reconcile(columns, projection)).toBe(true);
@@ -406,7 +407,8 @@ describe("BrunoTable editable traversal index", () => {
       expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
     }
 
-    expect(evaluate).toHaveBeenCalledTimes(rowCount * columnCount);
+    expect(evaluate).toHaveBeenCalledTimes((rowCount - 1) * columnCount);
+    expect(index.getCachedRowCount()).toBe(rowCount - 1);
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`known-${String(rowCount - 1)}`);
   });
 

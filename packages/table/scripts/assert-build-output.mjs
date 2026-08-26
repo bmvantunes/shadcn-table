@@ -467,6 +467,7 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
 }
 
 assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
+assertEmittedProducedTextEvidence(rootRuntimeAst);
 for (const { sourcePath, ast } of productionModuleAsts) {
   assertKeyboardBoundary(ast, sourcePath, keyboardBoundaryModeForPath(sourcePath));
 }
@@ -902,6 +903,54 @@ function assertKeyboardBoundary(ast, label, mode) {
   });
   if (violation !== undefined) {
     throw new Error(`${label} violates the BrunoTable keyboard boundary: ${String(violation)}.`);
+  }
+}
+
+function assertEmittedProducedTextEvidence(ast) {
+  const installer = ast.body.find(
+    (statement) =>
+      statement.type === "FunctionDeclaration" &&
+      statement.id?.name === "installBrunoTableProducedTextEvidence",
+  );
+  if (installer === undefined) {
+    throw new Error("The emitted package lost the produced-text evidence installer.");
+  }
+  assertKeyboardBoundary(
+    { type: "Program", sourceType: "module", body: [installer] },
+    "emitted produced-text evidence installer",
+    "produced-text-evidence",
+  );
+  const lifecycleTypes = new Set([
+    "compositionstart",
+    "compositionupdate",
+    "compositionend",
+    "beforeinput",
+  ]);
+  const allowedTypes = new Set(["compositionstart", "beforeinput", "compositionend"]);
+  const lifecycleCounts = new Map();
+  let violation = "";
+  walkSyntaxTree(ast, (node, ancestors) => {
+    if (violation.length > 0 || node.type !== "CallExpression") return;
+    if (node.callee.type !== "MemberExpression") return;
+    const listenerMethod = memberPropertyName(node.callee);
+    if (listenerMethod !== "addEventListener" && listenerMethod !== "removeEventListener") return;
+    const eventType = staticStringValue(node.arguments[0]);
+    if (eventType === undefined || !lifecycleTypes.has(eventType)) return;
+    if (!ancestors.includes(installer) || !allowedTypes.has(eventType)) {
+      violation = `${listenerMethod}(${eventType}) escaped the emitted produced-text installer`;
+      return;
+    }
+    const key = `${listenerMethod}:${eventType}`;
+    lifecycleCounts.set(key, (lifecycleCounts.get(key) ?? 0) + 1);
+  });
+  if (violation.length > 0) throw new Error(`Emitted produced-text evidence: ${violation}.`);
+  for (const listenerMethod of ["addEventListener", "removeEventListener"]) {
+    for (const eventType of allowedTypes) {
+      const key = `${listenerMethod}:${eventType}`;
+      if (lifecycleCounts.get(key) !== 1) {
+        throw new Error(`Emitted produced-text evidence expected exactly one ${key} lifecycle.`);
+      }
+    }
   }
 }
 

@@ -145,7 +145,8 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   bench(
     "paces a known 5,000-row publication with latest-row evidence and no partial traversal",
     () => {
-      const knownRowsById = new Map(rows.map((row) => [row.id, row]));
+      const highEligibilityRows = rows.map((row) => ({ ...row, editable: true }));
+      const knownRowsById = new Map(highEligibilityRows.map((row) => [row.id, row]));
       let predicateEvaluations = 0;
       const index = new BrunoTableCellEditTraversalIndex(
         (rowId) => knownRowsById.get(rowId),
@@ -160,11 +161,17 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       predicateEvaluations = 0;
       for (const row of rows) knownRowsById.set(row.id, { ...row, editable: false });
       const changedRowIds = new Set(knownRowsById.keys());
+      const stagingSamples: number[] = [];
+      let startedAt = performance.now();
       index.reconcileRows(changedRowIds);
       index.reconcile(columns, rowSpace);
+      stagingSamples.push(performance.now() - startedAt);
       knownRowsById.set(rows.at(-1)!.id, { ...rows.at(-1)!, editable: true });
+      startedAt = performance.now();
       index.reconcileRows(new Set([rows.at(-1)!.id]));
       index.reconcile(columns, rowSpace);
+      stagingSamples.push(performance.now() - startedAt);
+      const stagingP99Ms = assertBudgetSamples("known-row invalidation staging", stagingSamples);
       if (predicateEvaluations !== 0 || index.find(0, columns[0]!.columnId, 1) !== undefined) {
         throw new Error("Known-row traversal exposed partial predicate evidence.");
       }
@@ -185,6 +192,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         JSON.stringify({
           benchmark: "BrunoTable known-row predicate-index production slices",
           predicateEvaluations,
+          stagingP99Ms,
           sliceCount: sliceSamples.length,
           p99Ms,
           referenceFrameBudgetMs,

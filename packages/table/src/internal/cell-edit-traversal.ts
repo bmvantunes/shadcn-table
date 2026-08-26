@@ -68,6 +68,9 @@ export class BrunoTableCellEditTraversalIndex {
   private validationGeneration = 0;
   private pendingRowIndexes: number[] = [];
   private pendingRowCursor = 0;
+  private pendingDetachedRowIds: string[] = [];
+  private pendingDetachedRowCursor = 0;
+  private readonly pendingDirtyRowIds = new Set<string>();
 
   public constructor(
     private readonly getRow: (rowId: string) => unknown,
@@ -121,7 +124,7 @@ export class BrunoTableCellEditTraversalIndex {
       this.reconcileDirtyCells();
       if (
         !this.incrementalBuild ||
-        (this.pendingRowIndexes.length - this.pendingRowCursor) * this.predicateColumns.length <=
+        this.pendingWorkCount() * this.predicateColumns.length <=
           SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
       ) {
         this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
@@ -129,8 +132,7 @@ export class BrunoTableCellEditTraversalIndex {
       return !this.isReady();
     }
 
-    for (const rowId of this.dirtyRowIds) this.removeRowCache(rowId);
-    this.dirtyRowIds.clear();
+    const dirtyWorkRowIds = new Set([...this.pendingDirtyRowIds, ...this.dirtyRowIds]);
 
     const rowIds = Array.from({ length: rowSpace.totalRows }, (_, rowIndex) =>
       rowSpace.getRowId(rowIndex),
@@ -142,6 +144,10 @@ export class BrunoTableCellEditTraversalIndex {
     for (const [rowIndex, rowId] of rowIds.entries()) {
       if (rowId === undefined) continue;
       this.rowIndexById.set(rowId, rowIndex);
+      if (dirtyWorkRowIds.has(rowId)) {
+        pendingRowIndexes.push(rowIndex);
+        continue;
+      }
       if (this.predicateColumns.length === 0) {
         validRowIndexes.push(rowIndex);
         continue;
@@ -169,13 +175,19 @@ export class BrunoTableCellEditTraversalIndex {
     this.eligiblePredicateRowIndexes = eligiblePredicateRowIndexes;
     this.pendingRowIndexes = pendingRowIndexes;
     this.pendingRowCursor = 0;
+    this.pendingDetachedRowIds = [...dirtyWorkRowIds].filter(
+      (rowId) => !this.rowIndexById.has(rowId),
+    );
+    this.pendingDetachedRowCursor = 0;
+    this.pendingDirtyRowIds.clear();
+    for (const rowId of dirtyWorkRowIds) this.pendingDirtyRowIds.add(rowId);
     this.allRowsDirty = false;
     this.dirtyRowIds.clear();
     this.dirtyColumnIdsByRowId.clear();
     this.verticalRangeCache = undefined;
     if (
       !this.incrementalBuild ||
-      pendingRowIndexes.length * this.predicateColumns.length <=
+      this.pendingWorkCount() * this.predicateColumns.length <=
         SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
     ) {
       this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
@@ -193,10 +205,18 @@ export class BrunoTableCellEditTraversalIndex {
     for (let built = 0; built < rowLimit; built += 1) {
       if (built > 0 && Date.now() - startedAt >= maximumDurationMs) break;
       const rowIndex = this.pendingRowIndexes[this.pendingRowCursor];
-      if (rowIndex === undefined) break;
+      const detachedRowId = this.pendingDetachedRowIds[this.pendingDetachedRowCursor];
+      if (rowIndex === undefined && detachedRowId === undefined) break;
+      if (rowIndex === undefined) {
+        this.pendingDetachedRowCursor += 1;
+        this.removeRowCache(detachedRowId!);
+        this.pendingDirtyRowIds.delete(detachedRowId!);
+        continue;
+      }
       this.pendingRowCursor += 1;
       const rowId = this.rowIds[rowIndex];
       if (rowId === undefined) continue;
+      if (this.pendingDirtyRowIds.delete(rowId)) this.removeRowCache(rowId);
       const row = this.getRow(rowId);
       if (typeof row !== "object" || row === null) continue;
       const existing = this.rowCacheById.get(rowId);
@@ -214,6 +234,10 @@ export class BrunoTableCellEditTraversalIndex {
       this.pendingRowIndexes = [];
       this.pendingRowCursor = 0;
     }
+    if (this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length) {
+      this.pendingDetachedRowIds = [];
+      this.pendingDetachedRowCursor = 0;
+    }
     return !this.isReady();
   };
 
@@ -221,7 +245,8 @@ export class BrunoTableCellEditTraversalIndex {
     !this.allRowsDirty &&
     this.dirtyRowIds.size === 0 &&
     this.dirtyColumnIdsByRowId.size === 0 &&
-    this.pendingRowCursor >= this.pendingRowIndexes.length;
+    this.pendingRowCursor >= this.pendingRowIndexes.length &&
+    this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length;
 
   public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (changedRowIds === undefined) {
@@ -327,20 +352,38 @@ export class BrunoTableCellEditTraversalIndex {
   private readonly stageDirtyRows = (): void => {
     if (this.dirtyRowIds.size === 0) return;
     const pendingRowIndexes = new Set(this.pendingRowIndexes.slice(this.pendingRowCursor));
+    const pendingDetachedRowIds = new Set(
+      this.pendingDetachedRowIds.slice(this.pendingDetachedRowCursor),
+    );
+    const dirtyRowIndexes = new Set<number>();
     for (const rowId of this.dirtyRowIds) {
       const rowIndex = this.rowIndexById.get(rowId);
-      this.removeRowCache(rowId);
+      this.pendingDirtyRowIds.add(rowId);
       this.dirtyColumnIdsByRowId.delete(rowId);
-      if (rowIndex === undefined) continue;
-      removeSorted(this.validRowIndexes, rowIndex);
-      removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
-      pendingRowIndexes.add(rowIndex);
+      if (rowIndex === undefined) pendingDetachedRowIds.add(rowId);
+      else {
+        dirtyRowIndexes.add(rowIndex);
+        pendingRowIndexes.add(rowIndex);
+      }
     }
+    this.validRowIndexes = this.validRowIndexes.filter(
+      (rowIndex) => !dirtyRowIndexes.has(rowIndex),
+    );
+    this.eligiblePredicateRowIndexes = this.eligiblePredicateRowIndexes.filter(
+      (rowIndex) => !dirtyRowIndexes.has(rowIndex),
+    );
     this.pendingRowIndexes = [...pendingRowIndexes].sort((left, right) => left - right);
     this.pendingRowCursor = 0;
+    this.pendingDetachedRowIds = [...pendingDetachedRowIds];
+    this.pendingDetachedRowCursor = 0;
     this.dirtyRowIds.clear();
     this.verticalRangeCache = undefined;
   };
+
+  private readonly pendingWorkCount = (): number =>
+    this.pendingRowIndexes.length -
+    this.pendingRowCursor +
+    (this.pendingDetachedRowIds.length - this.pendingDetachedRowCursor);
 
   private readonly refreshRow = (rowId: string): void => {
     const rowIndex = this.rowIndexById.get(rowId);
