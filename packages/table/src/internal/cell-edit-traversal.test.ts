@@ -483,11 +483,13 @@ describe("BrunoTable editable traversal index", () => {
       })),
     );
     const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
-    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(getRow, evaluate, true);
     const projection = rowSpace([...rows.keys()]);
     index.reconcile(columns, projection);
     while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
     evaluate.mockClear();
+    getRow.mockClear();
 
     for (const [rowId, row] of rows) rows.set(rowId, { ...row, enabled: false });
     rows.delete("unknown-0");
@@ -495,6 +497,10 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.reconcile(columns, projection)).toBe(true);
     expect(evaluate).not.toHaveBeenCalled();
     expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    expect(index.buildNextSlice(160, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(getRow).toHaveBeenCalledTimes(10);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.isReady()).toBe(false);
 
     rows.set(`unknown-${String(rowCount - 1)}`, {
       id: `unknown-${String(rowCount - 1)}`,

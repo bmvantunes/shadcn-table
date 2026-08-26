@@ -259,9 +259,21 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
-    "paces an unknown high-eligibility replacement without synchronous membership teardown",
+    "paces unknown discovery and rebuilding for a 20,000 by 150 replacement",
     () => {
-      const unknownRowsById = new Map(rows.map((row) => [row.id, { ...row, editable: true }]));
+      const unknownRowCount = 20_000;
+      const unknownRows = Array.from(
+        { length: unknownRowCount },
+        (_unused, rowIndex): Row => ({
+          id: `unknown-row-${String(rowIndex)}`,
+          editable: true,
+        }),
+      );
+      const unknownRowSpace = Object.freeze({
+        totalRows: unknownRowCount,
+        getRowId: (rowIndex: number) => unknownRows[rowIndex]?.id,
+      });
+      const unknownRowsById = new Map(unknownRows.map((row) => [row.id, row]));
       let predicateEvaluations = 0;
       const index = new BrunoTableCellEditTraversalIndex(
         (rowId) => unknownRowsById.get(rowId),
@@ -271,36 +283,50 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         },
         true,
       );
-      index.reconcile(columns, rowSpace);
+      index.reconcile(columns, unknownRowSpace);
       while (index.buildNextSlice());
       predicateEvaluations = 0;
-      for (const row of rows) unknownRowsById.set(row.id, { ...row, editable: false });
-      unknownRowsById.delete(rows[0]!.id);
+      for (const row of unknownRows) unknownRowsById.set(row.id, { ...row, editable: false });
+      unknownRowsById.delete(unknownRows[0]!.id);
       const stagingSamples: number[] = [];
       let startedAt = performance.now();
       index.reconcileRows(undefined);
-      index.reconcile(columns, rowSpace);
+      index.reconcile(columns, unknownRowSpace);
       stagingSamples.push(performance.now() - startedAt);
-      unknownRowsById.set(rows.at(-1)!.id, { ...rows.at(-1)!, editable: true });
+      const supersededSliceStartedAt = performance.now();
+      index.buildNextSlice();
+      const supersededDiscoveryMs = performance.now() - supersededSliceStartedAt;
+      unknownRowsById.set(unknownRows.at(-1)!.id, {
+        ...unknownRows.at(-1)!,
+        editable: true,
+      });
       startedAt = performance.now();
       index.reconcileRows(undefined);
-      index.reconcile(columns, rowSpace);
+      index.reconcile(columns, unknownRowSpace);
       stagingSamples.push(performance.now() - startedAt);
       const stagingP99Ms = assertBudgetSamples("unknown-row invalidation staging", stagingSamples);
       if (predicateEvaluations !== 0 || index.find(0, columns[0]!.columnId, 1) !== undefined) {
         throw new Error("Unknown-row traversal exposed partial predicate evidence.");
       }
-      const sliceSamples: number[] = [];
+      const discoverySamples: number[] = [supersededDiscoveryMs];
+      const rebuildSamples: number[] = [];
       while (!index.isReady()) {
+        const evaluationsBeforeSlice: number = predicateEvaluations;
         const sliceStartedAt = performance.now();
         index.buildNextSlice();
-        sliceSamples.push(performance.now() - sliceStartedAt);
+        const elapsedMs = performance.now() - sliceStartedAt;
+        if (predicateEvaluations === evaluationsBeforeSlice) discoverySamples.push(elapsedMs);
+        else rebuildSamples.push(elapsedMs);
+        if (!index.isReady() && index.find(0, columns[0]!.columnId, 1) !== undefined) {
+          throw new Error("Unknown-row traversal exposed a partial destination during a slice.");
+        }
       }
-      const p99Ms = assertBudgetSamples("unknown-row predicate-index slice", sliceSamples);
+      const discoveryP99Ms = assertBudgetSamples("unknown-row discovery slice", discoverySamples);
+      const rebuildP99Ms = assertBudgetSamples("unknown-row predicate-index slice", rebuildSamples);
       if (
-        predicateEvaluations !== (rowCount - 1) * columnCount ||
-        index.getCachedRowCount() !== rowCount - 1 ||
-        index.find(0, columns[0]!.columnId, 1)?.rowId !== rows.at(-1)!.id
+        predicateEvaluations !== (unknownRowCount - 1) * columnCount ||
+        index.getCachedRowCount() !== unknownRowCount - 1 ||
+        index.find(0, columns[0]!.columnId, 1)?.rowId !== unknownRows.at(-1)!.id
       ) {
         throw new Error("Unknown-row predicate-index reconciliation was not exact/latest-wins.");
       }
@@ -309,8 +335,10 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
           benchmark: "BrunoTable unknown-row predicate-index production slices",
           predicateEvaluations,
           stagingP99Ms,
-          sliceCount: sliceSamples.length,
-          p99Ms,
+          discoverySliceCount: discoverySamples.length,
+          discoveryP99Ms,
+          rebuildSliceCount: rebuildSamples.length,
+          rebuildP99Ms,
           referenceFrameBudgetMs,
         }),
       );
