@@ -56,6 +56,7 @@ export class BrunoTableCellEditTraversalIndex {
   private validRowIndexes: number[] = [];
   private eligiblePredicateRowIndexes: number[] = [];
   private readonly dirtyColumnIdsByRowId = new Map<string, Set<string>>();
+  private readonly dirtyRowIds = new Set<string>();
   private verticalRangeCache:
     | {
         readonly range: Extract<BrunoTableCellEditTraversalRange, { readonly axis: "vertical" }>;
@@ -88,6 +89,7 @@ export class BrunoTableCellEditTraversalIndex {
       !columnsChanged &&
       !projectionChanged &&
       !this.allRowsDirty &&
+      this.dirtyRowIds.size === 0 &&
       this.dirtyColumnIdsByRowId.size === 0
     ) {
       return !this.isReady();
@@ -115,9 +117,20 @@ export class BrunoTableCellEditTraversalIndex {
     }
 
     if (!columnsChanged && !projectionChanged && !this.allRowsDirty) {
+      this.stageDirtyRows();
       this.reconcileDirtyCells();
+      if (
+        !this.incrementalBuild ||
+        (this.pendingRowIndexes.length - this.pendingRowCursor) * this.predicateColumns.length <=
+          SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
+      ) {
+        this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
+      }
       return !this.isReady();
     }
+
+    for (const rowId of this.dirtyRowIds) this.removeRowCache(rowId);
+    this.dirtyRowIds.clear();
 
     const rowIds = Array.from({ length: rowSpace.totalRows }, (_, rowIndex) =>
       rowSpace.getRowId(rowIndex),
@@ -157,6 +170,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingRowIndexes = pendingRowIndexes;
     this.pendingRowCursor = 0;
     this.allRowsDirty = false;
+    this.dirtyRowIds.clear();
     this.dirtyColumnIdsByRowId.clear();
     this.verticalRangeCache = undefined;
     if (
@@ -205,6 +219,7 @@ export class BrunoTableCellEditTraversalIndex {
 
   public readonly isReady = (): boolean =>
     !this.allRowsDirty &&
+    this.dirtyRowIds.size === 0 &&
     this.dirtyColumnIdsByRowId.size === 0 &&
     this.pendingRowCursor >= this.pendingRowIndexes.length;
 
@@ -212,12 +227,12 @@ export class BrunoTableCellEditTraversalIndex {
     if (changedRowIds === undefined) {
       this.validationGeneration += 1;
       this.allRowsDirty = true;
+      this.dirtyRowIds.clear();
+      this.verticalRangeCache = undefined;
       return;
     }
-    for (const rowId of changedRowIds) {
-      this.refreshRow(rowId);
-      this.reconcileVerticalRangeRow(rowId);
-    }
+    for (const rowId of changedRowIds) this.dirtyRowIds.add(rowId);
+    if (changedRowIds.size > 0) this.verticalRangeCache = undefined;
   };
 
   public readonly invalidateCell = (rowId: string, columnId: string): void => {
@@ -243,7 +258,8 @@ export class BrunoTableCellEditTraversalIndex {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
     if (columns === undefined || rowSpace === undefined) return undefined;
-    if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
+    if (this.allRowsDirty || this.dirtyRowIds.size > 0 || this.dirtyColumnIdsByRowId.size > 0)
+      this.reconcile(columns, rowSpace);
     if (!this.isReady()) return undefined;
     const columnIndex = this.columnIndexById.get(columnId);
     if (columnIndex === undefined || this.rowIds[rowIndex] === undefined) return undefined;
@@ -272,7 +288,8 @@ export class BrunoTableCellEditTraversalIndex {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
     if (columns === undefined || rowSpace === undefined) return undefined;
-    if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
+    if (this.allRowsDirty || this.dirtyRowIds.size > 0 || this.dirtyColumnIdsByRowId.size > 0)
+      this.reconcile(columns, rowSpace);
     if (!this.isReady()) return undefined;
     if (range.axis === "vertical")
       return this.findVerticalRangeDestination(range, currentRowId, currentColumnId, direction);
@@ -305,6 +322,24 @@ export class BrunoTableCellEditTraversalIndex {
       }
       rowCache.validationGeneration = this.validationGeneration;
     }
+  };
+
+  private readonly stageDirtyRows = (): void => {
+    if (this.dirtyRowIds.size === 0) return;
+    const pendingRowIndexes = new Set(this.pendingRowIndexes.slice(this.pendingRowCursor));
+    for (const rowId of this.dirtyRowIds) {
+      const rowIndex = this.rowIndexById.get(rowId);
+      this.removeRowCache(rowId);
+      this.dirtyColumnIdsByRowId.delete(rowId);
+      if (rowIndex === undefined) continue;
+      removeSorted(this.validRowIndexes, rowIndex);
+      removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
+      pendingRowIndexes.add(rowIndex);
+    }
+    this.pendingRowIndexes = [...pendingRowIndexes].sort((left, right) => left - right);
+    this.pendingRowCursor = 0;
+    this.dirtyRowIds.clear();
+    this.verticalRangeCache = undefined;
   };
 
   private readonly refreshRow = (rowId: string): void => {

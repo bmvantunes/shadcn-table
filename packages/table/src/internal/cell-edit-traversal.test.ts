@@ -136,12 +136,13 @@ describe("BrunoTable editable traversal index", () => {
     const replacement: Row = { ...second, enabled: false, alternate: true };
     rows.set(second.id, replacement);
     index.reconcileRows(new Set(["second"]));
-    expect(evaluate).toHaveBeenCalledTimes(8);
+    expect(evaluate).toHaveBeenCalledTimes(6);
     expect(index.find(0, "COL_ID_ENABLED", 1)).toEqual({
       rowIndex: 1,
       rowId: "second",
       columnId: "COL_ID_ALTERNATE",
     });
+    expect(evaluate).toHaveBeenCalledTimes(8);
 
     index.invalidateCell("second", "COL_ID_ALTERNATE");
     expect(index.find(0, "COL_ID_ENABLED", 1)).toEqual({
@@ -159,6 +160,7 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.getCachedRowCount()).toBe(3);
     rows.delete("second");
     index.reconcileRows(new Set(["second"]));
+    index.reconcile(nextColumns, rowSpace(["first", "third"]));
     expect(index.getCachedRowCount()).toBe(2);
   });
 
@@ -279,8 +281,9 @@ describe("BrunoTable editable traversal index", () => {
     rows.set("row-2500", { id: "row-2500", enabled: true, alternate: false });
     index.reconcileRows(new Set(["row-2500"]));
 
-    expect(evaluate).toHaveBeenCalledTimes(150);
+    expect(evaluate).not.toHaveBeenCalled();
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe("row-2500");
+    expect(evaluate).toHaveBeenCalledTimes(150);
   });
 
   it("validates row references after an unknown publication without rebuilding unchanged rows", () => {
@@ -358,6 +361,53 @@ describe("BrunoTable editable traversal index", () => {
       expect(index.isReady()).toBe(false);
     }
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`row-${String(rowCount - 1)}`);
+  });
+
+  it("paces, deduplicates, and applies the latest known-row batch without partial destinations", () => {
+    const rowCount = 40;
+    const columnCount = 40;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_unused, rowIndex) => {
+        const id = `known-${String(rowIndex)}`;
+        return [id, { id, enabled: rowIndex === rowCount - 1, alternate: false }];
+      }),
+    );
+    const columns = compileColumns(
+      Array.from({ length: columnCount }, (_unused, columnIndex) => ({
+        columnId: `COL_ID_KNOWN_${String(columnIndex)}`,
+        field: "enabled" as const,
+        headerName: `Known ${String(columnIndex)}`,
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      })),
+    );
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const projection = rowSpace([...rows.keys()]);
+    index.reconcile(columns, projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    evaluate.mockClear();
+
+    for (const [rowId, row] of rows) rows.set(rowId, { ...row, enabled: false });
+    const allRowIds = new Set(rows.keys());
+    index.reconcileRows(allRowIds);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.reconcile(columns, projection)).toBe(true);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+
+    rows.set(`known-${String(rowCount - 1)}`, {
+      id: `known-${String(rowCount - 1)}`,
+      enabled: true,
+      alternate: false,
+    });
+    index.reconcileRows(new Set([`known-${String(rowCount - 1)}`]));
+    expect(index.reconcile(columns, projection)).toBe(true);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY)) {
+      expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    }
+
+    expect(evaluate).toHaveBeenCalledTimes(rowCount * columnCount);
+    expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`known-${String(rowCount - 1)}`);
   });
 
   it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {

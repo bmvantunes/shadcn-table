@@ -143,6 +143,58 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "paces a known 5,000-row publication with latest-row evidence and no partial traversal",
+    () => {
+      const knownRowsById = new Map(rows.map((row) => [row.id, row]));
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => knownRowsById.get(rowId),
+        (_rowId, row) => {
+          predicateEvaluations += 1;
+          return (row as Row).editable;
+        },
+        true,
+      );
+      index.reconcile(columns, rowSpace);
+      while (index.buildNextSlice());
+      predicateEvaluations = 0;
+      for (const row of rows) knownRowsById.set(row.id, { ...row, editable: false });
+      const changedRowIds = new Set(knownRowsById.keys());
+      index.reconcileRows(changedRowIds);
+      index.reconcile(columns, rowSpace);
+      knownRowsById.set(rows.at(-1)!.id, { ...rows.at(-1)!, editable: true });
+      index.reconcileRows(new Set([rows.at(-1)!.id]));
+      index.reconcile(columns, rowSpace);
+      if (predicateEvaluations !== 0 || index.find(0, columns[0]!.columnId, 1) !== undefined) {
+        throw new Error("Known-row traversal exposed partial predicate evidence.");
+      }
+      const sliceSamples: number[] = [];
+      while (!index.isReady()) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      const p99Ms = assertBudgetSamples("known-row predicate-index slice", sliceSamples);
+      if (
+        predicateEvaluations !== rowCount * columnCount ||
+        index.find(0, columns[0]!.columnId, 1)?.rowId !== rows.at(-1)!.id
+      ) {
+        throw new Error("Known-row predicate-index reconciliation was not exact/latest-wins.");
+      }
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable known-row predicate-index production slices",
+          predicateEvaluations,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "finds far forward, reverse, and terminal destinations across 750,000 predicate cells",
     () => {
       const startedAt = performance.now();

@@ -13,7 +13,10 @@ assertReactCompilerStrictness(transformSync);
 
 class UninspectableWildcardExportError extends Error {}
 // Never weaken the global rule or infer keyboard ownership from a lookalike path.
-const keyboardEvidenceModuleCapabilities = new Map([["internal/hotkey-adapter.ts", "adapter"]]);
+const keyboardEvidenceModuleCapabilities = new Map([
+  ["internal/hotkey-adapter.ts", "adapter"],
+  ["internal/produced-text-evidence.ts", "produced-text-evidence"],
+]);
 
 function normalizeProductionModulePath(sourcePath) {
   return sourcePath.replaceAll("\\", "/").replace(/^\.\/+|\/+$/gu, "");
@@ -30,6 +33,8 @@ for (const [sourcePath, expectedMode] of [
   ["internal/hotkey-adapter.ts", "adapter"],
   ["internal\\hotkey-adapter.ts", "adapter"],
   ["./internal/hotkey-adapter.ts", "adapter"],
+  ["internal/produced-text-evidence.ts", "produced-text-evidence"],
+  ["internal\\produced-text-evidence.ts", "produced-text-evidence"],
   ["internal/bruno-table-view.tsx", "production"],
   ["internal\\bruno-table-view.tsx", "production"],
   ["./internal/cell-edit-boundary.tsx", "production"],
@@ -323,6 +328,14 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
       mode: "native-evidence",
     },
+    {
+      source: `element.addEventListener("keydown", () => undefined);`,
+      mode: "produced-text-evidence",
+    },
+    {
+      source: `import { useHotkeys } from "@tanstack/react-hotkeys"; useHotkeys("Enter", () => undefined);`,
+      mode: "produced-text-evidence",
+    },
     ...[
       "key",
       "code",
@@ -337,7 +350,7 @@ const keyboardBoundaryRejectedSmokes = await Promise.all(
       "shiftKey",
       "getModifierState",
     ].flatMap((property) =>
-      ["adapter", "native-evidence"].flatMap((mode) => [
+      ["adapter", "native-evidence", "produced-text-evidence"].flatMap((mode) => [
         {
           source: `function boundary(event: KeyboardEvent) { return event.${property}; }`,
           mode,
@@ -392,6 +405,10 @@ const keyboardBoundaryAllowedSmokes = await Promise.all(
     {
       source: `element.addEventListener("keydown", (event) => record(event.isComposing));`,
       mode: "native-evidence",
+    },
+    {
+      source: `element.addEventListener("compositionstart", () => undefined); element.addEventListener("beforeinput", (event: InputEvent) => record(event.inputType, event.data, event.isComposing)); element.addEventListener("compositionend", (event: CompositionEvent) => record(event.data));`,
+      mode: "produced-text-evidence",
     },
     {
       source: `function command(event: BrunoTableHotkeyGesture) { if (event.target) event.preventDefault(); }`,
@@ -830,6 +847,13 @@ function assertKeyboardBoundary(ast, label, mode) {
           violation = `${listenerMethod} keyboard listener`;
           return;
         }
+        if (
+          mode === "produced-text-evidence" &&
+          !["compositionstart", "beforeinput", "compositionend"].includes(eventType)
+        ) {
+          violation = `${listenerMethod} unsupported produced-text listener`;
+          return;
+        }
       }
     }
     if (mode !== "adapter" && mode !== "emitted" && isReactHotkeysModuleReference(node)) {
@@ -851,7 +875,7 @@ function assertKeyboardBoundary(ast, label, mode) {
       return;
     }
     if (
-      (mode === "adapter" || mode === "native-evidence") &&
+      (mode === "adapter" || mode === "native-evidence" || mode === "produced-text-evidence") &&
       ((node.type === "MemberExpression" &&
         isKeyboardInterpretationProperty(memberPropertyName(node))) ||
         (node.type === "Property" &&

@@ -78,6 +78,10 @@ import type { BrunoTableColumnId } from "../public-types";
 import type { CompiledColumn } from "./compile-columns";
 import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
 import { useBrunoTableGridTabStopHandoff } from "./focus";
+import {
+  armBrunoTableProducedTextCapture,
+  installBrunoTableProducedTextEvidence,
+} from "./produced-text-evidence";
 import { sameBrunoTableToolbarNode } from "./toolbar-node";
 import {
   type BrunoTableHotkeyGesture,
@@ -2792,38 +2796,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useEffect(() => {
     const grid = gridElement.current;
     if (grid === null || cellEdit === undefined) return;
-    const ownsCaptureEvent = (target: EventTarget | null) =>
-      target === grid || target === producedTextCapture.current;
-    const handleCompositionStart = (event: CompositionEvent) => {
-      if (!ownsCaptureEvent(event.target)) return;
-      armProducedTextCapture(grid, producedTextCapture.current);
-    };
-    const handleBeforeInput = (event: InputEvent) => {
-      if (!ownsCaptureEvent(event.target)) return;
-      if (event.isComposing || event.inputType === "insertCompositionText") return;
-      if (typeof event.data === "string" && event.inputType === "insertText") {
-        startReplaceFromProducedTextRef.current(event.data);
-        event.preventDefault();
-        clearProducedTextCapture(grid, producedTextCapture.current);
-        return;
-      }
-      event.preventDefault();
-      clearProducedTextCapture(grid, producedTextCapture.current);
-    };
-    const handleCompositionEnd = (event: CompositionEvent) => {
-      if (!ownsCaptureEvent(event.target)) return;
-      startReplaceFromProducedTextRef.current(event.data);
-      event.preventDefault();
-      clearProducedTextCapture(grid, producedTextCapture.current);
-    };
-    grid.addEventListener("compositionstart", handleCompositionStart);
-    grid.addEventListener("beforeinput", handleBeforeInput);
-    grid.addEventListener("compositionend", handleCompositionEnd);
-    return () => {
-      grid.removeEventListener("compositionstart", handleCompositionStart);
-      grid.removeEventListener("beforeinput", handleBeforeInput);
-      grid.removeEventListener("compositionend", handleCompositionEnd);
-    };
+    return installBrunoTableProducedTextEvidence(grid, producedTextCapture.current, (text) =>
+      startReplaceFromProducedTextRef.current(text),
+    );
   }, [cellEdit]);
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
@@ -2988,13 +2963,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         onFocus={(event) => {
           if (event.target === event.currentTarget) {
             navigation.activateForFocus();
-            armProducedTextCapture(event.currentTarget, producedTextCapture.current);
+            armBrunoTableProducedTextCapture(event.currentTarget, producedTextCapture.current);
           }
         }}
         onPointerDown={runCellRangePointerDown}
         onPointerUp={(event) => {
           if (event.currentTarget.ownerDocument.activeElement === event.currentTarget) {
-            armProducedTextCapture(event.currentTarget, producedTextCapture.current);
+            armBrunoTableProducedTextCapture(event.currentTarget, producedTextCapture.current);
           }
         }}
         style={{
@@ -5899,24 +5874,6 @@ function focusFirstInteractiveDescendant(cell: HTMLElement): boolean {
     if (document.activeElement === candidate) return true;
   }
   return false;
-}
-
-function armProducedTextCapture(grid: HTMLElement, capture: HTMLElement | null): void {
-  if (capture === null || grid.ownerDocument.activeElement !== grid) return;
-  capture.textContent = "";
-  const selection = grid.ownerDocument.getSelection();
-  if (selection === null) return;
-  const range = grid.ownerDocument.createRange();
-  range.selectNodeContents(capture);
-  range.collapse(false);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function clearProducedTextCapture(grid: HTMLElement, capture: HTMLElement | null): void {
-  if (capture === null) return;
-  capture.textContent = "";
-  armProducedTextCapture(grid, capture);
 }
 
 function interactiveDescendantIsUsable(candidate: InteractiveDomElement): boolean {
