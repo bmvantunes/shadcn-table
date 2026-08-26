@@ -585,6 +585,34 @@ describe("BrunoTableBigDecimalColumn", () => {
       ]),
     ).toThrow("validate must be a function");
 
+    const validate = () => undefined;
+    expect(() =>
+      Reflect.apply(BrunoTableBigDecimalColumn, undefined, [
+        {
+          columnId: "COL_ID_READ_ONLY_VALIDATE",
+          field: "price",
+          headerName: "Read-only validate",
+          validate,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+    expect(() =>
+      Reflect.apply(BrunoTableBigDecimalColumn.withDefaults, undefined, [{ validate }]),
+    ).toThrow("validate requires potential field editability");
+    const validatedPreset = Reflect.apply(BrunoTableBigDecimalColumn.withDefaults, undefined, [
+      { isEditable: true, validate },
+    ]) as (...arguments_: unknown[]) => unknown;
+    expect(() =>
+      Reflect.apply(validatedPreset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED_VALIDATE",
+          field: "price",
+          headerName: "Disabled validate",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+
     const predicate = vi.fn(() => true);
     const predicatePreset = BrunoTableBigDecimalColumn.withDefaults({
       isEditable: predicate,

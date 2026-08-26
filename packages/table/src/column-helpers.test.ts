@@ -15,4 +15,36 @@ describe("BrunoTable Column Helper runtime capability guards", () => {
       ]),
     ).toThrow("validate must be a function");
   });
+
+  it("rejects validation without effective potential editability", () => {
+    const validate = () => undefined;
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn, undefined, [
+        {
+          columnId: "COL_ID_READ_ONLY_VALIDATE",
+          field: "value",
+          headerName: "Read-only validate",
+          validate,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [{ validate }]),
+    ).toThrow("preset validate requires potential editability");
+
+    const preset = Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+      { isEditable: true, validate },
+    ]) as (...arguments_: unknown[]) => unknown;
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED_VALIDATE",
+          field: "value",
+          headerName: "Disabled validate",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+  });
 });

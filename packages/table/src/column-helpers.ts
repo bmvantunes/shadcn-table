@@ -418,6 +418,13 @@ function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
   if (options["validate"] !== undefined && typeof options["validate"] !== "function") {
     throw new TypeError("BrunoTable validate must be a function.");
   }
+  if (
+    typeof options["validate"] === "function" &&
+    options["isEditable"] !== true &&
+    typeof options["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable validate requires potential field editability.");
+  }
   const hasGroupPresentation =
     Object.hasOwn(options, "groupKeyValueFormatter") ||
     Object.hasOwn(options, "groupKeyCellClassName") ||
@@ -1118,6 +1125,13 @@ function snapshotPresetDefaults(
   }
   if (defaults["validate"] !== undefined && typeof defaults["validate"] !== "function") {
     throw new TypeError("BrunoTable Column Helper preset validate must be a function.");
+  }
+  if (
+    typeof defaults["validate"] === "function" &&
+    defaults["isEditable"] !== true &&
+    typeof defaults["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable Column Helper preset validate requires potential editability.");
   }
 
   const format = defaults["format"];

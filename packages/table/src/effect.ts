@@ -803,6 +803,13 @@ function validateCapabilityCombination(options: RuntimeColumnOptions): void {
   if (options["validate"] !== undefined && typeof options["validate"] !== "function") {
     throw new TypeError("BrunoTable BigDecimal validate must be a function.");
   }
+  if (
+    typeof options["validate"] === "function" &&
+    options["isEditable"] !== true &&
+    typeof options["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable BigDecimal validate requires potential field editability.");
+  }
   const hasGroupPresentation =
     Object.hasOwn(options, "groupKeyValueFormatter") ||
     Object.hasOwn(options, "groupKeyCellClassName") ||
