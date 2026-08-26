@@ -136,6 +136,9 @@ type ProjectionRowClaim = {
 };
 
 function findProjectedRow(grid: HTMLElement, rowId: string): HTMLElement | undefined {
+  const tableBoundary = grid.closest("[data-bruno-table]");
+  const slot = grid.querySelector<HTMLElement>(`[data-bruno-edit-row-slot="${CSS.escape(rowId)}"]`);
+  if (slot?.closest("[data-bruno-table]") === tableBoundary) return slot;
   for (const cell of projectedCells(grid, rowId)) {
     const row = cell.closest<HTMLElement>('[role="row"]');
     if (row !== null) return row;

@@ -1481,6 +1481,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
+  const getActiveEditRowId = useCallback((): string | undefined => {
+    const session = cellEdit?.getSessionSnapshot();
+    return session?.kind === "editing" ? session.rowId : undefined;
+  }, [cellEdit]);
+  const activeEditRowId = useSyncExternalStore(
+    cellEdit?.subscribeSession ?? subscribeNoCellEditSession,
+    getActiveEditRowId,
+    getActiveEditRowId,
+  );
   const traversalQueueRef = useRef<{
     readonly addItem: (item: number) => boolean;
     readonly clear: () => void;
@@ -3066,6 +3075,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
                       key={`row:${rowId}`}
                       attachBodyLayer={attachBodyLayerWithFocusHandoff}
                       rowId={rowId}
+                      projectionSuppressed={rowId === activeEditRowId}
                       instanceId={instanceId}
                       tableId={tableId}
                       centerStartIndex={columnWindow.centerStartIndex}
@@ -3104,6 +3114,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               leadingUtilityWidth={rowSelectionWidth}
               columnIndexOffset={columnIndexOffset}
               totalHeight={virtualWindow.totalHeight}
+              suppressedRowId={activeEditRowId}
             />
           ) : null}
           {columnWindow.pinnedEnd.length > 0 ? (
@@ -3123,6 +3134,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
               leadingUtilityWidth={rowSelectionWidth}
               columnIndexOffset={columnIndexOffset}
               totalHeight={virtualWindow.totalHeight}
+              suppressedRowId={activeEditRowId}
             />
           ) : null}
           {cellEdit === undefined ? null : (
@@ -4769,6 +4781,7 @@ type BrunoTableRowProps = Readonly<{
   readonly semanticRowIndex?: number | null | undefined;
   readonly onCommittedOutsideCellPointer?: ((rowId: string, columnId: string) => void) | undefined;
   readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
+  readonly projectionSuppressed?: boolean | undefined;
 }>;
 
 const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
@@ -4799,6 +4812,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     semanticRowIndex,
     onCommittedOutsideCellPointer,
     yieldGridTabStop,
+    projectionSuppressed = false,
   } = props;
   const resolvedSemanticRowIndex =
     semanticRowIndex === undefined ? logicalRowIndex + 2 : semanticRowIndex;
@@ -4841,6 +4855,26 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     ownRowSelection,
     tableId,
   ]);
+  if (projectionSuppressed) {
+    return (
+      <tr
+        ref={attachBodyLayer}
+        role="presentation"
+        aria-hidden="true"
+        data-bruno-edit-row-slot={rowId}
+        style={{
+          display: "table",
+          height: ROW_HEIGHT,
+          maxHeight: ROW_HEIGHT,
+          overflow: "hidden",
+          position: "absolute",
+          tableLayout: "fixed",
+          top,
+          width: rowSelectionSurfaceWidth(width, rowSelection),
+        }}
+      />
+    );
+  }
   return (
     <tr
       ref={attachBodyLayer}
@@ -4968,6 +5002,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
   totalHeight,
   leadingUtilityWidth,
   columnIndexOffset,
+  suppressedRowId,
 }: {
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly columns: readonly CompiledColumn[];
@@ -4984,6 +5019,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
   readonly totalHeight: number;
   readonly leadingUtilityWidth: number;
   readonly columnIndexOffset: number;
+  readonly suppressedRowId?: string | undefined;
 }) {
   const width = totalColumnWidth(columns);
   return (
@@ -5009,6 +5045,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
             pinnedStartCount={pinnedStartCount}
             precedingColumnCount={precedingColumnCount}
             rowId={rowId}
+            projectionSuppressed={rowId !== undefined && rowId === suppressedRowId}
             runtime={runtime}
             side={side}
             tableId={tableId}
@@ -5040,6 +5077,7 @@ const BrunoTablePinnedBodyRow = memo(
       onCommittedOutsideCellPointer,
       yieldGridTabStop,
       activeEditorColumnId,
+      projectionSuppressed = false,
     }: {
       readonly columns: readonly CompiledColumn[];
       readonly instanceId: string;
@@ -5059,9 +5097,29 @@ const BrunoTablePinnedBodyRow = memo(
         | undefined;
       readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
       readonly activeEditorColumnId?: BrunoTableColumnId | undefined;
+      readonly projectionSuppressed?: boolean | undefined;
     },
     ref: ForwardedRef<HTMLTableRowElement>,
   ) {
+    if (projectionSuppressed) {
+      return (
+        <tr
+          ref={ref}
+          role="presentation"
+          aria-hidden="true"
+          style={{
+            display: "table",
+            height: ROW_HEIGHT,
+            maxHeight: ROW_HEIGHT,
+            overflow: "hidden",
+            position: "absolute",
+            tableLayout: "fixed",
+            top,
+            width: `var(${brunoTablePinnedWidthCssVariable(side)}, ${String(width)}px)`,
+          }}
+        />
+      );
+    }
     return (
       <tr
         ref={ref}

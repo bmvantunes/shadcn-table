@@ -59,6 +59,11 @@ const authorityIndex = createIndex(() => {
   authorityPredicateEvaluations += 1;
 });
 authorityPredicateEvaluations = 0;
+let equivalentAuthorityPredicateEvaluations = 0;
+const equivalentAuthorityIndex = createIndex(() => {
+  equivalentAuthorityPredicateEvaluations += 1;
+});
+equivalentAuthorityPredicateEvaluations = 0;
 const rangeIndex = createIndex();
 const forwardRowIds = rows.map((row) => row.id);
 const reverseRowIds = forwardRowIds.toReversed();
@@ -430,15 +435,15 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   bench(
     "reconciles an equivalent 5,000 by 150 recompile without predicate callbacks",
     () => {
-      authorityPredicateEvaluations = 0;
+      equivalentAuthorityPredicateEvaluations = 0;
       const startedAt = performance.now();
-      authorityIndex.reconcile(equivalentColumns, forwardRowSpace);
+      equivalentAuthorityIndex.reconcile(equivalentColumns, forwardRowSpace);
       recordBudgetSample(
         "equivalent predicate-authority reconciliation",
         equivalentAuthoritySamples,
         performance.now() - startedAt,
       );
-      if (authorityPredicateEvaluations !== 0) {
+      if (equivalentAuthorityPredicateEvaluations !== 0) {
         throw new Error("Equivalent predicate authority revisited cached evidence.");
       }
     },

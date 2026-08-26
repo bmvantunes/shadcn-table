@@ -35,8 +35,10 @@ export function installBrunoTableProducedTextEvidence(
   const handleBeforeInput = (event: InputEvent) => {
     if (!ownsCaptureEvent(event.target)) return;
     if (event.isComposing || event.inputType === "insertCompositionText") return;
-    if (typeof event.data === "string" && event.inputType === "insertText") {
-      onProducedText(event.data);
+    if (event.inputType === "insertText" || event.inputType === "insertReplacementText") {
+      const text =
+        typeof event.data === "string" ? event.data : event.dataTransfer?.getData("text/plain");
+      if (text !== undefined && text.length > 0) onProducedText(text);
       event.preventDefault();
       clearBrunoTableProducedTextCapture(grid, capture);
       return;

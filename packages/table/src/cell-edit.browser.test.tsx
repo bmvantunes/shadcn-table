@@ -1123,6 +1123,25 @@ test("uses only browser-produced composition text and respects prevented nested 
   await userEvent.keyboard("{Escape}");
 });
 
+test("starts replacement editing from browser-produced replacement text", async () => {
+  const { grid, screen } = await renderEditableTable();
+  const replacement = new InputEvent("beforeinput", {
+    bubbles: true,
+    cancelable: true,
+    inputType: "insertReplacementText",
+  });
+  Object.defineProperty(replacement, "dataTransfer", {
+    value: {
+      getData: (type: string) => (type === "text/plain" ? "Grace Hopper" : ""),
+    },
+  });
+
+  expect(grid.element().dispatchEvent(replacement)).toBe(false);
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Name" }))
+    .toHaveValue("Grace Hopper");
+});
+
 test("preserves incomplete Number replace seeds until the native control can own them", async () => {
   const { grid, screen } = await renderEditableTable();
   await userEvent.keyboard("{ArrowRight}-");
@@ -1870,6 +1889,13 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   expect(
     document.getElementById(activeCellId ?? "")?.closest("[data-bruno-edit-owned-row]"),
   ).not.toBeNull();
+  expect(
+    [
+      ...grid
+        .element()
+        .querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id="target"]'),
+    ].filter((cell) => cell.closest("[data-bruno-edit-owned-row]") === null),
+  ).toHaveLength(0);
   const anchorTop = editor.element().getBoundingClientRect().top;
 
   await screen.rerender(renderTable([peer, { ...target, ordinal: 2, revision: 2n }], 2));
@@ -1979,6 +2005,15 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
+  await vi.waitFor(() => {
+    const ordinaryCells = [
+      ...grid
+        .element()
+        .querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id="target"]'),
+    ].filter((cell) => cell.closest("[data-bruno-edit-owned-row]") === null);
+    expect(ordinaryCells.length).toBeGreaterThan(0);
+    expect(new Set(ordinaryCells.map((cell) => cell.id)).size).toBe(ordinaryCells.length);
+  });
 
   grid.element().focus();
   await userEvent.keyboard("{F2}");
