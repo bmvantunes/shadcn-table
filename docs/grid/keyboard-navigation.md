@@ -18,8 +18,8 @@ retain Escape by stopping propagation before it reaches that target. Active resi
 uses the same table-scoped TanStack binding and typed cancellation command. BrunoTable does not add
 a capture listener, foreign-document bridge, modifier parser, or parallel key-state tracker.
 The React Adapter is the only current production module allowed to receive a raw `KeyboardEvent`.
-It projects each match into a new key- and modifier-free gesture containing only `target`, the
-captured `defaultPrevented` state, and a bound `preventDefault`; the raw event does not cross into
+It projects each match into a new key- and modifier-free gesture containing only `target`, live
+`defaultPrevented` state, and a bound `preventDefault`; the raw event does not cross into
 feature owners at runtime. The build guard maintains an explicit finite map from exact
 normalized root-relative module paths to evidence capabilities. The React Adapter alone may import
 React Hotkeys. Production code may not import Hotkeys core or install keyboard DOM listeners.

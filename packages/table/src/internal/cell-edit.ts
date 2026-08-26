@@ -566,7 +566,6 @@ export class BrunoTableCellEditRuntime {
       (rowId, row, column) => this.evaluateEditable(rowId, row, column),
       options.incrementalTraversal === true,
     );
-    this.activate();
   }
 
   public readonly activate = (): void => {

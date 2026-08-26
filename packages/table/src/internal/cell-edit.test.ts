@@ -4,7 +4,10 @@ import * as BigDecimal from "effect/BigDecimal";
 import { BrunoTableSelectColumn } from "../column-helpers";
 import { BrunoTableBigDecimalValueType } from "../effect";
 import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
-import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
+import {
+  BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH,
+  BrunoTableCellEditRuntime as BrunoTableCellEditRuntimeBase,
+} from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
 type Row = Readonly<{
@@ -32,6 +35,13 @@ const columns = compileColumns([
       value <= 10 ? undefined : "Score must be at most 10.",
   },
 ]);
+
+class BrunoTableCellEditRuntime extends BrunoTableCellEditRuntimeBase {
+  public constructor(options: ConstructorParameters<typeof BrunoTableCellEditRuntimeBase>[0]) {
+    super(options);
+    this.activate();
+  }
+}
 
 describe("BrunoTable Cell Edit Session", () => {
   it("retains invalid raw input and commits exact typed values only after one gate", () => {
