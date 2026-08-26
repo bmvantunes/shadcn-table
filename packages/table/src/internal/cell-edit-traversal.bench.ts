@@ -79,22 +79,23 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   const horizontalRangeSamples: number[] = [];
 
   afterAll(() => {
-    const traversalP99Ms = percentile99(samples);
-    const reconciliationP99Ms = percentile99(reconciliationSamples);
-    const rangeP99Ms = percentile99(rangeSamples);
-    const horizontalRangeP99Ms = percentile99(horizontalRangeSamples);
-    if (
-      samples.length !== 100 ||
-      reconciliationSamples.length !== 100 ||
-      rangeSamples.length !== 100 ||
-      horizontalRangeSamples.length !== 100 ||
-      traversalP99Ms > referenceFrameBudgetMs ||
-      reconciliationP99Ms > referenceFrameBudgetMs ||
-      rangeP99Ms > referenceFrameBudgetMs ||
-      horizontalRangeP99Ms > referenceFrameBudgetMs
-    ) {
-      throw new Error("The editable traversal index missed its sample count or frame budget.");
-    }
+    const assertSamples = (name: string, values: readonly number[]): number => {
+      if (values.length === 0) return 0;
+      const p99Ms = percentile99(values);
+      if (values.length !== 100 || p99Ms > referenceFrameBudgetMs) {
+        throw new Error(
+          `${name} produced ${String(values.length)} samples with p99 ${String(p99Ms)} ms.`,
+        );
+      }
+      return p99Ms;
+    };
+    const traversalP99Ms = assertSamples("far traversal", samples);
+    const reconciliationP99Ms = assertSamples("projection reconciliation", reconciliationSamples);
+    const rangeP99Ms = assertSamples("vertical range traversal", rangeSamples);
+    const horizontalRangeP99Ms = assertSamples(
+      "horizontal range traversal",
+      horizontalRangeSamples,
+    );
     console.log(
       JSON.stringify({
         benchmark: "BrunoTable exact editable traversal index",

@@ -1977,6 +1977,7 @@ type PresetEditRow = Readonly<{
   readonly optional: number | undefined;
   readonly required: number;
   readonly nullableStatus: "open" | "closed" | null;
+  readonly requiredStatus: "open" | "closed";
 }>;
 const nullableNumberPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
@@ -2033,6 +2034,30 @@ const predicateSelectPresetColumns = [
   }),
 ] satisfies BrunoTableColumns<PresetEditRow>;
 void predicateSelectPresetColumns;
+const invalidRequiredSelectPreset = predicateSelectPreset({
+  columnId: "COL_ID_INVALID_REQUIRED_SELECT_PRESET",
+  // @ts-expect-error an inherited null blank policy cannot target a required Select field.
+  field: "requiredStatus",
+  headerName: "Invalid required Select preset",
+});
+void invalidRequiredSelectPreset;
+const widenedEditableDefaults: { readonly isEditable?: boolean } = { isEditable: true };
+const widenedEditableNumberPreset = BrunoTableNumberColumn.withDefaults(widenedEditableDefaults);
+const invalidWidenedNullablePreset = widenedEditableNumberPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_PRESET",
+  // @ts-expect-error widened editability may be true, so nullable fields require a blank policy.
+  field: "nullable",
+  headerName: "Widened nullable preset",
+});
+void invalidWidenedNullablePreset;
+const validWidenedRequiredPreset = [
+  widenedEditableNumberPreset({
+    columnId: "COL_ID_WIDENED_REQUIRED_PRESET",
+    field: "required",
+    headerName: "Widened required preset",
+  }),
+] satisfies BrunoTableColumns<PresetEditRow>;
+void validWidenedRequiredPreset;
 const computedFromEditPresetColumns = [
   nullableNumberPreset({
     columnId: "COL_ID_COMPUTED_PRESET",

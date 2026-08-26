@@ -89,6 +89,23 @@ const invalidNullableBigDecimalWithoutBlank = editableBigDecimalWithoutBlank({
   headerName: "Nullable BigDecimal without blank",
 });
 void invalidNullableBigDecimalWithoutBlank;
+const widenedBigDecimalDefaults: { readonly isEditable?: boolean } = { isEditable: true };
+const widenedBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults(widenedBigDecimalDefaults);
+const invalidWidenedNullableBigDecimal = widenedBigDecimalPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_BIGDECIMAL",
+  // @ts-expect-error widened editability may be true, so nullable fields require a blank policy.
+  field: "nullable",
+  headerName: "Widened nullable BigDecimal",
+});
+void invalidWidenedNullableBigDecimal;
+const validWidenedRequiredBigDecimal = [
+  widenedBigDecimalPreset({
+    columnId: "COL_ID_WIDENED_REQUIRED_BIGDECIMAL",
+    field: "required",
+    headerName: "Widened required BigDecimal",
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void validWidenedRequiredBigDecimal;
 
 const priceColumn = BrunoTableBigDecimalColumn.withDefaults({
   headerName: "Price",

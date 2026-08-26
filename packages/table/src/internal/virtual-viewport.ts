@@ -200,36 +200,7 @@ export class BrunoTableViewportRuntime {
       element === null ? undefined : this.captureLayoutSourceCoordinate(element);
     this.leadingUtilityWidth = next;
     if (element === null) return true;
-    this.layoutReconciliationPending = true;
-    this.layoutReconciliationDeferrals = 0;
-    this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
-    const projectedLogicalScrollLeft = this.projectLayoutLogicalScrollLeft(
-      element,
-      previousHorizontalCoordinate,
-    );
-    if (
-      previousHorizontalCoordinate !== undefined &&
-      this.shouldDeferReverseRtlLayoutWrite(element, projectedLogicalScrollLeft)
-    ) {
-      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
-        element,
-        projectedLogicalScrollLeft,
-      );
-      this.layoutReconciliationDeferrals = 1;
-      this.horizontalInputPending = false;
-      this.horizontalInputSample = undefined;
-      this.horizontalInputNativeScrollLeft = undefined;
-      this.horizontalInputEventOrder = undefined;
-      this.directionDirty = false;
-      this.publishCoordinates(
-        element,
-        this.readLogicalScrollTop(element, true),
-        projectedLogicalScrollLeft,
-      );
-      this.schedulePublish();
-      return true;
-    }
-    this.publishFromElement();
+    this.reconcileHorizontalAfterLayoutSourceChange(element, previousHorizontalCoordinate);
     return true;
   };
 
@@ -271,6 +242,13 @@ export class BrunoTableViewportRuntime {
       logicalScrollMaximum(this.layout, element.clientHeight),
     );
     this.setLogicalScrollTop(element, clampedLogicalScrollTop);
+    this.reconcileHorizontalAfterLayoutSourceChange(element, previousHorizontalCoordinate);
+  };
+
+  private readonly reconcileHorizontalAfterLayoutSourceChange = (
+    element: HTMLElement,
+    previousHorizontalCoordinate: HorizontalCoordinateSample | undefined,
+  ): void => {
     this.layoutReconciliationPending = true;
     this.layoutReconciliationDeferrals = 0;
     this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;

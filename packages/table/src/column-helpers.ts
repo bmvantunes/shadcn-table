@@ -25,6 +25,7 @@ import type {
   BrunoTableOrdering,
   BrunoTableValueType,
 } from "./public-types";
+import type { EffectiveFieldPresetCapability } from "./internal/preset-capability";
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
@@ -177,48 +178,18 @@ type FieldOnlyPresetKey =
   | "blankValue"
   | "validate";
 
+const fieldOnlyPresetKeyEvidence = {
+  enableFilter: true,
+  enableSetFilter: true,
+  enableSorting: true,
+  isEditable: true,
+  blankValue: true,
+  validate: true,
+} as const satisfies Readonly<Record<FieldOnlyPresetKey, true>>;
+
+const fieldOnlyPresetKeys = new Set<PropertyKey>(Reflect.ownKeys(fieldOnlyPresetKeyEvidence));
+
 type ComputedPresetDefaults<TDefaults> = Omit<TDefaults, FieldOnlyPresetKey>;
-
-type EffectivePresetOption<TDefaults, TOptions, TKey extends PropertyKey> =
-  TOptions extends Record<TKey, infer TValue>
-    ? TValue
-    : TDefaults extends Record<TKey, infer TValue>
-      ? TValue
-      : never;
-
-type EffectiveFieldPresetCapability<
-  TRow,
-  TField extends BrunoTableFieldKey<TRow>,
-  TDefaults,
-  TOptions,
-> =
-  EffectivePresetOption<TDefaults, TOptions, "blankValue"> extends infer TBlank
-    ? [TBlank] extends [never]
-      ? EffectivePresetOption<TDefaults, TOptions, "isEditable"> extends infer TEditable
-        ? [TEditable] extends [never]
-          ? unknown
-          : TEditable extends true | ((...arguments_: never[]) => unknown)
-            ? null extends TRow[TField]
-              ? never
-              : undefined extends TRow[TField]
-                ? never
-                : unknown
-            : unknown
-        : never
-      : EffectivePresetOption<TDefaults, TOptions, "isEditable"> extends
-            | true
-            | ((...arguments_: never[]) => unknown)
-        ? [TBlank] extends [null]
-          ? null extends TRow[TField]
-            ? unknown
-            : never
-          : [TBlank] extends [undefined]
-            ? undefined extends TRow[TField]
-              ? unknown
-              : never
-            : never
-        : never
-    : never;
 
 type BuiltInColumnPreset<
   TValue,
@@ -439,6 +410,9 @@ function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
   ) {
     throw new TypeError("BrunoTable blankValue requires potential field editability.");
   }
+  if (options["validate"] !== undefined && typeof options["validate"] !== "function") {
+    throw new TypeError("BrunoTable validate must be a function.");
+  }
   const hasGroupPresentation =
     Object.hasOwn(options, "groupKeyValueFormatter") ||
     Object.hasOwn(options, "groupKeyCellClassName") ||
@@ -479,12 +453,7 @@ function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeCol
     Reflect.ownKeys(defaults)
       .filter(
         (key) =>
-          key !== "enableFilter" &&
-          key !== "enableSetFilter" &&
-          key !== "enableSorting" &&
-          key !== "isEditable" &&
-          key !== "blankValue" &&
-          key !== "validate" &&
+          !fieldOnlyPresetKeys.has(key) &&
           key !== "groupBy" &&
           key !== "groupKeyValueFormatter" &&
           key !== "groupKeyCellClassName" &&
@@ -829,10 +798,10 @@ type EffectiveSelectPresetCapability<
   TColumnId extends BrunoTableColumnId,
   TDefaults,
   TOptions,
-> =
-  Merge<TDefaults, TOptions> extends SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>
+> = EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
+  (Merge<TDefaults, TOptions> extends SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>
     ? unknown
-    : never;
+    : never);
 
 type SelectColumnPreset<
   TDefaultOptions extends NonEmptySelectOptions,

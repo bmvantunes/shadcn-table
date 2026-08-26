@@ -695,4 +695,38 @@ describe("BrunoTable Cell Edit Session", () => {
       value: 6,
     });
   });
+
+  it("preserves compatible drafts across recompiles and prunes a changed value domain", () => {
+    const compileTextColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: true,
+        },
+      ]);
+    const textColumns = compileTextColumns();
+    const liveRow = { id: "row", value: "source" };
+    const runtime = new BrunoTableCellEditRuntime({ columns: textColumns, getRow: () => liveRow });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("draft")).toBe(true);
+
+    runtime.reconcileColumns(compileTextColumns());
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("draft");
+
+    runtime.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "number",
+          isEditable: true,
+        },
+      ]),
+    );
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+  });
 });

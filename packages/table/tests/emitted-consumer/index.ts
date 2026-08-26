@@ -1417,6 +1417,7 @@ type EmittedPresetEditRow = Readonly<{
   readonly optional: number | undefined;
   readonly required: number;
   readonly nullableStatus: "open" | "closed" | null;
+  readonly requiredStatus: "open" | "closed";
 }>;
 const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
@@ -1460,7 +1461,13 @@ const emittedPredicateNumberColumns = [
 void emittedPredicateNumberColumns;
 const emittedPredicateSelectPreset = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
-  isEditable: ({ value }) => value !== undefined,
+  isEditable: ({ row, value }) => {
+    type SelectRowIsUnknown = Expect<Equal<typeof row, unknown>>;
+    type SelectValueIsExact = Expect<Equal<typeof value, "open" | "closed" | null | undefined>>;
+    void (null as unknown as SelectRowIsUnknown);
+    void (null as unknown as SelectValueIsExact);
+    return value !== undefined;
+  },
   blankValue: null,
 });
 const emittedPredicateSelectColumns = [
@@ -1471,6 +1478,32 @@ const emittedPredicateSelectColumns = [
   }),
 ] satisfies BrunoTableColumns<EmittedPresetEditRow>;
 void emittedPredicateSelectColumns;
+const invalidEmittedRequiredSelectPreset = emittedPredicateSelectPreset({
+  columnId: "COL_ID_INVALID_REQUIRED_SELECT_PRESET",
+  // @ts-expect-error an inherited null blank policy cannot target a required Select field.
+  field: "requiredStatus",
+  headerName: "Invalid required Select preset",
+});
+void invalidEmittedRequiredSelectPreset;
+const emittedWidenedEditableDefaults: { readonly isEditable?: boolean } = { isEditable: true };
+const emittedWidenedNumberPreset = BrunoTableNumberColumn.withDefaults(
+  emittedWidenedEditableDefaults,
+);
+const invalidEmittedWidenedNullablePreset = emittedWidenedNumberPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_PRESET",
+  // @ts-expect-error widened editability may be true, so nullable fields require a blank policy.
+  field: "nullable",
+  headerName: "Widened nullable preset",
+});
+void invalidEmittedWidenedNullablePreset;
+const validEmittedWidenedRequiredPreset = [
+  emittedWidenedNumberPreset({
+    columnId: "COL_ID_WIDENED_REQUIRED_PRESET",
+    field: "required",
+    headerName: "Widened required preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void validEmittedWidenedRequiredPreset;
 const emittedComputedFromEditPresetColumns = [
   emittedNullableNumberPreset({
     columnId: "COL_ID_COMPUTED_PRESET",

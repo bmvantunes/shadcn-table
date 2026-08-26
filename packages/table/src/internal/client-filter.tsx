@@ -54,6 +54,7 @@ import {
   recordBrunoTableClientColumnFilterTriggerRender,
 } from "./render-instrumentation";
 import {
+  brunoTableSetValueKey,
   createBrunoTableSetValueIndex,
   hasBrunoTableSetValue,
   type BrunoTableSetValueIndex,
@@ -981,11 +982,7 @@ function isBrunoTableFacetOptionSelected(
 }
 
 function facetOptionKey(column: CompiledColumn, value: unknown): string {
-  try {
-    return `${column.semantics.codecId}:${column.semantics.formatCanonicalText(value)}`;
-  } catch {
-    return `${typeof value}:${String(value)}`;
-  }
+  return brunoTableSetValueKey(column, value) ?? `${typeof value}:${String(value)}`;
 }
 
 function FilterExpressionEditor({

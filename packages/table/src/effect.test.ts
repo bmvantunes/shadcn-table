@@ -574,6 +574,16 @@ describe("BrunoTableBigDecimalColumn", () => {
         },
       ]),
     ).toThrow("blankValue requires potential field editability");
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_INVALID_VALIDATE",
+          field: "nullable",
+          headerName: "Invalid validate",
+          validate: "not-a-function",
+        },
+      ]),
+    ).toThrow("validate must be a function");
 
     const predicate = vi.fn(() => true);
     const predicatePreset = BrunoTableBigDecimalColumn.withDefaults({

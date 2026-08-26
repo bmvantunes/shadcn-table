@@ -622,9 +622,26 @@ export class BrunoTableCellEditRuntime {
 
   public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
     if (this.columns === columns) return;
-    this.cancel();
-    this.columns = columns;
-    this.fieldColumnsById = indexFieldColumns(columns);
+    const previousFieldColumns = this.fieldColumnsById;
+    const nextFieldColumns = indexFieldColumns(columns);
+    const previousDrafts = this.draftStore.get();
+    const { drafts: nextDrafts, changedKeys } = reconcileDraftsForColumns(
+      previousDrafts,
+      previousFieldColumns,
+      nextFieldColumns,
+    );
+    batch(() => {
+      this.cancel();
+      this.columns = columns;
+      this.fieldColumnsById = nextFieldColumns;
+      if (nextDrafts === previousDrafts) return;
+      this.draftStore.setState(() => nextDrafts);
+      for (const key of changedKeys) {
+        this.invalidateDraftCell(key);
+        this.publishCell(key, nextDrafts);
+        this.releaseUnusedCellStore(key);
+      }
+    });
   };
 
   public readonly commitActiveCandidate = (): boolean => {
@@ -833,6 +850,51 @@ function indexFieldColumns(
     if (column.kind === "field") indexed.set(column.columnId, column);
   }
   return indexed;
+}
+
+function reconcileDraftsForColumns(
+  drafts: ReadonlyMap<string, DraftEntry>,
+  previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
+): Readonly<{ readonly drafts: ReadonlyMap<string, DraftEntry>; readonly changedKeys: string[] }> {
+  let nextDrafts: Map<string, DraftEntry> | undefined;
+  const changedKeys: string[] = [];
+  for (const [key, draft] of drafts) {
+    const identity = parseCellKey(key);
+    const previousColumn =
+      identity === undefined ? undefined : previousColumns.get(identity.columnId);
+    const nextColumn = identity === undefined ? undefined : nextColumns.get(identity.columnId);
+    if (nextColumn === undefined) {
+      nextDrafts ??= new Map(drafts);
+      nextDrafts.delete(key);
+      changedKeys.push(key);
+      continue;
+    }
+    if (
+      previousColumn?.semantics.decodeRuntimeAuthority ===
+      nextColumn.semantics.decodeRuntimeAuthority
+    ) {
+      continue;
+    }
+    const decoded = nextColumn.semantics.decodeRuntime(draft.value);
+    if (decoded._tag === "Failure") {
+      nextDrafts ??= new Map(drafts);
+      nextDrafts.delete(key);
+      changedKeys.push(key);
+      continue;
+    }
+    if (Object.is(decoded.value, draft.value)) continue;
+    nextDrafts ??= new Map(drafts);
+    nextDrafts.set(
+      key,
+      Object.freeze({
+        value: decoded.value,
+        projection: Object.freeze({ active: false, hasDraft: true, draft: decoded.value }),
+      }),
+    );
+    changedKeys.push(key);
+  }
+  return Object.freeze({ drafts: nextDrafts ?? drafts, changedKeys });
 }
 
 function cellKey(rowId: string, columnId: string): string {

@@ -901,6 +901,12 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
         .includes(activeCellId ?? "") === true,
   );
   expect(detachedSemanticOwner?.getAttribute("aria-rowindex")).toBeNull();
+  expect(
+    screen
+      .getByRole("checkbox")
+      .all()
+      .filter((checkbox) => checkbox.element().closest("[data-bruno-edit-owned-row]") !== null),
+  ).toHaveLength(0);
 
   await screen.rerender(renderTable([peer], 4));
   await expect

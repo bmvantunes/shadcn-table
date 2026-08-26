@@ -5507,7 +5507,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
           />
         </tbody>
       </table>
-      {rowSelection === undefined || session.rowMissing ? null : (
+      {rowSelection === undefined || detached ? null : (
         <div
           data-bruno-edit-owned-selection=""
           style={{

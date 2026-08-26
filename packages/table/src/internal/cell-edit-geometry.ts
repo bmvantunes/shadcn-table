@@ -145,10 +145,11 @@ function findProjectedRow(grid: HTMLElement, rowId: string): HTMLElement | undef
 }
 
 function projectedCells(grid: HTMLElement, rowId: string): readonly HTMLElement[] {
-  return [...grid.querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id]')].filter(
-    (cell) =>
-      cell.dataset["brunoRowId"] === rowId && cell.closest("[data-bruno-edit-owned-row]") === null,
-  );
+  return [
+    ...grid.querySelectorAll<HTMLElement>(
+      `[role="gridcell"][data-bruno-row-id="${CSS.escape(rowId)}"]`,
+    ),
+  ].filter((cell) => cell.closest("[data-bruno-edit-owned-row]") === null);
 }
 
 function restoreAttribute(element: HTMLElement, name: string, value: string | null): void {
