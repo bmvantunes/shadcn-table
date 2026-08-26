@@ -154,11 +154,13 @@ export class BrunoTableViewportRuntime {
   private layoutKey = "";
   private layoutPinningKey = "";
   private snapshot: BrunoTableViewportSnapshot = INITIAL_VIEWPORT;
+  private leadingUtilityWidth: number;
 
   public constructor(
     private readonly headerHeight: number = ROW_HEIGHT,
-    private readonly leadingUtilityWidth: number = 0,
+    leadingUtilityWidth: number = 0,
   ) {
+    this.leadingUtilityWidth = normalizedLeadingUtilityWidth(leadingUtilityWidth);
     this.layout = createLayout(0, [], headerHeight);
   }
 
@@ -187,6 +189,47 @@ export class BrunoTableViewportRuntime {
     if (next === current) return false;
     this.setLogicalScrollLeft(element, next);
     this.schedulePublish();
+    return true;
+  };
+
+  public readonly setLeadingUtilityWidth = (leadingUtilityWidth: number): boolean => {
+    const next = normalizedLeadingUtilityWidth(leadingUtilityWidth);
+    if (next === this.leadingUtilityWidth) return false;
+    const element = this.element;
+    const previousHorizontalCoordinate =
+      element === null ? undefined : this.captureLayoutSourceCoordinate(element);
+    this.leadingUtilityWidth = next;
+    if (element === null) return true;
+    this.layoutReconciliationPending = true;
+    this.layoutReconciliationDeferrals = 0;
+    this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
+    const projectedLogicalScrollLeft = this.projectLayoutLogicalScrollLeft(
+      element,
+      previousHorizontalCoordinate,
+    );
+    if (
+      previousHorizontalCoordinate !== undefined &&
+      this.shouldDeferReverseRtlLayoutWrite(element, projectedLogicalScrollLeft)
+    ) {
+      this.pendingLayoutHorizontalCoordinate = this.captureHorizontalCoordinate(
+        element,
+        projectedLogicalScrollLeft,
+      );
+      this.layoutReconciliationDeferrals = 1;
+      this.horizontalInputPending = false;
+      this.horizontalInputSample = undefined;
+      this.horizontalInputNativeScrollLeft = undefined;
+      this.horizontalInputEventOrder = undefined;
+      this.directionDirty = false;
+      this.publishCoordinates(
+        element,
+        this.readLogicalScrollTop(element, true),
+        projectedLogicalScrollLeft,
+      );
+      this.schedulePublish();
+      return true;
+    }
+    this.publishFromElement();
     return true;
   };
 
@@ -1772,6 +1815,10 @@ function quantizeScroll(value: number): number {
   return (
     Math.floor(value / BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM) * BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM
   );
+}
+
+function normalizedLeadingUtilityWidth(value: number): number {
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
 }
 
 function rowLayerTransform(offset: string): string {

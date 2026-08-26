@@ -176,7 +176,7 @@ test.each(["ltr", "rtl"] as const)(
     }>;
     const harnessRef = createRef<HarnessHandle>();
     const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
-      const [layout, setLayout] = useState({ rowSelection: false, width: 760 });
+      const [layout, setLayout] = useState({ rowSelection: false, width: 440 });
       useImperativeHandle(
         ref,
         () => ({ updateLayout: (width, rowSelection) => setLayout({ width, rowSelection }) }),
@@ -229,9 +229,9 @@ test.each(["ltr", "rtl"] as const)(
     const initialSelectionEnd = nativeEditor.selectionEnd;
     expect(nativeEditor.closest('[role="gridcell"]')?.getAttribute("aria-colindex")).toBe("1");
 
-    flushSync(() => harnessRef.current?.updateLayout(170, true));
-    flushSync(() => harnessRef.current?.updateLayout(760, false));
-    flushSync(() => harnessRef.current?.updateLayout(170, true));
+    flushSync(() => harnessRef.current?.updateLayout(440, true));
+    flushSync(() => harnessRef.current?.updateLayout(440, false));
+    flushSync(() => harnessRef.current?.updateLayout(440, true));
     await settleBrunoTableBrowserFrames();
     await vi.waitFor(() =>
       expect(grid.element().querySelector('[data-pinned-region="start"]')).toBeNull(),
@@ -244,8 +244,14 @@ test.each(["ltr", "rtl"] as const)(
     await expect.element(editor).toHaveFocus();
     expect(nativeEditor.closest('[role="gridcell"]')?.getAttribute("aria-colindex")).toBe("2");
     await expect.element(screen.getByRole("checkbox", { name: "Select row 1" })).toBeVisible();
+    const suspendedHeader = screen
+      .getByRole("columnheader", { name: /^Stable score/u })
+      .element()
+      .getBoundingClientRect();
+    const suspendedCell = nativeEditor.getBoundingClientRect();
+    expect(Math.abs(suspendedCell.left - suspendedHeader.left)).toBeLessThanOrEqual(1);
 
-    flushSync(() => harnessRef.current?.updateLayout(760, false));
+    flushSync(() => harnessRef.current?.updateLayout(440, false));
     await settleBrunoTableBrowserFrames();
     await vi.waitFor(() =>
       expect(grid.element().querySelector('[data-pinned-region="start"]')).not.toBeNull(),

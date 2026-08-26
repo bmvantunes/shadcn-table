@@ -222,6 +222,7 @@ export function BrunoTableViewportAdapterBoundary({
     subscribe: viewport.subscribe,
     getSnapshot: viewport.getSnapshot,
     setLayout: viewport.setLayout,
+    setLeadingUtilityWidth: viewport.setLeadingUtilityWidth,
     resetVertical: viewport.resetVertical,
     dispose: viewport.dispose,
     attach: viewport.attach,
@@ -250,6 +251,9 @@ export function BrunoTableViewportAdapterBoundary({
     viewportBindings.getSnapshot,
     viewportBindings.getSnapshot,
   );
+  useLayoutEffect(() => {
+    viewportBindings.setLeadingUtilityWidth(leadingUtilityWidth);
+  }, [leadingUtilityWidth, viewportBindings]);
   const filterPositionResetEpoch = useSyncExternalStore(
     runtime.subscribeFilterPositionReset,
     runtime.getFilterPositionResetEpochSnapshot,

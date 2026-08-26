@@ -2688,6 +2688,71 @@ describe("BrunoTableViewportRuntime", () => {
     );
   });
 
+  it("reconciles a live leading utility gutter once and restores the pinned layout", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LIVE_UTILITY_START",
+        field: "name",
+        headerName: "Live utility start",
+        valueType: "text",
+        pinned: "start",
+        width: 170,
+      },
+      {
+        columnId: "COL_ID_LIVE_UTILITY_CENTER",
+        field: "name",
+        headerName: "Live utility center",
+        valueType: "text",
+        width: 500,
+      },
+      {
+        columnId: "COL_ID_LIVE_UTILITY_END",
+        field: "name",
+        headerName: "Live utility end",
+        valueType: "text",
+        pinned: "end",
+        width: 170,
+      },
+    ]);
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 440,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    const listener = vi.fn();
+    viewport.subscribe(listener);
+
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 440,
+      virtualWindow: { pinningSuspended: false },
+    });
+    expect(viewport.setLeadingUtilityWidth(0)).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+
+    expect(viewport.setLeadingUtilityWidth(40)).toBe(true);
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 400,
+      virtualWindow: { pinningSuspended: true },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(viewport.setLeadingUtilityWidth(40)).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    expect(viewport.setLeadingUtilityWidth(0)).toBe(true);
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 440,
+      virtualWindow: { pinningSuspended: false },
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds, reveals, and restores an oversized centreless pinned layout", () => {
     const columns = compileColumns([
       ...Array.from({ length: 30 }, (_, index) => ({
