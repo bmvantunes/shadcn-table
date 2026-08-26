@@ -5522,7 +5522,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
       : activePinnedEndIndex >= 0
         ? `calc(var(${BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE}, 0px) + var(${BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE}, ${String(
             surfaceWidth,
-          )}px) - ${String(
+          )}) - ${String(
             totalColumnWidth(pinnedEnd) -
               totalColumnWidth(pinnedEnd.slice(0, activePinnedEndIndex)),
           )}px)`

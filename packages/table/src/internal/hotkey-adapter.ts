@@ -24,6 +24,19 @@ type BrunoTableHotkeyBinding = Readonly<{
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
   Pick<KeyboardEvent, "preventDefault">;
 
+function brunoTableLiveHotkeyGesture(event: KeyboardEvent): BrunoTableHotkeyGesture {
+  const gesture = {
+    preventDefault: () => event.preventDefault(),
+    target: event.target,
+  } as BrunoTableHotkeyGesture;
+  Object.defineProperty(gesture, "defaultPrevented", {
+    configurable: false,
+    enumerable: true,
+    get: () => event.defaultPrevented,
+  });
+  return gesture;
+}
+
 export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
   "Escape",
   "Control+Escape",
@@ -448,11 +461,7 @@ function useBrunoTableHotkeys(
     hotkey: binding.hotkey,
     callback: (event) => {
       if (event.isComposing) return;
-      binding.onTrigger({
-        defaultPrevented: event.defaultPrevented,
-        preventDefault: event.preventDefault.bind(event),
-        target: event.target,
-      });
+      binding.onTrigger(brunoTableLiveHotkeyGesture(event));
     },
     options: { ignoreInputs: binding.allowInTextInput !== true },
   }));

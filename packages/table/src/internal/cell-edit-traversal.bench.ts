@@ -33,19 +33,30 @@ const compilePredicateColumns = (firstPredicate = stablePredicate) =>
 const columns = compilePredicateColumns();
 const equivalentColumns = compilePredicateColumns();
 const changedAuthorityColumns = compilePredicateColumns(changedPredicate);
+const allChangedAuthorityColumns = compileColumns(
+  Array.from({ length: columnCount }, (_unused, columnIndex) => ({
+    columnId: `COL_ID_EDIT_${String(columnIndex).padStart(3, "0")}`,
+    field: "editable" as const,
+    headerName: `Editable ${String(columnIndex)}`,
+    valueType: "boolean" as const,
+    isEditable: changedPredicate,
+  })),
+);
 const rowSpace = Object.freeze({
   totalRows: rowCount,
   getRowId: (rowIndex: number) => rows[rowIndex]?.id,
 });
-function createIndex(onPredicateEvaluation?: () => void) {
+function createIndex(onPredicateEvaluation?: () => void, incrementalBuild = false) {
   const created = new BrunoTableCellEditTraversalIndex(
     (rowId) => rowsById.get(rowId),
     (_rowId: string, row: object, _column: CompiledFieldColumn) => {
       onPredicateEvaluation?.();
       return (row as Row).editable;
     },
+    incrementalBuild,
   );
   created.reconcile(columns, rowSpace);
+  while (created.buildNextSlice());
   return created;
 }
 const traversalIndex = createIndex();
@@ -57,8 +68,13 @@ reconciliationPredicateEvaluations = 0;
 let authorityPredicateEvaluations = 0;
 const authorityIndex = createIndex(() => {
   authorityPredicateEvaluations += 1;
-});
+}, true);
 authorityPredicateEvaluations = 0;
+let allAuthorityPredicateEvaluations = 0;
+const allAuthorityIndex = createIndex(() => {
+  allAuthorityPredicateEvaluations += 1;
+}, true);
+allAuthorityPredicateEvaluations = 0;
 let equivalentAuthorityPredicateEvaluations = 0;
 const equivalentAuthorityIndex = createIndex(() => {
   equivalentAuthorityPredicateEvaluations += 1;
@@ -129,6 +145,9 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   const horizontalRangeSamples: number[] = [];
   const equivalentAuthoritySamples: number[] = [];
   const changedAuthoritySamples: number[] = [];
+  const changedAuthoritySliceSamples: number[] = [];
+  const allAuthorityStagingSamples: number[] = [];
+  const allAuthoritySliceSamples: number[] = [];
   bench(
     "proves the exact 750,000-cell initial index is partitioned into bounded production slices",
     () => {
@@ -452,7 +471,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
 
   let changedAuthority = false;
   bench(
-    "reevaluates only one 5,000-row predicate after its authority changes",
+    "paces one changed predicate authority across 5,000 rows",
     () => {
       authorityPredicateEvaluations = 0;
       const startedAt = performance.now();
@@ -465,12 +484,59 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         changedAuthoritySamples,
         performance.now() - startedAt,
       );
+      if (authorityPredicateEvaluations !== 0 || authorityIndex.isReady()) {
+        throw new Error("Changed predicate authority performed synchronous row work.");
+      }
+      while (authorityIndex.isReady() === false) {
+        const sliceStartedAt = performance.now();
+        authorityIndex.buildNextSlice();
+        recordBudgetSample(
+          "changed predicate-authority slice",
+          changedAuthoritySliceSamples,
+          performance.now() - sliceStartedAt,
+        );
+      }
       changedAuthority = !changedAuthority;
-      if (authorityPredicateEvaluations !== rowCount) {
+      if (Number(authorityPredicateEvaluations) !== rowCount) {
         throw new Error("Changed predicate authority did not perform bounded row work.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  let allAuthoritiesChanged = false;
+  bench(
+    "paces replacement of all 750,000 predicate authorities with zero synchronous callbacks",
+    () => {
+      allAuthorityPredicateEvaluations = 0;
+      const startedAt = performance.now();
+      allAuthorityIndex.reconcile(
+        allAuthoritiesChanged ? columns : allChangedAuthorityColumns,
+        forwardRowSpace,
+      );
+      recordBudgetSample(
+        "all predicate-authority staging",
+        allAuthorityStagingSamples,
+        performance.now() - startedAt,
+      );
+      if (allAuthorityPredicateEvaluations !== 0 || allAuthorityIndex.isReady()) {
+        throw new Error("All-authority replacement performed synchronous predicate work.");
+      }
+      while (allAuthorityIndex.isReady() === false) {
+        const sliceStartedAt = performance.now();
+        allAuthorityIndex.buildNextSlice();
+        recordBudgetSample(
+          "all predicate-authority slice",
+          allAuthoritySliceSamples,
+          performance.now() - sliceStartedAt,
+        );
+      }
+      allAuthoritiesChanged = !allAuthoritiesChanged;
+      if (Number(allAuthorityPredicateEvaluations) !== rowCount * columnCount) {
+        throw new Error("All-authority replacement did not rebuild every predicate cell.");
+      }
+    },
+    { iterations: 3, time: 0, warmupIterations: 0, warmupTime: 0 },
   );
 
   let reversed = false;

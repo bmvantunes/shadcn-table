@@ -25,7 +25,10 @@ import type {
   BrunoTableOrdering,
   BrunoTableValueType,
 } from "./public-types";
-import type { EffectiveFieldPresetCapability } from "./internal/preset-capability";
+import type {
+  EffectiveFieldPresetCapability,
+  PresetEditingDefaults,
+} from "./internal/preset-capability";
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
@@ -143,33 +146,6 @@ type TextBuiltIn = BuiltInDefaults<"text", "start", "inline", 160>;
 type NumberBuiltIn = BuiltInDefaults<"number", "end", "inline", 120>;
 type BigIntBuiltIn = BuiltInDefaults<"bigint", "end", "inline", 140>;
 type BooleanBuiltIn = BuiltInDefaults<"boolean", "center", "center", 88>;
-
-type PresetValidation<TValue> = (parameters: {
-  readonly row: unknown;
-  readonly value: TValue | null | undefined;
-}) => string | undefined;
-
-type PresetEditablePredicate<TValue> = (parameters: {
-  readonly row: unknown;
-  readonly value: TValue | null | undefined;
-}) => boolean;
-
-type PresetEditingDefaults<TValue> =
-  | {
-      readonly isEditable?: boolean | PresetEditablePredicate<TValue>;
-      readonly blankValue?: never;
-      readonly validate?: never;
-    }
-  | {
-      readonly isEditable: true | PresetEditablePredicate<TValue>;
-      readonly blankValue?: never;
-      readonly validate?: PresetValidation<TValue>;
-    }
-  | {
-      readonly isEditable: true | PresetEditablePredicate<TValue>;
-      readonly blankValue: null | undefined;
-      readonly validate?: PresetValidation<TValue>;
-    };
 
 type PresetDefaults<TValue> = {
   readonly headerName?: string;

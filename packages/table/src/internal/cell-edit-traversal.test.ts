@@ -338,6 +338,44 @@ describe("BrunoTable editable traversal index", () => {
     expect(evaluate).toHaveBeenCalledTimes(150);
   });
 
+  it("paces replacement of every predicate authority without synchronous callbacks", () => {
+    const rowCount = 40;
+    const columnCount = 40;
+    const rowIds = Array.from({ length: rowCount }, (_unused, rowIndex) => `authority-${rowIndex}`);
+    const rows = new Map<string, Row>(
+      rowIds.map((id) => [id, { id, enabled: true, alternate: false }]),
+    );
+    const makeAuthorityColumns = () =>
+      compileColumns(
+        Array.from({ length: columnCount }, (_unused, columnIndex) => ({
+          columnId: `COL_ID_AUTHORITY_${String(columnIndex)}`,
+          field: "enabled" as const,
+          headerName: `Authority ${String(columnIndex)}`,
+          valueType: "boolean" as const,
+          isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+        })),
+      );
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const projection = rowSpace(rowIds);
+    index.reconcile(makeAuthorityColumns(), projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    evaluate.mockClear();
+
+    expect(index.reconcile(makeAuthorityColumns(), projection)).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.isReady()).toBe(false);
+    expect(index.find(0, "COL_ID_AUTHORITY_0", 1)).toBeUndefined();
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(80);
+    expect(index.isReady()).toBe(false);
+
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(evaluate).toHaveBeenCalledTimes(rowCount * columnCount);
+    expect(index.isReady()).toBe(true);
+    expect(index.find(0, "COL_ID_AUTHORITY_0", 1)?.columnId).toBe("COL_ID_AUTHORITY_1");
+  });
+
   it("validates row references after an unknown publication without rebuilding unchanged rows", () => {
     const rows = new Map<string, Row>([
       ["first", { id: "first", enabled: false, alternate: false }],

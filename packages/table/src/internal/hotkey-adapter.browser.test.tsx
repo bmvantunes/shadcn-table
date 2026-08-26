@@ -64,6 +64,27 @@ afterEach(async () => {
 });
 
 describe("BrunoTable hotkey Adapter browser contract", () => {
+  test("runs exactly one semantic Shift+Tab command after live prevention", async () => {
+    const tab = vi.fn((event) => event.preventDefault());
+    const shiftTab = vi.fn();
+    const screen = await render(
+      <AdapterProbe commands={probeCommands({ shiftTab, tab })} label="Shift Tab prevention" />,
+    );
+    const owner = screen.getByRole("region", { name: "Shift Tab prevention" }).element();
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+      shiftKey: true,
+    });
+
+    owner.dispatchEvent(event);
+
+    expect(tab).toHaveBeenCalledOnce();
+    expect(shiftTab).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   test.each([
     { platform: "windows" as const, modifier: { ctrlKey: true } },
     { platform: "mac" as const, modifier: { metaKey: true } },

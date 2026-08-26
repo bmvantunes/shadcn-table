@@ -146,6 +146,21 @@ const invalidEmittedEditableWithoutVersion = (
 );
 void invalidEmittedEditableWithoutVersion;
 
+const invalidEmittedEditableWithoutSaveHandler = (
+  <BrunoTableClient
+    tableId="TABLE_ID_EMITTED_EDITABLE_WITHOUT_SAVE_HANDLER"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Emitted editable Client Tables require onSaveEdits.
+    editable
+    // @ts-expect-error Without onSaveEdits there is no valid emitted editable overload.
+    getRowVersion={(row: Row) => row.revision}
+  />
+);
+void invalidEmittedEditableWithoutSaveHandler;
+
 const invalidEmittedEditableWithoutPotentialColumn = (
   <BrunoTableClient
     tableId="TABLE_ID_EMITTED_EDITABLE_WITHOUT_POTENTIAL_COLUMN"

@@ -279,7 +279,10 @@ function BrunoTableClientInstance<
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
-  useLayoutEffect(() => () => cellEdit?.dispose(), [cellEdit]);
+  useLayoutEffect(() => {
+    cellEdit?.activate();
+    return () => cellEdit?.dispose();
+  }, [cellEdit]);
   return (
     <BrunoTableClientFilterProvider facetRows={rowPipelineAdapter} runtime={runtimeView}>
       <BrunoTableToolbarProvider

@@ -525,7 +525,8 @@ export class BrunoTableCellEditRuntime {
   private fieldColumnsById: ReadonlyMap<string, CompiledFieldColumn>;
   private readonly getRow: (rowId: string) => unknown;
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
-  private readonly actor = createActor(brunoTableCellEditMachine);
+  private actor = createActor(brunoTableCellEditMachine);
+  private actorActive = false;
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
   private readonly draftStore = new Store<ReadonlyMap<string, DraftEntry>>(new Map());
   private readonly candidateStore = new Store<ActiveCandidateSnapshot>(EMPTY_CANDIDATE);
@@ -565,9 +566,18 @@ export class BrunoTableCellEditRuntime {
       (rowId, row, column) => this.evaluateEditable(rowId, row, column),
       options.incrementalTraversal === true,
     );
+    this.activate();
+  }
+
+  public readonly activate = (): void => {
+    if (this.actorActive) return;
+    if (this.actor.getSnapshot().status === "stopped") {
+      this.actor = createActor(brunoTableCellEditMachine);
+    }
     this.actor.subscribe(() => this.publishActorDecision());
     this.actor.start();
-  }
+    this.actorActive = true;
+  };
 
   public readonly getSessionSnapshot = (): BrunoTableCellEditSessionSnapshot =>
     this.sessionStore.get();
@@ -630,10 +640,11 @@ export class BrunoTableCellEditRuntime {
     nativeInvalid: boolean,
     intent: "scalar" | "blank" = "scalar",
   ): void => {
+    const boundedRawText = rawText.slice(0, BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1);
     const next: ActiveCandidateSnapshot =
       intent === "blank"
         ? Object.freeze({ kind: "blank", rawText: "", nativeInvalid: false })
-        : Object.freeze({ kind: "scalar", rawText, nativeInvalid });
+        : Object.freeze({ kind: "scalar", rawText: boundedRawText, nativeInvalid });
     const previous = this.candidateStore.get();
     if (
       previous.kind === next.kind &&
@@ -872,12 +883,17 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly dispose = (): void => {
+    if (!this.actorActive) return;
     this.actor.stop();
+    this.actorActive = false;
+    this.sessionStore.setState(() => IDLE_SESSION);
     this.draftStore.setState(() => new Map());
     this.candidateStore.setState(() => EMPTY_CANDIDATE);
     this.cellStores.clear();
     this.cellSubscriberCounts.clear();
     this.traversalInvalidationListeners.clear();
+    this.activeCellKey = undefined;
+    this.activeCandidate = undefined;
   };
 
   private readonly publishActorDecision = (): void => {

@@ -65,6 +65,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     const commit = useCallback(
       (movement: BrunoTableCellEditMovement): boolean => {
         const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
+        if (session.kind === "editing" && session.rowMissing) {
+          return movement !== "tab-forward";
+        }
         if (!runtime.isTraversalReady()) return true;
         const origin = runtime.captureMovementOrigin();
         if (!runtime.commitActiveCandidate()) return true;
@@ -79,7 +82,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
         return false;
       },
-      [runtime, yieldGridTabStop],
+      [runtime, session, yieldGridTabStop],
     );
     useBrunoTableCellEditorHotkeys(control, { cancel, commit });
     useLayoutEffect(() => {

@@ -2,7 +2,7 @@ import { detectPlatform } from "@tanstack/react-hotkeys";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
-import { createRef, forwardRef, useImperativeHandle, useState } from "react";
+import { createRef, forwardRef, StrictMode, useImperativeHandle, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
@@ -49,9 +49,9 @@ const rows: readonly Row[] = [
   { id: "grace", name: "Grace", score: 8, note: "last", revision: 9_007_199_254_740_994n },
 ];
 
-async function renderEditableTable() {
+async function renderEditableTable(strict = false) {
   const onSaveEdits = vi.fn(() => Promise.resolve());
-  const screen = await render(
+  const table = (
     <>
       <button type="button">Before table</button>
       <BrunoTableClient
@@ -68,8 +68,9 @@ async function renderEditableTable() {
         <summary role="button">After grid summary</summary>
       </details>
       <button type="button">After table</button>
-    </>,
+    </>
   );
+  const screen = await render(strict ? <StrictMode>{table}</StrictMode> : table);
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT" });
   grid.element().focus();
   return { grid, onSaveEdits, screen };
@@ -124,6 +125,20 @@ test("commits through one parse-validation gate and preserves invalid editor evi
     .toBeInTheDocument();
   expect(onSaveEdits).not.toHaveBeenCalled();
   expect(grid.element()).toHaveFocus();
+});
+
+test("keeps Cell Edit active after the Strict Mode effect rehearsal", async () => {
+  const { grid, screen } = await renderEditableTable(true);
+  await userEvent.keyboard("{Enter}");
+  const editor = screen.getByRole("textbox", { name: "Edit Name" });
+  await expect.element(editor).toHaveFocus();
+  await userEvent.clear(editor);
+  await userEvent.keyboard("Strict Ada{Enter}");
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Strict Ada", exact: true }))
+    .toBeInTheDocument();
+  await expect.element(grid).toHaveFocus();
 });
 
 test("preserves browser-incompatible current Number seeds and caret across equivalent recompiles", async () => {
@@ -2139,7 +2154,9 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .not.toHaveAttribute("aria-invalid", "true");
   const cancel = screen.getByRole("button", { name: "Cancel editing" });
-  cancel.element().focus();
+  await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).toHaveFocus();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(cancel).toHaveFocus();
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
   await expect.element(grid).toHaveFocus();

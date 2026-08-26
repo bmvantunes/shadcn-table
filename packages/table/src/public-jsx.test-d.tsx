@@ -175,6 +175,21 @@ const invalidEditableWithoutVersion = (
 );
 void invalidEditableWithoutVersion;
 
+const invalidEditableWithoutSaveHandler = (
+  <BrunoTableClient
+    tableId="TABLE_ID_JSX_EDITABLE_WITHOUT_SAVE_HANDLER"
+    columns={columns}
+    initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+    clientSource={clientSource}
+    getRowId={(row) => row.id}
+    // @ts-expect-error Editable Client Tables require onSaveEdits.
+    editable
+    // @ts-expect-error Without onSaveEdits there is no valid editable overload.
+    getRowVersion={(row: Row) => row.revision}
+  />
+);
+void invalidEditableWithoutSaveHandler;
+
 const invalidReadOnlySaveHandler = (
   <BrunoTableClient
     tableId="TABLE_ID_JSX_READ_ONLY_SAVE_HANDLER"

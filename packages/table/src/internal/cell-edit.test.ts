@@ -108,6 +108,13 @@ describe("BrunoTable Cell Edit Session", () => {
     const runtime = new BrunoTableCellEditRuntime({ columns: guardedColumns, getRow: () => row });
 
     expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate(
+      "1".repeat(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 100),
+      false,
+    );
+    expect(runtime.getActiveCandidateSnapshot().rawText).toHaveLength(
+      BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1,
+    );
     expect(runtime.commit("1".repeat(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH + 1))).toBe(false);
     expect(runtime.getSessionSnapshot()).toMatchObject({
       invalidMessage: `Enter at most ${String(BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH)} characters.`,

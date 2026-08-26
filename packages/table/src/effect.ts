@@ -38,7 +38,10 @@ import type {
   BrunoTableServerBigDecimalValueTypeAuthority,
   BrunoTableValueType,
 } from "./public-types";
-import type { EffectiveFieldPresetCapability } from "./internal/preset-capability";
+import type {
+  EffectiveFieldPresetCapability,
+  PresetEditingDefaults,
+} from "./internal/preset-capability";
 
 const codecId = "@bruno/table/effect/bigdecimal";
 const persistedType = "effect-bigdecimal";
@@ -375,32 +378,7 @@ type BigDecimalAggregationPresetDefaults =
       };
     }[keyof BigDecimalAggregateResults];
 
-type BigDecimalPresetValidation = (parameters: {
-  readonly row: unknown;
-  readonly value: BigDecimal.BigDecimal | null | undefined;
-}) => string | undefined;
-
-type BigDecimalPresetEditablePredicate = (parameters: {
-  readonly row: unknown;
-  readonly value: BigDecimal.BigDecimal | null | undefined;
-}) => boolean;
-
-type BigDecimalPresetEditingDefaults =
-  | {
-      readonly isEditable?: boolean | BigDecimalPresetEditablePredicate;
-      readonly blankValue?: never;
-      readonly validate?: never;
-    }
-  | {
-      readonly isEditable: true | BigDecimalPresetEditablePredicate;
-      readonly blankValue?: never;
-      readonly validate?: BigDecimalPresetValidation;
-    }
-  | {
-      readonly isEditable: true | BigDecimalPresetEditablePredicate;
-      readonly blankValue: null | undefined;
-      readonly validate?: BigDecimalPresetValidation;
-    };
+type BigDecimalPresetEditingDefaults = PresetEditingDefaults<BigDecimal.BigDecimal>;
 
 type BigDecimalPresetBaseDefaults = {
   readonly headerName?: string;
