@@ -1651,6 +1651,27 @@ describe("BrunoTable public types", () => {
     }>();
   });
 
+  it("requires explicit editable component generics to name the Row Version authority", () => {
+    const editableProps = {
+      tableId: "explicit-editable-version",
+      columns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: directViewServerResult,
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: (changes: BrunoTableSaveChangeSet<Order, Columns, bigint>) => {
+        expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
+        return Promise.resolve();
+      },
+    } as const;
+
+    // @ts-expect-error Explicit editable calls require the third Row Version authority generic.
+    void BrunoTableClient<Order, Columns>(editableProps);
+    void BrunoTableClient<Order, Columns, (row: Order) => bigint>(editableProps);
+    void BrunoTableClient(editableProps);
+  });
+
   it("types recursive filters and ordered sorts", () => {
     const filters = [
       { columnId: "COL_ID_PRICE", type: "greaterThanOrEqual", filter: 100 },

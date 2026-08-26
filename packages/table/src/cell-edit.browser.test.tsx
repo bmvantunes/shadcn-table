@@ -366,7 +366,9 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
   const NestedTable = forwardRef<NestedHandle>(function NestedTable(_props, ref) {
     const [hidden, setHidden] = useState(false);
     useImperativeHandle(ref, () => ({ hide: () => setHidden(true) }), []);
-    const nestedRow = hidden ? { ...rows[1]!, name: "Hidden" } : rows[1]!;
+    const nestedRow = hidden
+      ? { ...rows[1]!, id: "ada", name: "Hidden" }
+      : { ...rows[1]!, id: "ada" };
     return (
       <BrunoTableClient
         tableId="TABLE_ID_NESTED_CANCEL_OWNER"
@@ -433,6 +435,13 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
   const outerEditorElement = outerEditor.element();
 
   const nestedGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_NESTED_CANCEL_OWNER" });
+  expect(nestedGrid.getByRole("gridcell", { name: "Grace", exact: true }).all()).toHaveLength(1);
+  expect(
+    nestedGrid
+      .getByRole("gridcell", { name: "Grace", exact: true })
+      .element()
+      .closest("[data-bruno-table]"),
+  ).toBe(nestedGrid.element().closest("[data-bruno-table]"));
   nestedGrid.element().focus();
   await userEvent.keyboard("{ArrowRight}{F2}");
   const nestedEditor = nestedGrid.getByRole("spinbutton", { name: "Edit Score" });
@@ -1264,6 +1273,152 @@ test("gates another cell in the edit-owned row through the same commit boundary"
   await expect.element(editor).not.toBeInTheDocument();
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(nameCell.element().id);
 });
+
+test("lets Shift pointer range activation retain its pre-commit anchor", async () => {
+  const writeText = vi.fn(async () => undefined);
+  const restoreClipboard = installClipboard(writeText);
+  try {
+    const { screen } = await renderEditableTable();
+    await userEvent.keyboard("{F2}");
+    const editor = screen.getByRole("textbox", { name: "Edit Name" });
+    const destination = screen.getByRole("gridcell", { name: "Grace", exact: true });
+
+    await userEvent.keyboard("{Shift>}");
+    await userEvent.click(destination, { modifiers: ["Shift"] });
+    await userEvent.keyboard("{/Shift}");
+    await expect.element(editor).not.toBeInTheDocument();
+
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Ada\nGrace"));
+  } finally {
+    restoreClipboard();
+  }
+});
+
+test("rolls back Shift pointer range activation when the edit commit is invalid", async () => {
+  const { grid, screen } = await renderEditableTable();
+  await userEvent.keyboard("{ArrowRight}");
+  const originCell = screen.getByRole("gridcell", { name: "4", exact: true });
+  const originCellId = originCell.element().id;
+  const destination = screen.getByRole("gridcell", { name: "8", exact: true });
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e{Shift>}");
+  await userEvent.click(destination, { modifiers: ["Shift"] });
+  await userEvent.keyboard("{/Shift}");
+
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(originCellId);
+  await expect.element(originCell).toHaveAttribute("aria-selected", "true");
+  await expect.element(destination).not.toHaveAttribute("aria-selected");
+});
+
+test.each([
+  ["forward Enter", "{Enter}", "C score", false],
+  ["backward Enter", "{Shift>}{Enter}{/Shift}", "A score", false],
+  ["forward Tab", "{Tab}", "C", false],
+  ["backward Tab", "{Shift>}{Tab}{/Shift}", "A note", false],
+  ["forward Enter after same-identity return", "{Enter}", "C score", true],
+] as const)(
+  "moves from the detached edit insertion boundary with %s",
+  async (_description, gesture, expectedCellName, reattach) => {
+    type DetachedMovementRow = Readonly<{
+      readonly id: string;
+      readonly name: string;
+      readonly score: number;
+      readonly note: string;
+      readonly visibility: string;
+    }>;
+    const movementRows = [
+      { id: "a", name: "A", score: 1, note: "A note", visibility: "shown" },
+      { id: "b", name: "B", score: 2, note: "B note", visibility: "shown" },
+      { id: "c", name: "C", score: 3, note: "C note", visibility: "shown" },
+    ] as const satisfies readonly DetachedMovementRow[];
+    const movementColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_VISIBILITY",
+        field: "visibility",
+        headerName: "Visibility",
+        valueType: "text",
+        isEditable: false,
+      },
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: true,
+        valueFormatter: ({ row }) => `${row.name} score`,
+      },
+      {
+        columnId: "COL_ID_NOTE",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<DetachedMovementRow>;
+    type HarnessHandle = Readonly<{ detach: () => void; reattach: () => void }>;
+    const harnessRef = createRef<HarnessHandle>();
+    const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+      const [detached, setDetached] = useState(false);
+      useImperativeHandle(
+        ref,
+        () => ({ detach: () => setDetached(true), reattach: () => setDetached(false) }),
+        [],
+      );
+      return (
+        <BrunoTableClient
+          tableId="TABLE_ID_DETACHED_MOVEMENT_ORIGIN"
+          columns={movementColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          initialFilters={[{ columnId: "COL_ID_VISIBILITY", type: "equals", filter: "shown" }]}
+          clientSource={{
+            rows: movementRows.map((row) =>
+              row.id === "b" && detached ? { ...row, visibility: "hidden" } : row,
+            ),
+            totalRows: movementRows.length,
+            version: detached ? 2 : 1,
+            status: "ready",
+          }}
+          getRowId={(row) => row.id}
+          editable
+          getRowVersion={() => 1n}
+          onSaveEdits={() => Promise.resolve()}
+        />
+      );
+    });
+    const screen = await render(<Harness ref={harnessRef} />);
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_DETACHED_MOVEMENT_ORIGIN" });
+    await userEvent.click(screen.getByRole("gridcell", { name: "B score", exact: true }));
+    await userEvent.keyboard("{F2}");
+    const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+    flushSync(() => harnessRef.current?.detach());
+    await expect
+      .element(screen.getByRole("status"))
+      .toHaveTextContent("Row no longer matches current filters");
+    if (reattach) {
+      flushSync(() => harnessRef.current?.reattach());
+      await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
+      await expect.element(editor).toHaveFocus();
+    }
+
+    await userEvent.keyboard(gesture);
+
+    await expect.element(editor).not.toBeInTheDocument();
+    const expected = screen.getByRole("gridcell", { name: expectedCellName, exact: true });
+    expect(grid.element().getAttribute("aria-activedescendant")).toBe(expected.element().id);
+  },
+);
 
 test("traverses pinned logical order, uses the one-axis range exception, and exits at terminal Tab", async () => {
   const { grid, screen } = await renderEditableTable();
@@ -2469,7 +2624,7 @@ test("cancels an active custom Boolean editor before its exact mapping can rever
       },
     ] as const satisfies BrunoTableColumns<ToggleRow>;
     return (
-      <BrunoTableClient<ToggleRow, typeof toggleColumns>
+      <BrunoTableClient<ToggleRow, typeof toggleColumns, (row: ToggleRow) => bigint>
         tableId="TABLE_ID_BOOLEAN_AUTHORITY"
         columns={toggleColumns}
         initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}

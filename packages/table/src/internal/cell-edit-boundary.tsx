@@ -12,7 +12,7 @@ import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
-import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
+import { isBrunoTableHotkeyHeld, useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 const BLANK_EDITOR_OPTION = "blank";
 const scalarEditorOption = (index: number): string => `scalar:${String(index)}`;
@@ -65,8 +65,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       (movement: BrunoTableCellEditMovement): boolean => {
         const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
         if (!runtime.isTraversalReady()) return true;
+        const origin = runtime.captureMovementOrigin();
         if (!runtime.commitActiveCandidate()) return true;
-        const moved = runtime.requestMovement(movement);
+        const moved = runtime.requestMovement(movement, origin);
         if (moved || movement.startsWith("enter")) {
           grid?.focus({ preventScroll: true });
           return true;
@@ -159,6 +160,12 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
                 ?.closest("[data-bruno-cell-edit-surface]") === editSurface))
         ) {
           return;
+        }
+        if (isBrunoTableHotkeyHeld("Shift") && event.target instanceof Element) {
+          const rangeCell = event.target.closest<HTMLElement>(
+            '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+          );
+          if (rangeCell?.closest("[data-bruno-table]") === tableBoundary) return;
         }
         if (!runtime.commitActiveCandidate()) {
           blockedClickTarget = event.target;

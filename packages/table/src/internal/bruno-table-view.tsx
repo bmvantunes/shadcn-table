@@ -178,6 +178,7 @@ import {
 import {
   BrunoTableCellEditRuntime,
   type BrunoTableCellEditMovement,
+  type BrunoTableCellEditMovementOrigin,
   type BrunoTableCellEditProjection,
   type BrunoTableCellEditSessionSnapshot,
 } from "./cell-edit";
@@ -2535,13 +2536,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     ) {
       return;
     }
+    const extendingWithShift = isBrunoTableHotkeyHeld("Shift");
     const horizontalLogicalSign = getComputedStyle(grid).direction === "rtl" ? -1 : 1;
     const activeBefore = navigation.getSnapshot();
     const currentActive =
       activeBefore?.region === "body" && activeBefore.rowId !== undefined
         ? { rowId: activeBefore.rowId, columnId: activeBefore.columnId }
         : undefined;
-    cellRange.startPointerGesture(
+    const started = cellRange.startPointerGesture(
       event.nativeEvent,
       hit,
       grid,
@@ -2553,8 +2555,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       },
       (physicalDelta) => scrollByLogical(horizontalLogicalSign * physicalDelta),
       currentActive,
-      isBrunoTableHotkeyHeld("Shift"),
+      extendingWithShift,
     );
+    if (
+      started &&
+      extendingWithShift &&
+      cellEdit?.getSessionSnapshot().kind === "editing" &&
+      !cellEdit.commitActiveCandidate()
+    ) {
+      cellRange.cancelPointerGesture();
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
   const runColumnResize = (
     event: BrunoTableHotkeyGesture,
@@ -2715,26 +2727,32 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       openHeaderFilter(column.columnId);
     }
   };
-  const moveAfterCellEdit = (movement: BrunoTableCellEditMovement): boolean => {
+  const moveAfterCellEdit = (
+    movement: BrunoTableCellEditMovement,
+    origin: BrunoTableCellEditMovementOrigin | undefined,
+  ): boolean => {
+    if (origin === undefined) return false;
+    const currentRowIndex = rowSpace.findRowIndex(origin.rowId);
+    const originRowIndex = currentRowIndex ?? origin.retainedRowIndex;
     if (moveWithinEditableRange(movement.endsWith("forward") ? 1 : -1) !== "unavailable")
       return true;
-    const active = navigation.getSnapshot();
-    if (active?.region !== "body") return false;
     if (movement === "enter-forward" || movement === "enter-backward") {
-      const rowIndex = active.rowIndex + (movement === "enter-forward" ? 1 : -1);
+      const rowIndex =
+        currentRowIndex === undefined
+          ? originRowIndex + (movement === "enter-forward" ? 0 : -1)
+          : originRowIndex + (movement === "enter-forward" ? 1 : -1);
       const rowId = rowSpace.getRowId(rowIndex);
       if (rowId === undefined) return false;
-      navigation.activateBody(rowIndex, rowId, active.columnId);
-      revealCell(rowIndex, active.columnId, "body", rowId);
+      navigation.activateBody(rowIndex, rowId, origin.columnId);
+      revealCell(rowIndex, origin.columnId, "body", rowId);
       return true;
     }
     if (cellEdit === undefined) return false;
     const direction = movement === "tab-forward" ? 1 : -1;
-    const destination = cellEdit.findTraversalDestination(
-      active.rowIndex,
-      active.columnId,
-      direction,
-    );
+    const destination =
+      currentRowIndex === undefined
+        ? cellEdit.findTraversalDestinationFromRowBoundary(originRowIndex, direction)
+        : cellEdit.findTraversalDestination(originRowIndex, origin.columnId, direction);
     if (destination === undefined) return false;
     navigation.activateBody(destination.rowIndex, destination.rowId, destination.columnId);
     revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
@@ -2841,7 +2859,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     () =>
       cellEdit === undefined
         ? undefined
-        : cellEdit.registerMovementCommand((movement) => moveAfterCellEditRef.current(movement)),
+        : cellEdit.registerMovementCommand((movement, origin) =>
+            moveAfterCellEditRef.current(movement, origin),
+          ),
     [cellEdit],
   );
   const runSelectAll = (event: BrunoTableHotkeyGesture): void => {
@@ -5412,6 +5432,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
       geometry.release();
       return;
     }
+    editRuntime.reconcileMovementRowIndex(rowIndex);
     editRuntime.reconcileActiveRow();
     const grid = gridElement.current;
     const container = layer.current;

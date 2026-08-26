@@ -144,11 +144,16 @@ function findProjectedRow(grid: HTMLElement, rowId: string): HTMLElement | undef
 }
 
 function projectedCells(grid: HTMLElement, rowId: string): readonly HTMLElement[] {
+  const tableBoundary = grid.closest("[data-bruno-table]");
   return [
     ...grid.querySelectorAll<HTMLElement>(
       `[role="gridcell"][data-bruno-row-id="${CSS.escape(rowId)}"]`,
     ),
-  ].filter((cell) => cell.closest("[data-bruno-edit-owned-row]") === null);
+  ].filter(
+    (cell) =>
+      cell.closest("[data-bruno-table]") === tableBoundary &&
+      cell.closest("[data-bruno-edit-owned-row]") === null,
+  );
 }
 
 function restoreAttribute(element: HTMLElement, name: string, value: string | null): void {

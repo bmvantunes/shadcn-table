@@ -2201,6 +2201,10 @@ const editableProps = {
     status: "ready",
   },
 } satisfies EmittedEditableClientProps<Columns>;
+// @ts-expect-error Explicit editable calls require the third Row Version authority generic.
+void BrunoTableClient<Order, Columns>(editableProps);
+void BrunoTableClient<Order, Columns, (row: Order) => bigint>(editableProps);
+void BrunoTableClient(editableProps);
 
 const noSortingProps = {
   tableId: "unsortable-orders",

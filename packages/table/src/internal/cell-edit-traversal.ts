@@ -416,6 +416,33 @@ export class BrunoTableCellEditTraversalIndex {
       : Object.freeze({ rowIndex: destination.rowIndex, rowId, columnId: column.columnId });
   };
 
+  public readonly findFromRowBoundary = (
+    rowIndex: number,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined => {
+    const columns = this.columns;
+    const rowSpace = this.rowSpace;
+    if (columns === undefined || rowSpace === undefined) return undefined;
+    if (this.allRowsDirty || this.dirtyRowIds.size > 0 || this.dirtyColumnIdsByRowId.size > 0)
+      this.reconcile(columns, rowSpace);
+    if (!this.isReady()) return undefined;
+    const boundaryRowIndex = direction > 0 ? rowIndex : rowIndex - 1;
+    if (this.rowIds[boundaryRowIndex] === undefined) return undefined;
+    const boundaryColumnIndex = direction > 0 ? -1 : columns.length;
+    const destination = nearerCandidate(
+      this.findStaticCandidate(boundaryRowIndex, boundaryColumnIndex, direction),
+      this.findPredicateCandidate(boundaryRowIndex, boundaryColumnIndex, direction),
+      columns.length,
+      direction,
+    );
+    if (destination === undefined) return undefined;
+    const rowId = this.rowIds[destination.rowIndex];
+    const column = columns[destination.columnIndex];
+    return rowId === undefined || column === undefined
+      ? undefined
+      : Object.freeze({ rowIndex: destination.rowIndex, rowId, columnId: column.columnId });
+  };
+
   public readonly findRange = (
     range: BrunoTableCellEditTraversalRange,
     currentRowId: string,

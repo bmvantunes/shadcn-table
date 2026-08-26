@@ -504,6 +504,11 @@ export type BrunoTableCellEditMovement =
   | "enter-backward"
   | "tab-forward"
   | "tab-backward";
+export type BrunoTableCellEditMovementOrigin = Readonly<{
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly retainedRowIndex: number;
+}>;
 const IDLE_SESSION: BrunoTableCellEditSessionSnapshot = Object.freeze({ kind: "idle" });
 const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, hasDraft: false });
 type ActiveCandidateSnapshot =
@@ -535,7 +540,13 @@ export class BrunoTableCellEditRuntime {
         readonly restoreFocus: () => void;
       }>
     | undefined;
-  private movementCommand: ((movement: BrunoTableCellEditMovement) => boolean) | undefined;
+  private movementCommand:
+    | ((
+        movement: BrunoTableCellEditMovement,
+        origin: BrunoTableCellEditMovementOrigin | undefined,
+      ) => boolean)
+    | undefined;
+  private retainedMovementRowIndex: number | undefined;
 
   public constructor(
     options: Readonly<{
@@ -647,7 +658,10 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly registerMovementCommand = (
-    command: (movement: BrunoTableCellEditMovement) => boolean,
+    command: (
+      movement: BrunoTableCellEditMovement,
+      origin: BrunoTableCellEditMovementOrigin | undefined,
+    ) => boolean,
   ): (() => void) => {
     this.movementCommand = command;
     return () => {
@@ -655,8 +669,27 @@ export class BrunoTableCellEditRuntime {
     };
   };
 
-  public readonly requestMovement = (movement: BrunoTableCellEditMovement): boolean =>
-    this.movementCommand?.(movement) === true;
+  public readonly reconcileMovementRowIndex = (rowIndex: number | undefined): void => {
+    if (rowIndex !== undefined && this.getSessionSnapshot().kind === "editing") {
+      this.retainedMovementRowIndex = rowIndex;
+    }
+  };
+
+  public readonly captureMovementOrigin = (): BrunoTableCellEditMovementOrigin | undefined => {
+    const session = this.getSessionSnapshot();
+    return session.kind === "editing" && this.retainedMovementRowIndex !== undefined
+      ? Object.freeze({
+          rowId: session.rowId,
+          columnId: session.columnId,
+          retainedRowIndex: this.retainedMovementRowIndex,
+        })
+      : undefined;
+  };
+
+  public readonly requestMovement = (
+    movement: BrunoTableCellEditMovement,
+    origin: BrunoTableCellEditMovementOrigin | undefined,
+  ): boolean => this.movementCommand?.(movement, origin) === true;
 
   public readonly reconcileTraversal = (
     columns: readonly CompiledColumn[],
@@ -702,6 +735,12 @@ export class BrunoTableCellEditRuntime {
     direction: -1 | 1,
   ): BrunoTableCellEditTraversalDestination | undefined =>
     this.traversalIndex.find(rowIndex, columnId, direction);
+
+  public readonly findTraversalDestinationFromRowBoundary = (
+    rowIndex: number,
+    direction: -1 | 1,
+  ): BrunoTableCellEditTraversalDestination | undefined =>
+    this.traversalIndex.findFromRowBoundary(rowIndex, direction);
 
   public readonly findRangeTraversalDestination = (
     range: BrunoTableCellEditTraversalRange,
@@ -805,6 +844,7 @@ export class BrunoTableCellEditRuntime {
       mode,
       producedText,
     });
+    this.retainedMovementRowIndex = undefined;
     return this.getSessionSnapshot().kind === "editing";
   };
 
@@ -827,6 +867,7 @@ export class BrunoTableCellEditRuntime {
   public readonly cancel = (): boolean => {
     if (this.actor.getSnapshot().value !== "editing") return false;
     this.actor.send({ type: "CANCEL" });
+    this.retainedMovementRowIndex = undefined;
     return true;
   };
 
