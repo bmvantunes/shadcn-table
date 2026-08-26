@@ -1138,7 +1138,13 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .toHaveTextContent("This row was removed from the server. Changes cannot be saved.");
   await expect
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
-    .not.toHaveAttribute("aria-invalid", "true");
+    .toHaveAttribute("aria-invalid", "true");
+  const tombstoneEditor = screen.getByRole("textbox", { name: "Edit Value" }).element();
+  const validationDescriptionId = tombstoneEditor.getAttribute("aria-describedby");
+  expect(validationDescriptionId).toBeTruthy();
+  expect(document.getElementById(validationDescriptionId ?? "")?.textContent).toContain(
+    "Candidate remains invalid.",
+  );
   await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
   expect(
     screen
@@ -1193,6 +1199,15 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await userEvent.click(screen.getByRole("gridcell", { name: "Target", exact: true }));
   await userEvent.keyboard("{F2}");
   await screen.rerender(renderTable([peer], 8));
+  expect(
+    screen
+      .getByRole("alert")
+      .all()
+      .filter((alert) => alert.element().textContent?.includes("removed from the server") === true),
+  ).toHaveLength(1);
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Value" }))
+    .not.toHaveAttribute("aria-invalid", "true");
   const cancel = screen.getByRole("button", { name: "Cancel editing" });
   cancel.element().focus();
   await userEvent.keyboard("{Enter}");

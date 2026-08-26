@@ -819,7 +819,7 @@ export class BrunoTableCellEditRuntime {
       session === undefined
         ? undefined
         : session.rowMissing
-          ? undefined
+          ? session.invalidMessage
           : (session.permissionMessage ?? session.invalidMessage);
     const next =
       session === undefined

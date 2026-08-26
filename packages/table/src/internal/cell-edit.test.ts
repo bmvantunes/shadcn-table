@@ -995,8 +995,8 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.commit("not-an-integer")).toBe(false);
     expect(runtime.getSessionSnapshot()).toMatchObject({
       rowMissing: true,
+      invalidMessage: "Expected signed base-10 integer digits.",
     });
-    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
 
     liveRow = row;
     runtime.reconcileActiveRow();
