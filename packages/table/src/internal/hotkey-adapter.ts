@@ -584,6 +584,7 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Enter",
         allowInTextInput: true,
         onTrigger: (event) => {
+          if (event.defaultPrevented) return;
           if (commandsRef.current.commit("enter-forward")) event.preventDefault();
         },
       },
@@ -591,6 +592,7 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Shift+Enter",
         allowInTextInput: true,
         onTrigger: (event) => {
+          if (event.defaultPrevented) return;
           if (commandsRef.current.commit("enter-backward")) event.preventDefault();
         },
       },
@@ -598,6 +600,7 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Tab",
         allowInTextInput: true,
         onTrigger: (event) => {
+          if (event.defaultPrevented) return;
           if (commandsRef.current.commit("tab-forward")) event.preventDefault();
         },
       },
@@ -605,6 +608,7 @@ export function useBrunoTableCellEditorHotkeys(
         hotkey: "Shift+Tab",
         allowInTextInput: true,
         onTrigger: (event) => {
+          if (event.defaultPrevented) return;
           if (commandsRef.current.commit("tab-backward")) event.preventDefault();
         },
       },

@@ -418,6 +418,36 @@ const keyboardBoundaryAllowedSmokes = await Promise.all(
     mode,
   })),
 );
+const emittedProducedTextInstallerSmoke = `
+function installBrunoTableProducedTextEvidence(target) {
+  const listener = () => undefined;
+  target.addEventListener("compositionstart", listener);
+  target.addEventListener("beforeinput", listener);
+  target.addEventListener("compositionend", listener);
+  return () => {
+    target.removeEventListener("compositionstart", listener);
+    target.removeEventListener("beforeinput", listener);
+    target.removeEventListener("compositionend", listener);
+  };
+}`;
+const emittedProducedTextEvidenceRejectedSmokes = await Promise.all(
+  [
+    {
+      source: `${emittedProducedTextInstallerSmoke}\nfunction unsupported(target) { target.addEventListener("compositionupdate", () => undefined); }`,
+      expected: "escaped the emitted produced-text installer",
+    },
+    {
+      source: emittedProducedTextInstallerSmoke.replace(
+        'target.addEventListener("compositionend", listener);',
+        'target.addEventListener("compositionend", listener); target.addEventListener("compositionupdate", listener);',
+      ),
+      expected: "is an unsupported produced-text lifecycle",
+    },
+  ].map(async ({ source, expected }) => ({
+    ast: await parseAstAsync(source, { lang: "js" }),
+    expected,
+  })),
+);
 const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
   layoutEffectBinding === undefined
@@ -432,8 +462,7 @@ if (
   /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
-  /installTableScopedListener/u.test(rootRuntime) ||
-  /performance\.now/u.test(rootRuntime)
+  /installTableScopedListener/u.test(rootRuntime)
 ) {
   throw new Error(
     "The production package contains test-only commit probes, listeners, or gesture timing diagnostics.",
@@ -468,6 +497,9 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
 
 assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
 assertEmittedProducedTextEvidence(rootRuntimeAst);
+for (const { ast, expected } of emittedProducedTextEvidenceRejectedSmokes) {
+  assertEmittedProducedTextEvidenceViolationDetected(ast, expected);
+}
 for (const { sourcePath, ast } of productionModuleAsts) {
   assertKeyboardBoundary(ast, sourcePath, keyboardBoundaryModeForPath(sourcePath));
 }
@@ -915,11 +947,6 @@ function assertEmittedProducedTextEvidence(ast) {
   if (installer === undefined) {
     throw new Error("The emitted package lost the produced-text evidence installer.");
   }
-  assertKeyboardBoundary(
-    { type: "Program", sourceType: "module", body: [installer] },
-    "emitted produced-text evidence installer",
-    "produced-text-evidence",
-  );
   const lifecycleTypes = new Set([
     "compositionstart",
     "compositionupdate",
@@ -936,8 +963,12 @@ function assertEmittedProducedTextEvidence(ast) {
     if (listenerMethod !== "addEventListener" && listenerMethod !== "removeEventListener") return;
     const eventType = staticStringValue(node.arguments[0]);
     if (eventType === undefined || !lifecycleTypes.has(eventType)) return;
-    if (!ancestors.includes(installer) || !allowedTypes.has(eventType)) {
+    if (!ancestors.includes(installer)) {
       violation = `${listenerMethod}(${eventType}) escaped the emitted produced-text installer`;
+      return;
+    }
+    if (!allowedTypes.has(eventType)) {
+      violation = `${listenerMethod}(${eventType}) is an unsupported produced-text lifecycle`;
       return;
     }
     const key = `${listenerMethod}:${eventType}`;
@@ -952,6 +983,21 @@ function assertEmittedProducedTextEvidence(ast) {
       }
     }
   }
+  assertKeyboardBoundary(
+    { type: "Program", sourceType: "module", body: [installer] },
+    "emitted produced-text evidence installer",
+    "produced-text-evidence",
+  );
+}
+
+function assertEmittedProducedTextEvidenceViolationDetected(ast, expected) {
+  try {
+    assertEmittedProducedTextEvidence(ast);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(expected)) return;
+    throw error;
+  }
+  throw new Error(`The emitted produced-text evidence accepted ${expected}.`);
 }
 
 function assertKeyboardBoundaryViolationDetected(ast, mode) {

@@ -16,6 +16,7 @@ import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime }
 import { isBrunoTableHotkeyHeld, useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 const BLANK_EDITOR_OPTION = "blank";
+const MINIMUM_VALIDATION_EXPLANATION_HEIGHT = 24;
 const scalarEditorOption = (index: number): string => `scalar:${String(index)}`;
 
 type BrunoTableCellEditBoundaryProps = Readonly<{
@@ -364,6 +365,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             style={{
               background: "Canvas",
               border: "1px solid currentColor",
+              boxSizing: "border-box",
               insetInlineStart: 0,
               maxWidth: 320,
               overflowY: "auto",
@@ -396,8 +398,20 @@ function positionValidationExplanation(
   const spaceBelow = Math.max(0, gridRect.bottom - editorRect.bottom);
   const spaceAbove = Math.max(0, editorRect.top - gridRect.top);
   const placeAbove = spaceBelow < contentHeight && spaceAbove > spaceBelow;
-  const availableHeight = Math.max(0, Math.floor(placeAbove ? spaceAbove : spaceBelow));
-  if (placeAbove) {
+  const preferredSpace = placeAbove ? spaceAbove : spaceBelow;
+  const gridHeight = Math.max(0, Math.floor(gridRect.height));
+  const minimumVisibleHeight = Math.min(MINIMUM_VALIDATION_EXPLANATION_HEIGHT, gridHeight);
+  const availableHeight = Math.min(
+    gridHeight,
+    Math.max(minimumVisibleHeight, Math.floor(preferredSpace)),
+  );
+  if (preferredSpace < minimumVisibleHeight) {
+    const desiredTop = Math.min(
+      Math.max(gridRect.top, editorRect.top - availableHeight),
+      gridRect.bottom - availableHeight,
+    );
+    error.style.setProperty("top", `${String(desiredTop - editorRect.top)}px`);
+  } else if (placeAbove) {
     error.style.removeProperty("top");
     error.style.setProperty("bottom", "100%");
   }

@@ -120,13 +120,10 @@ describe("BrunoTable editable traversal index", () => {
       }),
     );
     const columns = makeColumns();
-    const evaluate = vi.fn((_rowId: string, row: Row, column: CompiledFieldColumn) =>
-      column.columnId === "COL_ID_ENABLED" ? row.enabled : row.alternate,
+    const evaluate = vi.fn((_rowId: string, row: object, column: CompiledFieldColumn) =>
+      column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
     );
-    const index = new BrunoTableCellEditTraversalIndex(
-      (rowId) => rows.get(rowId),
-      evaluate as never,
-    );
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
     const projection = rowSpace([...rows.keys()]);
 
     index.reconcile(columns, projection);
@@ -155,13 +152,10 @@ describe("BrunoTable editable traversal index", () => {
       [second.id, second],
       [third.id, third],
     ]);
-    const evaluate = vi.fn((_rowId: string, row: Row, column: CompiledFieldColumn) =>
-      column.columnId === "COL_ID_ENABLED" ? row.enabled : row.alternate,
+    const evaluate = vi.fn((_rowId: string, row: object, column: CompiledFieldColumn) =>
+      column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
     );
-    const index = new BrunoTableCellEditTraversalIndex(
-      (rowId) => rows.get(rowId),
-      evaluate as never,
-    );
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
     const columns = makeColumns();
 
     index.reconcile(columns, rowSpace(["first", "second", "third"]));
@@ -232,11 +226,8 @@ describe("BrunoTable editable traversal index", () => {
       ["first", { id: "first", enabled: true, alternate: false }],
       ["second", { id: "second", enabled: false, alternate: false }],
     ]);
-    const evaluate = vi.fn((_rowId: string, row: Row) => row.enabled);
-    const index = new BrunoTableCellEditTraversalIndex(
-      (rowId) => rows.get(rowId),
-      evaluate as never,
-    );
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate);
 
     index.reconcile(makeEquivalentColumns(), rowSpace(["first", "second"]));
     expect(evaluate).toHaveBeenCalledTimes(2);

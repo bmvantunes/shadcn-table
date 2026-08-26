@@ -118,12 +118,10 @@ export class BrunoTableCellEditTraversalIndex {
     ) {
       return !this.isReady();
     }
-    const previousPredicateColumns = new Map(
-      this.predicateColumns.map(({ column }) => [column.columnId, column]),
-    );
     this.columns = columns;
     this.rowSpace = rowSpace;
     if (columnsChanged) {
+      const previousPredicateColumns = this.predicateColumnsById;
       this.columnIndexById.clear();
       for (const [columnIndex, column] of columns.entries()) {
         this.columnIndexById.set(column.columnId, columnIndex);
@@ -242,10 +240,10 @@ export class BrunoTableCellEditTraversalIndex {
   ): boolean => {
     const predicateColumnCount = Math.max(this.predicateColumns.length, 1);
     let remainingPredicateCells = Math.max(1, maximumPredicateCells);
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     let built = 0;
     while (remainingPredicateCells > 0) {
-      if (built > 0 && Date.now() - startedAt >= maximumDurationMs) break;
+      if (built > 0 && performance.now() - startedAt >= maximumDurationMs) break;
       if (this.allRowsDirty) {
         const projection = this.unknownProjection;
         if (projection !== undefined) {

@@ -141,6 +141,37 @@ test("keeps Cell Edit active after the Strict Mode effect rehearsal", async () =
   await expect.element(grid).toHaveFocus();
 });
 
+test("leaves prevented editor movement commands with the owning widget", async () => {
+  const { onSaveEdits, screen } = await renderEditableTable();
+  await userEvent.keyboard("{Enter}");
+  const editor = screen.getByRole("textbox", { name: "Edit Name" });
+  await userEvent.fill(editor, "Blocked movement");
+  const preventMovement: EventListener = (event) => event.preventDefault();
+  editor.element().addEventListener("keydown", preventMovement, true);
+
+  for (const { key, shiftKey } of [
+    { key: "Enter", shiftKey: false },
+    { key: "Enter", shiftKey: true },
+    { key: "Tab", shiftKey: false },
+    { key: "Tab", shiftKey: true },
+  ]) {
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key,
+      shiftKey,
+    });
+    editor.element().dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    await expect.element(editor).toHaveFocus();
+    await expect.element(editor).toHaveValue("Blocked movement");
+  }
+
+  editor.element().removeEventListener("keydown", preventMovement, true);
+  expect(onSaveEdits).not.toHaveBeenCalled();
+  await userEvent.keyboard("{Escape}");
+});
+
 test("preserves browser-incompatible current Number seeds and caret across equivalent recompiles", async () => {
   type SeedRow = Readonly<{
     readonly id: string;
@@ -754,6 +785,24 @@ test("keeps the validation explanation inside the scrollport across collision ch
   expect(alertRect.top).toBeGreaterThanOrEqual(upperEditorRect.bottom);
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveValue(99);
+
+  grid.element().style.height = "52px";
+  gridRect = grid.element().getBoundingClientRect();
+  const beforeConstrainedEditorRect = editor.element().getBoundingClientRect();
+  grid.element().scrollTop += beforeConstrainedEditorRect.top - gridRect.top - 8;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  const constrainedEditorRect = editor.element().getBoundingClientRect();
+  alertRect = alert.element().getBoundingClientRect();
+  gridRect = grid.element().getBoundingClientRect();
+  expect(constrainedEditorRect.top - gridRect.top).toBeLessThan(24);
+  expect(gridRect.bottom - constrainedEditorRect.bottom).toBeLessThan(24);
+  expect(alertRect.height).toBeGreaterThanOrEqual(24);
+  expect(alertRect.top).toBeGreaterThanOrEqual(gridRect.top);
+  expect(alertRect.bottom).toBeLessThanOrEqual(gridRect.bottom);
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveValue(99);
+  await expect.element(editor).toHaveAttribute("aria-describedby", alert.element().id);
 });
 
 test("uses the sole active Table Instance as the document Escape fallback", async () => {
