@@ -1315,6 +1315,79 @@ test("rolls back Shift pointer range activation when the edit commit is invalid"
   await expect.element(destination).not.toHaveAttribute("aria-selected");
 });
 
+test("keeps Shift interactive cell descendants behind the outside commit gate", async () => {
+  const action = vi.fn();
+  const interactiveColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      pinned: "start",
+    },
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      isEditable: true,
+      validate: ({ value }) => (value <= 10 ? undefined : "Score must be at most 10."),
+    },
+    {
+      columnId: "COL_ID_NOTE",
+      field: "note",
+      headerName: "Note",
+      valueType: "text",
+      isEditable: true,
+      pinned: "end",
+      cellRenderer: ({ value }) => (
+        <button type="button" onClick={action}>
+          {value}
+        </button>
+      ),
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_SHIFT_INTERACTIVE_COMMIT_GATE"
+      columns={interactiveColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_SHIFT_INTERACTIVE_COMMIT_GATE",
+  });
+  await userEvent.click(grid.getByRole("gridcell", { name: "4", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e{Shift>}");
+  await userEvent.click(grid.getByRole("button", { name: "last" }), {
+    modifiers: ["Shift"],
+  });
+  await userEvent.keyboard("{/Shift}");
+
+  expect(action).not.toHaveBeenCalled();
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+
+  await userEvent.fill(editor, "5");
+  await userEvent.keyboard("{Shift>}");
+  await userEvent.click(grid.getByRole("button", { name: "last" }), {
+    modifiers: ["Shift"],
+  });
+  await userEvent.keyboard("{/Shift}");
+
+  expect(action).toHaveBeenCalledTimes(1);
+  await expect.element(editor).not.toBeInTheDocument();
+});
+
 test.each([
   ["forward Enter", "{Enter}", "C score", false],
   ["backward Enter", "{Shift>}{Enter}{/Shift}", "A score", false],

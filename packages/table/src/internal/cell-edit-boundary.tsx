@@ -10,6 +10,7 @@ import {
 import type { NamedExoticComponent, ReactElement } from "react";
 
 import type { CompiledColumn } from "./compile-columns";
+import { brunoTableCellRangePointerHit } from "./cell-range-clipboard";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { isBrunoTableHotkeyHeld, useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
@@ -161,19 +162,18 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         ) {
           return;
         }
-        if (isBrunoTableHotkeyHeld("Shift") && event.target instanceof Element) {
-          const rangeCell = event.target.closest<HTMLElement>(
-            '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
-          );
-          if (rangeCell?.closest("[data-bruno-table]") === tableBoundary) return;
-        }
+        const grid = editor.closest<HTMLElement>('[role="grid"]');
+        const rangeOwnsPointer =
+          grid !== null &&
+          isBrunoTableHotkeyHeld("Shift") &&
+          brunoTableCellRangePointerHit(event.target, grid) !== undefined;
         if (!runtime.commitActiveCandidate()) {
           blockedClickTarget = event.target;
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
-        if (event.target instanceof Element) {
+        if (!rangeOwnsPointer && event.target instanceof Element) {
           const cell = event.target.closest<HTMLElement>(
             '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
           );

@@ -1578,11 +1578,27 @@ function captureBodyViewportTopInset(grid: HTMLElement): number {
   );
 }
 
-export function closestBrunoTableCellRangeHit(
+const CELL_RANGE_POINTER_EXCLUSION_SELECTOR =
+  'label,a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex],[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"],[role="radio"],[role="spinbutton"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="tab"],[role="treeitem"]';
+
+export function brunoTableCellRangePointerHit(
   target: EventTarget | null,
   grid: HTMLElement,
 ): BrunoTableCellRangeHit | undefined {
-  return closestCellHit(target, grid);
+  const hit = closestCellHit(target, grid);
+  if (hit === undefined) return undefined;
+  const ElementConstructor = grid.ownerDocument.defaultView?.Element;
+  if (ElementConstructor === undefined || !(target instanceof ElementConstructor)) return undefined;
+  const hitCell = target.closest<HTMLElement>(
+    '[role="gridcell"][data-bruno-row-id][data-bruno-row-index][data-bruno-column-id]',
+  );
+  const excludedDescendant = target.closest<HTMLElement>(CELL_RANGE_POINTER_EXCLUSION_SELECTOR);
+  return hitCell !== null &&
+    excludedDescendant !== null &&
+    excludedDescendant !== hitCell &&
+    hitCell.contains(excludedDescendant)
+    ? undefined
+    : hit;
 }
 
 function closestCellHit(

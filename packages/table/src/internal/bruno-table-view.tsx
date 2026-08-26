@@ -169,7 +169,7 @@ import {
   captureBrunoTableClipboardSnapshot,
   clipboardTargetFromRange,
   clipboardTargetFromSelection,
-  closestBrunoTableCellRangeHit,
+  brunoTableCellRangePointerHit,
   createBrunoTableCellRangeStructure,
   createBrunoTableCellRangeStructureFromRowSpace,
   serializeBrunoTableClipboardSnapshot,
@@ -241,9 +241,6 @@ type BrunoTableColumnPointerDownHandler = (
 ) => void;
 const INTERACTIVE_DESCENDANT_SELECTOR =
   'a[href],area[href],button,input,select,summary,textarea,iframe,object,embed,audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),[tabindex]';
-const INTERACTIVE_ROLE_SELECTOR =
-  '[role="button"],[role="link"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="slider"],[role="switch"],[role="radio"],[role="spinbutton"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="tab"],[role="treeitem"]';
-const CELL_RANGE_POINTER_EXCLUSION_SELECTOR = `label,${INTERACTIVE_DESCENDANT_SELECTOR},${INTERACTIVE_ROLE_SELECTOR}`;
 const EMBEDDED_BROWSING_CONTEXT_SELECTOR = "iframe,object,embed";
 const VISUALLY_HIDDEN: CSSProperties = {
   clip: "rect(0 0 0 0)",
@@ -2515,27 +2512,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const runCellRangePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (cellRange === undefined || cellRangeStructure === undefined) return;
     const grid = event.currentTarget;
-    const ElementConstructor = grid.ownerDocument.defaultView?.Element;
-    const target =
-      ElementConstructor !== undefined && event.target instanceof ElementConstructor
-        ? event.target
-        : null;
-    const hit = closestBrunoTableCellRangeHit(event.target, grid);
+    const hit = brunoTableCellRangePointerHit(event.target, grid);
     if (hit === undefined) return;
-    const hitCell = target?.closest<HTMLElement>(
-      '[role="gridcell"][data-bruno-row-id][data-bruno-row-index][data-bruno-column-id]',
-    );
-    const excludedDescendant = target?.closest<HTMLElement>(CELL_RANGE_POINTER_EXCLUSION_SELECTOR);
-    if (
-      hitCell !== null &&
-      hitCell !== undefined &&
-      excludedDescendant !== null &&
-      excludedDescendant !== undefined &&
-      excludedDescendant !== hitCell &&
-      hitCell.contains(excludedDescendant)
-    ) {
-      return;
-    }
     const extendingWithShift = isBrunoTableHotkeyHeld("Shift");
     const horizontalLogicalSign = getComputedStyle(grid).direction === "rtl" ? -1 : 1;
     const activeBefore = navigation.getSnapshot();
@@ -2543,7 +2521,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       activeBefore?.region === "body" && activeBefore.rowId !== undefined
         ? { rowId: activeBefore.rowId, columnId: activeBefore.columnId }
         : undefined;
-    const started = cellRange.startPointerGesture(
+    cellRange.startPointerGesture(
       event.nativeEvent,
       hit,
       grid,
@@ -2557,16 +2535,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       currentActive,
       extendingWithShift,
     );
-    if (
-      started &&
-      extendingWithShift &&
-      cellEdit?.getSessionSnapshot().kind === "editing" &&
-      !cellEdit.commitActiveCandidate()
-    ) {
-      cellRange.cancelPointerGesture();
-      event.preventDefault();
-      event.stopPropagation();
-    }
   };
   const runColumnResize = (
     event: BrunoTableHotkeyGesture,
