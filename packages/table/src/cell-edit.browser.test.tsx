@@ -472,6 +472,107 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
   await expect.element(outerEditor).toHaveAttribute("aria-invalid", "true");
 });
 
+test("anchors simultaneous nested editors with colliding Row Identities to their owning rows", async () => {
+  const nestedRow: Row = {
+    id: "shared",
+    name: "Nested",
+    score: 1,
+    note: "Nested note",
+    revision: 1n,
+  };
+  const NestedTable = () => (
+    <BrunoTableClient
+      tableId="TABLE_ID_NESTED_GEOMETRY_OWNER"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: [nestedRow], totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const outerRows: readonly Row[] = [
+    { id: "host", name: "A host", score: 0, note: "Host", revision: 1n },
+    { id: "shared", name: "Z target", score: 2, note: "Target", revision: 1n },
+  ];
+  const outerColumns = [
+    columns[0]!,
+    columns[1]!,
+    {
+      columnId: "COL_ID_NOTE",
+      field: "note",
+      headerName: "Note",
+      valueType: "text",
+      isEditable: true,
+      pinned: "end",
+      cellRenderer: ({ row, value }: { readonly row: Row; readonly value: string }) =>
+        row.id === "host" ? <NestedTable /> : value,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_OUTER_GEOMETRY_OWNER"
+      columns={outerColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: outerRows, totalRows: 2, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_GEOMETRY_OWNER" });
+  const nestedGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_NESTED_GEOMETRY_OWNER" });
+  const nestedCell = nestedGrid.getByRole("gridcell", { name: "1", exact: true });
+  const owningSlot = (grid: HTMLElement, rowId: string) =>
+    [
+      ...grid.querySelectorAll<HTMLElement>(`[data-bruno-edit-row-slot="${CSS.escape(rowId)}"]`),
+    ].find((slot) => slot.closest("[data-bruno-table]") === grid.closest("[data-bruno-table]"));
+
+  await userEvent.click(nestedCell);
+  await userEvent.keyboard("{F2}");
+  const nestedEditor = nestedGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await settleBrunoTableBrowserFrames();
+  const nestedSlot = owningSlot(nestedGrid.element() as HTMLElement, "shared");
+  expect(nestedSlot).toBeDefined();
+  const nestedEditorTop = nestedEditor.element().getBoundingClientRect().top;
+  const outerTargetTop = outerGrid
+    .getByRole("gridcell", { name: "Z target", exact: true })
+    .element()
+    .getBoundingClientRect().top;
+
+  outerGrid.element().focus();
+  await userEvent.keyboard("{ArrowDown}{F2}");
+  const outerEditor = outerGrid.getByRole("textbox", { name: "Edit Name" });
+  await settleBrunoTableBrowserFrames();
+  await expect.element(outerEditor).toHaveFocus();
+  await expect.element(nestedEditor).toBeVisible();
+  const outerSlot = owningSlot(outerGrid.element() as HTMLElement, "shared");
+  expect(outerSlot).toBeDefined();
+  expect(
+    Math.abs(outerEditor.element().getBoundingClientRect().top - outerTargetTop),
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(nestedEditor.element().getBoundingClientRect().top - nestedEditorTop),
+  ).toBeLessThanOrEqual(1);
+  const editorCellIds = [nestedEditor, outerEditor].map(
+    (editor) => editor.element().closest<HTMLElement>('[role="gridcell"]')?.id,
+  );
+  expect(editorCellIds.every((id) => id !== undefined && id.length > 0)).toBe(true);
+  expect(new Set(editorCellIds).size).toBe(2);
+  for (const id of editorCellIds) {
+    expect(document.querySelectorAll(`[id="${CSS.escape(id ?? "")}"]`)).toHaveLength(1);
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(outerEditor).not.toBeInTheDocument();
+  await expect.element(nestedEditor).toBeVisible();
+  nestedEditor.element().focus();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(nestedEditor).not.toBeInTheDocument();
+});
+
 test("does not retarget after a valid outside commit into a sibling Table Instance", async () => {
   const screen = await render(
     <>
