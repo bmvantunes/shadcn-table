@@ -12,13 +12,13 @@ import type { NamedExoticComponent, ReactElement } from "react";
 import type { CompiledColumn } from "./compile-columns";
 import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
-import { useBrunoTableGridTabStopHandoff } from "./focus";
 import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
 type BrunoTableCellEditBoundaryProps = Readonly<{
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableCellEditRuntime;
   readonly onCommittedOutsideCellPointer?: ((rowId: string, columnId: string) => void) | undefined;
+  readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
 }>;
 
 export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEditBoundaryProps> =
@@ -26,6 +26,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     column,
     runtime,
     onCommittedOutsideCellPointer,
+    yieldGridTabStop,
   }: BrunoTableCellEditBoundaryProps): ReactElement | null {
     const control = useRef<HTMLElement>(null);
     const attachControl = useCallback((element: HTMLElement | null) => {
@@ -52,7 +53,6 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         : undefined;
     const rawNumberSeed = useRef(initialRawNumberSeed);
     const [rawNumberDisplay, setRawNumberDisplay] = useState(initialRawNumberSeed);
-    const yieldGridTabStop = useBrunoTableGridTabStopHandoff();
     const cancel = useCallback(() => {
       const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
       runtime.cancel();
@@ -69,7 +69,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
         if (grid !== null) {
           grid.focus({ preventScroll: true });
-          yieldGridTabStop(grid);
+          yieldGridTabStop?.(grid);
         }
         return false;
       },

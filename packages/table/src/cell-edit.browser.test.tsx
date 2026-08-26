@@ -378,6 +378,9 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
   await userEvent.click(screen.getByRole("gridcell", { name: "last", exact: true }));
   await userEvent.keyboard("{F2}{Tab}");
   await expect.element(screen.getByRole("button", { name: "After grid summary" })).toHaveFocus();
+  await vi.waitFor(() => expect(grid.element().tabIndex).toBe(0));
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  await expect.element(grid).toHaveFocus();
 });
 
 test("traverses editable cells from Navigation Mode and yields natively only at both terminals", async () => {
@@ -681,7 +684,7 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await expect.element(editor).toHaveValue("Candidate survives");
   expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
-    screen.getByRole("row").nth(2).getByRole("gridcell").first().element().id,
+    editor.element().closest<HTMLElement>('[role="gridcell"]')?.id,
   );
 
   await screen.rerender(
@@ -695,13 +698,14 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   await expect
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .toHaveValue("Candidate survives");
-  expect(
-    screen
-      .getByRole("textbox", { name: "Edit Value" })
-      .element()
-      .closest('[role="row"]')
-      ?.getAttribute("aria-rowindex"),
-  ).toBeNull();
+  const detachedSemanticOwner = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find(
+    (row) =>
+      row
+        .getAttribute("aria-owns")
+        ?.split(" ")
+        .includes(activeCellId ?? "") === true,
+  );
+  expect(detachedSemanticOwner?.getAttribute("aria-rowindex")).toBeNull();
 
   await screen.rerender(renderTable([peer], 4));
   await expect
@@ -917,11 +921,10 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
   const activeCell = editor.element().closest<HTMLElement>('[role="gridcell"]');
   expect(activeCell).not.toBeNull();
   const activeId = activeCell?.id ?? "";
-  expect(
-    [...document.querySelectorAll<HTMLElement>("[id]")].filter(
-      (candidate) => candidate.id === activeId,
-    ),
-  ).toHaveLength(1);
+  const retainedActiveIds = [...document.querySelectorAll<HTMLElement>("[id]")].filter(
+    (candidate) => candidate.id === activeId,
+  );
+  expect(retainedActiveIds).toHaveLength(1);
   const activeHeader = screen.getByRole("columnheader", { name: /^Wide 100/u });
   expect(
     Math.abs(
@@ -948,6 +951,27 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
   ).toBeLessThanOrEqual(1);
   expect(screen.getByRole("checkbox", { name: "Select row 1", exact: true })).toBeVisible();
   const anchorTop = editor.element().getBoundingClientRect().top;
+
+  grid.element().scrollLeft = 0;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  await expect.element(editor).toHaveValue("wide candidate");
+  await expect.element(editor).toHaveFocus();
+  const visibleHeader = screen.getByRole("columnheader", { name: /^Wide 0/u });
+  const visibleCell = screen.getByRole("gridcell", { name: "wide-0-target", exact: true });
+  expect(
+    Math.abs(
+      visibleCell.element().getBoundingClientRect().left -
+        visibleHeader.element().getBoundingClientRect().left,
+    ),
+  ).toBeLessThanOrEqual(1);
+  expect(editor.element().getBoundingClientRect().left).toBeGreaterThan(
+    grid.element().getBoundingClientRect().right,
+  );
+  const scrolledActiveIds = [...document.querySelectorAll<HTMLElement>("[id]")].filter(
+    (candidate) => candidate.id === activeId,
+  );
+  expect(scrolledActiveIds).toHaveLength(1);
 
   await screen.rerender(table({ ...target, order: "999" }, 2));
   await settleBrunoTableBrowserFrames();

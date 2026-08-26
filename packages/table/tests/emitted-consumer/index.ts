@@ -339,6 +339,37 @@ const emittedInvalidStaticFalseBlankHelperColumns = [
   }),
 ] satisfies BrunoTableColumns<EmittedNullableEditRow>;
 void emittedInvalidStaticFalseBlankHelperColumns;
+const emittedWidenedEditablePolicy: boolean = Math.random() > 0.5;
+const emittedWidenedRequiredEditColumns = [
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedWidenedRequiredEditColumns;
+const emittedInvalidWidenedNullableEditColumns = [
+  // @ts-expect-error emitted nullable widened booleans cannot choose an exact blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+  },
+  // @ts-expect-error emitted nullable widened booleans cannot pair safely with blankValue.
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+    blankValue: undefined,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidWidenedNullableEditColumns;
 
 const emittedHelperGroupedColumns = [
   BrunoTableTextColumn({
