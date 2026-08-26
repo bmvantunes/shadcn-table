@@ -109,6 +109,7 @@ export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
   private readonly environmentListeners = new Set<Listener>();
   private readonly bodyLayers = new Set<HTMLElement>();
+  private pinnedEditorHost: HTMLElement | null = null;
   private element: HTMLElement | null = null;
   private rowLayer: HTMLElement | null = null;
   private scrollbarOverlay: HTMLElement | null = null;
@@ -604,6 +605,13 @@ export class BrunoTableViewportRuntime {
     };
   };
 
+  public readonly attachPinnedEditorHost = (element: HTMLElement | null): void => {
+    if (this.pinnedEditorHost === element) return;
+    this.clearPinnedEditorGeometry(this.pinnedEditorHost);
+    this.pinnedEditorHost = element;
+    this.writePinnedEditorGeometry(this.logicalScrollLeft);
+  };
+
   public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
     if (this.scrollbarOverlay === element) return;
     this.scrollbarOverlay = element;
@@ -627,6 +635,8 @@ export class BrunoTableViewportRuntime {
     this.element = null;
     this.rowLayer = null;
     this.bodyLayers.clear();
+    this.clearPinnedEditorGeometry(this.pinnedEditorHost);
+    this.pinnedEditorHost = null;
     this.scrollbarOverlay = null;
     this.scrollbarOverlayDirection = undefined;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
@@ -841,14 +851,7 @@ export class BrunoTableViewportRuntime {
     logicalScrollLeft: number,
   ): void {
     this.logicalScrollLeft = logicalScrollLeft;
-    element.style.setProperty(
-      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
-      `${logicalScrollLeft}px`,
-    );
-    element.style.setProperty(
-      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
-      `${element.clientWidth}px`,
-    );
+    this.writePinnedEditorGeometry(logicalScrollLeft);
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const structuralLogicalScrollLeft = quantizeScroll(logicalScrollLeft);
     const next = createViewportSnapshot(this.layout, {
@@ -861,6 +864,26 @@ export class BrunoTableViewportRuntime {
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
     this.writeBodyLayerOffset(nextRowLayerOffset);
     if (this.previewLayout === undefined) this.publishSnapshot(next);
+  }
+
+  private writePinnedEditorGeometry(logicalScrollLeft: number): void {
+    const host = this.pinnedEditorHost;
+    const element = this.element;
+    if (host === null || element === null) return;
+    host.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      `${logicalScrollLeft}px`,
+    );
+    host.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      `${element.clientWidth}px`,
+    );
+  }
+
+  private clearPinnedEditorGeometry(host: HTMLElement | null): void {
+    if (host === null) return;
+    host.style.removeProperty(BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE);
+    host.style.removeProperty(BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE);
   }
 
   private writeBodyLayerOffset(nextOffset: string): void {

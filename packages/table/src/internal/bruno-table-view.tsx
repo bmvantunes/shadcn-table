@@ -1379,6 +1379,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             viewportSnapshot={adapter.viewportSnapshot}
             attach={adapter.attach}
             attachBodyLayer={adapter.attachBodyLayer}
+            attachPinnedEditorHost={adapter.attachPinnedEditorHost}
             attachRowLayer={adapter.attachRowLayer}
             attachScrollbarOverlay={adapter.attachScrollbarOverlay}
             subscribeViewportEnvironment={adapter.subscribeViewportEnvironment}
@@ -1418,6 +1419,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   viewportSnapshot,
   attach,
   attachBodyLayer,
+  attachPinnedEditorHost,
   attachRowLayer,
   attachScrollbarOverlay,
   subscribeViewportEnvironment,
@@ -1451,6 +1453,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly viewportSnapshot: BrunoTableViewportSnapshot;
   readonly attach: (element: HTMLElement | null) => void;
   readonly attachBodyLayer: RefCallback<HTMLElement>;
+  readonly attachPinnedEditorHost: RefCallback<HTMLElement>;
   readonly attachRowLayer: (element: HTMLElement | null) => void;
   readonly attachScrollbarOverlay: (element: HTMLElement | null) => void;
   readonly subscribeViewportEnvironment: (listener: () => void) => () => void;
@@ -3112,6 +3115,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           ) : null}
           {cellEdit === undefined ? null : (
             <BrunoTableEditOwnedRow
+              attachPinnedEditorHost={attachPinnedEditorHost}
               center={columnWindow.center}
               centerStartIndex={columnWindow.centerStartIndex}
               columnIndexOffset={columnIndexOffset}
@@ -5320,6 +5324,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
 });
 
 const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
+  attachPinnedEditorHost,
   center,
   centerStartIndex,
   columnIndexOffset,
@@ -5343,6 +5348,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   width,
   yieldGridTabStop,
 }: {
+  readonly attachPinnedEditorHost: RefCallback<HTMLElement>;
   readonly center: readonly CompiledColumn[];
   readonly centerStartIndex: number;
   readonly columnIndexOffset: number;
@@ -5552,6 +5558,11 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
       )}
       {activeColumn === undefined || activeEditorOffset === undefined ? null : (
         <table
+          ref={
+            activePinnedStartIndex >= 0 || activePinnedEndIndex >= 0
+              ? attachPinnedEditorHost
+              : undefined
+          }
           data-bruno-active-editor=""
           role="presentation"
           style={{

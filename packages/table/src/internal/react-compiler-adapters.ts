@@ -133,6 +133,7 @@ export type BrunoTableViewportAdapterState = Readonly<{
   viewportSnapshot: BrunoTableViewportSnapshot;
   attach: (element: HTMLElement | null) => void;
   attachBodyLayer: RefCallback<HTMLElement>;
+  attachPinnedEditorHost: RefCallback<HTMLElement>;
   attachRowLayer: (element: HTMLElement | null) => void;
   attachScrollbarOverlay: (element: HTMLElement | null) => void;
   subscribeViewportEnvironment: (listener: () => void) => () => void;
@@ -225,6 +226,7 @@ export function BrunoTableViewportAdapterBoundary({
     dispose: viewport.dispose,
     attach: viewport.attach,
     attachBodyLayer: viewport.attachBodyLayer,
+    attachPinnedEditorHost: viewport.attachPinnedEditorHost,
     attachRowLayer: viewport.attachRowLayer,
     attachScrollbarOverlay: viewport.attachScrollbarOverlay,
     subscribeEnvironment: viewport.subscribeEnvironment,
@@ -361,6 +363,7 @@ export function BrunoTableViewportAdapterBoundary({
     viewportSnapshot,
     attach: viewportBindings.attach,
     attachBodyLayer: viewportBindings.attachBodyLayer,
+    attachPinnedEditorHost: viewportBindings.attachPinnedEditorHost,
     attachRowLayer: viewportBindings.attachRowLayer,
     attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
     subscribeViewportEnvironment: viewportBindings.subscribeEnvironment,

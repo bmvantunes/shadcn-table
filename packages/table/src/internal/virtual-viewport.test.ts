@@ -783,7 +783,9 @@ describe("BrunoTableViewportRuntime", () => {
       });
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       const maximum = 800;
-      const setProperty = vi.fn();
+      const gridSetProperty = vi.fn();
+      const hostSetProperty = vi.fn();
+      const hostRemoveProperty = vi.fn();
       const element = {
         addEventListener: vi.fn(),
         clientHeight: 480,
@@ -793,24 +795,35 @@ describe("BrunoTableViewportRuntime", () => {
         removeEventListener: vi.fn(),
         scrollLeft: rtlType === "reverse" ? maximum : 0,
         scrollTop: 0,
-        style: { setProperty },
+        style: { setProperty: gridSetProperty },
       } as unknown as HTMLElement;
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
+      viewport.attachPinnedEditorHost({
+        style: { removeProperty: hostRemoveProperty, setProperty: hostSetProperty },
+      } as unknown as HTMLElement);
 
       viewport.revealCell(0, "COL_ID_RTL_9", "header");
       callbacks.shift()!(0);
       expect(element.scrollLeft).toBe(
         rtlType === "negative" ? -maximum : rtlType === "reverse" ? 0 : maximum,
       );
-      expect(setProperty).toHaveBeenCalledWith(
+      expect(hostSetProperty).toHaveBeenCalledWith(
         BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
         `${maximum}px`,
       );
-      expect(setProperty).toHaveBeenCalledWith(
+      expect(hostSetProperty).toHaveBeenCalledWith(
         BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
         "200px",
+      );
+      expect(gridSetProperty).not.toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+        expect.any(String),
+      );
+      expect(gridSetProperty).not.toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+        expect.any(String),
       );
       expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe("COL_ID_RTL_9");
 
