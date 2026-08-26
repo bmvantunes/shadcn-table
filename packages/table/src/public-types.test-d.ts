@@ -1670,6 +1670,12 @@ describe("BrunoTable public types", () => {
     void BrunoTableClient<Order, Columns>(editableProps);
     void BrunoTableClient<Order, Columns, (row: Order) => bigint>(editableProps);
     void BrunoTableClient(editableProps);
+
+    // @ts-expect-error Editable named props require the third Row Version authority generic.
+    const erasedNamedProps: BrunoTableClientProps<Order, Columns> = editableProps;
+    void erasedNamedProps;
+    const exactNamedProps: BrunoTableClientProps<Order, Columns, bigint> = editableProps;
+    expectTypeOf(exactNamedProps.getRowVersion).returns.toEqualTypeOf<bigint>();
   });
 
   it("types recursive filters and ordered sorts", () => {

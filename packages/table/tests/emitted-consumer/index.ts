@@ -34,7 +34,6 @@ import {
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
-  type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableGridFilterCommandCapability,
   type BrunoTableFilterExpressions,
@@ -2173,11 +2172,11 @@ void BrunoTableClient({
 const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
 void emittedToolbar;
 
-type EmittedEditableClientProps<TColumns extends BrunoTableColumns<Order>> = Omit<
-  BrunoTableClientProps<Order, TColumns>,
-  "editable" | "getRowVersion" | "onSaveEdits"
-> &
-  BrunoTableEditingCapability<Order, TColumns, bigint>;
+type EmittedEditableClientProps<TColumns extends BrunoTableColumns<Order>> = BrunoTableClientProps<
+  Order,
+  TColumns,
+  bigint
+>;
 
 const editableProps = {
   tableId: "orders",
@@ -2201,6 +2200,14 @@ const editableProps = {
     status: "ready",
   },
 } satisfies EmittedEditableClientProps<Columns>;
+// @ts-expect-error Emitted editable named props require the third Row Version authority generic.
+const emittedErasedNamedProps: BrunoTableClientProps<Order, Columns> = editableProps;
+void emittedErasedNamedProps;
+const emittedExactNamedProps: BrunoTableClientProps<Order, Columns, bigint> = editableProps;
+const emittedExactNamedVersion: bigint = emittedExactNamedProps.getRowVersion(
+  emittedExactNamedProps.clientSource.rows[0]!,
+);
+void emittedExactNamedVersion;
 // @ts-expect-error Explicit editable calls require the third Row Version authority generic.
 void BrunoTableClient<Order, Columns>(editableProps);
 void BrunoTableClient<Order, Columns, (row: Order) => bigint>(editableProps);

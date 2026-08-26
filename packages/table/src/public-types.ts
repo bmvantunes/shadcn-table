@@ -1689,7 +1689,7 @@ export type BrunoTableEditableClientProps<
 export type BrunoTableClientProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
-  TRowVersion = unknown,
+  TRowVersion = never,
 > =
   | BrunoTableReadOnlyClientProps<TRow, TColumns>
   | (BrunoTableClientSourceProps<TRow, TColumns> &
