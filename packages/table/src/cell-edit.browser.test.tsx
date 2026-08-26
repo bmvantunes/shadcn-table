@@ -951,6 +951,75 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
   ).toBeLessThanOrEqual(1);
   expect(screen.getByRole("checkbox", { name: "Select row 1", exact: true })).toBeVisible();
   const anchorTop = editor.element().getBoundingClientRect().top;
+  const initialEditorRect = editor.element().getBoundingClientRect();
+  expect(
+    document
+      .elementFromPoint(initialEditorRect.left + initialEditorRect.width / 2, anchorTop + 2)
+      ?.closest('[role="gridcell"]'),
+  ).toBe(activeCell);
+
+  grid.element().scrollTop = 18;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  const stickyHeaderRect = activeHeader.element().getBoundingClientRect();
+  expect(editor.element().getBoundingClientRect().top).toBeLessThan(stickyHeaderRect.bottom);
+  expect(
+    document
+      .elementFromPoint(
+        initialEditorRect.left + initialEditorRect.width / 2,
+        stickyHeaderRect.bottom - 2,
+      )
+      ?.closest('[role="columnheader"]'),
+  ).toBe(activeHeader.element());
+  grid.element().scrollTop = 0;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+
+  const startRect = startCell.element().getBoundingClientRect();
+  let editorRect = editor.element().getBoundingClientRect();
+  grid.element().scrollLeft += editorRect.left - startRect.right + editorRect.width / 2;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  editorRect = editor.element().getBoundingClientRect();
+  expect(editorRect.left).toBeLessThan(startRect.right);
+  expect(editorRect.right).toBeGreaterThan(startRect.right);
+  expect(
+    document
+      .elementFromPoint(startRect.right - 2, editorRect.top + editorRect.height / 2)
+      ?.closest('[role="gridcell"]'),
+  ).toBe(startCell.element());
+
+  const selection = screen.getByRole("checkbox", { name: "Select row 1", exact: true });
+  const selectionRect = selection.element().getBoundingClientRect();
+  editorRect = editor.element().getBoundingClientRect();
+  grid.element().scrollLeft +=
+    editorRect.left - selectionRect.left + editorRect.width / 2 - selectionRect.width / 2;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  const selectionAfterScroll = selection.element().getBoundingClientRect();
+  const gridAfterSelectionScroll = grid.element().getBoundingClientRect();
+  expect(selectionAfterScroll.left).toBeGreaterThanOrEqual(gridAfterSelectionScroll.left);
+  expect(selectionAfterScroll.right).toBeLessThanOrEqual(gridAfterSelectionScroll.right);
+  expect(
+    document.elementFromPoint(
+      selectionAfterScroll.left + selectionAfterScroll.width / 2,
+      selectionAfterScroll.top + selectionAfterScroll.height / 2,
+    ),
+  ).toBe(selection.element());
+
+  const endRect = endCell.element().getBoundingClientRect();
+  editorRect = editor.element().getBoundingClientRect();
+  grid.element().scrollLeft += editorRect.right - endRect.left - editorRect.width / 2;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  editorRect = editor.element().getBoundingClientRect();
+  expect(editorRect.left).toBeLessThan(endRect.left);
+  expect(editorRect.right).toBeGreaterThan(endRect.left);
+  expect(
+    document
+      .elementFromPoint(endRect.left + 2, editorRect.top + editorRect.height / 2)
+      ?.closest('[role="gridcell"]'),
+  ).toBe(endCell.element());
 
   grid.element().scrollLeft = 0;
   grid.element().dispatchEvent(new Event("scroll"));
@@ -972,6 +1041,11 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
     (candidate) => candidate.id === activeId,
   );
   expect(scrolledActiveIds).toHaveLength(1);
+  const semanticOwners = [...document.querySelectorAll<HTMLElement>('[role="row"]')].filter(
+    (row) => row.getAttribute("aria-owns")?.split(" ").includes(activeId) === true,
+  );
+  expect(semanticOwners).toHaveLength(1);
+  expect(semanticOwners[0]?.getAttribute("aria-rowindex")).toBe("2");
 
   await screen.rerender(table({ ...target, order: "999" }, 2));
   await settleBrunoTableBrowserFrames();

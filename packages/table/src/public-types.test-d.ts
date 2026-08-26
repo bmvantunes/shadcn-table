@@ -3005,7 +3005,23 @@ const widenedRequiredEditColumns = [
     valueType: "number",
     isEditable: widenedEditablePolicy,
   },
-] satisfies BrunoTableColumns<NullableEditRow>;
+] as const satisfies BrunoTableColumns<NullableEditRow>;
+const widenedOnlyEditableClientProps = {
+  tableId: "widened-only-editability",
+  columns: widenedRequiredEditColumns,
+  initialOrderBy: [{ columnId: "COL_ID_REQUIRED", direction: "asc" }],
+  getRowId: (row: NullableEditRow) => row.id,
+  editable: true,
+  getRowVersion: () => 1n,
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" },
+} as const;
+// @ts-expect-error widened boolean alone cannot prove the Table-level editable capability.
+const invalidWidenedOnlyEditableClient: BrunoTableClientProps<
+  NullableEditRow,
+  typeof widenedRequiredEditColumns,
+  bigint
+> = widenedOnlyEditableClientProps;
 const invalidWidenedNullableEditColumns = [
   // @ts-expect-error nullable widened booleans cannot choose an exact blank representation.
   {
@@ -3088,6 +3104,7 @@ void invalidNullableEditColumns;
 void invalidStaticFalseBlankColumns;
 void invalidStaticFalseBlankHelperColumns;
 void widenedRequiredEditColumns;
+void invalidWidenedOnlyEditableClient;
 void invalidWidenedNullableEditColumns;
 void invalidMissingNullableBlankColumns;
 void invalidMissingNullableBlankHelperColumns;
