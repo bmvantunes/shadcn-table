@@ -259,6 +259,66 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "paces an unknown high-eligibility replacement without synchronous membership teardown",
+    () => {
+      const unknownRowsById = new Map(rows.map((row) => [row.id, { ...row, editable: true }]));
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => unknownRowsById.get(rowId),
+        (_rowId, row) => {
+          predicateEvaluations += 1;
+          return (row as Row).editable;
+        },
+        true,
+      );
+      index.reconcile(columns, rowSpace);
+      while (index.buildNextSlice());
+      predicateEvaluations = 0;
+      for (const row of rows) unknownRowsById.set(row.id, { ...row, editable: false });
+      unknownRowsById.delete(rows[0]!.id);
+      const stagingSamples: number[] = [];
+      let startedAt = performance.now();
+      index.reconcileRows(undefined);
+      index.reconcile(columns, rowSpace);
+      stagingSamples.push(performance.now() - startedAt);
+      unknownRowsById.set(rows.at(-1)!.id, { ...rows.at(-1)!, editable: true });
+      startedAt = performance.now();
+      index.reconcileRows(undefined);
+      index.reconcile(columns, rowSpace);
+      stagingSamples.push(performance.now() - startedAt);
+      const stagingP99Ms = assertBudgetSamples("unknown-row invalidation staging", stagingSamples);
+      if (predicateEvaluations !== 0 || index.find(0, columns[0]!.columnId, 1) !== undefined) {
+        throw new Error("Unknown-row traversal exposed partial predicate evidence.");
+      }
+      const sliceSamples: number[] = [];
+      while (!index.isReady()) {
+        const sliceStartedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - sliceStartedAt);
+      }
+      const p99Ms = assertBudgetSamples("unknown-row predicate-index slice", sliceSamples);
+      if (
+        predicateEvaluations !== (rowCount - 1) * columnCount ||
+        index.getCachedRowCount() !== rowCount - 1 ||
+        index.find(0, columns[0]!.columnId, 1)?.rowId !== rows.at(-1)!.id
+      ) {
+        throw new Error("Unknown-row predicate-index reconciliation was not exact/latest-wins.");
+      }
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable unknown-row predicate-index production slices",
+          predicateEvaluations,
+          stagingP99Ms,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "finds far forward, reverse, and terminal destinations across 750,000 predicate cells",
     () => {
       const startedAt = performance.now();

@@ -345,7 +345,7 @@ export class BrunoTableCellEditTraversalIndex {
     for (const [rowId, rowCache] of this.rowCacheById) {
       const row = this.getRow(rowId);
       if (typeof row !== "object" || row === null || rowCache.row !== row) {
-        this.removeRowCache(rowId);
+        this.dirtyRowIds.add(rowId);
         continue;
       }
       rowCache.validationGeneration = this.validationGeneration;
