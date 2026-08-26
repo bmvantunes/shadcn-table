@@ -39,6 +39,18 @@ const emittedEditableBigDecimalColumns = [
   }),
 ] satisfies BrunoTableColumns<EmittedPriceRow>;
 void emittedEditableBigDecimalColumns;
+const emittedPredicateBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: ({ value }) => value !== undefined,
+  blankValue: null,
+});
+const emittedPredicateBigDecimalColumns = [
+  emittedPredicateBigDecimalPreset({
+    columnId: "COL_ID_PREDICATE_BIGDECIMAL_PRESET",
+    field: "nullablePrice",
+    headerName: "Predicate BigDecimal preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPriceRow>;
+void emittedPredicateBigDecimalColumns;
 const emittedInvalidDisabledBigDecimalPreset = emittedEditableBigDecimalPreset({
   columnId: "COL_ID_DISABLED_PRICE_PRESET",
   // @ts-expect-error emitted inherited blank cannot combine with isEditable false.

@@ -137,14 +137,19 @@ type PresetValidation<TValue> = (parameters: {
   readonly value: TValue | null | undefined;
 }) => string | undefined;
 
+type PresetEditablePredicate<TValue> = (parameters: {
+  readonly row: unknown;
+  readonly value: TValue | null | undefined;
+}) => boolean;
+
 type PresetEditingDefaults<TValue> =
   | {
-      readonly isEditable?: boolean;
+      readonly isEditable?: boolean | PresetEditablePredicate<TValue>;
       readonly blankValue?: never;
       readonly validate?: PresetValidation<TValue>;
     }
   | {
-      readonly isEditable: true;
+      readonly isEditable: true | PresetEditablePredicate<TValue>;
       readonly blankValue: null | undefined;
       readonly validate?: PresetValidation<TValue>;
     };
@@ -1128,8 +1133,14 @@ function snapshotPresetDefaults(
     }
   }
 
-  if (Object.hasOwn(defaults, "blankValue") && defaults["isEditable"] !== true) {
-    throw new TypeError("BrunoTable Column Helper preset blankValue requires isEditable: true.");
+  if (
+    Object.hasOwn(defaults, "blankValue") &&
+    defaults["isEditable"] !== true &&
+    typeof defaults["isEditable"] !== "function"
+  ) {
+    throw new TypeError(
+      "BrunoTable Column Helper preset blankValue requires potential editability.",
+    );
   }
   if (defaults["validate"] !== undefined && typeof defaults["validate"] !== "function") {
     throw new TypeError("BrunoTable Column Helper preset validate must be a function.");

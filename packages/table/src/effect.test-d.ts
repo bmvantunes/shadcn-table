@@ -1,4 +1,5 @@
 import * as BigDecimal from "effect/BigDecimal";
+import { expectTypeOf } from "vitest";
 
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 import type {
@@ -53,6 +54,22 @@ const nullableBigDecimalPresetColumns = [
   }),
 ] satisfies BrunoTableColumns<EditableBigDecimalRow>;
 void nullableBigDecimalPresetColumns;
+const predicateBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: ({ row, value }) => {
+    expectTypeOf(row).toEqualTypeOf<unknown>();
+    expectTypeOf(value).toEqualTypeOf<BigDecimal.BigDecimal | null | undefined>();
+    return value !== undefined;
+  },
+  blankValue: null,
+});
+const predicateBigDecimalColumns = [
+  predicateBigDecimalPreset({
+    columnId: "COL_ID_PREDICATE_BIGDECIMAL_PRESET",
+    field: "nullable",
+    headerName: "Predicate BigDecimal preset",
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void predicateBigDecimalColumns;
 const invalidDisabledBigDecimalPreset = nullableBigDecimalPreset({
   columnId: "COL_ID_DISABLED_BIGDECIMAL_PRESET",
   // @ts-expect-error inherited blank cannot combine with isEditable false.

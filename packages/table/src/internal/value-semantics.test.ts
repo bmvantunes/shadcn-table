@@ -308,7 +308,26 @@ describe("compiled Column Value Semantics", () => {
       Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
         { isEditable: false, blankValue: null },
       ]),
-    ).toThrow("preset blankValue requires isEditable: true");
+    ).toThrow("preset blankValue requires potential editability");
+
+    const predicate = vi.fn(() => true);
+    const predicateNumberPreset = BrunoTableNumberColumn.withDefaults({
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateSelectPreset = BrunoTableSelectColumn.withDefaults({
+      options: ["open", "closed"],
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateNumber = Reflect.apply(predicateNumberPreset, undefined, [
+      { columnId: "COL_ID_PREDICATE_NUMBER", field: "nullable", headerName: "Number" },
+    ]) as Readonly<Record<string, unknown>>;
+    const predicateSelect = Reflect.apply(predicateSelectPreset, undefined, [
+      { columnId: "COL_ID_PREDICATE_SELECT", field: "status", headerName: "Select" },
+    ]) as Readonly<Record<string, unknown>>;
+    expect(predicateNumber).toMatchObject({ isEditable: predicate, blankValue: null });
+    expect(predicateSelect).toMatchObject({ isEditable: predicate, blankValue: null });
   });
 
   it("snapshots custom Value Type methods and validates their boundary results", () => {

@@ -1416,6 +1416,7 @@ type EmittedPresetEditRow = Readonly<{
   readonly nullable: number | null;
   readonly optional: number | undefined;
   readonly required: number;
+  readonly nullableStatus: "open" | "closed" | null;
 }>;
 const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
@@ -1439,6 +1440,37 @@ const emittedOptionalPresetEditColumns = [
   }),
 ] satisfies BrunoTableColumns<EmittedPresetEditRow>;
 void emittedOptionalPresetEditColumns;
+const emittedPredicateNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: ({ row, value }) => {
+    type RowIsUnknown = Expect<Equal<typeof row, unknown>>;
+    type ValueIsExact = Expect<Equal<typeof value, number | null | undefined>>;
+    void (null as unknown as RowIsUnknown);
+    void (null as unknown as ValueIsExact);
+    return value !== undefined;
+  },
+  blankValue: null,
+});
+const emittedPredicateNumberColumns = [
+  emittedPredicateNumberPreset({
+    columnId: "COL_ID_PREDICATE_NUMBER_PRESET",
+    field: "nullable",
+    headerName: "Predicate Number preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPredicateNumberColumns;
+const emittedPredicateSelectPreset = BrunoTableSelectColumn.withDefaults({
+  options: ["open", "closed"],
+  isEditable: ({ value }) => value !== undefined,
+  blankValue: null,
+});
+const emittedPredicateSelectColumns = [
+  emittedPredicateSelectPreset({
+    columnId: "COL_ID_PREDICATE_SELECT_PRESET",
+    field: "nullableStatus",
+    headerName: "Predicate Select preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPredicateSelectColumns;
 const emittedComputedFromEditPresetColumns = [
   emittedNullableNumberPreset({
     columnId: "COL_ID_COMPUTED_PRESET",

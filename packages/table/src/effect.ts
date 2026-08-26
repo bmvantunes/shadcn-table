@@ -379,14 +379,19 @@ type BigDecimalPresetValidation = (parameters: {
   readonly value: BigDecimal.BigDecimal | null | undefined;
 }) => string | undefined;
 
+type BigDecimalPresetEditablePredicate = (parameters: {
+  readonly row: unknown;
+  readonly value: BigDecimal.BigDecimal | null | undefined;
+}) => boolean;
+
 type BigDecimalPresetEditingDefaults =
   | {
-      readonly isEditable?: boolean;
+      readonly isEditable?: boolean | BigDecimalPresetEditablePredicate;
       readonly blankValue?: never;
       readonly validate?: BigDecimalPresetValidation;
     }
   | {
-      readonly isEditable: true;
+      readonly isEditable: true | BigDecimalPresetEditablePredicate;
       readonly blankValue: null | undefined;
       readonly validate?: BigDecimalPresetValidation;
     };

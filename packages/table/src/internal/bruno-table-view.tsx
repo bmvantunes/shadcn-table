@@ -1294,6 +1294,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     cellRange,
     interactionAnnouncer,
   }: BrunoTableViewportAdapterProps): ReactElement {
+    const cellEdit = useContext(BrunoTableCellEditContext);
     const installedProjection = useSyncExternalStore(
       runtime.subscribeInstalledClientProjection,
       runtime.getInstalledClientProjectionSnapshot,
@@ -1322,7 +1323,11 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     const projectedRowSelection =
       installedProjection?.kind === "grouped" ? undefined : rowSelection;
     const viewportLayoutKey = `${projectionLayoutKey}:${
-      projectedRowSelection === undefined ? "without-row-selection" : "with-row-selection"
+      cellEdit === undefined
+        ? projectedRowSelection === undefined
+          ? "without-row-selection"
+          : "with-row-selection"
+        : "editable-stable-owner"
     }`;
     const reconcileRangeAnchorAfterCommittedNavigation = useCallback(
       (activeCell: BrunoTableActiveCell | undefined, logicalColumns: readonly CompiledColumn[]) => {
@@ -5015,6 +5020,7 @@ const BrunoTablePinnedBodyRow = memo(
       renderActiveEditor = false,
       onCommittedOutsideCellPointer,
       yieldGridTabStop,
+      activeEditorColumnId,
     }: {
       readonly columns: readonly CompiledColumn[];
       readonly instanceId: string;
@@ -5033,6 +5039,7 @@ const BrunoTablePinnedBodyRow = memo(
         | ((rowId: string, columnId: string) => void)
         | undefined;
       readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
+      readonly activeEditorColumnId?: BrunoTableColumnId | undefined;
     },
     ref: ForwardedRef<HTMLTableRowElement>,
   ) {
@@ -5062,6 +5069,15 @@ const BrunoTablePinnedBodyRow = memo(
                 (side === "start" ? index : pinnedStartCount + precedingColumnCount + index)
               }
               id={loadingCellDomId(instanceId, tableId, logicalRowIndex, column.columnId)}
+            />
+          ) : column.columnId === activeEditorColumnId ? (
+            <td
+              key={column.columnId}
+              aria-hidden="true"
+              style={{
+                padding: 0,
+                width: `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
+              }}
             />
           ) : (
             <BrunoTableCell
@@ -5403,6 +5419,9 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   const pinnedColumnIds = new Set([...pinnedStart, ...pinnedEnd].map((column) => column.columnId));
   const allCenter = logicalColumns.filter((column) => !pinnedColumnIds.has(column.columnId));
   const activeCenterIndex = activeColumn === undefined ? -1 : allCenter.indexOf(activeColumn);
+  const activePinnedStartIndex =
+    activeColumn === undefined ? -1 : pinnedStart.indexOf(activeColumn);
+  const activePinnedEndIndex = activeColumn === undefined ? -1 : pinnedEnd.indexOf(activeColumn);
   const utilityWidth = rowSelection === undefined ? 0 : ROW_SELECTION_COLUMN_WIDTH;
   const activeCenterOffset =
     activeCenterIndex < 0
@@ -5411,6 +5430,19 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
         totalColumnWidth(pinnedStart) +
         totalColumnWidth(allCenter.slice(0, activeCenterIndex));
   const surfaceWidth = rowSelectionSurfaceWidth(width, rowSelection);
+  const gridScrollLeft = gridElement.current?.scrollLeft ?? 0;
+  const activeEditorOffset =
+    activePinnedStartIndex >= 0
+      ? gridScrollLeft +
+        utilityWidth +
+        totalColumnWidth(pinnedStart.slice(0, activePinnedStartIndex))
+      : activePinnedEndIndex >= 0
+        ? gridScrollLeft +
+          (gridElement.current?.clientWidth ?? width) -
+          totalColumnWidth(pinnedEnd) +
+          totalColumnWidth(pinnedEnd.slice(0, activePinnedEndIndex))
+        : activeCenterOffset;
+  const activeEditorZIndex = activePinnedStartIndex >= 0 || activePinnedEndIndex >= 0 ? 3 : 2;
   const cancelAndFocus = () => {
     editRuntime.cancel();
     gridElement.current?.focus({ preventScroll: true });
@@ -5452,7 +5484,6 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
             pinnedEnd={pinnedEnd}
             pinnedStart={pinnedStart}
             pinnedStartCount={pinnedStartCount}
-            renderActiveEditor
             rightPadding={rightPadding}
             rowId={session.rowId}
             rowSelection={rowSelection}
@@ -5516,20 +5547,18 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
           </table>
         </div>
       )}
-      {activeColumn === undefined ||
-      activeCenterIndex < 0 ||
-      activeCenterOffset === undefined ? null : (
+      {activeColumn === undefined || activeEditorOffset === undefined ? null : (
         <table
-          data-bruno-active-center-editor=""
+          data-bruno-active-editor=""
           role="presentation"
           style={{
-            insetInlineStart: activeCenterOffset,
+            insetInlineStart: activeEditorOffset,
             pointerEvents: "auto",
             position: "absolute",
             tableLayout: "fixed",
             top: 0,
             width: `var(${brunoTableColumnCssVariable("width", activeColumn.columnId)}, ${String(activeColumn.semantics.width)}px)`,
-            zIndex: 2,
+            zIndex: activeEditorZIndex,
           }}
         >
           <tbody role="presentation">
@@ -5570,7 +5599,9 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
             onCommittedOutsideCellPointer={activateOutsideCell}
             pinnedStartCount={pinnedStartCount}
             precedingColumnCount={0}
-            renderActiveEditor
+            activeEditorColumnId={
+              activePinnedStartIndex < 0 ? undefined : (session.columnId as BrunoTableColumnId)
+            }
             rowId={session.rowId}
             runtime={viewRuntime}
             side="start"
@@ -5598,7 +5629,9 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
             onCommittedOutsideCellPointer={activateOutsideCell}
             pinnedStartCount={pinnedStartCount}
             precedingColumnCount={allCenter.length}
-            renderActiveEditor
+            activeEditorColumnId={
+              activePinnedEndIndex < 0 ? undefined : (session.columnId as BrunoTableColumnId)
+            }
             rowId={session.rowId}
             runtime={viewRuntime}
             side="end"

@@ -574,6 +574,20 @@ describe("BrunoTableBigDecimalColumn", () => {
         },
       ]),
     ).toThrow("blankValue requires potential field editability");
+
+    const predicate = vi.fn(() => true);
+    const predicatePreset = BrunoTableBigDecimalColumn.withDefaults({
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateColumn = Reflect.apply(predicatePreset, undefined, [
+      {
+        columnId: "COL_ID_PREDICATE_NULLABLE",
+        field: "nullable",
+        headerName: "Predicate nullable",
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    expect(predicateColumn).toMatchObject({ isEditable: predicate, blankValue: null });
   });
 
   it("preserves capability-valid grouped presentation through presets", () => {
