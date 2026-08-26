@@ -63,7 +63,7 @@ const traversalIndex = createIndex();
 let reconciliationPredicateEvaluations = 0;
 const reconciliationIndex = createIndex(() => {
   reconciliationPredicateEvaluations += 1;
-});
+}, true);
 reconciliationPredicateEvaluations = 0;
 let authorityPredicateEvaluations = 0;
 const authorityIndex = createIndex(() => {
@@ -185,6 +185,108 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "paces 100,000-row identity projection and skips equivalent column rescans",
+    () => {
+      const rowIds = Array.from(
+        { length: staticRowCount },
+        (_unused, rowIndex) => `paced-row-${String(rowIndex)}`,
+      );
+      let rowIdReads = 0;
+      const initialRowSpace = Object.freeze({
+        totalRows: staticRowCount,
+        getRowId: (rowIndex: number) => {
+          rowIdReads += 1;
+          return rowIds[rowIndex];
+        },
+      });
+      const index = new BrunoTableCellEditTraversalIndex(
+        () => {
+          throw new Error("Static identity projection read row contents.");
+        },
+        () => {
+          throw new Error("Static identity projection evaluated a predicate.");
+        },
+        true,
+      );
+      const stagingSamples: number[] = [];
+      let startedAt = performance.now();
+      index.reconcile(staticColumns, initialRowSpace);
+      stagingSamples.push(performance.now() - startedAt);
+      if (rowIdReads !== 0 || index.isReady()) {
+        throw new Error("Initial identity projection performed synchronous discovery.");
+      }
+      const sliceSamples: number[] = [];
+      while (!index.isReady()) {
+        startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      if (Number(rowIdReads) !== staticRowCount) {
+        throw new Error("Initial identity projection did not visit every row exactly once.");
+      }
+
+      rowIdReads = 0;
+      startedAt = performance.now();
+      const equivalentPending = index.reconcile(
+        compileColumns([
+          {
+            columnId: "COL_ID_STATIC_EDIT",
+            field: "id" as const,
+            headerName: "Static edit",
+            valueType: "text" as const,
+            isEditable: true,
+          },
+        ]),
+        initialRowSpace,
+      );
+      stagingSamples.push(performance.now() - startedAt);
+      if (equivalentPending || rowIdReads !== 0) {
+        throw new Error("Equivalent columns rescanned the stable row-space projection.");
+      }
+
+      const reversedRowIds = rowIds.toReversed();
+      let remapReads = 0;
+      const remappedRowSpace = Object.freeze({
+        totalRows: staticRowCount,
+        getRowId: (rowIndex: number) => {
+          remapReads += 1;
+          return reversedRowIds[rowIndex];
+        },
+      });
+      startedAt = performance.now();
+      index.reconcile(staticColumns, remappedRowSpace);
+      stagingSamples.push(performance.now() - startedAt);
+      if (remapReads !== 0 || index.isReady()) {
+        throw new Error("Remapped identity projection performed synchronous discovery.");
+      }
+      while (!index.isReady()) {
+        startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      if (
+        Number(remapReads) !== staticRowCount ||
+        index.findFromRowBoundary(1, -1)?.rowId !== reversedRowIds[0]
+      ) {
+        throw new Error("Remapped identity projection did not install exact latest evidence.");
+      }
+      const stagingP99Ms = assertBudgetSamples("identity-projection staging", stagingSamples);
+      const p99Ms = assertBudgetSamples("identity-projection slice", sliceSamples);
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable paced row-space identity projection",
+          rowIdReads: staticRowCount + remapReads,
+          stagingP99Ms,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "paces a known 5,000-row publication with latest-row evidence and no partial traversal",
     () => {
       const highEligibilityRows = rows.map((row) => ({ ...row, editable: true }));
@@ -259,6 +361,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         true,
       );
       index.reconcile(staticColumns, staticRowSpace);
+      while (index.buildNextSlice());
       const changedRowIds = new Set(
         Array.from(
           { length: staticRowCount },
@@ -544,17 +647,37 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
     "remaps a sorted or filtered 5,000-row projection without revisiting 750,000 predicates",
     () => {
       reconciliationPredicateEvaluations = 0;
+      const nextRowSpace = reversed ? forwardRowSpace : reverseRowSpace;
       const startedAt = performance.now();
-      reconciliationIndex.reconcileRows(undefined);
-      reconciliationIndex.reconcile(columns, reversed ? forwardRowSpace : reverseRowSpace);
+      reconciliationIndex.reconcile(columns, nextRowSpace);
       recordBudgetSample(
         "projection reconciliation",
         reconciliationSamples,
         performance.now() - startedAt,
       );
+      if (
+        reconciliationIndex.isReady() ||
+        reconciliationIndex.find(0, columns[0]!.columnId, 1) !== undefined
+      ) {
+        throw new Error("Projection remapping exposed a partial destination.");
+      }
+      while (!reconciliationIndex.isReady()) {
+        const sliceStartedAt = performance.now();
+        reconciliationIndex.buildNextSlice();
+        const elapsedMs = performance.now() - sliceStartedAt;
+        if (elapsedMs > referenceFrameBudgetMs) {
+          throw new Error(
+            `projection reconciliation slice exceeded the frame reference with ${String(elapsedMs)} ms.`,
+          );
+        }
+      }
       reversed = !reversed;
-      if (reconciliationPredicateEvaluations !== 0) {
-        throw new Error("Projection remapping revisited cached predicate evidence.");
+      if (
+        reconciliationPredicateEvaluations !== 0 ||
+        reconciliationIndex.findFromRowBoundary(rowCount, -1)?.rowId !==
+          nextRowSpace.getRowId(rowCount - 1)
+      ) {
+        throw new Error("Projection remapping did not install exact cached predicate evidence.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },

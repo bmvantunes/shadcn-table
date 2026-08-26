@@ -35,6 +35,64 @@ function rowSpace(rowIds: readonly string[]) {
 }
 
 describe("BrunoTable editable traversal index", () => {
+  it("paces initial and remapped row-space identity projection without rescanning equivalent columns", () => {
+    const rowCount = 5_000;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_unused, rowIndex) => {
+        const id = `projection-${String(rowIndex)}`;
+        return [id, { id, enabled: rowIndex === rowCount - 1, alternate: false }];
+      }),
+    );
+    const editable = ({ row }: { readonly row: Row }) => row.enabled;
+    const makeEquivalentColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_PROJECTION",
+          field: "enabled" as const,
+          headerName: "Projection",
+          valueType: "boolean" as const,
+          isEditable: editable,
+        },
+      ]);
+    const rowIds = [...rows.keys()];
+    const getRowId = vi.fn((rowIndex: number) => rowIds[rowIndex]);
+    const projection = Object.freeze({ totalRows: rowCount, getRowId });
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+
+    expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(true);
+    expect(getRowId).not.toHaveBeenCalled();
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.find(0, "COL_ID_PROJECTION", 1)).toBeUndefined();
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(getRowId).toHaveBeenCalledTimes(5);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(index.find(0, "COL_ID_PROJECTION", 1)?.rowId).toBe(`projection-${String(rowCount - 1)}`);
+
+    getRowId.mockClear();
+    evaluate.mockClear();
+    expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(false);
+    expect(index.isReady()).toBe(true);
+    expect(getRowId).not.toHaveBeenCalled();
+    expect(evaluate).not.toHaveBeenCalled();
+
+    const reversedRowIds = rowIds.toReversed();
+    const remappedGetRowId = vi.fn((rowIndex: number) => reversedRowIds[rowIndex]);
+    const remappedProjection = Object.freeze({ totalRows: rowCount, getRowId: remappedGetRowId });
+    expect(index.reconcile(makeEquivalentColumns(), remappedProjection)).toBe(true);
+    expect(remappedGetRowId).not.toHaveBeenCalled();
+    expect(index.find(0, "COL_ID_PROJECTION", 1)).toBeUndefined();
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(remappedGetRowId).toHaveBeenCalledTimes(5);
+
+    expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(true);
+    expect(getRowId).not.toHaveBeenCalled();
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(remappedGetRowId).toHaveBeenCalledTimes(5);
+    expect(index.find(0, "COL_ID_PROJECTION", 1)?.rowId).toBe(`projection-${String(rowCount - 1)}`);
+  });
+
   it("keeps literal editable columns analytical without reading or evaluating rows", () => {
     const columns = compileColumns([
       {
@@ -102,8 +160,10 @@ describe("BrunoTable editable traversal index", () => {
     index.buildNextSlice(80, Number.POSITIVE_INFINITY);
     expect(index.isReady()).toBe(false);
     getRow.mockClear();
-    expect(index.reconcile(staticColumns, projection)).toBe(false);
+    expect(index.reconcile(staticColumns, projection)).toBe(true);
 
+    expect(index.isReady()).toBe(false);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
     expect(index.isReady()).toBe(true);
     expect(index.getCachedRowCount()).toBe(0);
     expect(index.find(0, "COL_ID_STATIC_TRANSITION", 1)?.rowId).toBe("transition-1");

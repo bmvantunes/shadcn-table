@@ -109,6 +109,8 @@ export class BrunoTableCellEditTraversalIndex {
   ): boolean => {
     const columnsChanged = this.columns !== columns;
     const projectionChanged = this.rowSpace !== rowSpace;
+    const hadPredicateColumns = this.predicateColumns.length > 0;
+    const hadPendingProjection = this.allRowsDirty || this.unknownProjection !== undefined;
     if (
       !columnsChanged &&
       !projectionChanged &&
@@ -169,6 +171,31 @@ export class BrunoTableCellEditTraversalIndex {
         this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
       }
       return !this.isReady();
+    }
+
+    const requiresProjectionRebuild =
+      projectionChanged ||
+      hadPendingProjection ||
+      (columnsChanged && !hadPredicateColumns && this.predicateColumns.length > 0);
+    if (!requiresProjectionRebuild) {
+      if (
+        !this.incrementalBuild ||
+        this.pendingWorkCount() * this.predicateColumns.length <=
+          SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
+      ) {
+        this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
+      }
+      return !this.isReady();
+    }
+
+    if (this.incrementalBuild) {
+      this.allRowsDirty = true;
+      this.unknownDiscoveryIterator = undefined;
+      this.unknownProjection = this.createUnknownProjection(rowSpace);
+      this.unknownMissingRowIds = [];
+      this.unknownMissingRowIdSet = new Set();
+      this.verticalRangeCache = undefined;
+      return true;
     }
 
     const dirtyWorkRowIds = new Set([...this.pendingDirtyRowIds, ...this.dirtyRowIds]);
@@ -276,16 +303,7 @@ export class BrunoTableCellEditTraversalIndex {
         const rowSpace = this.rowSpace;
         if (rowSpace === undefined) break;
         this.unknownDiscoveryIterator = undefined;
-        this.unknownProjection = {
-          rowSpace,
-          rowIds: [],
-          rowIndexById: new Map(),
-          validRowIndexes: [],
-          eligiblePredicateRowIndexes: [],
-          pendingRowIndexes: [],
-          pendingRowIndexSet: new Set(),
-          rowIndex: 0,
-        };
+        this.unknownProjection = this.createUnknownProjection(rowSpace);
         continue;
       }
       const authorityRowId =
@@ -543,6 +561,10 @@ export class BrunoTableCellEditTraversalIndex {
     projection.rowIds[rowIndex] = rowId;
     if (rowId === undefined) return;
     projection.rowIndexById.set(rowId, rowIndex);
+    if (this.predicateColumns.length === 0) {
+      projection.validRowIndexes.push(rowIndex);
+      return;
+    }
     if (this.dirtyRowIds.has(rowId)) {
       if (!this.unknownMissingRowIdSet.has(rowId) && projection.pendingRowIndexSet.add(rowIndex)) {
         projection.pendingRowIndexes.push(rowIndex);
@@ -578,6 +600,19 @@ export class BrunoTableCellEditTraversalIndex {
     this.unknownMissingRowIdSet = new Set();
     this.verticalRangeCache = undefined;
   };
+
+  private readonly createUnknownProjection = (
+    rowSpace: BrunoTableCellEditTraversalRowSpace,
+  ): UnknownProjection => ({
+    rowSpace,
+    rowIds: [],
+    rowIndexById: new Map(),
+    validRowIndexes: [],
+    eligiblePredicateRowIndexes: [],
+    pendingRowIndexes: [],
+    pendingRowIndexSet: new Set(),
+    rowIndex: 0,
+  });
 
   private readonly clearPredicateEvidence = (): void => {
     this.rowCacheById.clear();

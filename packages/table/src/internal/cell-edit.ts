@@ -1050,6 +1050,21 @@ function reconcileDraftsForColumns(
     ) {
       continue;
     }
+    if (
+      previousColumn?.blankValue !== undefined &&
+      Object.is(draft.value, previousColumn.blankValue.value)
+    ) {
+      if (
+        nextColumn.blankValue !== undefined &&
+        Object.is(previousColumn.blankValue.value, nextColumn.blankValue.value)
+      ) {
+        continue;
+      }
+      nextDrafts ??= new Map(drafts);
+      nextDrafts.delete(key);
+      changedKeys.push(key);
+      continue;
+    }
     const decoded = nextColumn.semantics.decodeRuntime(draft.value);
     if (decoded._tag === "Failure") {
       nextDrafts ??= new Map(drafts);

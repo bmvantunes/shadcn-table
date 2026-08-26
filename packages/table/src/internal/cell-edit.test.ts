@@ -836,6 +836,99 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
   });
 
+  it("preserves nullish blank drafts only across an unchanged explicit blank policy", () => {
+    type NullableRow = Readonly<{
+      readonly id: string;
+      readonly value: number | null | undefined;
+    }>;
+    const liveRow: NullableRow = { id: "nullable", value: 1 };
+    const customNumberValueType = (): BrunoTableValueType<number> => ({
+      codecId: "test/non-null-number",
+      codecVersion: 1,
+      filterFamily: "numeric",
+      editorFamily: "number",
+      cellAlign: "end",
+      editorLayout: "inline",
+      defaultWidth: 100,
+      decodeRuntime: (input) =>
+        typeof input === "number"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected a non-null number." },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: Number(text) }),
+      formatDisplay: String,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        typeof input === "number"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected a persisted number." },
+    });
+    const compileNullableColumns = (blankValue: null | undefined) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: customNumberValueType(),
+          isEditable: true,
+          blankValue,
+        },
+      ] satisfies BrunoTableColumns<NullableRow>);
+
+    for (const blankValue of [null, undefined] as const) {
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileNullableColumns(blankValue),
+        getRow: () => liveRow,
+      });
+      expect(runtime.start("nullable", "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("", false, "blank")).toBe(true);
+      expect(runtime.getCellSnapshot("nullable", "COL_ID_VALUE")).toMatchObject({
+        hasDraft: true,
+        draft: blankValue,
+      });
+
+      runtime.reconcileColumns(compileNullableColumns(blankValue));
+      expect(runtime.getCellSnapshot("nullable", "COL_ID_VALUE")).toMatchObject({
+        hasDraft: true,
+        draft: blankValue,
+      });
+      expect(runtime.captureDraftCommandReader()("nullable", "COL_ID_VALUE")).toEqual({
+        hasDraft: true,
+        value: blankValue,
+      });
+
+      runtime.reconcileColumns(compileNullableColumns(blankValue === null ? undefined : null));
+      expect(runtime.getCellSnapshot("nullable", "COL_ID_VALUE")).toMatchObject({
+        hasDraft: false,
+      });
+      runtime.dispose();
+
+      const removedPolicyRuntime = new BrunoTableCellEditRuntime({
+        columns: compileNullableColumns(blankValue),
+        getRow: () => liveRow,
+      });
+      expect(removedPolicyRuntime.start("nullable", "COL_ID_VALUE")).toBe(true);
+      expect(removedPolicyRuntime.commit("", false, "blank")).toBe(true);
+      removedPolicyRuntime.reconcileColumns(
+        compileColumns([
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            headerName: "Value",
+            valueType: customNumberValueType(),
+            isEditable: false,
+          },
+        ] satisfies BrunoTableColumns<NullableRow>),
+      );
+      expect(removedPolicyRuntime.getCellSnapshot("nullable", "COL_ID_VALUE")).toMatchObject({
+        hasDraft: false,
+      });
+      removedPolicyRuntime.dispose();
+    }
+  });
+
   it("prunes drafts when a recompiled runtime decoder throws or returns malformed evidence", () => {
     const compileTextColumns = () =>
       compileColumns([
