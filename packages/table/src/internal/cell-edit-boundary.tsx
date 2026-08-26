@@ -153,8 +153,10 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       if (editor === null || document === undefined) return;
       const editSurface = editor.closest<HTMLElement>("[data-bruno-cell-edit-surface]");
       const tableBoundary = editor.closest<HTMLElement>("[data-bruno-table]");
+      let blockedPointerId: number | null = null;
       let blockedClickTarget: EventTarget | null = null;
       const commitOutsidePointer = (event: PointerEvent) => {
+        blockedPointerId = null;
         blockedClickTarget = null;
         if (
           event.target instanceof Node &&
@@ -172,6 +174,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           isBrunoTableHotkeyHeld("Shift") &&
           brunoTableCellRangePointerHit(event.target, grid) !== undefined;
         if (!runtime.commitActiveCandidate()) {
+          blockedPointerId = event.pointerId;
           blockedClickTarget = event.target;
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -192,6 +195,17 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           }
         }
       };
+      const suppressRejectedPointerUp = (event: PointerEvent) => {
+        if (event.pointerId !== blockedPointerId) return;
+        blockedPointerId = null;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+      const clearRejectedPointer = (event: PointerEvent) => {
+        if (event.pointerId !== blockedPointerId) return;
+        blockedPointerId = null;
+        blockedClickTarget = null;
+      };
       const suppressRejectedClick = (event: MouseEvent) => {
         const blocked = blockedClickTarget;
         blockedClickTarget = null;
@@ -200,9 +214,13 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         event.stopImmediatePropagation();
       };
       document.addEventListener("pointerdown", commitOutsidePointer, true);
+      document.addEventListener("pointerup", suppressRejectedPointerUp, true);
+      document.addEventListener("pointercancel", clearRejectedPointer, true);
       document.addEventListener("click", suppressRejectedClick, true);
       return () => {
         document.removeEventListener("pointerdown", commitOutsidePointer, true);
+        document.removeEventListener("pointerup", suppressRejectedPointerUp, true);
+        document.removeEventListener("pointercancel", clearRejectedPointer, true);
         document.removeEventListener("click", suppressRejectedClick, true);
       };
     }, [onCommittedOutsideCellPointer, runtime]);

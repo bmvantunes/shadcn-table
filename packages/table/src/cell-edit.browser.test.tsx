@@ -1500,7 +1500,8 @@ test("rolls back Shift pointer range activation when the edit commit is invalid"
 });
 
 test("keeps Shift interactive cell descendants behind the outside commit gate", async () => {
-  const action = vi.fn();
+  const pointerUpAction = vi.fn();
+  const clickAction = vi.fn();
   const interactiveColumns = [
     {
       columnId: "COL_ID_NAME",
@@ -1526,7 +1527,7 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
       isEditable: true,
       pinned: "end",
       cellRenderer: ({ value }) => (
-        <button type="button" onClick={action}>
+        <button type="button" onPointerUp={pointerUpAction} onClick={clickAction}>
           {value}
         </button>
       ),
@@ -1550,25 +1551,64 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
   await userEvent.click(grid.getByRole("gridcell", { name: "4", exact: true }));
   await userEvent.keyboard("{F2}");
   const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
+  const actionButton = grid.getByRole("button", { name: "last" });
   await userEvent.clear(editor);
   await userEvent.keyboard("1e{Shift>}");
-  await userEvent.click(grid.getByRole("button", { name: "last" }), {
-    modifiers: ["Shift"],
-  });
+  await userEvent.click(actionButton, { modifiers: ["Shift"] });
   await userEvent.keyboard("{/Shift}");
 
-  expect(action).not.toHaveBeenCalled();
+  expect(pointerUpAction).not.toHaveBeenCalled();
+  expect(clickAction).not.toHaveBeenCalled();
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveAttribute("aria-invalid", "true");
 
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 81 }),
+    );
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 82 }),
+    );
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 81 }),
+    );
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(pointerUpAction).toHaveBeenCalledTimes(1);
+  expect(clickAction).not.toHaveBeenCalled();
+
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 83 }),
+    );
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointercancel", { bubbles: true, cancelable: true, pointerId: 83 }),
+    );
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 83 }),
+    );
+  expect(pointerUpAction).toHaveBeenCalledTimes(2);
+
   await userEvent.fill(editor, "5");
+  pointerUpAction.mockClear();
+  clickAction.mockClear();
   await userEvent.keyboard("{Shift>}");
-  await userEvent.click(grid.getByRole("button", { name: "last" }), {
-    modifiers: ["Shift"],
-  });
+  await userEvent.click(actionButton, { modifiers: ["Shift"] });
   await userEvent.keyboard("{/Shift}");
 
-  expect(action).toHaveBeenCalledTimes(1);
+  expect(pointerUpAction).toHaveBeenCalledTimes(1);
+  expect(clickAction).toHaveBeenCalledTimes(1);
   await expect.element(editor).not.toBeInTheDocument();
 });
 

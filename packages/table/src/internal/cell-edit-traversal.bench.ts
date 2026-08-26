@@ -287,6 +287,123 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "stages one steady-state predicate-row invalidation independently of row count",
+    () => {
+      const isolatedRows = Array.from(
+        { length: staticRowCount },
+        (_unused, rowIndex): Row => ({
+          id: `isolated-row-${String(rowIndex)}`,
+          editable: true,
+        }),
+      );
+      const isolatedRowsById = new Map(isolatedRows.map((row) => [row.id, row]));
+      const isolatedRowSpace = Object.freeze({
+        totalRows: isolatedRows.length,
+        getRowId: (rowIndex: number) => isolatedRows[rowIndex]?.id,
+      });
+      const isolatedColumns = compileColumns([
+        {
+          columnId: "COL_ID_ISOLATED_EDIT",
+          field: "editable" as const,
+          headerName: "Isolated edit",
+          valueType: "boolean" as const,
+          isEditable: stablePredicate,
+        },
+      ]);
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => isolatedRowsById.get(rowId),
+        (_rowId, row) => {
+          predicateEvaluations += 1;
+          return (row as Row).editable;
+        },
+        true,
+      );
+      index.reconcile(isolatedColumns, isolatedRowSpace);
+      while (index.buildNextSlice());
+      const stagingSamples: number[] = [];
+      const sliceSamples: number[] = [];
+      const stageAndDrain = (rowId: string, expectedPredicateEvaluations: number) => {
+        predicateEvaluations = 0;
+        const startedAt = performance.now();
+        index.reconcileRows(new Set([rowId]));
+        index.reconcile(isolatedColumns, isolatedRowSpace);
+        stagingSamples.push(performance.now() - startedAt);
+        if (
+          predicateEvaluations !== 0 ||
+          index.isReady() ||
+          index.find(0, isolatedColumns[0]!.columnId, 1) !== undefined
+        ) {
+          throw new Error(
+            "One-row predicate invalidation exposed synchronous or partial evidence.",
+          );
+        }
+        while (!index.isReady()) {
+          const sliceStartedAt = performance.now();
+          index.buildNextSlice();
+          sliceSamples.push(performance.now() - sliceStartedAt);
+        }
+        if (predicateEvaluations !== expectedPredicateEvaluations) {
+          throw new Error(
+            "One-row predicate invalidation did not evaluate latest evidence exactly.",
+          );
+        }
+      };
+
+      const firstRow = isolatedRows[0]!;
+      const middleRow = isolatedRows[Math.floor(isolatedRows.length / 2)]!;
+      const lastRow = isolatedRows.at(-1)!;
+      isolatedRowsById.set(firstRow.id, { ...firstRow, editable: false });
+      stageAndDrain(firstRow.id, 1);
+      if (index.find(1, isolatedColumns[0]!.columnId, -1) !== undefined) {
+        throw new Error("Start-row true-to-false invalidation was not exact.");
+      }
+      isolatedRowsById.set(firstRow.id, firstRow);
+      stageAndDrain(firstRow.id, 1);
+      if (index.find(1, isolatedColumns[0]!.columnId, -1)?.rowId !== firstRow.id) {
+        throw new Error("Start-row false-to-true invalidation did not restore eligibility.");
+      }
+      isolatedRowsById.set(middleRow.id, { ...middleRow });
+      stageAndDrain(middleRow.id, 1);
+      if (
+        index.find(Math.floor(isolatedRows.length / 2) - 1, isolatedColumns[0]!.columnId, 1)
+          ?.rowId !== middleRow.id
+      ) {
+        throw new Error("Middle-row reference replacement was not exact.");
+      }
+      isolatedRowsById.delete(lastRow.id);
+      stageAndDrain(lastRow.id, 0);
+      if (index.find(isolatedRows.length - 2, isolatedColumns[0]!.columnId, 1) !== undefined) {
+        throw new Error("Missing end row retained stale eligibility.");
+      }
+      isolatedRowsById.set(lastRow.id, lastRow);
+      stageAndDrain(lastRow.id, 1);
+      if (
+        index.find(isolatedRows.length - 2, isolatedColumns[0]!.columnId, 1)?.rowId !== lastRow.id
+      ) {
+        throw new Error("Returned end row did not restore exact eligibility.");
+      }
+
+      const stagingP99Ms = assertBudgetSamples(
+        "one-row predicate invalidation staging",
+        stagingSamples,
+      );
+      const p99Ms = assertBudgetSamples("one-row predicate invalidation slice", sliceSamples);
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable one-row predicate invalidation",
+          rowCount: isolatedRows.length,
+          stagingP99Ms,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "paces a known 5,000-row publication with latest-row evidence and no partial traversal",
     () => {
       const highEligibilityRows = rows.map((row) => ({ ...row, editable: true }));
