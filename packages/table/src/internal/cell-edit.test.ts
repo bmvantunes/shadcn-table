@@ -964,6 +964,50 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(selectRuntime.getActiveCandidateSnapshot()).toMatchObject({ rawText: "a" });
     selectRuntime.reconcileColumns(compileSelect(true));
     expect(selectRuntime.getSessionSnapshot()).toEqual({ kind: "idle" });
+
+    type ToggleRow = Readonly<{ readonly toggle: "N" | "Y" }>;
+    const decodeToggle = (input: unknown) =>
+      input === "N" || input === "Y"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected N or Y." } as const);
+    const formatToggle = (value: "N" | "Y") => value;
+    const parseToggle = (text: string) => decodeToggle(text);
+    const compileToggle = (booleanEditorValues: readonly ["N" | "Y", "N" | "Y"]) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_TOGGLE",
+          field: "toggle",
+          headerName: "Toggle",
+          valueType: {
+            codecId: "test/toggle-session-authority",
+            codecVersion: 1,
+            filterFamily: "equality",
+            editorFamily: "boolean",
+            booleanEditorValues,
+            cellAlign: "center",
+            editorLayout: "center",
+            defaultWidth: 88,
+            decodeRuntime: decodeToggle,
+            equivalent: Object.is,
+            compare: () => 0 as const,
+            formatCanonicalText: formatToggle,
+            parseCanonicalText: parseToggle,
+            formatDisplay: formatToggle,
+            encodePersisted: formatToggle,
+            decodePersisted: decodeToggle,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<ToggleRow>);
+    const toggleRuntime = new BrunoTableCellEditRuntime({
+      columns: compileToggle(["N", "Y"]),
+      getRow: (): ToggleRow => ({ toggle: "N" }),
+    });
+    expect(toggleRuntime.start("row", "COL_ID_TOGGLE")).toBe(true);
+    toggleRuntime.reconcileColumns(compileToggle(["N", "Y"]));
+    expect(toggleRuntime.getSessionSnapshot()).toMatchObject({ kind: "editing" });
+    toggleRuntime.reconcileColumns(compileToggle(["Y", "N"]));
+    expect(toggleRuntime.getSessionSnapshot()).toEqual({ kind: "idle" });
   });
 
   it("blocks an active commit while dynamic edit permission is denied and recovers in place", () => {

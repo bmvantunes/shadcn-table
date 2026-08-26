@@ -151,8 +151,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           event.target instanceof Node &&
           (editor.contains(event.target) ||
             (event.target instanceof Element &&
-              editSurface?.contains(event.target.closest("[data-bruno-cell-edit-cancel]")) ===
-                true))
+              event.target
+                .closest("[data-bruno-cell-edit-cancel]")
+                ?.closest("[data-bruno-cell-edit-surface]") === editSurface))
         ) {
           return;
         }

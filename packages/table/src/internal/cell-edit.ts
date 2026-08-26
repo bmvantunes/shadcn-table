@@ -1004,6 +1004,10 @@ function hasEquivalentEditSemantics(
     return sameStringSequence(previousSelectAuthority, nextSelectAuthority);
   }
   return (
+    sameStringSequence(
+      previousColumn.semantics.booleanEditorCanonicalValues,
+      nextColumn.semantics.booleanEditorCanonicalValues,
+    ) &&
     previousColumn.semantics.decodeRuntimeAuthority ===
       nextColumn.semantics.decodeRuntimeAuthority &&
     previousColumn.semantics.editorFamily === nextColumn.semantics.editorFamily &&

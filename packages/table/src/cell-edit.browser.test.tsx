@@ -183,6 +183,98 @@ test("does not exempt another Table Instance's detached Cancel control", async (
   expect(secondGrid.getByRole("spinbutton", { name: "Edit Score" }).all()).toHaveLength(1);
 });
 
+test("does not exempt a nested Table Instance's detached Cancel control", async () => {
+  type NestedHandle = Readonly<{ hide: () => void }>;
+  const nestedRef = createRef<NestedHandle>();
+  const NestedTable = forwardRef<NestedHandle>(function NestedTable(_props, ref) {
+    const [hidden, setHidden] = useState(false);
+    useImperativeHandle(ref, () => ({ hide: () => setHidden(true) }), []);
+    const nestedRow = hidden ? { ...rows[1]!, name: "Hidden" } : rows[1]!;
+    return (
+      <BrunoTableClient
+        tableId="TABLE_ID_NESTED_CANCEL_OWNER"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "Grace" }]}
+        clientSource={{
+          rows: [nestedRow],
+          totalRows: 1,
+          version: hidden ? 2 : 1,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    );
+  });
+  const outerColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      pinned: "start",
+    },
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+      isEditable: true,
+      validate: ({ value }) => (value <= 10 ? undefined : "Score must be at most 10."),
+    },
+    {
+      columnId: "COL_ID_NOTE",
+      field: "note",
+      headerName: "Note",
+      valueType: "text",
+      isEditable: true,
+      pinned: "end",
+      cellRenderer: () => <NestedTable ref={nestedRef} />,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_OUTER_CANCEL_OWNER"
+      columns={outerColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+  const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_CANCEL_OWNER" });
+  await userEvent.click(outerGrid.getByRole("gridcell", { name: "4", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const outerEditor = outerGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.fill(outerEditor, "99");
+  const outerEditorElement = outerEditor.element();
+
+  const nestedGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_NESTED_CANCEL_OWNER" });
+  nestedGrid.element().focus();
+  await userEvent.keyboard("{ArrowRight}{F2}");
+  const nestedEditor = nestedGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await expect.element(nestedEditor).toBeVisible();
+  flushSync(() => nestedRef.current?.hide());
+  const nestedCancel = screen.getByRole("button", { name: "Cancel editing" });
+  await expect.element(nestedCancel).toBeVisible();
+
+  nestedCancel
+    .element()
+    .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  (nestedCancel.element() as HTMLButtonElement).click();
+
+  expect(document.activeElement).toBe(outerEditorElement);
+  await vi.waitFor(() => expect(outerEditorElement.getAttribute("aria-invalid")).toBe("true"));
+  await expect.element(nestedCancel).toBeVisible();
+  await expect.element(nestedEditor).toBeVisible();
+});
+
 test("cancels before a live blank-policy change can reinterpret the active candidate", async () => {
   type NullableRow = Readonly<{
     readonly id: string;
@@ -1904,6 +1996,89 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
   await expect
     .element(screen.getByRole("gridcell", { name: "Required empty", exact: true }))
     .toBeVisible();
+});
+
+test("cancels an active custom Boolean editor before its exact mapping can reverse", async () => {
+  type ToggleRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly toggle: "N" | "Y";
+  }>;
+  const decodeToggle = (input: unknown) =>
+    input === "N" || input === "Y"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected N or Y." } as const);
+  const formatToggle = (value: "N" | "Y") => value;
+  const parseToggle = (text: string) => decodeToggle(text);
+  const createToggleValueType = (
+    booleanEditorValues: readonly ["N" | "Y", "N" | "Y"],
+  ): BrunoTableValueType<"N" | "Y", "equality", "boolean"> => ({
+    codecId: "test/browser-toggle-authority",
+    codecVersion: 1,
+    filterFamily: "equality",
+    editorFamily: "boolean",
+    booleanEditorValues,
+    cellAlign: "center",
+    editorLayout: "center",
+    defaultWidth: 88,
+    decodeRuntime: decodeToggle,
+    equivalent: Object.is,
+    compare: () => 0,
+    formatCanonicalText: formatToggle,
+    parseCanonicalText: parseToggle,
+    formatDisplay: formatToggle,
+    encodePersisted: formatToggle,
+    decodePersisted: decodeToggle,
+  });
+  type ToggleHandle = Readonly<{ reverse: () => void }>;
+  const harnessRef = createRef<ToggleHandle>();
+  const Harness = forwardRef<ToggleHandle>(function Harness(_props, ref) {
+    const [reversed, setReversed] = useState(false);
+    useImperativeHandle(ref, () => ({ reverse: () => setReversed(true) }), []);
+    const toggleColumns = [
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_TOGGLE",
+        field: "toggle",
+        headerName: "Toggle",
+        valueType: createToggleValueType(reversed ? ["Y", "N"] : ["N", "Y"]),
+        isEditable: true,
+      },
+    ] as const satisfies BrunoTableColumns<ToggleRow>;
+    return (
+      <BrunoTableClient<ToggleRow, typeof toggleColumns>
+        tableId="TABLE_ID_BOOLEAN_AUTHORITY"
+        columns={toggleColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{
+          rows: [{ id: "toggle", name: "Toggle row", toggle: "N" }],
+          totalRows: 1,
+          version: 1,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={() => 1n}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    );
+  });
+  const screen = await render(<Harness ref={harnessRef} />);
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BOOLEAN_AUTHORITY" });
+  await userEvent.click(screen.getByRole("gridcell", { name: "N", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("checkbox", { name: "Edit Toggle" });
+  await expect.element(editor).not.toBeChecked();
+
+  flushSync(() => harnessRef.current?.reverse());
+
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect.element(grid.getByRole("gridcell", { name: "N", exact: true })).toBeVisible();
 });
 
 test("contains a wrong-domain custom parser Success while preserving candidate focus", async () => {
