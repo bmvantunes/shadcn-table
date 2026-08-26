@@ -257,7 +257,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
   });
 
   test.each(["active-first", "active-last"] as const)(
-    "gives an active document Escape gesture exclusive ownership when mounted $order",
+    "keeps table-owned Escape in its realm and uses the sole-active document fallback when mounted $order",
     async (order) => {
       let active = true;
       const activeEscape = vi.fn((event: { readonly preventDefault: () => void }) =>
@@ -289,15 +289,21 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       focused.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
+      expect(activeEscape).not.toHaveBeenCalled();
+      expect(focusedEscape).toHaveBeenCalledOnce();
+
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      );
       expect(activeEscape).toHaveBeenCalledOnce();
-      expect(focusedEscape).not.toHaveBeenCalled();
+      expect(focusedEscape).toHaveBeenCalledOnce();
 
       active = false;
       focused.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
       expect(activeEscape).toHaveBeenCalledOnce();
-      expect(focusedEscape).toHaveBeenCalledOnce();
+      expect(focusedEscape).toHaveBeenCalledTimes(2);
     },
   );
 

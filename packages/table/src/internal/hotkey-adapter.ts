@@ -101,6 +101,7 @@ function activeDocumentEscapeRegistration(
         return registration;
       }
     }
+    return undefined;
   }
   let soleActiveRegistration: BrunoTableDocumentEscapeRegistration | undefined;
   for (const registration of registrations) {
