@@ -49,15 +49,67 @@ describe("BrunoTable editable traversal index", () => {
     const evaluate = vi.fn();
     const index = new BrunoTableCellEditTraversalIndex(getRow, evaluate);
 
-    index.reconcile(columns, rowSpace(["first", "second"]));
+    const rowIds = Array.from({ length: 5_000 }, (_unused, index) => `row-${String(index)}`);
+    const projection = rowSpace(rowIds);
+    index.reconcile(columns, projection);
 
     expect(index.find(0, "COL_ID_STATIC", 1)).toEqual({
       rowIndex: 1,
-      rowId: "second",
+      rowId: "row-1",
       columnId: "COL_ID_STATIC",
     });
+    expect(index.reconcileRows(new Set(rowIds))).toBe(false);
+    expect(index.reconcileRows(undefined)).toBe(false);
+    expect(index.isReady()).toBe(true);
+    expect(index.getCachedRowCount()).toBe(0);
+    expect(index.find(rowIds.length - 2, "COL_ID_STATIC", 1)?.rowId).toBe("row-4999");
     expect(getRow).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("atomically discards in-flight predicate evidence when columns become static", () => {
+    const rowIds = Array.from({ length: 40 }, (_unused, index) => `transition-${String(index)}`);
+    const rows = new Map(
+      rowIds.map((id, index) => [id, { id, enabled: index === 39, alternate: false }]),
+    );
+    const predicateColumns = compileColumns(
+      Array.from({ length: 40 }, (_unused, columnIndex) => ({
+        columnId: `COL_ID_TRANSITION_${String(columnIndex)}`,
+        field: "enabled" as const,
+        headerName: `Transition ${String(columnIndex)}`,
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      })),
+    );
+    const staticColumns = compileColumns([
+      {
+        columnId: "COL_ID_STATIC_TRANSITION",
+        field: "id" as const,
+        headerName: "Static transition",
+        valueType: "text" as const,
+        isEditable: true,
+      },
+    ]);
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(
+      getRow,
+      (_rowId, row) => (row as Row).enabled,
+      true,
+    );
+    const projection = rowSpace(rowIds);
+
+    expect(index.reconcile(predicateColumns, projection)).toBe(true);
+    index.buildNextSlice(80, Number.POSITIVE_INFINITY);
+    expect(index.isReady()).toBe(false);
+    getRow.mockClear();
+    expect(index.reconcile(staticColumns, projection)).toBe(false);
+
+    expect(index.isReady()).toBe(true);
+    expect(index.getCachedRowCount()).toBe(0);
+    expect(index.find(0, "COL_ID_STATIC_TRANSITION", 1)?.rowId).toBe("transition-1");
+    expect(index.reconcileRows(new Set(rowIds))).toBe(false);
+    expect(index.reconcileRows(undefined)).toBe(false);
+    expect(getRow).not.toHaveBeenCalled();
   });
 
   it("finds exact far-later, reverse, and terminal destinations without a cell scan", () => {

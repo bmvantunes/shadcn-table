@@ -77,6 +77,21 @@ const horizontalRange = Object.freeze({
   rowId: rows.at(-1)!.id,
   columnIds: Object.freeze(columns.map((column) => column.columnId)),
 });
+const staticColumns = compileColumns([
+  {
+    columnId: "COL_ID_STATIC_EDIT",
+    field: "id" as const,
+    headerName: "Static edit",
+    valueType: "text" as const,
+    isEditable: true,
+  },
+]);
+const staticRowCount = 100_000;
+const staticRowSpace = Object.freeze({
+  totalRows: staticRowCount,
+  getRowId: (rowIndex: number) =>
+    rowIndex < staticRowCount ? `static-row-${String(rowIndex)}` : undefined,
+});
 
 function percentile99(samples: readonly number[]): number {
   const sorted = [...samples].sort((left, right) => left - right);
@@ -198,6 +213,47 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
           referenceFrameBudgetMs,
         }),
       );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "keeps 100,000-row known and unknown publications analytical for static editability",
+    () => {
+      let rowReads = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        () => {
+          rowReads += 1;
+          return undefined;
+        },
+        () => {
+          throw new Error("Static editability evaluated a row predicate.");
+        },
+        true,
+      );
+      index.reconcile(staticColumns, staticRowSpace);
+      const changedRowIds = new Set(
+        Array.from(
+          { length: staticRowCount },
+          (_unused, rowIndex) => `static-row-${String(rowIndex)}`,
+        ),
+      );
+      const startedAt = performance.now();
+      index.reconcileRows(changedRowIds);
+      index.reconcile(staticColumns, staticRowSpace);
+      index.reconcileRows(undefined);
+      index.reconcile(staticColumns, staticRowSpace);
+      const elapsedMs = performance.now() - startedAt;
+      assertBudgetSamples("static-editability publication", [elapsedMs], 1);
+      if (
+        rowReads !== 0 ||
+        index.getCachedRowCount() !== 0 ||
+        !index.isReady() ||
+        index.find(staticRowCount - 2, staticColumns[0]!.columnId, 1)?.rowId !==
+          `static-row-${String(staticRowCount - 1)}`
+      ) {
+        throw new Error("Static editability lost its analytical traversal projection.");
+      }
     },
     { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
   );

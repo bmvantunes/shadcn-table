@@ -670,8 +670,9 @@ export class BrunoTableCellEditRuntime {
   public readonly reconcileTraversalRows = (
     changedRowIds: ReadonlySet<string> | undefined,
   ): void => {
-    this.traversalIndex.reconcileRows(changedRowIds);
-    this.publishTraversalInvalidation();
+    if (this.traversalIndex.reconcileRows(changedRowIds)) {
+      this.publishTraversalInvalidation();
+    }
   };
 
   public readonly subscribeTraversalInvalidation = (listener: Listener): (() => void) => {

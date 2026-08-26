@@ -116,7 +116,8 @@ export class BrunoTableCellEditTraversalIndex {
           ? [{ column, columnIndex }]
           : [],
       );
-      this.reconcilePredicateColumns(previousPredicateColumns);
+      if (this.predicateColumns.length === 0) this.clearPredicateEvidence();
+      else this.reconcilePredicateColumns(previousPredicateColumns);
     }
 
     if (!columnsChanged && !projectionChanged && !this.allRowsDirty) {
@@ -248,16 +249,18 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingRowCursor >= this.pendingRowIndexes.length &&
     this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length;
 
-  public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
+  public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): boolean => {
+    if (this.predicateColumns.length === 0) return false;
     if (changedRowIds === undefined) {
       this.validationGeneration += 1;
       this.allRowsDirty = true;
       this.dirtyRowIds.clear();
       this.verticalRangeCache = undefined;
-      return;
+      return true;
     }
     for (const rowId of changedRowIds) this.dirtyRowIds.add(rowId);
     if (changedRowIds.size > 0) this.verticalRangeCache = undefined;
+    return changedRowIds.size > 0;
   };
 
   public readonly invalidateCell = (rowId: string, columnId: string): void => {
@@ -347,6 +350,20 @@ export class BrunoTableCellEditTraversalIndex {
       }
       rowCache.validationGeneration = this.validationGeneration;
     }
+  };
+
+  private readonly clearPredicateEvidence = (): void => {
+    this.rowCacheById.clear();
+    this.eligiblePredicateRowIdsByColumnId.clear();
+    this.dirtyRowIds.clear();
+    this.dirtyColumnIdsByRowId.clear();
+    this.pendingRowIndexes = [];
+    this.pendingRowCursor = 0;
+    this.pendingDetachedRowIds = [];
+    this.pendingDetachedRowCursor = 0;
+    this.pendingDirtyRowIds.clear();
+    this.allRowsDirty = false;
+    this.verticalRangeCache = undefined;
   };
 
   private readonly stageDirtyRows = (): void => {
