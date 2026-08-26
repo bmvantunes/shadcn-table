@@ -1045,12 +1045,6 @@ function reconcileDraftsForColumns(
       continue;
     }
     if (
-      previousColumn?.semantics.decodeRuntimeAuthority ===
-      nextColumn.semantics.decodeRuntimeAuthority
-    ) {
-      continue;
-    }
-    if (
       previousColumn?.blankValue !== undefined &&
       Object.is(draft.value, previousColumn.blankValue.value)
     ) {
@@ -1063,6 +1057,12 @@ function reconcileDraftsForColumns(
       nextDrafts ??= new Map(drafts);
       nextDrafts.delete(key);
       changedKeys.push(key);
+      continue;
+    }
+    if (
+      previousColumn?.semantics.decodeRuntimeAuthority ===
+      nextColumn.semantics.decodeRuntimeAuthority
+    ) {
       continue;
     }
     const decoded = nextColumn.semantics.decodeRuntime(draft.value);

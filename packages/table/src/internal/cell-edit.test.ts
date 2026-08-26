@@ -927,6 +927,31 @@ describe("BrunoTable Cell Edit Session", () => {
       });
       removedPolicyRuntime.dispose();
     }
+
+    const compileBuiltInColumns = (blankValue: null | undefined) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "number",
+          isEditable: true,
+          blankValue,
+        },
+      ] satisfies BrunoTableColumns<NullableRow>);
+    const stableAuthorityRuntime = new BrunoTableCellEditRuntime({
+      columns: compileBuiltInColumns(null),
+      getRow: () => liveRow,
+    });
+    expect(stableAuthorityRuntime.start("nullable", "COL_ID_VALUE")).toBe(true);
+    expect(stableAuthorityRuntime.commit("", false, "blank")).toBe(true);
+    stableAuthorityRuntime.reconcileColumns(compileBuiltInColumns(null));
+    expect(stableAuthorityRuntime.getDraftSnapshot("nullable", "COL_ID_VALUE")).toBe(null);
+    stableAuthorityRuntime.reconcileColumns(compileBuiltInColumns(undefined));
+    expect(stableAuthorityRuntime.getCellSnapshot("nullable", "COL_ID_VALUE")).toMatchObject({
+      hasDraft: false,
+    });
+    stableAuthorityRuntime.dispose();
   });
 
   it("prunes drafts when a recompiled runtime decoder throws or returns malformed evidence", () => {

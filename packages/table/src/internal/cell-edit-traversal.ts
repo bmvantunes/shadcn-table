@@ -53,6 +53,29 @@ function hasSamePredicateAuthority(
   return right !== undefined && left.field === right.field && left.isEditable === right.isEditable;
 }
 
+function hasSameTraversalAuthority(
+  previous: readonly CompiledColumn[] | undefined,
+  next: readonly CompiledColumn[],
+): boolean {
+  if (previous === undefined || previous.length !== next.length) return false;
+  return previous.every((column, columnIndex) => {
+    const nextColumn = next[columnIndex];
+    if (
+      nextColumn === undefined ||
+      column.columnId !== nextColumn.columnId ||
+      column.kind !== nextColumn.kind
+    ) {
+      return false;
+    }
+    return (
+      column.kind !== "field" ||
+      (nextColumn.kind === "field" &&
+        column.field === nextColumn.field &&
+        column.isEditable === nextColumn.isEditable)
+    );
+  });
+}
+
 export class BrunoTableCellEditTraversalIndex {
   private columns: readonly CompiledColumn[] | undefined;
   private rowSpace: BrunoTableCellEditTraversalRowSpace | undefined;
@@ -92,6 +115,7 @@ export class BrunoTableCellEditTraversalIndex {
   private unknownProjection: UnknownProjection | undefined;
   private unknownMissingRowIds: string[] = [];
   private unknownMissingRowIdSet = new Set<string>();
+  private unknownDiscoveryRequired = false;
 
   public constructor(
     private readonly getRow: (rowId: string) => unknown,
@@ -109,6 +133,7 @@ export class BrunoTableCellEditTraversalIndex {
   ): boolean => {
     const columnsChanged = this.columns !== columns;
     const projectionChanged = this.rowSpace !== rowSpace;
+    const traversalAuthorityChanged = !hasSameTraversalAuthority(this.columns, columns);
     const hadPredicateColumns = this.predicateColumns.length > 0;
     const hadPendingProjection = this.allRowsDirty || this.unknownProjection !== undefined;
     if (
@@ -145,14 +170,20 @@ export class BrunoTableCellEditTraversalIndex {
 
     if (this.allRowsDirty) {
       if (
-        columnsChanged ||
-        projectionChanged ||
-        (this.unknownDiscoveryIterator === undefined && this.unknownProjection === undefined)
+        this.unknownProjection !== undefined &&
+        (projectionChanged ||
+          (traversalAuthorityChanged && hadPredicateColumns !== this.predicateColumns.length > 0))
       ) {
-        this.unknownDiscoveryIterator = this.rowCacheById.entries();
-        this.unknownProjection = undefined;
-        this.unknownMissingRowIds = [];
-        this.unknownMissingRowIdSet = new Set();
+        this.unknownProjection = this.createUnknownProjection(rowSpace);
+      }
+      if (this.unknownDiscoveryIterator === undefined && this.unknownProjection === undefined) {
+        if (this.unknownDiscoveryRequired) {
+          this.unknownDiscoveryIterator = this.rowCacheById.entries();
+          this.unknownMissingRowIds = [];
+          this.unknownMissingRowIdSet = new Set();
+        } else {
+          this.unknownProjection = this.createUnknownProjection(rowSpace);
+        }
       }
       if (!this.incrementalBuild) {
         this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
@@ -176,7 +207,7 @@ export class BrunoTableCellEditTraversalIndex {
     const requiresProjectionRebuild =
       projectionChanged ||
       hadPendingProjection ||
-      (columnsChanged && !hadPredicateColumns && this.predicateColumns.length > 0);
+      (traversalAuthorityChanged && hadPredicateColumns !== this.predicateColumns.length > 0);
     if (!requiresProjectionRebuild) {
       if (
         !this.incrementalBuild ||
@@ -190,6 +221,7 @@ export class BrunoTableCellEditTraversalIndex {
 
     if (this.incrementalBuild) {
       this.allRowsDirty = true;
+      this.unknownDiscoveryRequired = false;
       this.unknownDiscoveryIterator = undefined;
       this.unknownProjection = this.createUnknownProjection(rowSpace);
       this.unknownMissingRowIds = [];
@@ -409,6 +441,7 @@ export class BrunoTableCellEditTraversalIndex {
     if (changedRowIds === undefined) {
       this.validationGeneration += 1;
       this.allRowsDirty = true;
+      this.unknownDiscoveryRequired = true;
       this.dirtyRowIds.clear();
       this.pendingRowIndexes = [];
       this.pendingRowCursor = 0;
@@ -595,6 +628,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.dirtyRowIds = new Set();
     this.dirtyColumnIdsByRowId.clear();
     this.allRowsDirty = false;
+    this.unknownDiscoveryRequired = false;
     this.unknownProjection = undefined;
     this.unknownMissingRowIds = [];
     this.unknownMissingRowIdSet = new Set();
@@ -632,6 +666,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.unknownMissingRowIds = [];
     this.unknownMissingRowIdSet = new Set();
     this.allRowsDirty = false;
+    this.unknownDiscoveryRequired = false;
     this.verticalRangeCache = undefined;
   };
 

@@ -58,7 +58,8 @@ describe("BrunoTable editable traversal index", () => {
     const getRowId = vi.fn((rowIndex: number) => rowIds[rowIndex]);
     const projection = Object.freeze({ totalRows: rowCount, getRowId });
     const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
-    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(getRow, evaluate, true);
 
     expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(true);
     expect(getRowId).not.toHaveBeenCalled();
@@ -66,6 +67,12 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, "COL_ID_PROJECTION", 1)).toBeUndefined();
     expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
     expect(getRowId).toHaveBeenCalledTimes(5);
+    expect(getRowId.mock.calls.map(([rowIndex]) => rowIndex)).toEqual([0, 1, 2, 3, 4]);
+    expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(true);
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(getRowId.mock.calls.map(([rowIndex]) => rowIndex)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    ]);
     while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
     expect(index.find(0, "COL_ID_PROJECTION", 1)?.rowId).toBe(`projection-${String(rowCount - 1)}`);
 
@@ -85,8 +92,11 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
     expect(remappedGetRowId).toHaveBeenCalledTimes(5);
 
+    getRow.mockClear();
     expect(index.reconcile(makeEquivalentColumns(), projection)).toBe(true);
     expect(getRowId).not.toHaveBeenCalled();
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(getRow).not.toHaveBeenCalled();
     while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
     expect(evaluate).not.toHaveBeenCalled();
     expect(remappedGetRowId).toHaveBeenCalledTimes(5);
@@ -169,6 +179,53 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, "COL_ID_STATIC_TRANSITION", 1)?.rowId).toBe("transition-1");
     expect(index.reconcileRows(new Set(rowIds))).toBe(false);
     expect(index.reconcileRows(undefined)).toBe(false);
+    expect(getRow).not.toHaveBeenCalled();
+  });
+
+  it("restores predicate-era missing identities when a ready index becomes static", () => {
+    const rowIds = ["missing", "present"];
+    const rows = new Map<string, Row>([
+      ["present", { id: "present", enabled: false, alternate: false }],
+    ]);
+    const predicateColumns = compileColumns([
+      {
+        columnId: "COL_ID_TRANSITION",
+        field: "enabled" as const,
+        headerName: "Transition",
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      },
+    ]);
+    const staticColumns = compileColumns([
+      {
+        columnId: "COL_ID_TRANSITION",
+        field: "enabled" as const,
+        headerName: "Transition",
+        valueType: "boolean" as const,
+        isEditable: true,
+      },
+    ]);
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(
+      getRow,
+      (_rowId, row) => (row as Row).enabled,
+      true,
+    );
+    const projection = rowSpace(rowIds);
+    index.reconcile(predicateColumns, projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(index.isReady()).toBe(true);
+    getRow.mockClear();
+
+    expect(index.reconcile(staticColumns, projection)).toBe(true);
+    expect(index.isReady()).toBe(false);
+    expect(getRow).not.toHaveBeenCalled();
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    expect(index.findFromRowBoundary(1, -1)).toEqual({
+      rowIndex: 0,
+      rowId: "missing",
+      columnId: "COL_ID_TRANSITION",
+    });
     expect(getRow).not.toHaveBeenCalled();
   });
 
