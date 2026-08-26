@@ -1,4 +1,4 @@
-import { afterAll, bench, describe } from "vite-plus/test";
+import { bench, describe } from "vite-plus/test";
 
 import { compileColumns, type CompiledFieldColumn } from "./compile-columns";
 import { BrunoTableCellEditTraversalIndex } from "./cell-edit-traversal";
@@ -57,16 +57,6 @@ const authorityIndex = createIndex(() => {
 });
 authorityPredicateEvaluations = 0;
 const rangeIndex = createIndex();
-let initialBuildPredicateEvaluations = 0;
-const initialBuildIndex = new BrunoTableCellEditTraversalIndex(
-  (rowId) => rowsById.get(rowId),
-  () => {
-    initialBuildPredicateEvaluations += 1;
-    return true;
-  },
-  true,
-);
-initialBuildIndex.reconcile(columns, rowSpace);
 const forwardRowIds = rows.map((row) => row.id);
 const reverseRowIds = forwardRowIds.toReversed();
 const forwardRowSpace = Object.freeze({
@@ -93,6 +83,22 @@ function percentile99(samples: readonly number[]): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1)] ?? 0;
 }
 
+function assertBudgetSamples(name: string, samples: readonly number[], expected?: number): number {
+  if (samples.length === 0 || (expected !== undefined && samples.length !== expected)) {
+    throw new Error(`${name} produced ${String(samples.length)} samples.`);
+  }
+  const p99Ms = percentile99(samples);
+  if (p99Ms > referenceFrameBudgetMs) {
+    throw new Error(`${name} exceeded the frame reference with p99 ${String(p99Ms)} ms.`);
+  }
+  return p99Ms;
+}
+
+function recordBudgetSample(name: string, samples: number[], elapsedMs: number): void {
+  samples.push(elapsedMs);
+  if (samples.length === 100) assertBudgetSamples(name, samples, 100);
+}
+
 describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz reference)", () => {
   const samples: number[] = [];
   const reconciliationSamples: number[] = [];
@@ -100,70 +106,40 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   const horizontalRangeSamples: number[] = [];
   const equivalentAuthoritySamples: number[] = [];
   const changedAuthoritySamples: number[] = [];
-  const initialBuildSliceSamples: number[] = [];
-
-  afterAll(() => {
-    const assertSamples = (name: string, values: readonly number[]): number => {
-      if (values.length === 0) return 0;
-      const p99Ms = percentile99(values);
-      if (values.length !== 100 || p99Ms > referenceFrameBudgetMs) {
-        throw new Error(
-          `${name} produced ${String(values.length)} samples with p99 ${String(p99Ms)} ms.`,
-        );
-      }
-      return p99Ms;
-    };
-    const traversalP99Ms = assertSamples("far traversal", samples);
-    const reconciliationP99Ms = assertSamples("projection reconciliation", reconciliationSamples);
-    const rangeP99Ms = assertSamples("vertical range traversal", rangeSamples);
-    const horizontalRangeP99Ms = assertSamples(
-      "horizontal range traversal",
-      horizontalRangeSamples,
-    );
-    const equivalentAuthorityP99Ms = assertSamples(
-      "equivalent predicate-authority reconciliation",
-      equivalentAuthoritySamples,
-    );
-    const changedAuthorityP99Ms = assertSamples(
-      "changed predicate-authority reconciliation",
-      changedAuthoritySamples,
-    );
-    const initialBuildSliceP99Ms = assertSamples(
-      "initial predicate-index slice",
-      initialBuildSliceSamples,
-    );
-    if (
-      initialBuildPredicateEvaluations !== rowCount * columnCount ||
-      !initialBuildIndex.isReady()
-    ) {
-      throw new Error("Incremental predicate-index construction did not finish exactly.");
-    }
-    console.log(
-      JSON.stringify({
-        benchmark: "BrunoTable exact editable traversal index",
-        referenceFrameBudgetMs,
-        rowCount,
-        columnCount,
-        traversalP99Ms,
-        reconciliationP99Ms,
-        rangeP99Ms,
-        horizontalRangeP99Ms,
-        equivalentAuthorityP99Ms,
-        changedAuthorityP99Ms,
-        initialBuildSliceP99Ms,
-        traversalP99WithinReference: traversalP99Ms <= referenceFrameBudgetMs,
-      }),
-    );
-  });
-
   bench(
-    "builds the exact 750,000-cell predicate index in bounded post-paint slices",
+    "proves the exact 750,000-cell initial index is partitioned into bounded production slices",
     () => {
-      const startedAt = performance.now();
-      initialBuildIndex.buildNextSlice(rowCount / 100);
-      initialBuildSliceSamples.push(performance.now() - startedAt);
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => rowsById.get(rowId),
+        () => {
+          predicateEvaluations += 1;
+          return true;
+        },
+        true,
+      );
+      index.reconcile(columns, rowSpace);
+      const sliceSamples: number[] = [];
+      while (!index.isReady()) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      const p99Ms = assertBudgetSamples("initial predicate-index slice", sliceSamples);
+      if (predicateEvaluations !== rowCount * columnCount) {
+        throw new Error("Incremental predicate-index construction did not finish exactly.");
+      }
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable incremental predicate-index production slices",
+          predicateEvaluations,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
     },
-    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
   );
 
   bench(
@@ -173,7 +149,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       const forward = traversalIndex.find(0, columns.at(-1)!.columnId, 1);
       const reverse = traversalIndex.find(rowCount - 1, columns[0]!.columnId, -1);
       const terminal = traversalIndex.find(rowCount - 1, columns.at(-1)!.columnId, 1);
-      samples.push(performance.now() - startedAt);
+      recordBudgetSample("far traversal", samples, performance.now() - startedAt);
       if (forward?.rowIndex !== rowCount - 1 || reverse?.rowIndex !== 0 || terminal !== undefined) {
         throw new Error("Unexpected editable traversal result.");
       }
@@ -187,7 +163,11 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       authorityPredicateEvaluations = 0;
       const startedAt = performance.now();
       authorityIndex.reconcile(equivalentColumns, forwardRowSpace);
-      equivalentAuthoritySamples.push(performance.now() - startedAt);
+      recordBudgetSample(
+        "equivalent predicate-authority reconciliation",
+        equivalentAuthoritySamples,
+        performance.now() - startedAt,
+      );
       if (authorityPredicateEvaluations !== 0) {
         throw new Error("Equivalent predicate authority revisited cached evidence.");
       }
@@ -205,7 +185,11 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         changedAuthority ? equivalentColumns : changedAuthorityColumns,
         forwardRowSpace,
       );
-      changedAuthoritySamples.push(performance.now() - startedAt);
+      recordBudgetSample(
+        "changed predicate-authority reconciliation",
+        changedAuthoritySamples,
+        performance.now() - startedAt,
+      );
       changedAuthority = !changedAuthority;
       if (authorityPredicateEvaluations !== rowCount) {
         throw new Error("Changed predicate authority did not perform bounded row work.");
@@ -222,7 +206,11 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       const startedAt = performance.now();
       reconciliationIndex.reconcileRows(undefined);
       reconciliationIndex.reconcile(columns, reversed ? forwardRowSpace : reverseRowSpace);
-      reconciliationSamples.push(performance.now() - startedAt);
+      recordBudgetSample(
+        "projection reconciliation",
+        reconciliationSamples,
+        performance.now() - startedAt,
+      );
       reversed = !reversed;
       if (reconciliationPredicateEvaluations !== 0) {
         throw new Error("Projection remapping revisited cached predicate evidence.");
@@ -243,7 +231,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         columns[0]!.columnId,
         1,
       );
-      rangeSamples.push(performance.now() - startedAt);
+      recordBudgetSample("vertical range traversal", rangeSamples, performance.now() - startedAt);
       if (destination?.rowId !== rows[0]!.id) {
         throw new Error("Unexpected vertical range traversal result.");
       }
@@ -261,7 +249,11 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         columns[0]!.columnId,
         1,
       );
-      horizontalRangeSamples.push(performance.now() - startedAt);
+      recordBudgetSample(
+        "horizontal range traversal",
+        horizontalRangeSamples,
+        performance.now() - startedAt,
+      );
       if (destination?.columnId !== columns[1]!.columnId) {
         throw new Error("Unexpected horizontal range traversal result.");
       }

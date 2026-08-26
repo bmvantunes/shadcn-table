@@ -127,39 +127,59 @@ test("commits through one parse-validation gate and preserves invalid editor evi
 });
 
 test("preserves browser-incompatible current Number seeds and caret across equivalent recompiles", async () => {
-  type SeedRow = Readonly<{ readonly id: string; readonly value: number }>;
+  type SeedRow = Readonly<{
+    readonly id: string;
+    readonly leadingZero: number;
+    readonly plus: number;
+  }>;
   const decode = (input: unknown) =>
     typeof input === "number" && Number.isFinite(input)
       ? ({ _tag: "Success", value: input } as const)
       : ({ _tag: "Failure", message: "Expected number." } as const);
-  const format = (value: number) => (value === 1 ? "+1" : "01");
   const parse = (text: string) => decode(Number(text));
   const equivalent = Object.is;
   const compare = (left: number, right: number) => (left === right ? 0 : left < right ? -1 : 1);
+  const plusFormat = () => "+1";
+  const leadingZeroFormat = () => "01";
+  const createValueType = (
+    codecId: string,
+    format: (value: number) => string,
+  ): BrunoTableValueType<number, "numeric", "number"> => ({
+    codecId,
+    codecVersion: 1,
+    filterFamily: "numeric",
+    editorFamily: "number",
+    cellAlign: "end",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime: decode,
+    equivalent,
+    compare,
+    formatCanonicalText: format,
+    parseCanonicalText: parse,
+    formatDisplay: format,
+    encodePersisted: String,
+    decodePersisted: (input) => decode(Number(input)),
+  });
   const createColumns = () => {
-    const valueType: BrunoTableValueType<number, "numeric", "number"> = {
-      codecId: "test/browser-incompatible-number-seed",
-      codecVersion: 1,
-      filterFamily: "numeric",
-      editorFamily: "number",
-      cellAlign: "end",
-      editorLayout: "inline",
-      defaultWidth: 120,
-      decodeRuntime: decode,
-      equivalent,
-      compare,
-      formatCanonicalText: format,
-      parseCanonicalText: parse,
-      formatDisplay: format,
-      encodePersisted: String,
-      decodePersisted: (input) => decode(Number(input)),
-    };
+    const plusValueType = createValueType("test/plus-number-seed", plusFormat);
+    const leadingZeroValueType = createValueType(
+      "test/leading-zero-number-seed",
+      leadingZeroFormat,
+    );
     return [
       {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType,
+        columnId: "COL_ID_PLUS",
+        field: "plus",
+        headerName: "Plus",
+        valueType: plusValueType,
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_LEADING_ZERO",
+        field: "leadingZero",
+        headerName: "Leading zero",
+        valueType: leadingZeroValueType,
         isEditable: true,
       },
     ] satisfies BrunoTableColumns<SeedRow>;
@@ -168,7 +188,7 @@ test("preserves browser-incompatible current Number seeds and caret across equiv
     <BrunoTableClient
       tableId="TABLE_ID_NUMBER_CURRENT_SEED"
       columns={columns}
-      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      initialOrderBy={[{ columnId: "COL_ID_PLUS", direction: "asc" }]}
       clientSource={{ rows: seedRows, totalRows: seedRows.length, version: 1, status: "ready" }}
       getRowId={(row) => row.id}
       editable
@@ -176,30 +196,32 @@ test("preserves browser-incompatible current Number seeds and caret across equiv
       onSaveEdits={() => Promise.resolve()}
     />
   );
-  const seedRows = [
-    { id: "plus", value: 1 },
-    { id: "leading-zero", value: 2 },
-  ] as const;
+  const seedRows = [{ id: "number-seeds", plus: 1, leadingZero: 1 }] as const;
   const screen = await render(table(seedRows, createColumns()));
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_NUMBER_CURRENT_SEED" });
   grid.element().focus();
   await userEvent.keyboard("{F2}");
-  const plusEditor = screen.getByRole("textbox", { name: "Edit Value" });
+  const plusEditor = screen.getByRole("textbox", { name: "Edit Plus" });
   await expect.element(plusEditor).toHaveValue("+1");
   const plusInput = plusEditor.element() as HTMLInputElement;
   plusInput.setSelectionRange(1, 1);
 
   await screen.rerender(table(seedRows, createColumns()));
 
-  expect(screen.getByRole("textbox", { name: "Edit Value" }).element()).toBe(plusInput);
+  expect(screen.getByRole("textbox", { name: "Edit Plus" }).element()).toBe(plusInput);
   expect(plusInput.selectionStart).toBe(1);
   expect(plusInput.selectionEnd).toBe(1);
   await userEvent.keyboard("{Escape}");
   await userEvent.click(screen.getByRole("gridcell", { name: "01", exact: true }));
   await userEvent.keyboard("{F2}");
-  const leadingZeroEditor = screen.getByRole("spinbutton", { name: "Edit Value" });
+  const leadingZeroEditor = screen.getByRole("spinbutton", { name: "Edit Leading zero" });
   await expect.element(leadingZeroEditor).toHaveValue(1);
   expect((leadingZeroEditor.element() as HTMLInputElement).value).toBe("01");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(leadingZeroEditor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "01", exact: true }))
+    .toBeInTheDocument();
 });
 
 test("contains hostile value equivalence without losing the raw candidate or focus", async () => {
@@ -1443,10 +1465,25 @@ test("reveals an exact far predicate destination in both directions before nativ
   grid.element().focus();
 
   expect(predicateEvaluations.mock.calls.length).toBeLessThan(tallRows.length * 150);
-  await userEvent.keyboard("{F2}{Tab}");
-  await expect.element(screen.getByRole("textbox", { name: "Edit Start" })).toHaveFocus();
-  await vi.waitFor(() =>
-    expect(predicateEvaluations.mock.calls.length).toBeGreaterThanOrEqual(tallRows.length * 150),
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+  const pendingRangeActive = grid.element().getAttribute("aria-activedescendant");
+  await userEvent.keyboard("{Enter}{Shift>}{Enter}{/Shift}");
+  expect(grid.element().getAttribute("aria-activedescendant")).toBe(pendingRangeActive);
+  expect(screen.getByRole("textbox").all()).toHaveLength(0);
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("gridcell", { name: "begin", exact: true }));
+  await userEvent.keyboard("{Enter}{Shift>}{Enter}{/Shift}");
+  expect(screen.getByRole("textbox").all()).toHaveLength(0);
+  await userEvent.keyboard("{F2}");
+  const pendingEditor = screen.getByRole("textbox", { name: "Edit Start" });
+  await userEvent.fill(pendingEditor, "Pending candidate");
+  await userEvent.keyboard("{Enter}{Shift>}{Enter}{/Shift}{Tab}");
+  await expect.element(pendingEditor).toHaveFocus();
+  await expect.element(pendingEditor).toHaveValue("Pending candidate");
+  await vi.waitFor(
+    () =>
+      expect(predicateEvaluations.mock.calls.length).toBeGreaterThanOrEqual(tallRows.length * 150),
+    { timeout: 5_000 },
   );
   await userEvent.keyboard("{Tab}");
   const destination = screen.getByRole("gridcell", { name: "far destination", exact: true });
@@ -1454,7 +1491,7 @@ test("reveals an exact far predicate destination in both directions before nativ
   expect(grid.element().scrollTop).toBeGreaterThan(0);
 
   await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
-  const start = screen.getByRole("gridcell", { name: "begin", exact: true });
+  const start = screen.getByRole("gridcell", { name: "Pending candidate", exact: true });
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(start.element().id);
   await userEvent.keyboard("{F2}{Tab}");
   await expect

@@ -64,7 +64,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     const commit = useCallback(
       (movement: BrunoTableCellEditMovement): boolean => {
         const grid = control.current?.closest<HTMLElement>('[role="grid"]') ?? null;
-        if (movement.startsWith("tab") && !runtime.isTraversalReady()) return true;
+        if (!runtime.isTraversalReady()) return true;
         if (!runtime.commitActiveCandidate()) return true;
         const moved = runtime.requestMovement(movement);
         if (moved || movement.startsWith("enter")) {

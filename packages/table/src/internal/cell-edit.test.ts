@@ -210,6 +210,8 @@ describe("BrunoTable Cell Edit Session", () => {
       },
     ]);
     const runtime = new BrunoTableCellEditRuntime({ columns: draftColumns, getRow: () => row });
+    const traversalInvalidation = vi.fn();
+    const unsubscribeTraversal = runtime.subscribeTraversalInvalidation(traversalInvalidation);
     runtime.reconcileTraversal(draftColumns, {
       totalRows: 1,
       getRowId: (rowIndex) => (rowIndex === 0 ? row.id : undefined),
@@ -226,8 +228,12 @@ describe("BrunoTable Cell Edit Session", () => {
     );
     expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
     expect(runtime.commit("7")).toBe(true);
+    expect(traversalInvalidation).toHaveBeenCalledOnce();
     expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)).toBeUndefined();
     expect(runtime.findRangeTraversalDestination(range, row.id, "COL_ID_START", 1)).toBeUndefined();
+    runtime.reconcileTraversalRows(undefined);
+    expect(traversalInvalidation).toHaveBeenCalledTimes(2);
+    unsubscribeTraversal();
     runtime.dispose();
   });
 

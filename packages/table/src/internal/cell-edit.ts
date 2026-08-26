@@ -526,6 +526,7 @@ export class BrunoTableCellEditRuntime {
   private readonly candidateStore = new Store<ActiveCandidateSnapshot>(EMPTY_CANDIDATE);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
+  private readonly traversalInvalidationListeners = new Set<Listener>();
   private readonly traversalIndex: BrunoTableCellEditTraversalIndex;
   private appliedDraftPatch: DraftPatch | undefined;
   private activeCellKey: string | undefined;
@@ -662,8 +663,7 @@ export class BrunoTableCellEditRuntime {
     rowSpace: BrunoTableCellEditTraversalRowSpace,
   ): boolean => this.traversalIndex.reconcile(columns, rowSpace);
 
-  public readonly buildTraversalSlice = (maximumRows: number): boolean =>
-    this.traversalIndex.buildNextSlice(maximumRows);
+  public readonly buildTraversalSlice = (): boolean => this.traversalIndex.buildNextSlice();
 
   public readonly isTraversalReady = (): boolean => this.traversalIndex.isReady();
 
@@ -671,6 +671,12 @@ export class BrunoTableCellEditRuntime {
     changedRowIds: ReadonlySet<string> | undefined,
   ): void => {
     this.traversalIndex.reconcileRows(changedRowIds);
+    this.publishTraversalInvalidation();
+  };
+
+  public readonly subscribeTraversalInvalidation = (listener: Listener): (() => void) => {
+    this.traversalInvalidationListeners.add(listener);
+    return () => this.traversalInvalidationListeners.delete(listener);
   };
 
   public readonly reconcileActiveRow = (changedRowIds?: ReadonlySet<string>): void => {
@@ -829,6 +835,7 @@ export class BrunoTableCellEditRuntime {
     this.candidateStore.setState(() => EMPTY_CANDIDATE);
     this.cellStores.clear();
     this.cellSubscriberCounts.clear();
+    this.traversalInvalidationListeners.clear();
   };
 
   private readonly publishActorDecision = (): void => {
@@ -936,8 +943,14 @@ export class BrunoTableCellEditRuntime {
 
   private readonly invalidateDraftCell = (key: string): void => {
     const identity = parseCellKey(key);
-    if (identity !== undefined)
+    if (identity !== undefined) {
       this.traversalIndex.invalidateCell(identity.rowId, identity.columnId);
+      this.publishTraversalInvalidation();
+    }
+  };
+
+  private readonly publishTraversalInvalidation = (): void => {
+    for (const listener of this.traversalInvalidationListeners) listener();
   };
 }
 

@@ -30,6 +30,8 @@ type RowCache = {
 };
 
 const SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT = 1_024;
+export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT = 4_096;
+export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_TIME_LIMIT_MS = 2;
 
 function hasSamePredicateAuthority(
   left: CompiledFieldColumn,
@@ -162,14 +164,20 @@ export class BrunoTableCellEditTraversalIndex {
       pendingRowIndexes.length * this.predicateColumns.length <=
         SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT
     ) {
-      this.buildNextSlice(Number.MAX_SAFE_INTEGER);
+      this.buildNextSlice(Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY);
     }
     return !this.isReady();
   };
 
-  public readonly buildNextSlice = (maximumRows: number): boolean => {
-    const count = Math.max(1, Math.floor(maximumRows));
-    for (let built = 0; built < count; built += 1) {
+  public readonly buildNextSlice = (
+    maximumPredicateCells: number = BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT,
+    maximumDurationMs: number = BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_TIME_LIMIT_MS,
+  ): boolean => {
+    const predicateColumnCount = Math.max(this.predicateColumns.length, 1);
+    const rowLimit = Math.max(1, Math.floor(maximumPredicateCells / predicateColumnCount));
+    const startedAt = Date.now();
+    for (let built = 0; built < rowLimit; built += 1) {
+      if (built > 0 && Date.now() - startedAt >= maximumDurationMs) break;
       const rowIndex = this.pendingRowIndexes[this.pendingRowCursor];
       if (rowIndex === undefined) break;
       this.pendingRowCursor += 1;
@@ -195,7 +203,10 @@ export class BrunoTableCellEditTraversalIndex {
     return !this.isReady();
   };
 
-  public readonly isReady = (): boolean => this.pendingRowCursor >= this.pendingRowIndexes.length;
+  public readonly isReady = (): boolean =>
+    !this.allRowsDirty &&
+    this.dirtyColumnIdsByRowId.size === 0 &&
+    this.pendingRowCursor >= this.pendingRowIndexes.length;
 
   public readonly reconcileRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (changedRowIds === undefined) {
@@ -231,8 +242,9 @@ export class BrunoTableCellEditTraversalIndex {
   ): BrunoTableCellEditTraversalDestination | undefined => {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
-    if (columns === undefined || rowSpace === undefined || !this.isReady()) return undefined;
+    if (columns === undefined || rowSpace === undefined) return undefined;
     if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
+    if (!this.isReady()) return undefined;
     const columnIndex = this.columnIndexById.get(columnId);
     if (columnIndex === undefined || this.rowIds[rowIndex] === undefined) return undefined;
     const staticCandidate = this.findStaticCandidate(rowIndex, columnIndex, direction);
@@ -259,8 +271,9 @@ export class BrunoTableCellEditTraversalIndex {
   ): BrunoTableCellEditTraversalDestination | undefined => {
     const columns = this.columns;
     const rowSpace = this.rowSpace;
-    if (columns === undefined || rowSpace === undefined || !this.isReady()) return undefined;
+    if (columns === undefined || rowSpace === undefined) return undefined;
     if (this.allRowsDirty || this.dirtyColumnIdsByRowId.size > 0) this.reconcile(columns, rowSpace);
+    if (!this.isReady()) return undefined;
     if (range.axis === "vertical")
       return this.findVerticalRangeDestination(range, currentRowId, currentColumnId, direction);
     const destinations = this.horizontalRangeDestinations(range);

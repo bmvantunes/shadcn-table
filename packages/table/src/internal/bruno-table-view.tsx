@@ -1487,7 +1487,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const traversalQueue = useQueuer<number>(
     (version) => {
       if (version !== traversalBuildVersionRef.current) return;
-      if (cellEdit?.buildTraversalSlice(64)) traversalQueueRef.current?.addItem(version);
+      if (cellEdit?.buildTraversalSlice()) traversalQueueRef.current?.addItem(version);
     },
     { key: "bruno-table-editable-traversal", maxSize: 1, started: true, wait: 1 },
   );
@@ -2619,22 +2619,24 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     event.preventDefault();
     requestBrunoTableHotkeyWorkflowAction(trigger);
   };
-  const moveWithinEditableRange = (direction: -1 | 1): boolean => {
-    if (cellEdit === undefined || cellRange === undefined) return false;
+  const moveWithinEditableRange = (direction: -1 | 1): "moved" | "pending" | "unavailable" => {
+    if (cellEdit === undefined || cellRange === undefined) return "unavailable";
     const active = navigation.getSnapshot();
     const range = cellRange.getSnapshot().range;
     if (active?.region !== "body" || active.rowId === undefined || range === undefined)
-      return false;
+      return "unavailable";
+    if (!cellEdit.isTraversalReady()) return "pending";
     const destination = cellEdit.findRangeTraversalDestination(
       range,
       active.rowId,
       active.columnId,
       direction,
     );
-    if (destination === undefined) return false;
+    if (!cellEdit.isTraversalReady()) return "pending";
+    if (destination === undefined) return "unavailable";
     navigation.activateBody(destination.rowIndex, destination.rowId, destination.columnId);
     revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
-    return true;
+    return "moved";
   };
   const runActivation = (
     event: BrunoTableHotkeyGesture,
@@ -2666,9 +2668,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
     const column = logicalColumns.find((candidate) => candidate.columnId === active?.columnId);
     if (active?.region === "body" && (intent === "enter" || intent === "f2")) {
-      if (intent === "enter" && moveWithinEditableRange(shift ? -1 : 1)) {
-        event.preventDefault();
-        return;
+      if (intent === "enter") {
+        const rangeMovement = moveWithinEditableRange(shift ? -1 : 1);
+        if (rangeMovement !== "unavailable" || cellEdit?.isTraversalReady() === false) {
+          event.preventDefault();
+          return;
+        }
       }
       if (
         cellEdit !== undefined &&
@@ -2707,7 +2712,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     }
   };
   const moveAfterCellEdit = (movement: BrunoTableCellEditMovement): boolean => {
-    if (moveWithinEditableRange(movement.endsWith("forward") ? 1 : -1)) return true;
+    if (moveWithinEditableRange(movement.endsWith("forward") ? 1 : -1) !== "unavailable")
+      return true;
     const active = navigation.getSnapshot();
     if (active?.region !== "body") return false;
     if (movement === "enter-forward" || movement === "enter-backward") {
@@ -2738,7 +2744,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       event.preventDefault();
       return;
     }
-    if (moveWithinEditableRange(direction)) {
+    if (moveWithinEditableRange(direction) !== "unavailable") {
       event.preventDefault();
       return;
     }
@@ -2821,23 +2827,28 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   }, [cellEdit]);
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
-    const buildVersion = traversalBuildVersionRef.current + 1;
-    traversalBuildVersionRef.current = buildVersion;
-    traversalQueue.clear();
-    if (cellEdit.reconcileTraversal(logicalColumns, rowSpace)) {
-      traversalQueue.addItem(buildVersion);
-    }
+    const reconcileAndScheduleTraversal = () => {
+      const buildVersion = traversalBuildVersionRef.current + 1;
+      traversalBuildVersionRef.current = buildVersion;
+      traversalQueue.clear();
+      if (cellEdit.reconcileTraversal(logicalColumns, rowSpace)) {
+        traversalQueue.addItem(buildVersion);
+      }
+    };
+    reconcileAndScheduleTraversal();
     cellEdit.reconcileActiveRow();
+    const unsubscribeTraversalInvalidation = cellEdit.subscribeTraversalInvalidation(
+      reconcileAndScheduleTraversal,
+    );
     const unsubscribe = runtime.subscribeRowChanges((changedRowIds) => {
       cellEdit.reconcileTraversalRows(changedRowIds);
       cellEdit.reconcileActiveRow(changedRowIds);
     });
     return () => {
       unsubscribe();
-      if (traversalBuildVersionRef.current === buildVersion) {
-        traversalBuildVersionRef.current += 1;
-        traversalQueue.clear();
-      }
+      unsubscribeTraversalInvalidation();
+      traversalBuildVersionRef.current += 1;
+      traversalQueue.clear();
     };
   }, [cellEdit, logicalColumns, rowSpace, runtime, traversalQueue]);
   useLayoutEffect(() => {

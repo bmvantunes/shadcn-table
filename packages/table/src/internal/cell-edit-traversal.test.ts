@@ -311,6 +311,55 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, "COL_ID_ENABLED", 1)?.rowId).toBe("second");
   });
 
+  it("withholds partial destinations and restarts exact incremental work after unknown publications", () => {
+    const rowCount = 40;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_unused, rowIndex) => {
+        const id = `row-${String(rowIndex)}`;
+        return [id, { id, enabled: rowIndex === rowCount - 1, alternate: false }];
+      }),
+    );
+    const columns = compileColumns(
+      Array.from({ length: 40 }, (_unused, columnIndex) => ({
+        columnId: `COL_ID_INCREMENTAL_${String(columnIndex)}`,
+        field: "enabled" as const,
+        headerName: `Incremental ${String(columnIndex)}`,
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      })),
+    );
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const projection = rowSpace([...rows.keys()]);
+
+    expect(index.reconcile(columns, projection)).toBe(true);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    index.buildNextSlice(80, Number.POSITIVE_INFINITY);
+    expect(index.isReady()).toBe(false);
+
+    for (const [rowId, row] of rows) rows.set(rowId, { ...row });
+    index.reconcileRows(undefined);
+    expect(index.isReady()).toBe(false);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY)) {
+      expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    }
+    expect(index.isReady()).toBe(true);
+    expect(index.find(0, columns[0]!.columnId, 1)).toEqual({
+      rowIndex: rowCount - 1,
+      rowId: `row-${String(rowCount - 1)}`,
+      columnId: columns[0]!.columnId,
+    });
+
+    for (const [rowId, row] of rows) rows.set(rowId, { ...row });
+    index.reconcileRows(undefined);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY)) {
+      expect(index.isReady()).toBe(false);
+    }
+    expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`row-${String(rowCount - 1)}`);
+  });
+
   it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {
     const first: Row = { id: "first", enabled: true, alternate: false };
     const rows = new Map<string, Row>([
