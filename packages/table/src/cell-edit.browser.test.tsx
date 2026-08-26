@@ -126,116 +126,193 @@ test("commits through one parse-validation gate and preserves invalid editor evi
   expect(grid.element()).toHaveFocus();
 });
 
-test("keeps one native Number editor node across responsive layout and selection changes", async () => {
-  type StableEditorRow = Readonly<{
-    readonly id: string;
-    readonly score: number;
-    readonly name: string;
-    readonly note: string;
-  }>;
-  const stableColumns = [
-    {
-      columnId: "COL_ID_STABLE_SCORE",
-      field: "score",
-      headerName: "Stable score",
-      valueType: "number",
-      isEditable: true,
-      pinned: "start",
-      width: 120,
-    },
-    {
-      columnId: "COL_ID_STABLE_NAME",
-      field: "name",
-      headerName: "Stable name",
-      valueType: "text",
-      width: 320,
-    },
-    {
-      columnId: "COL_ID_STABLE_NOTE",
-      field: "note",
-      headerName: "Stable note",
-      valueType: "text",
-      pinned: "end",
-      width: 120,
-    },
-  ] satisfies BrunoTableColumns<StableEditorRow>;
-  type HarnessHandle = Readonly<{
-    updateLayout: (width: number, rowSelection: boolean) => void;
-  }>;
-  const harnessRef = createRef<HarnessHandle>();
-  const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
-    const [layout, setLayout] = useState({ rowSelection: false, width: 760 });
-    useImperativeHandle(
-      ref,
-      () => ({ updateLayout: (width, rowSelection) => setLayout({ width, rowSelection }) }),
-      [],
+test.each(["ltr", "rtl"] as const)(
+  "keeps one native Number editor node across %s responsive and pinned layout changes",
+  async (direction) => {
+    type StableEditorRow = Readonly<{
+      readonly id: string;
+      readonly score: number;
+      readonly startPeer: string;
+      readonly center: string;
+      readonly endScore: number;
+    }>;
+    const stableColumns = [
+      {
+        columnId: "COL_ID_STABLE_SCORE",
+        field: "score",
+        headerName: "Stable score",
+        valueType: "number",
+        isEditable: true,
+        pinned: "start",
+        width: 120,
+      },
+      {
+        columnId: "COL_ID_STABLE_START_PEER",
+        field: "startPeer",
+        headerName: "Stable start peer",
+        valueType: "text",
+        pinned: "start",
+        width: 100,
+      },
+      {
+        columnId: "COL_ID_STABLE_CENTER",
+        field: "center",
+        headerName: "Stable center",
+        valueType: "text",
+        width: 1_200,
+      },
+      {
+        columnId: "COL_ID_STABLE_END_SCORE",
+        field: "endScore",
+        headerName: "Stable end score",
+        valueType: "number",
+        isEditable: true,
+        pinned: "end",
+        width: 120,
+      },
+    ] satisfies BrunoTableColumns<StableEditorRow>;
+    type HarnessHandle = Readonly<{
+      updateLayout: (width: number, rowSelection: boolean) => void;
+    }>;
+    const harnessRef = createRef<HarnessHandle>();
+    const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+      const [layout, setLayout] = useState({ rowSelection: false, width: 760 });
+      useImperativeHandle(
+        ref,
+        () => ({ updateLayout: (width, rowSelection) => setLayout({ width, rowSelection }) }),
+        [],
+      );
+      return (
+        <div dir={direction} style={{ width: layout.width }}>
+          <BrunoTableClient
+            tableId={`TABLE_ID_STABLE_NATIVE_NUMBER_EDITOR_${direction.toUpperCase()}`}
+            columns={stableColumns}
+            initialOrderBy={[{ columnId: "COL_ID_STABLE_SCORE", direction: "asc" }]}
+            clientSource={{
+              rows: [
+                {
+                  id: "stable",
+                  score: 4,
+                  startPeer: "peer",
+                  center: "center",
+                  endScore: 7,
+                },
+              ],
+              totalRows: 1,
+              version: 1,
+              status: "ready",
+            }}
+            getRowId={(row) => row.id}
+            editable
+            getRowVersion={() => 1n}
+            onSaveEdits={() => Promise.resolve()}
+            {...(layout.rowSelection ? ({ rowSelection: true } as const) : {})}
+          />
+        </div>
+      );
+    });
+    const screen = await render(<Harness ref={harnessRef} />);
+    const grid = screen.getByRole("grid", {
+      name: `Data for TABLE_ID_STABLE_NATIVE_NUMBER_EDITOR_${direction.toUpperCase()}`,
+    });
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector('[data-pinned-region="start"]')).not.toBeNull(),
     );
-    return (
-      <div style={{ width: layout.width }}>
-        <BrunoTableClient
-          tableId="TABLE_ID_STABLE_NATIVE_NUMBER_EDITOR"
-          columns={stableColumns}
-          initialOrderBy={[{ columnId: "COL_ID_STABLE_SCORE", direction: "asc" }]}
-          clientSource={{
-            rows: [{ id: "stable", score: 4, name: "Ada", note: "note" }],
-            totalRows: 1,
-            version: 1,
-            status: "ready",
-          }}
-          getRowId={(row) => row.id}
-          editable
-          getRowVersion={() => 1n}
-          onSaveEdits={() => Promise.resolve()}
-          {...(layout.rowSelection ? ({ rowSelection: true } as const) : {})}
-        />
-      </div>
+    grid.element().focus();
+    await userEvent.keyboard("{F2}");
+    const editor = screen.getByRole("spinbutton", { name: "Edit Stable score" });
+    await userEvent.clear(editor);
+    await userEvent.keyboard("1e");
+    const nativeEditor = editor.element() as HTMLInputElement;
+    expect(nativeEditor.validity.badInput).toBe(true);
+    const initialSelectionStart = nativeEditor.selectionStart;
+    const initialSelectionEnd = nativeEditor.selectionEnd;
+    expect(nativeEditor.closest('[role="gridcell"]')?.getAttribute("aria-colindex")).toBe("1");
+
+    flushSync(() => harnessRef.current?.updateLayout(170, true));
+    flushSync(() => harnessRef.current?.updateLayout(760, false));
+    flushSync(() => harnessRef.current?.updateLayout(170, true));
+    await settleBrunoTableBrowserFrames();
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector('[data-pinned-region="start"]')).toBeNull(),
     );
-  });
-  const screen = await render(<Harness ref={harnessRef} />);
-  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_STABLE_NATIVE_NUMBER_EDITOR" });
-  await vi.waitFor(() =>
-    expect(grid.element().querySelector('[data-pinned-region="start"]')).not.toBeNull(),
-  );
-  grid.element().focus();
-  await userEvent.keyboard("{F2}");
-  const editor = screen.getByRole("spinbutton", { name: "Edit Stable score" });
-  await userEvent.clear(editor);
-  await userEvent.keyboard("1e");
-  const nativeEditor = editor.element() as HTMLInputElement;
-  expect(nativeEditor.validity.badInput).toBe(true);
-  const initialSelectionStart = nativeEditor.selectionStart;
-  const initialSelectionEnd = nativeEditor.selectionEnd;
+    const suspendedEditor = screen.getByRole("spinbutton", { name: "Edit Stable score" }).element();
+    expect(suspendedEditor).toBe(nativeEditor);
+    expect(nativeEditor.validity.badInput).toBe(true);
+    expect(nativeEditor.selectionStart).toBe(initialSelectionStart);
+    expect(nativeEditor.selectionEnd).toBe(initialSelectionEnd);
+    await expect.element(editor).toHaveFocus();
+    expect(nativeEditor.closest('[role="gridcell"]')?.getAttribute("aria-colindex")).toBe("2");
+    await expect.element(screen.getByRole("checkbox", { name: "Select row 1" })).toBeVisible();
 
-  flushSync(() => harnessRef.current?.updateLayout(170, true));
-  flushSync(() => harnessRef.current?.updateLayout(760, false));
-  flushSync(() => harnessRef.current?.updateLayout(170, true));
-  await settleBrunoTableBrowserFrames();
-  await vi.waitFor(() =>
-    expect(grid.element().querySelector('[data-pinned-region="start"]')).toBeNull(),
-  );
-  const suspendedEditor = screen.getByRole("spinbutton", { name: "Edit Stable score" }).element();
-  expect(suspendedEditor).toBe(nativeEditor);
-  expect(nativeEditor.validity.badInput).toBe(true);
-  expect(nativeEditor.selectionStart).toBe(initialSelectionStart);
-  expect(nativeEditor.selectionEnd).toBe(initialSelectionEnd);
-  await expect.element(editor).toHaveFocus();
-  await expect.element(screen.getByRole("checkbox", { name: "Select row 1" })).toBeVisible();
+    flushSync(() => harnessRef.current?.updateLayout(760, false));
+    await settleBrunoTableBrowserFrames();
+    await vi.waitFor(() =>
+      expect(grid.element().querySelector('[data-pinned-region="start"]')).not.toBeNull(),
+    );
+    expect(screen.getByRole("spinbutton", { name: "Edit Stable score" }).element()).toBe(
+      nativeEditor,
+    );
+    expect(nativeEditor.validity.badInput).toBe(true);
+    await expect.element(editor).toHaveFocus();
+    await expect
+      .element(screen.getByRole("checkbox", { name: "Select row 1" }))
+      .not.toBeInTheDocument();
 
-  flushSync(() => harnessRef.current?.updateLayout(760, false));
-  await settleBrunoTableBrowserFrames();
-  await vi.waitFor(() =>
-    expect(grid.element().querySelector('[data-pinned-region="start"]')).not.toBeNull(),
-  );
-  expect(screen.getByRole("spinbutton", { name: "Edit Stable score" }).element()).toBe(
-    nativeEditor,
-  );
-  expect(nativeEditor.validity.badInput).toBe(true);
-  await expect.element(editor).toHaveFocus();
-  await expect
-    .element(screen.getByRole("checkbox", { name: "Select row 1" }))
-    .not.toBeInTheDocument();
-  await userEvent.keyboard("{Escape}");
-});
+    const startHeader = screen.getByRole("columnheader", { name: /^Stable score/u }).element();
+    grid.element().scrollLeft = direction === "rtl" ? -64 : 64;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(screen.getByRole("spinbutton", { name: "Edit Stable score" }).element()).toBe(
+      nativeEditor,
+    );
+    expect(nativeEditor.validity.badInput).toBe(true);
+    await expect.element(editor).toHaveFocus();
+    const startEditorRect = nativeEditor.getBoundingClientRect();
+    const startHeaderRect = startHeader.getBoundingClientRect();
+    expect(
+      Math.abs(
+        direction === "rtl"
+          ? startEditorRect.right - startHeaderRect.right
+          : startEditorRect.left - startHeaderRect.left,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await userEvent.keyboard("{Escape}");
+
+    const endCell = screen.getByRole("gridcell", { name: "7", exact: true });
+    await userEvent.click(endCell);
+    await userEvent.keyboard("{F2}");
+    const endEditor = screen.getByRole("spinbutton", { name: "Edit Stable end score" });
+    await userEvent.clear(endEditor);
+    await userEvent.keyboard("1e");
+    const nativeEndEditor = endEditor.element() as HTMLInputElement;
+    expect(nativeEndEditor.validity.badInput).toBe(true);
+    expect(nativeEndEditor.closest('[role="gridcell"]')?.getAttribute("aria-colindex")).toBe("4");
+    const endSelectionStart = nativeEndEditor.selectionStart;
+    const endSelectionEnd = nativeEndEditor.selectionEnd;
+    const endHeader = screen.getByRole("columnheader", { name: /^Stable end score/u }).element();
+    grid.element().scrollLeft = direction === "rtl" ? -128 : 128;
+    grid.element().dispatchEvent(new Event("scroll"));
+    await settleBrunoTableBrowserFrames();
+    expect(screen.getByRole("spinbutton", { name: "Edit Stable end score" }).element()).toBe(
+      nativeEndEditor,
+    );
+    expect(nativeEndEditor.validity.badInput).toBe(true);
+    expect(nativeEndEditor.selectionStart).toBe(endSelectionStart);
+    expect(nativeEndEditor.selectionEnd).toBe(endSelectionEnd);
+    await expect.element(endEditor).toHaveFocus();
+    const endEditorRect = nativeEndEditor.getBoundingClientRect();
+    const endHeaderRect = endHeader.getBoundingClientRect();
+    expect(
+      Math.abs(
+        direction === "rtl"
+          ? endEditorRect.left - endHeaderRect.left
+          : endEditorRect.right - endHeaderRect.right,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await userEvent.keyboard("{Escape}");
+  },
+);
 
 test("starts from exact current values, replaces from produced text, and cancels without a transaction", async () => {
   const { grid, onSaveEdits, screen } = await renderEditableTable();

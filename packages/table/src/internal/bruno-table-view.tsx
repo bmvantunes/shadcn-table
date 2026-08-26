@@ -152,6 +152,8 @@ import {
   BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
   BRUNO_TABLE_ROW_HEIGHT,
   BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS,
+  BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+  BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
   type BrunoTableViewportSnapshot,
 } from "./virtual-viewport";
 import {
@@ -5430,17 +5432,18 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
         totalColumnWidth(pinnedStart) +
         totalColumnWidth(allCenter.slice(0, activeCenterIndex));
   const surfaceWidth = rowSelectionSurfaceWidth(width, rowSelection);
-  const gridScrollLeft = gridElement.current?.scrollLeft ?? 0;
   const activeEditorOffset =
     activePinnedStartIndex >= 0
-      ? gridScrollLeft +
-        utilityWidth +
-        totalColumnWidth(pinnedStart.slice(0, activePinnedStartIndex))
+      ? `calc(var(${BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE}, 0px) + ${String(
+          utilityWidth + totalColumnWidth(pinnedStart.slice(0, activePinnedStartIndex)),
+        )}px)`
       : activePinnedEndIndex >= 0
-        ? gridScrollLeft +
-          (gridElement.current?.clientWidth ?? width) -
-          totalColumnWidth(pinnedEnd) +
-          totalColumnWidth(pinnedEnd.slice(0, activePinnedEndIndex))
+        ? `calc(var(${BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE}, 0px) + var(${BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE}, ${String(
+            surfaceWidth,
+          )}px) - ${String(
+            totalColumnWidth(pinnedEnd) -
+              totalColumnWidth(pinnedEnd.slice(0, activePinnedEndIndex)),
+          )}px)`
         : activeCenterOffset;
   const activeEditorZIndex = activePinnedStartIndex >= 0 || activePinnedEndIndex >= 0 ? 3 : 2;
   const cancelAndFocus = () => {
@@ -5568,7 +5571,14 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
             >
               <BrunoTableCell
                 column={activeColumn}
-                columnIndex={columnIndexOffset + pinnedStartCount + activeCenterIndex}
+                columnIndex={
+                  columnIndexOffset +
+                  (activePinnedStartIndex >= 0
+                    ? activePinnedStartIndex
+                    : activeCenterIndex >= 0
+                      ? pinnedStartCount + activeCenterIndex
+                      : pinnedStartCount + allCenter.length + activePinnedEndIndex)
+                }
                 instanceId={instanceId}
                 logicalRowIndex={rowIndex ?? 0}
                 onCommittedOutsideCellPointer={activateOutsideCell}

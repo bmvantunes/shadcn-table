@@ -98,6 +98,9 @@ const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
 });
 
 export const BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM = 32;
+export const BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE =
+  "--bruno-table-viewport-logical-scroll-left";
+export const BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE = "--bruno-table-viewport-inline-size";
 const MAX_REVERSE_RTL_LAYOUT_DEFERRALS = 8;
 const HORIZONTAL_RECONCILIATION_SETTLED = Symbol("horizontal-reconciliation-settled");
 type HorizontalReconciliation = number | typeof HORIZONTAL_RECONCILIATION_SETTLED;
@@ -838,6 +841,14 @@ export class BrunoTableViewportRuntime {
     logicalScrollLeft: number,
   ): void {
     this.logicalScrollLeft = logicalScrollLeft;
+    element.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      `${logicalScrollLeft}px`,
+    );
+    element.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      `${element.clientWidth}px`,
+    );
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const structuralLogicalScrollLeft = quantizeScroll(logicalScrollLeft);
     const next = createViewportSnapshot(this.layout, {
