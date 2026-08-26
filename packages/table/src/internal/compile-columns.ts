@@ -277,6 +277,11 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
         `BrunoTable validate must be a function when provided: ${columnId}`,
       );
     }
+    if (hasValidate && (isEditable === undefined || isEditable === false)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable validate requires a potentially editable field column: ${columnId}`,
+      );
+    }
 
     const enableFilter = hasEnableFilter ? candidate["enableFilter"] : true;
     if (typeof enableFilter !== "boolean") {

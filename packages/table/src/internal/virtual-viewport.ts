@@ -341,6 +341,7 @@ export class BrunoTableViewportRuntime {
       );
       void element.scrollWidth;
       this.setLogicalScrollLeft(element, previewScrollLeft);
+      this.writePinnedEditorGeometry(previewScrollLeft);
       this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
       return;
     }
@@ -374,6 +375,7 @@ export class BrunoTableViewportRuntime {
             );
       this.logicalScrollLeft = restoredLogicalScrollLeft;
       this.setLogicalScrollLeft(this.element, restoredLogicalScrollLeft);
+      this.writePinnedEditorGeometry(restoredLogicalScrollLeft);
       this.writeScrollbarOverlay(this.element, logicalScrollTop, restoredLogicalScrollLeft);
       if (publishSnapshot) {
         this.publishSnapshot(

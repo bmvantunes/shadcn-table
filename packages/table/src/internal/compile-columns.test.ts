@@ -22,7 +22,7 @@ describe("compileColumns", () => {
 
     const [compiled] = compileColumns(definitions);
 
-    expect(compiled?.kind === "field" ? compiled.blankValue : undefined).toEqual({
+    expect(compiled?.kind === "field" ? compiled.blankValue : undefined).toStrictEqual({
       value: undefined,
     });
     expect(() =>
@@ -38,6 +38,22 @@ describe("compileColumns", () => {
     ).toThrowError(
       new ColumnConfigurationError(
         "BrunoTable blankValue requires a potentially editable field column: COL_ID_READ_ONLY_BLANK",
+      ),
+    );
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_READ_ONLY_VALIDATE",
+          field: "score",
+          headerName: "Read-only validate",
+          valueType: "number",
+          validate: () => undefined,
+        },
+      ]),
+    ).toThrowError(
+      new ColumnConfigurationError(
+        "BrunoTable validate requires a potentially editable field column: COL_ID_READ_ONLY_VALIDATE",
       ),
     );
   });

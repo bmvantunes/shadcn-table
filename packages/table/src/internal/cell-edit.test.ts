@@ -762,6 +762,64 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
   });
 
+  it("prunes drafts when a recompiled runtime decoder throws or returns malformed evidence", () => {
+    const compileTextColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: true,
+        },
+      ]);
+    const liveRow = { value: "source" };
+    const hostileValueType = (mode: "throw" | "malformed"): BrunoTableValueType<string> => ({
+      codecId: `test/hostile-recompile-${mode}`,
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: () => {
+        if (mode === "throw") throw new Error("decoder escaped");
+        return { nope: true } as never;
+      },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) => ({ _tag: "Success", value: String(input) }),
+    });
+
+    for (const mode of ["throw", "malformed"] as const) {
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileTextColumns(),
+        getRow: () => liveRow,
+      });
+      expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("draft")).toBe(true);
+
+      expect(() =>
+        runtime.reconcileColumns(
+          compileColumns([
+            {
+              columnId: "COL_ID_VALUE",
+              field: "value",
+              headerName: "Value",
+              valueType: hostileValueType(mode),
+              isEditable: true,
+            },
+          ]),
+        ),
+      ).not.toThrow();
+      expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    }
+  });
+
   it("rebinds an active invalid session across an equivalent column recompile", () => {
     const compileValidatedColumns = () =>
       compileColumns([

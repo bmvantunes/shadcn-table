@@ -1137,6 +1137,7 @@ describe("BrunoTableViewportRuntime", () => {
     ]);
     const removeProperty = vi.fn();
     const setProperty = vi.fn();
+    const hostSetProperty = vi.fn();
     const element = {
       addEventListener: vi.fn(),
       clientHeight: 480,
@@ -1152,11 +1153,23 @@ describe("BrunoTableViewportRuntime", () => {
     const publications = vi.fn();
     viewport.setLayout(2, columns);
     viewport.attach(element);
+    viewport.attachPinnedEditorHost({
+      style: { removeProperty: vi.fn(), setProperty: hostSetProperty },
+    } as unknown as HTMLElement);
+    hostSetProperty.mockClear();
     viewport.subscribe(publications);
     const publicationsBeforePreview = publications.mock.calls.length;
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
 
     viewport.previewColumnWidth("COL_ID_PREVIEW_START", 300);
+    expect(hostSetProperty).toHaveBeenCalledWith(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      "0px",
+    );
+    expect(hostSetProperty).toHaveBeenLastCalledWith(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      "500px",
+    );
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(0);
     expect(publications.mock.calls.length).toBeGreaterThan(publicationsBeforePreview);
@@ -1173,7 +1186,16 @@ describe("BrunoTableViewportRuntime", () => {
     );
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
 
+    hostSetProperty.mockClear();
     viewport.clearColumnWidthPreview();
+    expect(hostSetProperty).toHaveBeenCalledWith(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      "0px",
+    );
+    expect(hostSetProperty).toHaveBeenLastCalledWith(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      "500px",
+    );
     expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
       "COL_ID_PREVIEW_START",
     );
