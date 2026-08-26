@@ -74,7 +74,8 @@ type CellEditEvent =
       readonly intent: "scalar" | "blank";
     }>
   | Readonly<{ readonly type: "CANCEL" }>
-  | Readonly<{ readonly type: "RECONCILE_ROW"; readonly row: unknown }>;
+  | Readonly<{ readonly type: "RECONCILE_ROW"; readonly row: unknown }>
+  | Readonly<{ readonly type: "RECONCILE_COLUMN"; readonly column: CompiledFieldColumn }>;
 
 const brunoTableCellEditMachine = createMachine({
   id: "brunoTableCellEditSession",
@@ -110,6 +111,14 @@ const brunoTableCellEditMachine = createMachine({
     },
     editing: {
       on: {
+        RECONCILE_COLUMN: {
+          actions: assign({
+            session: ({ context, event }) =>
+              context.session === undefined
+                ? undefined
+                : Object.freeze({ ...context.session, column: event.column }),
+          }),
+        },
         RECONCILE_ROW: {
           actions: assign({
             session: ({ context, event }) => {
@@ -630,10 +639,21 @@ export class BrunoTableCellEditRuntime {
       previousFieldColumns,
       nextFieldColumns,
     );
+    const activeSession = this.actor.getSnapshot().context.session;
+    const nextActiveColumn =
+      activeSession === undefined ? undefined : nextFieldColumns.get(activeSession.column.columnId);
+    const canRebindActiveSession =
+      activeSession !== undefined &&
+      nextActiveColumn !== undefined &&
+      isCompatibleActiveColumn(activeSession.column, nextActiveColumn);
     batch(() => {
-      this.cancel();
       this.columns = columns;
       this.fieldColumnsById = nextFieldColumns;
+      if (canRebindActiveSession) {
+        this.actor.send({ type: "RECONCILE_COLUMN", column: nextActiveColumn });
+      } else {
+        this.cancel();
+      }
       if (nextDrafts === previousDrafts) return;
       this.draftStore.setState(() => nextDrafts);
       for (const key of changedKeys) {
@@ -864,7 +884,12 @@ function reconcileDraftsForColumns(
     const previousColumn =
       identity === undefined ? undefined : previousColumns.get(identity.columnId);
     const nextColumn = identity === undefined ? undefined : nextColumns.get(identity.columnId);
-    if (nextColumn === undefined) {
+    if (
+      nextColumn === undefined ||
+      nextColumn.isEditable === undefined ||
+      nextColumn.isEditable === false ||
+      previousColumn?.field !== nextColumn.field
+    ) {
       nextDrafts ??= new Map(drafts);
       nextDrafts.delete(key);
       changedKeys.push(key);
@@ -895,6 +920,19 @@ function reconcileDraftsForColumns(
     changedKeys.push(key);
   }
   return Object.freeze({ drafts: nextDrafts ?? drafts, changedKeys });
+}
+
+function isCompatibleActiveColumn(
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn,
+): boolean {
+  return (
+    previousColumn.field === nextColumn.field &&
+    previousColumn.semantics.decodeRuntimeAuthority ===
+      nextColumn.semantics.decodeRuntimeAuthority &&
+    nextColumn.isEditable !== undefined &&
+    nextColumn.isEditable !== false
+  );
 }
 
 function cellKey(rowId: string, columnId: string): string {

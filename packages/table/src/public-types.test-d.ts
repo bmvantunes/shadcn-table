@@ -2050,6 +2050,15 @@ const invalidWidenedNullablePreset = widenedEditableNumberPreset({
   headerName: "Widened nullable preset",
 });
 void invalidWidenedNullablePreset;
+const invalidWidenedNullablePresetWithBlank = widenedEditableNumberPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_PRESET_WITH_BLANK",
+  // @ts-expect-error widened editability cannot prove the nullable field capability.
+  field: "nullable",
+  headerName: "Widened nullable preset with blank",
+  // @ts-expect-error a blank policy still requires exact true or predicate editability.
+  blankValue: null,
+});
+void invalidWidenedNullablePresetWithBlank;
 const validWidenedRequiredPreset = [
   widenedEditableNumberPreset({
     columnId: "COL_ID_WIDENED_REQUIRED_PRESET",

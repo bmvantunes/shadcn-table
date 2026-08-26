@@ -4,7 +4,7 @@ export type BrunoTableSetValueIndex = ReadonlyMap<string, readonly unknown[]>;
 
 export function brunoTableSetValueKey(column: CompiledColumn, value: unknown): string | undefined {
   try {
-    const presence = value === null ? "null" : value === undefined ? "undefined" : "value";
+    const presence = value == null ? "nullish" : "value";
     return `${column.semantics.codecId}:${presence}:${
       value == null ? "" : column.semantics.formatCanonicalText(value)
     }`;

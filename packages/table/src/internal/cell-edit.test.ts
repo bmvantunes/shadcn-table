@@ -720,6 +720,38 @@ describe("BrunoTable Cell Edit Session", () => {
       compileColumns([
         {
           columnId: "COL_ID_VALUE",
+          field: "other",
+          headerName: "Other",
+          valueType: "text",
+          isEditable: true,
+        },
+      ]),
+    );
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+
+    const capabilityRuntime = new BrunoTableCellEditRuntime({
+      columns: textColumns,
+      getRow: () => liveRow,
+    });
+    expect(capabilityRuntime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(capabilityRuntime.commit("draft")).toBe(true);
+    capabilityRuntime.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: false,
+        },
+      ]),
+    );
+    expect(capabilityRuntime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+
+    runtime.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
           field: "value",
           headerName: "Value",
           valueType: "number",
@@ -728,5 +760,40 @@ describe("BrunoTable Cell Edit Session", () => {
       ]),
     );
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+  });
+
+  it("rebinds an active invalid session across an equivalent column recompile", () => {
+    const compileValidatedColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: true,
+          validate: ({ value }: { readonly value: string }) =>
+            value === "invalid" ? "Invalid value." : undefined,
+        },
+      ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileValidatedColumns(),
+      getRow: () => ({ value: "source" }),
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("invalid", false);
+    expect(runtime.commit("invalid")).toBe(false);
+
+    runtime.reconcileColumns(compileValidatedColumns());
+
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      columnId: "COL_ID_VALUE",
+      invalidMessage: "Invalid value.",
+    });
+    expect(runtime.getActiveCandidateSnapshot()).toEqual({
+      kind: "scalar",
+      rawText: "invalid",
+      nativeInvalid: false,
+    });
   });
 });

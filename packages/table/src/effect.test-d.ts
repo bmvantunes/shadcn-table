@@ -98,6 +98,15 @@ const invalidWidenedNullableBigDecimal = widenedBigDecimalPreset({
   headerName: "Widened nullable BigDecimal",
 });
 void invalidWidenedNullableBigDecimal;
+const invalidWidenedNullableBigDecimalWithBlank = widenedBigDecimalPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_BIGDECIMAL_WITH_BLANK",
+  // @ts-expect-error widened editability cannot prove the nullable field capability.
+  field: "nullable",
+  headerName: "Widened nullable BigDecimal with blank",
+  // @ts-expect-error a blank policy still requires exact true or predicate editability.
+  blankValue: null,
+});
+void invalidWidenedNullableBigDecimalWithBlank;
 const validWidenedRequiredBigDecimal = [
   widenedBigDecimalPreset({
     columnId: "COL_ID_WIDENED_REQUIRED_BIGDECIMAL",

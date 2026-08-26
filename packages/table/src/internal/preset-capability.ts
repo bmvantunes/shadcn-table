@@ -6,6 +6,11 @@ export type EffectivePresetOption<TDefaults, TOptions, TKey extends PropertyKey>
       : never;
 
 type IsPotentiallyEditable<TEditable> = [TEditable] extends [false | undefined] ? false : true;
+type IsStaticallyEditable<TEditable> = [TEditable] extends [
+  true | ((...arguments_: never[]) => unknown),
+]
+  ? true
+  : false;
 
 export type EffectiveFieldPresetCapability<TRow, TField extends keyof TRow, TDefaults, TOptions> =
   EffectivePresetOption<TDefaults, TOptions, "blankValue"> extends infer TBlank
@@ -21,7 +26,7 @@ export type EffectiveFieldPresetCapability<TRow, TField extends keyof TRow, TDef
                 : unknown
             : unknown
         : never
-      : IsPotentiallyEditable<EffectivePresetOption<TDefaults, TOptions, "isEditable">> extends true
+      : IsStaticallyEditable<EffectivePresetOption<TDefaults, TOptions, "isEditable">> extends true
         ? [TBlank] extends [null]
           ? null extends TRow[TField]
             ? unknown

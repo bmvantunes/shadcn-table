@@ -805,33 +805,36 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     readonly status: string;
     readonly revision: bigint;
   }>;
-  const liveEditColumns = [
-    {
-      columnId: "COL_ID_VALUE",
-      field: "value",
-      headerName: "Value",
-      valueType: "text",
-      isEditable: true,
-    },
-    {
-      columnId: "COL_ID_ORDINAL",
-      field: "ordinal",
-      headerName: "Ordinal",
-      valueType: "number",
-    },
-    {
-      columnId: "COL_ID_STATUS",
-      field: "status",
-      headerName: "Status",
-      valueType: "text",
-      enableFilter: true,
-    },
-  ] satisfies BrunoTableColumns<LiveEditRow>;
+  const createLiveEditColumns = () =>
+    [
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+        validate: ({ value }: { readonly value: string }) =>
+          value === "Candidate survives" ? "Candidate remains invalid." : undefined,
+      },
+      {
+        columnId: "COL_ID_ORDINAL",
+        field: "ordinal",
+        headerName: "Ordinal",
+        valueType: "number",
+      },
+      {
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        valueType: "text",
+        enableFilter: true,
+      },
+    ] satisfies BrunoTableColumns<LiveEditRow>;
   const onSaveEdits = vi.fn(() => Promise.resolve());
   const renderTable = (liveRows: readonly LiveEditRow[], version: number) => (
     <BrunoTableClient
       tableId="TABLE_ID_CELL_EDIT_IDENTITY"
-      columns={liveEditColumns}
+      columns={createLiveEditColumns()}
       initialOrderBy={[{ columnId: "COL_ID_ORDINAL", direction: "asc" }]}
       initialFilters={[{ columnId: "COL_ID_STATUS", type: "equals", filter: "keep" }]}
       clientSource={{ rows: liveRows, totalRows: liveRows.length, version, status: "ready" }}
@@ -858,10 +861,17 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   };
   const screen = await render(renderTable([target, peer], 1));
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_IDENTITY" });
+  const selectionColumnId = screen
+    .getByRole("checkbox", { name: "Select all rows", exact: true })
+    .element()
+    .closest<HTMLElement>('[role="columnheader"]')?.dataset["brunoColumnId"];
   grid.element().focus();
   await userEvent.keyboard("{F2}");
   let editor = screen.getByRole("textbox", { name: "Edit Value" });
   await userEvent.fill(editor, "Candidate survives");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+  await expect.element(editor).toHaveFocus();
   const activeCellId = editor.element().closest<HTMLElement>('[role="gridcell"]')?.id;
   expect(activeCellId).toBeTruthy();
   expect(
@@ -902,6 +912,15 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   );
   expect(detachedSemanticOwner?.getAttribute("aria-rowindex")).toBeNull();
   expect(
+    detachedSemanticOwner
+      ?.getAttribute("aria-owns")
+      ?.split(" ")
+      .some(
+        (ownedId) =>
+          document.getElementById(ownedId)?.dataset["brunoColumnId"] === selectionColumnId,
+      ),
+  ).toBe(false);
+  expect(
     screen
       .getByRole("checkbox")
       .all()
@@ -909,8 +928,13 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
   ).toHaveLength(0);
 
   await screen.rerender(renderTable([peer], 4));
+  const tombstoneAlert = screen
+    .getByRole("alert")
+    .all()
+    .find((alert) => alert.element().textContent?.includes("removed from the server") === true);
+  expect(tombstoneAlert).toBeDefined();
   await expect
-    .element(screen.getByRole("alert"))
+    .element(tombstoneAlert!)
     .toHaveTextContent("This row was removed from the server. Changes cannot be saved.");
   await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
   expect(
@@ -925,10 +949,6 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
       ?.split(" ")
       .includes(activeCellId ?? ""),
   );
-  const selectionColumnId = screen
-    .getByRole("checkbox", { name: "Select all rows", exact: true })
-    .element()
-    .closest<HTMLElement>('[role="columnheader"]')?.dataset["brunoColumnId"];
   expect(
     tombstoneOwner
       ?.getAttribute("aria-owns")
