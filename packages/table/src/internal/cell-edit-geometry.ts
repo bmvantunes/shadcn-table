@@ -13,6 +13,7 @@ export class BrunoTableCellEditGeometryController {
   private rowId: string | undefined;
   private appliedRowIndex: number | undefined;
   private anchorViewportTop: number | undefined;
+  private observedScrollTop: number | undefined;
   private claimedProjectionRows: readonly ProjectionRowClaim[] = [];
 
   public readonly reconcile = (input: EditGeometryInput): void => {
@@ -20,16 +21,17 @@ export class BrunoTableCellEditGeometryController {
       this.restoreProjectionRow();
       this.rowId = input.rowId;
       this.appliedRowIndex = input.rowIndex;
+      this.observedScrollTop = input.grid.scrollTop;
       this.anchorViewportTop = findProjectedRow(
         input.grid,
         input.rowId,
       )?.getBoundingClientRect().top;
-    } else if (this.appliedRowIndex === input.rowIndex && input.layer.style.top !== "") {
-      // Window-only movement must carry the editor with its actual scroll position. Preserve the
-      // previous viewport anchor only while a Row Identity is moving to a different logical index.
-      this.anchorViewportTop =
-        findProjectedRow(input.grid, input.rowId)?.getBoundingClientRect().top ??
-        input.layer.getBoundingClientRect().top;
+    } else {
+      const observedScrollTop = input.grid.scrollTop;
+      if (this.observedScrollTop !== undefined && this.anchorViewportTop !== undefined) {
+        this.anchorViewportTop -= observedScrollTop - this.observedScrollTop;
+      }
+      this.observedScrollTop = observedScrollTop;
     }
     this.input = input;
     this.claimProjectionRows(input.grid, input.rowId);
@@ -46,6 +48,7 @@ export class BrunoTableCellEditGeometryController {
     this.rowId = undefined;
     this.appliedRowIndex = undefined;
     this.anchorViewportTop = undefined;
+    this.observedScrollTop = undefined;
     this.restoreProjectionRow();
   };
 
@@ -69,6 +72,7 @@ export class BrunoTableCellEditGeometryController {
       if (requestedDelta !== 0) {
         const before = grid.scrollTop;
         grid.scrollTop = before + requestedDelta;
+        this.observedScrollTop = grid.scrollTop;
       }
       this.appliedRowIndex = rowIndex;
     } else if (rowIndex !== undefined) {

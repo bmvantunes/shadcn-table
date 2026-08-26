@@ -1414,6 +1414,7 @@ const emittedStatusColumn = BrunoTableSelectColumn.withDefaults({
 
 type EmittedPresetEditRow = Readonly<{
   readonly nullable: number | null;
+  readonly optional: number | undefined;
   readonly required: number;
 }>;
 const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
@@ -1429,6 +1430,15 @@ const emittedPresetEditColumns = [
   }),
 ] satisfies BrunoTableColumns<EmittedPresetEditRow>;
 void emittedPresetEditColumns;
+const emittedOptionalPresetEditColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_OPTIONAL_PRESET",
+    field: "optional",
+    headerName: "Optional preset",
+    blankValue: undefined,
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedOptionalPresetEditColumns;
 const emittedComputedFromEditPresetColumns = [
   emittedNullableNumberPreset({
     columnId: "COL_ID_COMPUTED_PRESET",
@@ -1457,6 +1467,25 @@ const emittedInvalidPresetField = emittedNullableNumberPreset({
   headerName: "Required preset",
 });
 void emittedInvalidPresetField;
+const emittedInvalidDisabledPresetField = emittedNullableNumberPreset({
+  columnId: "COL_ID_DISABLED_PRESET",
+  // @ts-expect-error emitted inherited blank cannot combine with isEditable false.
+  field: "nullable",
+  headerName: "Disabled preset",
+  // @ts-expect-error emitted effective false-plus-blank shape is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledPresetField;
+const emittedEditableWithoutBlankPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+});
+const emittedInvalidNullableWithoutBlank = emittedEditableWithoutBlankPreset({
+  columnId: "COL_ID_NULLABLE_WITHOUT_BLANK",
+  // @ts-expect-error emitted nullable editable preset applications require an exact blank policy.
+  field: "nullable",
+  headerName: "Nullable without blank",
+});
+void emittedInvalidNullableWithoutBlank;
 // @ts-expect-error emitted blank preset requires literal isEditable true.
 BrunoTableNumberColumn.withDefaults({
   isEditable: false,

@@ -296,7 +296,31 @@ function evaluateCandidate(
   if (parsed._tag !== "Success" || !("value" in parsed)) {
     return Object.freeze({ kind: "invalid", message: "The value is invalid." });
   }
-  const after = parsed.value;
+  let after = parsed.value;
+  if (!blankIntent) {
+    let decoded: unknown;
+    try {
+      decoded = session.column.semantics.decodeRuntime(after);
+    } catch {
+      return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+    }
+    if (typeof decoded !== "object" || decoded === null || !("_tag" in decoded)) {
+      return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+    }
+    if (decoded._tag === "Failure") {
+      return Object.freeze({
+        kind: "invalid",
+        message:
+          "message" in decoded && typeof decoded.message === "string"
+            ? boundedMessage(decoded.message)
+            : "The value is invalid.",
+      });
+    }
+    if (decoded._tag !== "Success" || !("value" in decoded)) {
+      return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+    }
+    after = decoded.value;
+  }
   if (session.column.validate !== undefined) {
     let result: unknown;
     try {

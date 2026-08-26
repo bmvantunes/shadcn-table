@@ -575,7 +575,7 @@ describe("BrunoTable Cell Edit Session", () => {
   });
 
   it("contains throwing and malformed custom parsers as recoverable invalid candidates", () => {
-    let malformed = false;
+    let parserMode: "throw" | "malformed" | "wrong-domain" = "throw";
     const customValueType: BrunoTableValueType<string> = {
       codecId: "test/throwing-editor-parser",
       codecVersion: 1,
@@ -592,7 +592,8 @@ describe("BrunoTable Cell Edit Session", () => {
       compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
       formatCanonicalText: String,
       parseCanonicalText: () => {
-        if (malformed) return { nope: true } as never;
+        if (parserMode === "malformed") return { nope: true } as never;
+        if (parserMode === "wrong-domain") return { _tag: "Success", value: 1n } as never;
         throw new Error("parser escaped");
       },
       formatDisplay: String,
@@ -629,11 +630,15 @@ describe("BrunoTable Cell Edit Session", () => {
       rawText: "candidate",
     });
 
-    malformed = true;
+    parserMode = "malformed";
     expect(runtime.commit("still candidate")).toBe(false);
     expect(runtime.getSessionSnapshot()).toMatchObject({
       invalidMessage: "BrunoTable Value Type parseCanonicalText failed.",
     });
+    parserMode = "wrong-domain";
+    expect(runtime.commit("wrong domain")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({ invalidMessage: "Expected string." });
+    expect(runtime.getDraftSnapshot("parser", "COL_ID_VALUE")).toBeUndefined();
     expect(runtime.cancel()).toBe(true);
   });
 

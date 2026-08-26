@@ -374,6 +374,23 @@ type BigDecimalAggregationPresetDefaults =
       };
     }[keyof BigDecimalAggregateResults];
 
+type BigDecimalPresetValidation = (parameters: {
+  readonly row: unknown;
+  readonly value: BigDecimal.BigDecimal | null | undefined;
+}) => string | undefined;
+
+type BigDecimalPresetEditingDefaults =
+  | {
+      readonly isEditable?: boolean;
+      readonly blankValue?: never;
+      readonly validate?: BigDecimalPresetValidation;
+    }
+  | {
+      readonly isEditable: true;
+      readonly blankValue: null | undefined;
+      readonly validate?: BigDecimalPresetValidation;
+    };
+
 type BigDecimalPresetBaseDefaults = {
   readonly headerName?: string;
   readonly width?: number;
@@ -382,9 +399,8 @@ type BigDecimalPresetBaseDefaults = {
   readonly enableFilter?: boolean;
   readonly enableSetFilter?: boolean;
   readonly enableSorting?: boolean;
-  readonly isEditable?: boolean;
   readonly cellClassName?: string;
-};
+} & BigDecimalPresetEditingDefaults;
 
 type BrunoTableBigDecimalColumnPresetDefaults = BigDecimalPresetBaseDefaults &
   BigDecimalGroupingPresetDefaults &
@@ -395,6 +411,8 @@ type FieldOnlyPresetKey =
   | "enableSetFilter"
   | "enableSorting"
   | "isEditable"
+  | "blankValue"
+  | "validate"
   | "groupBy"
   | "groupKeyValueFormatter"
   | "groupKeyCellClassName"
@@ -404,6 +422,13 @@ type FieldOnlyPresetKey =
   | "aggregateCellClassName"
   | "aggregateCellRenderer";
 type ComputedPresetDefaults<TDefaults> = Omit<TDefaults, FieldOnlyPresetKey>;
+
+type EffectivePresetOption<TDefaults, TOptions, TKey extends PropertyKey> =
+  TOptions extends Record<TKey, infer TValue>
+    ? TValue
+    : TDefaults extends Record<TKey, infer TValue>
+      ? TValue
+      : never;
 
 type GroupPresentationKey =
   | "groupKeyValueFormatter"
@@ -470,6 +495,40 @@ type BigDecimalPresetFieldCompatibility<TRow, TField extends keyof TRow, TDefaul
           : unknown
     : never;
 
+type BigDecimalEffectiveFieldCapability<
+  TRow,
+  TField extends FieldOfBigDecimal<TRow>,
+  TDefaults,
+  TOptions,
+> =
+  EffectivePresetOption<TDefaults, TOptions, "blankValue"> extends infer TBlank
+    ? [TBlank] extends [never]
+      ? EffectivePresetOption<TDefaults, TOptions, "isEditable"> extends infer TEditable
+        ? [TEditable] extends [never]
+          ? unknown
+          : TEditable extends true | ((...arguments_: never[]) => unknown)
+            ? null extends TRow[TField]
+              ? never
+              : undefined extends TRow[TField]
+                ? never
+                : unknown
+            : unknown
+        : never
+      : EffectivePresetOption<TDefaults, TOptions, "isEditable"> extends
+            | true
+            | ((...arguments_: never[]) => unknown)
+        ? [TBlank] extends [null]
+          ? null extends TRow[TField]
+            ? unknown
+            : never
+          : [TBlank] extends [undefined]
+            ? undefined extends TRow[TField]
+              ? unknown
+              : never
+            : never
+        : never
+    : never;
+
 type BigDecimalHelperResult<TOptions, TColumn> = BrunoTableColumnHelperOutput<
   Merge<BigDecimalBuiltInDefaults, TOptions> & TColumn
 >;
@@ -488,6 +547,7 @@ type BrunoTableBigDecimalColumnPreset<TDefaults extends BrunoTableBigDecimalColu
       options: TOptions &
         FieldIdentity<TField, TColumnId> &
         BigDecimalPresetFieldCompatibility<TRow, TField, TDefaults, TOptions> &
+        BigDecimalEffectiveFieldCapability<TRow, TField, TDefaults, TOptions> &
         OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
     ): BigDecimalPresetResult<
       EffectiveFieldPresetDefaults<TDefaults, TOptions>,
@@ -653,6 +713,8 @@ const presetDefaultKeys = new Set<PropertyKey>([
   "enableSetFilter",
   "enableSorting",
   "isEditable",
+  "blankValue",
+  "validate",
   "cellClassName",
   "groupBy",
   "groupKeyValueFormatter",
@@ -681,6 +743,8 @@ const fieldOptionKeys = new Set<PropertyKey>([
   "enableSetFilter",
   "enableSorting",
   "isEditable",
+  "blankValue",
+  "validate",
   "groupBy",
   "groupKeyValueFormatter",
   "groupKeyCellClassName",
@@ -709,6 +773,8 @@ function omitFieldOnlyDefaults(defaults: RuntimeColumnOptions): RuntimeColumnOpt
           key !== "enableSetFilter" &&
           key !== "enableSorting" &&
           key !== "isEditable" &&
+          key !== "blankValue" &&
+          key !== "validate" &&
           key !== "groupBy" &&
           key !== "groupKeyValueFormatter" &&
           key !== "groupKeyCellClassName" &&
@@ -754,6 +820,16 @@ function omitIncompatiblePresentationDefaults(
 }
 
 function validateCapabilityCombination(options: RuntimeColumnOptions): void {
+  if (
+    Object.hasOwn(options, "blankValue") &&
+    options["isEditable"] !== true &&
+    typeof options["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable BigDecimal blankValue requires potential field editability.");
+  }
+  if (options["validate"] !== undefined && typeof options["validate"] !== "function") {
+    throw new TypeError("BrunoTable BigDecimal validate must be a function.");
+  }
   const hasGroupPresentation =
     Object.hasOwn(options, "groupKeyValueFormatter") ||
     Object.hasOwn(options, "groupKeyCellClassName") ||
@@ -853,6 +929,7 @@ function BrunoTableBigDecimalColumnWithDefaults<
     options: TOptions &
       FieldIdentity<TField, TColumnId> &
       BigDecimalPresetFieldCompatibility<TRow, TField, TDefaults, TOptions> &
+      BigDecimalEffectiveFieldCapability<TRow, TField, TDefaults, TOptions> &
       OnlyKnownKeys<TOptions, BigDecimalFieldInput<TRow, TField, TColumnId>>,
   ): BigDecimalPresetResult<
     EffectiveFieldPresetDefaults<TDefaults, TOptions>,

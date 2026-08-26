@@ -16,6 +16,63 @@ type PriceRow = {
   readonly symbol: string;
 };
 
+type EditableBigDecimalRow = {
+  readonly required: BigDecimal.BigDecimal;
+  readonly nullable: BigDecimal.BigDecimal | null;
+  readonly optional: BigDecimal.BigDecimal | undefined;
+};
+
+const directEditableBigDecimalColumns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_NULLABLE_BIGDECIMAL",
+    field: "nullable",
+    headerName: "Nullable BigDecimal",
+    isEditable: true,
+    blankValue: null,
+    validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void directEditableBigDecimalColumns;
+
+const nullableBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+const nullableBigDecimalPresetColumns = [
+  nullableBigDecimalPreset({
+    columnId: "COL_ID_NULLABLE_BIGDECIMAL_PRESET",
+    field: "nullable",
+    headerName: "Nullable BigDecimal preset",
+  }),
+  nullableBigDecimalPreset({
+    columnId: "COL_ID_OPTIONAL_BIGDECIMAL_PRESET",
+    field: "optional",
+    headerName: "Optional BigDecimal preset",
+    blankValue: undefined,
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void nullableBigDecimalPresetColumns;
+const invalidDisabledBigDecimalPreset = nullableBigDecimalPreset({
+  columnId: "COL_ID_DISABLED_BIGDECIMAL_PRESET",
+  // @ts-expect-error inherited blank cannot combine with isEditable false.
+  field: "nullable",
+  headerName: "Disabled BigDecimal preset",
+  // @ts-expect-error the effective false-plus-blank shape is rejected.
+  isEditable: false,
+});
+void invalidDisabledBigDecimalPreset;
+const editableBigDecimalWithoutBlank = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+});
+const invalidNullableBigDecimalWithoutBlank = editableBigDecimalWithoutBlank({
+  columnId: "COL_ID_NULLABLE_BIGDECIMAL_WITHOUT_BLANK",
+  // @ts-expect-error nullable editable BigDecimal applications require a blank policy.
+  field: "nullable",
+  headerName: "Nullable BigDecimal without blank",
+});
+void invalidNullableBigDecimalWithoutBlank;
+
 const priceColumn = BrunoTableBigDecimalColumn.withDefaults({
   headerName: "Price",
   width: 128,

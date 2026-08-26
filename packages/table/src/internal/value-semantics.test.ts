@@ -295,6 +295,16 @@ describe("compiled Column Value Semantics", () => {
     expect(computed).not.toHaveProperty("blankValue");
     expect(computed).not.toHaveProperty("validate");
     expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED",
+          field: "nullable",
+          headerName: "Disabled",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("blankValue requires potential field editability");
+    expect(() =>
       Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
         { isEditable: false, blankValue: null },
       ]),
