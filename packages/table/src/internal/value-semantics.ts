@@ -35,6 +35,7 @@ type RuntimeValueTypeDescriptor = {
   readonly decodeRuntimeAuthority?: unknown;
   readonly equivalentAuthority?: unknown;
   readonly formatCanonicalTextAuthority?: unknown;
+  readonly parseCanonicalTextAuthority?: unknown;
   readonly formatDisplayAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -60,6 +61,11 @@ export type CompiledColumnValueSemantics = {
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   /** Stable private authority used to invalidate decoded Server projections. */
   readonly decodeRuntimeAuthority: unknown;
+  /** Stable private authority used to decide whether an active editor may retain its candidate. */
+  readonly editSessionAuthority: Readonly<{
+    readonly formatCanonicalText: unknown;
+    readonly parseCanonicalText: unknown;
+  }>;
   /** Stable private authority for grouped representative retention and Copy observability. */
   readonly groupedRetentionAuthority: Readonly<{
     readonly equivalent: unknown;
@@ -219,6 +225,11 @@ export function compileColumnValueSemantics(
       : { serverAggregateAuthority: descriptor.serverAggregateAuthority }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
+    editSessionAuthority: Object.freeze({
+      formatCanonicalText:
+        descriptor.formatCanonicalTextAuthority ?? descriptor.formatCanonicalText,
+      parseCanonicalText: descriptor.parseCanonicalTextAuthority ?? descriptor.parseCanonicalText,
+    }),
     groupedRetentionAuthority: Object.freeze({
       equivalent: descriptor.equivalentAuthority ?? descriptor.equivalent,
       formatCanonicalText:
@@ -323,6 +334,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     decodeRuntimeAuthority: decodeRuntimeFunction,
     equivalentAuthority: equivalentFunction,
     formatCanonicalTextAuthority: formatCanonicalTextFunction,
+    parseCanonicalTextAuthority: parseCanonicalTextFunction,
     formatDisplayAuthority: formatDisplayFunction,
     equivalent: (left, right) =>
       validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),

@@ -930,8 +930,40 @@ function isCompatibleActiveColumn(
     previousColumn.field === nextColumn.field &&
     previousColumn.semantics.decodeRuntimeAuthority ===
       nextColumn.semantics.decodeRuntimeAuthority &&
+    previousColumn.semantics.editorFamily === nextColumn.semantics.editorFamily &&
+    previousColumn.semantics.editSessionAuthority.formatCanonicalText ===
+      nextColumn.semantics.editSessionAuthority.formatCanonicalText &&
+    previousColumn.semantics.editSessionAuthority.parseCanonicalText ===
+      nextColumn.semantics.editSessionAuthority.parseCanonicalText &&
+    sameSelectDomain(
+      previousColumn.semantics.selectCanonicalOptions,
+      nextColumn.semantics.selectCanonicalOptions,
+    ) &&
+    sameBlankPolicy(previousColumn, nextColumn) &&
     nextColumn.isEditable !== undefined &&
     nextColumn.isEditable !== false
+  );
+}
+
+function sameBlankPolicy(
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn,
+): boolean {
+  return (
+    (previousColumn.blankValue === undefined) === (nextColumn.blankValue === undefined) &&
+    Object.is(previousColumn.blankValue?.value, nextColumn.blankValue?.value)
+  );
+}
+
+function sameSelectDomain(
+  previousOptions: readonly string[] | undefined,
+  nextOptions: readonly string[] | undefined,
+): boolean {
+  if (previousOptions === nextOptions) return true;
+  if (previousOptions === undefined || nextOptions === undefined) return false;
+  return (
+    previousOptions.length === nextOptions.length &&
+    previousOptions.every((option, index) => option === nextOptions[index])
   );
 }
 

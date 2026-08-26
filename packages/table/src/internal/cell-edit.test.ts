@@ -796,4 +796,109 @@ describe("BrunoTable Cell Edit Session", () => {
       nativeInvalid: false,
     });
   });
+
+  it("cancels active candidates before an edit-facing column recompile can reinterpret them", () => {
+    type OptionalRow = Readonly<{ readonly value: string | null | undefined }>;
+    const decodeRuntime = (input: unknown) =>
+      typeof input === "string" || input == null
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected nullable text." } as const);
+    const formatCanonicalText = (value: string | null | undefined) => value ?? "";
+    const parseText = (text: string) => ({ _tag: "Success", value: text }) as const;
+    const parseUpper = (text: string) => ({ _tag: "Success", value: text.toUpperCase() }) as const;
+    const valueType = (
+      parseCanonicalText: typeof parseText,
+      editorFamily: "text" | "number" = "text",
+    ) => ({
+      codecId: "test/active-session-authority",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily,
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime,
+      equivalent: Object.is,
+      compare: () => 0 as const,
+      formatCanonicalText,
+      parseCanonicalText,
+      formatDisplay: formatCanonicalText,
+      encodePersisted: (value: string | null | undefined) => value ?? null,
+      decodePersisted: decodeRuntime,
+    });
+    const compileOptional = (blankValue: null | undefined, parseCanonicalText = parseText) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: valueType(parseCanonicalText),
+          isEditable: true,
+          blankValue,
+        },
+      ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileOptional(null),
+      getRow: (): OptionalRow => ({ value: null }),
+    });
+
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("", false, "blank");
+    runtime.reconcileColumns(compileOptional(undefined));
+    expect(runtime.getSessionSnapshot()).toEqual({ kind: "idle" });
+
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("candidate", false);
+    runtime.reconcileColumns(compileOptional(undefined, parseUpper));
+    expect(runtime.getSessionSnapshot()).toEqual({ kind: "idle" });
+
+    const familyRuntime = new BrunoTableCellEditRuntime({
+      columns: compileOptional(undefined),
+      getRow: (): OptionalRow => ({ value: "source" }),
+    });
+    expect(familyRuntime.start("row", "COL_ID_VALUE")).toBe(true);
+    familyRuntime.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: valueType(parseText, "number"),
+          isEditable: true,
+          blankValue: undefined,
+        },
+      ]),
+    );
+    expect(familyRuntime.getSessionSnapshot()).toEqual({ kind: "idle" });
+
+    type SelectRow = Readonly<{ readonly choice: "a" | "b" | "c" }>;
+    const compileSelect = (changed: boolean) =>
+      changed
+        ? compileColumns([
+            BrunoTableSelectColumn({
+              columnId: "COL_ID_CHOICE",
+              field: "choice",
+              headerName: "Choice",
+              options: ["a", "c", "b"],
+              isEditable: true,
+            }),
+          ] satisfies BrunoTableColumns<SelectRow>)
+        : compileColumns([
+            BrunoTableSelectColumn({
+              columnId: "COL_ID_CHOICE",
+              field: "choice",
+              headerName: "Choice",
+              options: ["a", "b", "c"],
+              isEditable: true,
+            }),
+          ] satisfies BrunoTableColumns<SelectRow>);
+    const selectRuntime = new BrunoTableCellEditRuntime({
+      columns: compileSelect(false),
+      getRow: (): SelectRow => ({ choice: "a" }),
+    });
+    expect(selectRuntime.start("row", "COL_ID_CHOICE")).toBe(true);
+    selectRuntime.updateActiveCandidate("a", false);
+    selectRuntime.reconcileColumns(compileSelect(true));
+    expect(selectRuntime.getSessionSnapshot()).toEqual({ kind: "idle" });
+  });
 });

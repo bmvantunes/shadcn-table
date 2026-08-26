@@ -126,6 +126,73 @@ test("commits through one parse-validation gate and preserves invalid editor evi
   expect(grid.element()).toHaveFocus();
 });
 
+test("cancels before a live blank-policy change can reinterpret the active candidate", async () => {
+  type NullableRow = Readonly<{
+    readonly id: string;
+    readonly value: number | null | undefined;
+  }>;
+  const initialColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "number",
+      isEditable: true,
+      blankValue: null,
+    },
+  ] as const satisfies BrunoTableColumns<NullableRow>;
+  type HarnessHandle = Readonly<{ changeBlankPolicy: () => void }>;
+  const harnessRef = createRef<HarnessHandle>();
+  const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+    const [usesUndefined, setUsesUndefined] = useState(false);
+    useImperativeHandle(ref, () => ({ changeBlankPolicy: () => setUsesUndefined(true) }), []);
+    const activeColumns = [
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: true,
+        blankValue: usesUndefined ? undefined : null,
+      },
+    ] as const satisfies BrunoTableColumns<NullableRow>;
+    // The public contract deliberately rejects a conditional nullable blank policy. This cast is
+    // confined to a hostile live-reconciliation test for already-compiled runtime columns.
+    const runtimeColumns = activeColumns as typeof initialColumns;
+    return (
+      <BrunoTableClient
+        tableId="TABLE_ID_BLANK_POLICY_RECONCILIATION"
+        columns={runtimeColumns}
+        initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+        clientSource={{
+          rows: [{ id: "row", value: null }],
+          totalRows: 1,
+          version: 1,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={() => 1n}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    );
+  });
+  const screen = await render(<Harness ref={harnessRef} />);
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BLANK_POLICY_RECONCILIATION" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("spinbutton", { name: "Edit Value" });
+  await userEvent.clear(editor);
+  await userEvent.keyboard("1e");
+  await expect.element(editor).toHaveFocus();
+
+  flushSync(() => harnessRef.current?.changeBlankPolicy());
+  await settleBrunoTableBrowserFrames();
+
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("gridcell", { name: "", exact: true })).toBeInTheDocument();
+});
+
 test.each(["ltr", "rtl"] as const)(
   "keeps one native Number editor node across %s responsive and pinned layout changes",
   async (direction) => {
