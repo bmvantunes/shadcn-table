@@ -666,9 +666,9 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.commit("7")).toBe(false);
     expect(runtime.getSessionSnapshot()).toMatchObject({
       kind: "editing",
-      invalidMessage: "This row was removed from the server. Changes cannot be saved.",
       rowMissing: true,
     });
+    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
 
     liveRow = { ...row, score: 6 };
     runtime.reconcileActiveRow();
@@ -923,17 +923,26 @@ describe("BrunoTable Cell Edit Session", () => {
           isEditable: predicate,
         },
       ]);
+    const sourcePolicy = vi.fn(
+      ({ row: candidateRow, value }: { readonly row: PermissionRow; readonly value: string }) =>
+        candidateRow.allowed && value !== "locked",
+    );
     const runtime = new BrunoTableCellEditRuntime({
-      columns: compilePermissionColumns(
-        ({ row: candidateRow, value }) => candidateRow.allowed && value !== "locked",
-      ),
+      columns: compilePermissionColumns(sourcePolicy),
       getRow: () => liveRow,
     });
     expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
     runtime.updateActiveCandidate("candidate", false);
 
+    const sessionSubscriber = vi.fn();
+    const unsubscribe = runtime.subscribeSession(sessionSubscriber);
+    sourcePolicy.mockClear();
+    runtime.reconcileActiveRow(new Set(["unrelated"]));
+    expect(sourcePolicy).not.toHaveBeenCalled();
+    expect(sessionSubscriber).not.toHaveBeenCalled();
+
     liveRow = { value: "locked", allowed: true };
-    runtime.reconcileActiveRow();
+    runtime.reconcileActiveRow(new Set(["row"]));
     expect(runtime.getSessionSnapshot()).toMatchObject({
       kind: "editing",
       invalidMessage: "This cell is no longer editable.",
@@ -969,6 +978,7 @@ describe("BrunoTable Cell Edit Session", () => {
     liveRow = { value: "locked", allowed: true };
     runtime.reconcileActiveRow();
     expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
+    unsubscribe();
   });
 
   it("clears a row-missing overlay on identity return and reveals prior validation", () => {
@@ -985,8 +995,8 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.commit("not-an-integer")).toBe(false);
     expect(runtime.getSessionSnapshot()).toMatchObject({
       rowMissing: true,
-      invalidMessage: "This row was removed from the server. Changes cannot be saved.",
     });
+    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
 
     liveRow = row;
     runtime.reconcileActiveRow();

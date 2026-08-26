@@ -2799,7 +2799,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     cellEdit.reconcileActiveRow();
     return runtime.subscribeRowChanges((changedRowIds) => {
       cellEdit.reconcileTraversalRows(changedRowIds);
-      cellEdit.reconcileActiveRow();
+      cellEdit.reconcileActiveRow(changedRowIds);
     });
   }, [cellEdit, logicalColumns, rowSpace, runtime]);
   useLayoutEffect(() => {

@@ -199,25 +199,24 @@ test("retains the editor and blocks every commit while live edit permission is d
     readonly value: string;
     readonly allowed: boolean;
   }>;
+  const editablePredicate = vi.fn(
+    ({ value: liveValue }: { readonly row: PermissionRow; readonly value: string }) =>
+      liveValue !== "locked",
+  );
+  const permissionColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: editablePredicate,
+    },
+  ] satisfies BrunoTableColumns<PermissionRow>;
   type HarnessHandle = Readonly<{ setValue: (value: string) => void }>;
   const harnessRef = createRef<HarnessHandle>();
   const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
     const [value, setValue] = useState("source");
     useImperativeHandle(ref, () => ({ setValue }), []);
-    const permissionColumns = [
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: ({
-          value: liveValue,
-        }: {
-          readonly row: PermissionRow;
-          readonly value: string;
-        }) => liveValue !== "locked",
-      },
-    ] satisfies BrunoTableColumns<PermissionRow>;
     return (
       <BrunoTableClient
         tableId="TABLE_ID_LIVE_EDIT_PERMISSION"
@@ -1128,9 +1127,18 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .all()
     .find((alert) => alert.element().textContent?.includes("removed from the server") === true);
   expect(tombstoneAlert).toBeDefined();
+  expect(
+    screen
+      .getByRole("alert")
+      .all()
+      .filter((alert) => alert.element().textContent?.includes("removed from the server") === true),
+  ).toHaveLength(1);
   await expect
     .element(tombstoneAlert!)
     .toHaveTextContent("This row was removed from the server. Changes cannot be saved.");
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Value" }))
+    .not.toHaveAttribute("aria-invalid", "true");
   await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
   expect(
     screen

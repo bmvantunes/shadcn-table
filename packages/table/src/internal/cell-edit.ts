@@ -653,9 +653,12 @@ export class BrunoTableCellEditRuntime {
     this.traversalIndex.reconcileRows(changedRowIds);
   };
 
-  public readonly reconcileActiveRow = (): void => {
+  public readonly reconcileActiveRow = (changedRowIds?: ReadonlySet<string>): void => {
     const session = this.actor.getSnapshot().context.session;
-    if (session !== undefined) {
+    if (
+      session !== undefined &&
+      (changedRowIds === undefined || changedRowIds.has(session.rowId))
+    ) {
       this.actor.send({ type: "RECONCILE_ROW", row: this.getRow(session.rowId) });
     }
   };
@@ -816,7 +819,7 @@ export class BrunoTableCellEditRuntime {
       session === undefined
         ? undefined
         : session.rowMissing
-          ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+          ? undefined
           : (session.permissionMessage ?? session.invalidMessage);
     const next =
       session === undefined
