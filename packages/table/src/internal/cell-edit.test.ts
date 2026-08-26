@@ -574,6 +574,69 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(parseCanonicalText).not.toHaveBeenCalled();
   });
 
+  it("contains throwing and malformed custom parsers as recoverable invalid candidates", () => {
+    let malformed = false;
+    const customValueType: BrunoTableValueType<string> = {
+      codecId: "test/throwing-editor-parser",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected string." },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: () => {
+        if (malformed) return { nope: true } as never;
+        throw new Error("parser escaped");
+      },
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected string." },
+    };
+    const parserRow = { id: "parser", value: "before" };
+    const parserColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: customValueType,
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: parserColumns,
+      getRow: () => parserRow,
+    });
+
+    expect(runtime.start("parser", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("candidate", false);
+    expect(runtime.commit("candidate")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "BrunoTable Value Type parseCanonicalText failed.",
+    });
+    expect(runtime.getActiveCandidateSnapshot()).toMatchObject({
+      kind: "scalar",
+      rawText: "candidate",
+    });
+
+    malformed = true;
+    expect(runtime.commit("still candidate")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      invalidMessage: "BrunoTable Value Type parseCanonicalText failed.",
+    });
+    expect(runtime.cancel()).toBe(true);
+  });
+
   it("keeps candidate ownership while XState reconciles a live Row Identity tombstone", () => {
     let liveRow: Row | undefined = row;
     const runtime = new BrunoTableCellEditRuntime({

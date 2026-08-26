@@ -1412,6 +1412,57 @@ const emittedStatusColumn = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
 });
 
+type EmittedPresetEditRow = Readonly<{
+  readonly nullable: number | null;
+  readonly required: number;
+}>;
+const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+const emittedPresetEditColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_NULLABLE_PRESET",
+    field: "nullable",
+    headerName: "Nullable preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPresetEditColumns;
+const emittedComputedFromEditPresetColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_COMPUTED_PRESET",
+    fields: ["required"],
+    headerName: "Computed preset",
+    valueGetter: ({ row }) => row.required,
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+const emittedComputedFromEditPreset = emittedComputedFromEditPresetColumns[0]!;
+type EmittedComputedEditPresetOmitsEditability = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["isEditable"], undefined>
+>;
+type EmittedComputedEditPresetOmitsBlank = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["blankValue"], undefined>
+>;
+type EmittedComputedEditPresetOmitsValidation = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["validate"], undefined>
+>;
+void (null as unknown as EmittedComputedEditPresetOmitsEditability);
+void (null as unknown as EmittedComputedEditPresetOmitsBlank);
+void (null as unknown as EmittedComputedEditPresetOmitsValidation);
+const emittedInvalidPresetField = emittedNullableNumberPreset({
+  columnId: "COL_ID_REQUIRED_PRESET",
+  // @ts-expect-error emitted null blank preset requires a field containing null.
+  field: "required",
+  headerName: "Required preset",
+});
+void emittedInvalidPresetField;
+// @ts-expect-error emitted blank preset requires literal isEditable true.
+BrunoTableNumberColumn.withDefaults({
+  isEditable: false,
+  blankValue: null,
+});
+
 const emittedComputedNumberColumn = BrunoTableNumberColumn.withDefaults({
   headerName: "Calculated price",
   enableFilter: true,

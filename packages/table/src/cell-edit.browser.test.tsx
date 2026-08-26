@@ -7,7 +7,7 @@ import { flushSync } from "react-dom";
 
 import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
-import type { BrunoTableColumnId, BrunoTableColumns } from "./public-types";
+import type { BrunoTableColumnId, BrunoTableColumns, BrunoTableValueType } from "./public-types";
 
 type Row = Readonly<{
   readonly id: string;
@@ -642,6 +642,7 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
       initialFilters={[{ columnId: "COL_ID_STATUS", type: "equals", filter: "keep" }]}
       clientSource={{ rows: liveRows, totalRows: liveRows.length, version, status: "ready" }}
       getRowId={(row) => row.id}
+      rowSelection
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={onSaveEdits}
@@ -712,6 +713,31 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .element(screen.getByRole("alert"))
     .toHaveTextContent("This row was removed from the server. Changes cannot be saved.");
   await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
+  expect(
+    screen
+      .getByRole("checkbox")
+      .all()
+      .filter((checkbox) => checkbox.element().closest("[data-bruno-edit-owned-row]") !== null),
+  ).toHaveLength(0);
+  const tombstoneOwner = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find((row) =>
+    row
+      .getAttribute("aria-owns")
+      ?.split(" ")
+      .includes(activeCellId ?? ""),
+  );
+  const selectionColumnId = screen
+    .getByRole("checkbox", { name: "Select all rows", exact: true })
+    .element()
+    .closest<HTMLElement>('[role="columnheader"]')?.dataset["brunoColumnId"];
+  expect(
+    tombstoneOwner
+      ?.getAttribute("aria-owns")
+      ?.split(" ")
+      .some(
+        (ownedId) =>
+          document.getElementById(ownedId)?.dataset["brunoColumnId"] === selectionColumnId,
+      ),
+  ).toBe(false);
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).toHaveFocus();
   expect(onSaveEdits).not.toHaveBeenCalled();
@@ -721,6 +747,9 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .toHaveValue("Candidate survives");
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("checkbox", { name: "Select row 2", exact: true }))
+    .toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Value" })).not.toBeInTheDocument();
 
@@ -806,6 +835,17 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
   let editor = screen.getByRole("textbox", { name: "Edit Value" });
   await userEvent.fill(editor, "Far candidate");
   const anchorTop = editor.element().getBoundingClientRect().top;
+  const anchorRect = editor.element().getBoundingClientRect();
+  grid.element().scrollTop = 420;
+  grid.element().dispatchEvent(new Event("scroll"));
+  await settleBrunoTableBrowserFrames();
+  const scrolledAnchorTop = editor.element().getBoundingClientRect().top;
+  expect(scrolledAnchorTop).toBeLessThan(anchorTop - 300);
+  expect(
+    document
+      .elementFromPoint(anchorRect.left + anchorRect.width / 2, anchorTop + anchorRect.height / 2)
+      ?.closest("[data-bruno-edit-owned-row]"),
+  ).toBeNull();
   let scrollPublications = 0;
   grid.element().addEventListener("scroll", () => {
     scrollPublications += 1;
@@ -819,14 +859,18 @@ test("coalesces a far virtualized live sort move while preserving the edit ancho
   await expect.element(editor).toHaveValue("Far candidate");
   await expect.element(editor).toHaveFocus();
   expect(grid.element().scrollTop).toBeGreaterThan(0);
-  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(editor.element().getBoundingClientRect().top - scrolledAnchorTop),
+  ).toBeLessThanOrEqual(1);
   expect(scrollPublications).toBeLessThanOrEqual(1);
 
   flushSync(() => harnessRef.current?.publish({ ...target, ordinal: 0 }, 5));
   await settleBrunoTableBrowserFrames();
   editor = screen.getByRole("textbox", { name: "Edit Value" });
   await expect.element(editor).toHaveValue("Far candidate");
-  expect(Math.abs(editor.element().getBoundingClientRect().top - anchorTop)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(editor.element().getBoundingClientRect().top - scrolledAnchorTop),
+  ).toBeLessThanOrEqual(1);
 });
 
 test("shares pinned, virtual, and selection geometry with the edit-owned row", async () => {
@@ -1294,6 +1338,72 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
   await expect
     .element(screen.getByRole("gridcell", { name: "Required empty", exact: true }))
     .toBeVisible();
+});
+
+test("contains a throwing custom parser while preserving candidate focus", async () => {
+  const throwingValueType: BrunoTableValueType<string> = {
+    codecId: "test/browser-throwing-parser",
+    codecVersion: 1,
+    filterFamily: "text",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 140,
+    decodeRuntime: (input) =>
+      typeof input === "string"
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected string." },
+    equivalent: Object.is,
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: () => {
+      throw new Error("parser escaped");
+    },
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: (input) =>
+      typeof input === "string"
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected string." },
+  };
+  const parserColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: throwingValueType,
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<Readonly<{ readonly id: string; readonly value: string }>>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_THROWING_PARSER"
+      columns={parserColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{
+        rows: [{ id: "parser", value: "before" }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "before", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await userEvent.fill(editor, "candidate survives");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).toHaveValue("candidate survives");
+  await expect.element(editor).toHaveFocus();
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("BrunoTable Value Type parseCanonicalText failed.");
+  await userEvent.keyboard("{Escape}");
 });
 
 test("copies one immutable source-plus-draft projection for active cells and ranges", async () => {

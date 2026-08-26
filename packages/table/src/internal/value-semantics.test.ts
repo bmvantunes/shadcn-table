@@ -259,6 +259,48 @@ describe("compiled Column Value Semantics", () => {
     expect(() => compileColumns([computedColumn as never])).not.toThrow();
   });
 
+  it("applies exact field edit policies through preset precedence and omits them for computed columns", () => {
+    const presetValidate = vi.fn(() => "preset invalid");
+    const individualValidate = vi.fn(() => undefined);
+    const preset = BrunoTableNumberColumn.withDefaults({
+      isEditable: true,
+      blankValue: null,
+      validate: presetValidate,
+    });
+    const inherited = Reflect.apply(preset, undefined, [
+      { columnId: "COL_ID_NULLABLE", field: "nullable", headerName: "Nullable" },
+    ]) as Readonly<Record<string, unknown>>;
+    const overridden = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        blankValue: undefined,
+        validate: individualValidate,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const computed = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_COMPUTED",
+        fields: ["price"],
+        valueGetter: ({ row }: { readonly row: Pick<SemanticRow, "price"> }) => row.price,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+
+    expect(inherited).toMatchObject({ isEditable: true, blankValue: null });
+    expect(inherited["validate"]).toBe(presetValidate);
+    expect(overridden).toHaveProperty("blankValue", undefined);
+    expect(overridden["validate"]).toBe(individualValidate);
+    expect(computed).not.toHaveProperty("isEditable");
+    expect(computed).not.toHaveProperty("blankValue");
+    expect(computed).not.toHaveProperty("validate");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+        { isEditable: false, blankValue: null },
+      ]),
+    ).toThrow("preset blankValue requires isEditable: true");
+  });
+
   it("snapshots custom Value Type methods and validates their boundary results", () => {
     const custom: BrunoTableValueType<string, "equality", "text"> = {
       codecId: "example/upper-text",

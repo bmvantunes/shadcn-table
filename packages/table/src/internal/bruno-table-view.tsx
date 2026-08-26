@@ -4737,6 +4737,7 @@ type BrunoTableRowProps = Readonly<{
   readonly width: number;
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly renderRowSelection?: boolean | undefined;
+  readonly ownRowSelection?: boolean | undefined;
   readonly columnIndexOffset: number;
   readonly renderActiveEditor?: boolean | undefined;
   readonly activeEditorColumnId?: BrunoTableColumnId | undefined;
@@ -4766,6 +4767,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     width,
     rowSelection,
     renderRowSelection = true,
+    ownRowSelection = true,
     columnIndexOffset,
     renderActiveEditor = false,
     activeEditorColumnId,
@@ -4793,7 +4795,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     }
     centerIdentities.sort((left, right) => left.index - right.index);
     return [
-      ...(rowSelection === undefined
+      ...(rowSelection === undefined || !ownRowSelection
         ? []
         : [BRUNO_TABLE_ROW_SELECTION_COLUMN_ID as BrunoTableColumnId]),
       ...pinnedStart.map((column) => column.columnId),
@@ -4812,6 +4814,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     pinnedStart,
     rowId,
     rowSelection,
+    ownRowSelection,
     tableId,
   ]);
   return (
@@ -5444,6 +5447,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
             instanceId={instanceId}
             leftPadding={leftPadding}
             logicalRowIndex={rowIndex ?? 0}
+            ownRowSelection={!session.rowMissing}
             onCommittedOutsideCellPointer={activateOutsideCell}
             pinnedEnd={pinnedEnd}
             pinnedStart={pinnedStart}
@@ -5463,7 +5467,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
           />
         </tbody>
       </table>
-      {rowSelection === undefined ? null : (
+      {rowSelection === undefined || session.rowMissing ? null : (
         <div
           data-bruno-edit-owned-selection=""
           style={{

@@ -1972,6 +1972,49 @@ const statusColumn = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
 });
 
+type PresetEditRow = Readonly<{
+  readonly nullable: number | null;
+  readonly optional: number | undefined;
+  readonly required: number;
+}>;
+const nullableNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+const presetEditColumns = [
+  nullableNumberPreset({
+    columnId: "COL_ID_NULLABLE_PRESET",
+    field: "nullable",
+    headerName: "Nullable preset",
+  }),
+] satisfies BrunoTableColumns<PresetEditRow>;
+void presetEditColumns;
+const computedFromEditPresetColumns = [
+  nullableNumberPreset({
+    columnId: "COL_ID_COMPUTED_PRESET",
+    fields: ["required"],
+    headerName: "Computed preset",
+    valueGetter: ({ row }) => row.required,
+  }),
+] satisfies BrunoTableColumns<PresetEditRow>;
+const computedFromEditPreset = computedFromEditPresetColumns[0]!;
+expectTypeOf(computedFromEditPreset["isEditable"]).toEqualTypeOf<undefined>();
+expectTypeOf(computedFromEditPreset["blankValue"]).toEqualTypeOf<undefined>();
+expectTypeOf(computedFromEditPreset["validate"]).toEqualTypeOf<undefined>();
+const invalidPresetField = nullableNumberPreset({
+  columnId: "COL_ID_REQUIRED_PRESET",
+  // @ts-expect-error a null blank preset can target only a field whose domain contains null.
+  field: "required",
+  headerName: "Required preset",
+});
+void invalidPresetField;
+// @ts-expect-error a blank preset requires literal isEditable true.
+BrunoTableNumberColumn.withDefaults({
+  isEditable: false,
+  blankValue: null,
+});
+
 const computedPriceColumn = BrunoTableNumberColumn.withDefaults({
   headerName: "Calculated price",
   enableFilter: true,

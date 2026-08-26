@@ -24,6 +24,12 @@ export class BrunoTableCellEditGeometryController {
         input.grid,
         input.rowId,
       )?.getBoundingClientRect().top;
+    } else if (this.appliedRowIndex === input.rowIndex && input.layer.style.top !== "") {
+      // Window-only movement must carry the editor with its actual scroll position. Preserve the
+      // previous viewport anchor only while a Row Identity is moving to a different logical index.
+      this.anchorViewportTop =
+        findProjectedRow(input.grid, input.rowId)?.getBoundingClientRect().top ??
+        input.layer.getBoundingClientRect().top;
     }
     this.input = input;
     this.claimProjectionRows(input.grid, input.rowId);

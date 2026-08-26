@@ -272,12 +272,29 @@ function evaluateCandidate(
   ) {
     return Object.freeze({ kind: "invalid", message: "Enter a value." });
   }
-  const parsed =
-    blankIntent && session.column.blankValue !== undefined
-      ? ({ _tag: "Success", value: session.column.blankValue.value } as const)
-      : session.column.semantics.parseCanonicalText(rawText);
+  let parsed: unknown;
+  try {
+    parsed =
+      blankIntent && session.column.blankValue !== undefined
+        ? { _tag: "Success", value: session.column.blankValue.value }
+        : session.column.semantics.parseCanonicalText(rawText);
+  } catch {
+    return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+  }
+  if (typeof parsed !== "object" || parsed === null || !("_tag" in parsed)) {
+    return Object.freeze({ kind: "invalid", message: "The value is invalid." });
+  }
   if (parsed._tag === "Failure") {
-    return Object.freeze({ kind: "invalid", message: boundedMessage(parsed.message) });
+    return Object.freeze({
+      kind: "invalid",
+      message:
+        "message" in parsed && typeof parsed.message === "string"
+          ? boundedMessage(parsed.message)
+          : "The value is invalid.",
+    });
+  }
+  if (parsed._tag !== "Success" || !("value" in parsed)) {
+    return Object.freeze({ kind: "invalid", message: "The value is invalid." });
   }
   const after = parsed.value;
   if (session.column.validate !== undefined) {
