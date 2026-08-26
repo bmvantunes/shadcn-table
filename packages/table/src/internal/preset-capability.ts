@@ -12,7 +12,7 @@ type IsStaticallyEditable<TEditable> = [TEditable] extends [
   ? true
   : false;
 
-export type EffectiveFieldPresetCapability<TRow, TField extends keyof TRow, TDefaults, TOptions> =
+type EffectiveFieldBlankPresetCapability<TRow, TField extends keyof TRow, TDefaults, TOptions> =
   EffectivePresetOption<TDefaults, TOptions, "blankValue"> extends infer TBlank
     ? [TBlank] extends [never]
       ? EffectivePresetOption<TDefaults, TOptions, "isEditable"> extends infer TEditable
@@ -37,4 +37,12 @@ export type EffectiveFieldPresetCapability<TRow, TField extends keyof TRow, TDef
               : never
             : never
         : never
+    : never;
+
+export type EffectiveFieldPresetCapability<TRow, TField extends keyof TRow, TDefaults, TOptions> = [
+  EffectivePresetOption<TDefaults, TOptions, "validate">,
+] extends [never]
+  ? EffectiveFieldBlankPresetCapability<TRow, TField, TDefaults, TOptions>
+  : IsStaticallyEditable<EffectivePresetOption<TDefaults, TOptions, "isEditable">> extends true
+    ? EffectiveFieldBlankPresetCapability<TRow, TField, TDefaults, TOptions>
     : never;

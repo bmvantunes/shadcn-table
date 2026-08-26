@@ -147,6 +147,11 @@ type PresetEditingDefaults<TValue> =
   | {
       readonly isEditable?: boolean | PresetEditablePredicate<TValue>;
       readonly blankValue?: never;
+      readonly validate?: never;
+    }
+  | {
+      readonly isEditable: true | PresetEditablePredicate<TValue>;
+      readonly blankValue?: never;
       readonly validate?: PresetValidation<TValue>;
     }
   | {

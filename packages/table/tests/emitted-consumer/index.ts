@@ -1419,6 +1419,21 @@ type EmittedPresetEditRow = Readonly<{
   readonly nullableStatus: "open" | "closed" | null;
   readonly requiredStatus: "open" | "closed";
 }>;
+const invalidEmittedRawValidationColumns = [
+  // @ts-expect-error emitted validation is edit-only and requires potential editability.
+  {
+    columnId: "COL_ID_READ_ONLY_VALIDATE",
+    field: "required",
+    headerName: "Read-only validate",
+    valueType: "number",
+    validate: () => undefined,
+  },
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void invalidEmittedRawValidationColumns;
+// @ts-expect-error emitted preset validation requires literal true or predicate editability.
+BrunoTableNumberColumn.withDefaults({
+  validate: () => undefined,
+});
 const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
   blankValue: null,
@@ -1553,6 +1568,19 @@ void emittedInvalidDisabledPresetField;
 const emittedEditableWithoutBlankPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
 });
+const emittedValidatedNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+  validate: () => undefined,
+});
+const emittedInvalidDisabledValidatedPreset = emittedValidatedNumberPreset({
+  columnId: "COL_ID_DISABLED_VALIDATED_PRESET",
+  // @ts-expect-error emitted inherited validation cannot combine with false editability.
+  field: "required",
+  headerName: "Disabled validated preset",
+  // @ts-expect-error emitted effective false-plus-validation shape is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledValidatedPreset;
 const emittedInvalidNullableWithoutBlank = emittedEditableWithoutBlankPreset({
   columnId: "COL_ID_NULLABLE_WITHOUT_BLANK",
   // @ts-expect-error emitted nullable editable preset applications require an exact blank policy.

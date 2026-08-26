@@ -389,6 +389,11 @@ type BigDecimalPresetEditingDefaults =
   | {
       readonly isEditable?: boolean | BigDecimalPresetEditablePredicate;
       readonly blankValue?: never;
+      readonly validate?: never;
+    }
+  | {
+      readonly isEditable: true | BigDecimalPresetEditablePredicate;
+      readonly blankValue?: never;
       readonly validate?: BigDecimalPresetValidation;
     }
   | {

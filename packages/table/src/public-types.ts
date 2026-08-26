@@ -634,27 +634,27 @@ type EditableBlankRepresentation<TValue> = null extends TValue
  * Plain structural arrays cannot admit a widened nullable boolean together with `blankValue`
  * without also admitting literal `false`. Nullable editability is therefore statically explicit.
  */
-type NonPotentialFieldEditingCapability<TRow, TValue> = null extends TValue
+type NonPotentialFieldEditingCapability<TValue> = null extends TValue
   ? {
       readonly isEditable?: false;
       readonly blankValue?: never;
-      readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+      readonly validate?: never;
     }
   : undefined extends TValue
     ? {
         readonly isEditable?: false;
         readonly blankValue?: never;
-        readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+        readonly validate?: never;
       }
     : {
         /** A widened boolean remains runtime-defended but cannot prove Table edit capability. */
         readonly isEditable?: boolean;
         readonly blankValue?: never;
-        readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+        readonly validate?: never;
       };
 
 type FieldEditingCapability<TRow, TValue> =
-  | NonPotentialFieldEditingCapability<TRow, TValue>
+  | NonPotentialFieldEditingCapability<TValue>
   | ({
       readonly isEditable: true | ((parameters: ValueParams<TRow, TValue>) => boolean);
       readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
