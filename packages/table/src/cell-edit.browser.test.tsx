@@ -5,7 +5,7 @@ import { cleanup, render } from "vitest-browser-react";
 import { createRef, forwardRef, useImperativeHandle, useState } from "react";
 import { flushSync } from "react-dom";
 
-import { BrunoTableClient } from "./index";
+import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import type { BrunoTableColumnId, BrunoTableColumns } from "./public-types";
 
@@ -949,7 +949,9 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
         screen.getByRole("columnheader", { name: /^End/u }).element().getBoundingClientRect().right,
     ),
   ).toBeLessThanOrEqual(1);
-  expect(screen.getByRole("checkbox", { name: "Select row 1", exact: true })).toBeVisible();
+  const selection = screen.getByRole("checkbox", { name: "Select row 1", exact: true });
+  const headerSelection = screen.getByRole("checkbox", { name: "Select all rows", exact: true });
+  expect(selection).toBeVisible();
   const anchorTop = editor.element().getBoundingClientRect().top;
   const initialEditorRect = editor.element().getBoundingClientRect();
   expect(
@@ -971,6 +973,13 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
       )
       ?.closest('[role="columnheader"]'),
   ).toBe(activeHeader.element());
+  const headerSelectionRect = headerSelection.element().getBoundingClientRect();
+  expect(
+    document.elementFromPoint(
+      headerSelectionRect.left + headerSelectionRect.width / 2,
+      headerSelectionRect.top + headerSelectionRect.height / 2,
+    ),
+  ).toBe(headerSelection.element());
   grid.element().scrollTop = 0;
   grid.element().dispatchEvent(new Event("scroll"));
   await settleBrunoTableBrowserFrames();
@@ -989,7 +998,6 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
       ?.closest('[role="gridcell"]'),
   ).toBe(startCell.element());
 
-  const selection = screen.getByRole("checkbox", { name: "Select row 1", exact: true });
   const selectionRect = selection.element().getBoundingClientRect();
   editorRect = editor.element().getBoundingClientRect();
   grid.element().scrollLeft +=
@@ -1046,6 +1054,13 @@ test("shares pinned, virtual, and selection geometry with the edit-owned row", a
   );
   expect(semanticOwners).toHaveLength(1);
   expect(semanticOwners[0]?.getAttribute("aria-rowindex")).toBe("2");
+  const ownedIds = semanticOwners[0]?.getAttribute("aria-owns")?.split(" ") ?? [];
+  const ownedColumnIndexes = ownedIds.map((id) =>
+    Number(document.getElementById(id)?.getAttribute("aria-colindex")),
+  );
+  expect(ownedColumnIndexes).toEqual([...ownedColumnIndexes].sort((left, right) => left - right));
+  expect(ownedIds[0]).toBe(selection.element().closest<HTMLElement>('[role="gridcell"]')?.id);
+  expect(ownedIds.indexOf(activeId)).toBeLessThan(ownedIds.indexOf(endCell.element().id));
 
   await screen.rerender(table({ ...target, order: "999" }, 2));
   await settleBrunoTableBrowserFrames();
@@ -1175,6 +1190,110 @@ test("compiles exact nullable blank policies without treating zero as blank", as
   } finally {
     restoreClipboard();
   }
+});
+
+test("keeps nullable Boolean and Select blanks distinct from exact scalar options", async () => {
+  type ChoiceRow = Readonly<{
+    readonly id: string;
+    readonly flag: boolean | null;
+    readonly nullableChoice: "" | "ready" | null;
+    readonly requiredChoice: "" | "ready";
+  }>;
+  const choiceColumns = [
+    {
+      columnId: "COL_ID_FLAG",
+      field: "flag",
+      headerName: "Flag",
+      valueType: "boolean",
+      isEditable: true,
+      blankValue: null,
+      cellRenderer: ({ value }: { readonly value: ChoiceRow["flag"] }) =>
+        value === null ? "Flag blank" : value ? "Flag true" : "Flag false",
+    },
+    BrunoTableSelectColumn({
+      columnId: "COL_ID_NULLABLE_CHOICE",
+      field: "nullableChoice",
+      headerName: "Nullable choice",
+      options: ["", "ready"],
+      isEditable: true,
+      blankValue: null,
+      cellRenderer: ({ value }: { readonly value: ChoiceRow["nullableChoice"] }) =>
+        value === null ? "Nullable blank" : value === "" ? "Nullable empty" : value,
+    }),
+    BrunoTableSelectColumn({
+      columnId: "COL_ID_REQUIRED_CHOICE",
+      field: "requiredChoice",
+      headerName: "Required choice",
+      options: ["", "ready"],
+      isEditable: true,
+      cellRenderer: ({ value }: { readonly value: ChoiceRow["requiredChoice"] }) =>
+        value === "" ? "Required empty" : value,
+    }),
+  ] satisfies BrunoTableColumns<ChoiceRow>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_CHOICES"
+      columns={choiceColumns}
+      initialOrderBy={[{ columnId: "COL_ID_FLAG", direction: "asc" }]}
+      clientSource={{
+        rows: [
+          {
+            id: "choice",
+            flag: null,
+            nullableChoice: null,
+            requiredChoice: "ready",
+          },
+        ],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "Flag blank", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const flagEditor = screen.getByRole("combobox", { name: "Edit Flag" });
+  await expect.element(flagEditor).toHaveValue("blank");
+  await userEvent.selectOptions(flagEditor, "scalar:0");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Flag false", exact: true }))
+    .toBeVisible();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "Nullable blank", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const nullableEditor = screen.getByRole("combobox", { name: "Edit Nullable choice" });
+  await expect.element(nullableEditor).toHaveValue("blank");
+  await userEvent.selectOptions(nullableEditor, "scalar:0");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Nullable empty", exact: true }))
+    .toBeVisible();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "Nullable empty", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const nullableAgain = screen.getByRole("combobox", { name: "Edit Nullable choice" });
+  await expect.element(nullableAgain).toHaveValue("scalar:0");
+  await userEvent.selectOptions(nullableAgain, "blank");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Nullable blank", exact: true }))
+    .toBeVisible();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "ready", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const requiredEditor = screen.getByRole("combobox", { name: "Edit Required choice" });
+  expect(requiredEditor.getByRole("option", { name: /Blank/u }).all()).toHaveLength(0);
+  await userEvent.selectOptions(requiredEditor, "scalar:0");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Required empty", exact: true }))
+    .toBeVisible();
 });
 
 test("copies one immutable source-plus-draft projection for active cells and ranges", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
+import { BrunoTableSelectColumn } from "../column-helpers";
 import { BrunoTableBigDecimalValueType } from "../effect";
 import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
@@ -463,6 +464,71 @@ describe("BrunoTable Cell Edit Session", () => {
     });
   });
 
+  it("keeps Select and Boolean blank intent distinct from exact scalar values", () => {
+    type ChoiceRow = Readonly<{
+      readonly id: string;
+      readonly flag: boolean | null;
+      readonly nullableChoice: "" | "ready" | null;
+      readonly requiredChoice: "" | "ready";
+    }>;
+    const choiceRow: ChoiceRow = {
+      id: "choice",
+      flag: null,
+      nullableChoice: null,
+      requiredChoice: "ready",
+    };
+    const choiceColumns = compileColumns([
+      {
+        columnId: "COL_ID_FLAG",
+        field: "flag",
+        headerName: "Flag",
+        valueType: "boolean",
+        isEditable: true,
+        blankValue: null,
+      },
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_NULLABLE_CHOICE",
+        field: "nullableChoice",
+        headerName: "Nullable choice",
+        options: ["", "ready"],
+        isEditable: true,
+        blankValue: null,
+      }),
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_REQUIRED_CHOICE",
+        field: "requiredChoice",
+        headerName: "Required choice",
+        options: ["", "ready"],
+        isEditable: true,
+      }),
+    ] satisfies BrunoTableColumns<ChoiceRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: choiceColumns,
+      getRow: () => choiceRow,
+    });
+
+    expect(runtime.start("choice", "COL_ID_FLAG")).toBe(true);
+    expect(runtime.getActiveCandidateSnapshot()).toMatchObject({ kind: "blank" });
+    expect(runtime.commit("false", false, "scalar")).toBe(true);
+    expect(runtime.getDraftSnapshot("choice", "COL_ID_FLAG")).toBe(false);
+
+    expect(runtime.start("choice", "COL_ID_NULLABLE_CHOICE")).toBe(true);
+    expect(runtime.commit("", false, "scalar")).toBe(true);
+    expect(runtime.getDraftSnapshot("choice", "COL_ID_NULLABLE_CHOICE")).toBe("");
+    expect(runtime.start("choice", "COL_ID_NULLABLE_CHOICE")).toBe(true);
+    expect(runtime.commit("", false, "blank")).toBe(true);
+    expect(runtime.getCellSnapshot("choice", "COL_ID_NULLABLE_CHOICE")).toMatchObject({
+      hasDraft: false,
+    });
+
+    expect(runtime.start("choice", "COL_ID_REQUIRED_CHOICE")).toBe(true);
+    expect(runtime.commit("", false, "scalar")).toBe(true);
+    expect(runtime.getDraftSnapshot("choice", "COL_ID_REQUIRED_CHOICE")).toBe("");
+    expect(runtime.start("choice", "COL_ID_REQUIRED_CHOICE")).toBe(true);
+    expect(runtime.commit("", false, "blank")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({ invalidMessage: "Enter a value." });
+  });
+
   it("rejects policy-free blank input before a custom numeric text parser can coerce zero", () => {
     const parseCanonicalText = vi.fn((text: string) => ({
       _tag: "Success" as const,
@@ -521,6 +587,7 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.reconcileActiveRow();
     expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing", rowMissing: false });
     expect(runtime.getActiveCandidateSnapshot()).toEqual({
+      kind: "scalar",
       rawText: "7",
       nativeInvalid: false,
     });

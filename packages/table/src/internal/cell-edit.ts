@@ -71,6 +71,7 @@ type CellEditEvent =
       readonly type: "COMMIT";
       readonly rawText: string;
       readonly nativeInvalid: boolean;
+      readonly intent: "scalar" | "blank";
     }>
   | Readonly<{ readonly type: "CANCEL" }>
   | Readonly<{ readonly type: "RECONCILE_ROW"; readonly row: unknown }>;
@@ -124,7 +125,7 @@ const brunoTableCellEditMachine = createMachine({
           target: "validating",
           actions: assign({
             evaluation: ({ context, event }) =>
-              evaluateCandidate(context.session, event.rawText, event.nativeInvalid),
+              evaluateCandidate(context.session, event.rawText, event.nativeInvalid, event.intent),
             draftPatch: undefined,
             affectedCellKeys: [],
             acceptedChange: undefined,
@@ -233,6 +234,7 @@ function evaluateCandidate(
   session: ActiveSession | undefined,
   rawText: string,
   nativeInvalid = false,
+  intent: "scalar" | "blank" = "scalar",
 ): CommitEvaluation {
   if (session === undefined) {
     return Object.freeze({ kind: "invalid", message: "The value is invalid." });
@@ -252,16 +254,26 @@ function evaluateCandidate(
   if (nativeInvalid) {
     return Object.freeze({ kind: "invalid", message: "Enter a valid number." });
   }
+  const blankIntent =
+    intent === "blank" ||
+    (rawText.length === 0 &&
+      session.column.blankValue !== undefined &&
+      session.column.semantics.editorFamily !== "select");
+  if (intent === "blank" && session.column.blankValue === undefined) {
+    return Object.freeze({ kind: "invalid", message: "Enter a value." });
+  }
   if (
     rawText.length === 0 &&
+    !blankIntent &&
     session.column.blankValue === undefined &&
+    session.column.semantics.editorFamily !== "select" &&
     (session.column.semantics.editorFamily !== "text" ||
       session.column.semantics.filterFamily === "numeric")
   ) {
     return Object.freeze({ kind: "invalid", message: "Enter a value." });
   }
   const parsed =
-    rawText.length === 0 && session.column.blankValue !== undefined
+    blankIntent && session.column.blankValue !== undefined
       ? ({ _tag: "Success", value: session.column.blankValue.value } as const)
       : session.column.semantics.parseCanonicalText(rawText);
   if (parsed._tag === "Failure") {
@@ -378,11 +390,11 @@ export type BrunoTableCellEditMovement =
   | "tab-backward";
 const IDLE_SESSION: BrunoTableCellEditSessionSnapshot = Object.freeze({ kind: "idle" });
 const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, hasDraft: false });
-type ActiveCandidateSnapshot = Readonly<{
-  readonly rawText: string;
-  readonly nativeInvalid: boolean;
-}>;
+type ActiveCandidateSnapshot =
+  | Readonly<{ readonly kind: "scalar"; readonly rawText: string; readonly nativeInvalid: boolean }>
+  | Readonly<{ readonly kind: "blank"; readonly rawText: ""; readonly nativeInvalid: false }>;
 const EMPTY_CANDIDATE: ActiveCandidateSnapshot = Object.freeze({
+  kind: "scalar",
   rawText: "",
   nativeInvalid: false,
 });
@@ -482,10 +494,22 @@ export class BrunoTableCellEditRuntime {
   public readonly getActiveCandidateSnapshot = (): ActiveCandidateSnapshot =>
     this.candidateStore.get();
 
-  public readonly updateActiveCandidate = (rawText: string, nativeInvalid: boolean): void => {
-    const next = Object.freeze({ rawText, nativeInvalid });
+  public readonly updateActiveCandidate = (
+    rawText: string,
+    nativeInvalid: boolean,
+    intent: "scalar" | "blank" = "scalar",
+  ): void => {
+    const next: ActiveCandidateSnapshot =
+      intent === "blank"
+        ? Object.freeze({ kind: "blank", rawText: "", nativeInvalid: false })
+        : Object.freeze({ kind: "scalar", rawText, nativeInvalid });
     const previous = this.candidateStore.get();
-    if (previous.rawText === rawText && previous.nativeInvalid === nativeInvalid) return;
+    if (
+      previous.kind === next.kind &&
+      previous.rawText === next.rawText &&
+      previous.nativeInvalid === next.nativeInvalid
+    )
+      return;
     this.candidateStore.setState(() => next);
   };
 
@@ -566,7 +590,11 @@ export class BrunoTableCellEditRuntime {
     const candidate = this.activeCandidate;
     if (candidate === undefined) return this.getSessionSnapshot().kind === "idle";
     const candidateValue = this.candidateStore.get();
-    const accepted = this.commit(candidateValue.rawText, candidateValue.nativeInvalid);
+    const accepted = this.commit(
+      candidateValue.rawText,
+      candidateValue.nativeInvalid,
+      candidateValue.kind,
+    );
     if (!accepted) candidate.restoreFocus();
     return accepted;
   };
@@ -620,12 +648,16 @@ export class BrunoTableCellEditRuntime {
     return this.getSessionSnapshot().kind === "editing";
   };
 
-  public readonly commit = (rawText: string, nativeInvalid = false): boolean => {
+  public readonly commit = (
+    rawText: string,
+    nativeInvalid = false,
+    intent: "scalar" | "blank" = "scalar",
+  ): boolean => {
     const actorSnapshot = this.actor.getSnapshot();
     if (actorSnapshot.value !== "editing" || actorSnapshot.context.session === undefined) {
       return false;
     }
-    this.actor.send({ type: "COMMIT", rawText, nativeInvalid });
+    this.actor.send({ type: "COMMIT", rawText, nativeInvalid, intent });
     const result = this.actor.getSnapshot();
     if (result.value !== "idle") return false;
     if (result.context.acceptedChange !== undefined) this.onCommit(result.context.acceptedChange);
@@ -667,7 +699,11 @@ export class BrunoTableCellEditRuntime {
     const nextKey = next.kind === "editing" ? cellKey(next.rowId, next.columnId) : undefined;
     if (previousKey === undefined && next.kind === "editing") {
       this.candidateStore.setState(() =>
-        Object.freeze({ rawText: next.initialText, nativeInvalid: false }),
+        session !== undefined &&
+        session.column.blankValue !== undefined &&
+        (session.before === null || session.before === undefined)
+          ? Object.freeze({ kind: "blank", rawText: "", nativeInvalid: false })
+          : Object.freeze({ kind: "scalar", rawText: next.initialText, nativeInvalid: false }),
       );
     }
     this.activeCellKey = nextKey;

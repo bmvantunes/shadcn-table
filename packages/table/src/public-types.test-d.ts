@@ -2901,6 +2901,39 @@ const nullableEditColumns = [
     isEditable: true,
   },
 ] satisfies BrunoTableColumns<NullableEditRow>;
+
+type NullableChoiceEditRow = Readonly<{
+  readonly id: string;
+  readonly flag: boolean | null;
+  readonly nullableChoice: "" | "ready" | null;
+  readonly requiredChoice: "" | "ready";
+}>;
+const nullableChoiceEditColumns = [
+  {
+    columnId: "COL_ID_FLAG",
+    field: "flag",
+    headerName: "Flag",
+    valueType: "boolean",
+    isEditable: true,
+    blankValue: null,
+  },
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_NULLABLE_CHOICE",
+    field: "nullableChoice",
+    headerName: "Nullable choice",
+    options: ["", "ready"],
+    isEditable: true,
+    blankValue: null,
+  }),
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_REQUIRED_CHOICE",
+    field: "requiredChoice",
+    headerName: "Required choice",
+    options: ["", "ready"],
+    isEditable: true,
+  }),
+] satisfies BrunoTableColumns<NullableChoiceEditRow>;
+void nullableChoiceEditColumns;
 const invalidNullableEditColumns = [
   // @ts-expect-error editable nullable fields require their exact blank representation.
   {

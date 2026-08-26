@@ -14,6 +14,9 @@ import type { BrunoTableCellEditMovement } from "./cell-edit";
 import { BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH, BrunoTableCellEditRuntime } from "./cell-edit";
 import { useBrunoTableCellEditorHotkeys } from "./hotkey-adapter";
 
+const BLANK_EDITOR_OPTION = "blank";
+const scalarEditorOption = (index: number): string => `scalar:${String(index)}`;
+
 type BrunoTableCellEditBoundaryProps = Readonly<{
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableCellEditRuntime;
@@ -99,6 +102,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         element.select();
       }
       const handleInput = () => {
+        if (element instanceof HTMLSelectElement) return;
         if (
           element instanceof HTMLInputElement &&
           column.semantics.editorFamily === "number" &&
@@ -182,9 +186,12 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       };
     }, [onCommittedOutsideCellPointer, runtime]);
     if (session.kind !== "editing") return null;
+    const blankValue = column.kind === "field" ? column.blankValue : undefined;
+    const renderBooleanSelect =
+      column.semantics.editorFamily === "boolean" && blankValue !== undefined;
     return (
       <div data-bruno-cell-editor="" style={{ height: "100%", position: "relative" }}>
-        {column.semantics.editorFamily === "boolean" ? (
+        {column.semantics.editorFamily === "boolean" && !renderBooleanSelect ? (
           <input
             ref={attachControl}
             aria-describedby={errorId}
@@ -196,6 +203,35 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             }
             type="checkbox"
           />
+        ) : renderBooleanSelect ? (
+          <select
+            ref={attachControl}
+            aria-describedby={errorId}
+            aria-invalid={invalidMessage === undefined ? undefined : true}
+            aria-label={`Edit ${column.headerName}`}
+            defaultValue={
+              candidate.kind === "blank"
+                ? BLANK_EDITOR_OPTION
+                : candidate.rawText === "true"
+                  ? scalarEditorOption(1)
+                  : scalarEditorOption(0)
+            }
+            onChange={(event) => {
+              const selected = event.currentTarget.value;
+              runtime.updateActiveCandidate(
+                selected === scalarEditorOption(1) ? "true" : "false",
+                false,
+                selected === BLANK_EDITOR_OPTION ? "blank" : "scalar",
+              );
+            }}
+            style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
+          >
+            <option value={BLANK_EDITOR_OPTION}>
+              {blankValue?.value === null ? "Blank (null)" : "Blank (undefined)"}
+            </option>
+            <option value={scalarEditorOption(0)}>False</option>
+            <option value={scalarEditorOption(1)}>True</option>
+          </select>
         ) : column.semantics.editorFamily === "select" &&
           column.semantics.selectCanonicalOptions !== undefined ? (
           <select
@@ -203,13 +239,35 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultValue={candidate.rawText}
-            onChange={(event) => runtime.updateActiveCandidate(event.currentTarget.value, false)}
+            defaultValue={
+              candidate.kind === "blank"
+                ? BLANK_EDITOR_OPTION
+                : scalarEditorOption(
+                    column.selectOptionCanonicalIndexes?.get(candidate.rawText) ?? 0,
+                  )
+            }
+            onChange={(event) => {
+              const selected = event.currentTarget.value;
+              if (selected === BLANK_EDITOR_OPTION) {
+                runtime.updateActiveCandidate("", false, "blank");
+                return;
+              }
+              const optionIndex = Number(selected.slice("scalar:".length));
+              runtime.updateActiveCandidate(
+                column.semantics.selectCanonicalOptions?.[optionIndex] ?? "",
+                false,
+              );
+            }}
             style={{ boxSizing: "border-box", height: "100%", width: "100%" }}
           >
-            {column.semantics.selectCanonicalOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {blankValue === undefined ? null : (
+              <option value={BLANK_EDITOR_OPTION}>
+                {blankValue.value === null ? "Blank (null)" : "Blank (undefined)"}
+              </option>
+            )}
+            {column.semantics.selectCanonicalOptions.map((option, index) => (
+              <option key={scalarEditorOption(index)} value={scalarEditorOption(index)}>
+                {option === "" ? "Empty string" : option}
               </option>
             ))}
           </select>

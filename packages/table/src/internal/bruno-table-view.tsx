@@ -72,6 +72,8 @@ import type {
   RefObject,
 } from "react";
 
+import type { BrunoTableColumnId } from "../public-types";
+
 import type { CompiledColumn } from "./compile-columns";
 import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
 import { useBrunoTableGridTabStopHandoff } from "./focus";
@@ -3740,11 +3742,13 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow({
 });
 
 const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
+  id,
   logicalRowIndex,
   rowId,
   selection,
   tableId,
 }: {
+  readonly id?: string | undefined;
   readonly logicalRowIndex: number;
   readonly rowId: string;
   readonly selection: BrunoTableRowSelectionRuntime;
@@ -3758,8 +3762,10 @@ const BrunoTableRowSelectionCell = memo(function BrunoTableRowSelectionCell({
   const checked = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return (
     <td
+      id={id}
       aria-colindex={1}
       data-bruno-column-id={BRUNO_TABLE_ROW_SELECTION_COLUMN_ID}
+      data-bruno-row-id={rowId}
       role="gridcell"
       style={rowSelectionCellStyle(5)}
     >
@@ -4733,7 +4739,8 @@ type BrunoTableRowProps = Readonly<{
   readonly renderRowSelection?: boolean | undefined;
   readonly columnIndexOffset: number;
   readonly renderActiveEditor?: boolean | undefined;
-  readonly activeEditorColumnId?: string | undefined;
+  readonly activeEditorColumnId?: BrunoTableColumnId | undefined;
+  readonly activeEditorCenterIndex?: number | undefined;
   readonly semanticRowIndex?: number | null | undefined;
   readonly onCommittedOutsideCellPointer?: ((rowId: string, columnId: string) => void) | undefined;
   readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
@@ -4762,6 +4769,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
     columnIndexOffset,
     renderActiveEditor = false,
     activeEditorColumnId,
+    activeEditorCenterIndex,
     semanticRowIndex,
     onCommittedOutsideCellPointer,
     yieldGridTabStop,
@@ -4769,14 +4777,43 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
   const resolvedSemanticRowIndex =
     semanticRowIndex === undefined ? logicalRowIndex + 2 : semanticRowIndex;
   const ownedCells = useMemo(() => {
-    const ownedColumnIds = new Set<string>(
-      [...pinnedStart, ...center, ...pinnedEnd].map((column) => column.columnId),
-    );
-    if (activeEditorColumnId !== undefined) ownedColumnIds.add(activeEditorColumnId);
-    return [...ownedColumnIds]
+    const centerIdentities: Array<{
+      readonly columnId: BrunoTableColumnId;
+      readonly index: number;
+    }> = center.map((column, index) => ({
+      columnId: column.columnId,
+      index: centerStartIndex + index,
+    }));
+    if (
+      activeEditorColumnId !== undefined &&
+      activeEditorCenterIndex !== undefined &&
+      !centerIdentities.some((identity) => identity.columnId === activeEditorColumnId)
+    ) {
+      centerIdentities.push({ columnId: activeEditorColumnId, index: activeEditorCenterIndex });
+    }
+    centerIdentities.sort((left, right) => left.index - right.index);
+    return [
+      ...(rowSelection === undefined
+        ? []
+        : [BRUNO_TABLE_ROW_SELECTION_COLUMN_ID as BrunoTableColumnId]),
+      ...pinnedStart.map((column) => column.columnId),
+      ...centerIdentities.map((identity) => identity.columnId),
+      ...pinnedEnd.map((column) => column.columnId),
+    ]
       .map((columnId) => cellDomId(instanceId, tableId, rowId, columnId))
       .join(" ");
-  }, [activeEditorColumnId, center, instanceId, pinnedEnd, pinnedStart, rowId, tableId]);
+  }, [
+    activeEditorCenterIndex,
+    activeEditorColumnId,
+    center,
+    centerStartIndex,
+    instanceId,
+    pinnedEnd,
+    pinnedStart,
+    rowId,
+    rowSelection,
+    tableId,
+  ]);
   return (
     <tr
       ref={attachBodyLayer}
@@ -4804,6 +4841,7 @@ const BrunoTableRow = memo(function BrunoTableRow(props: BrunoTableRowProps) {
       ) : null}
       {rowSelection === undefined ? null : renderRowSelection ? (
         <BrunoTableRowSelectionCell
+          id={cellDomId(instanceId, tableId, rowId, BRUNO_TABLE_ROW_SELECTION_COLUMN_ID)}
           logicalRowIndex={logicalRowIndex}
           rowId={rowId}
           selection={rowSelection}
@@ -5388,13 +5426,17 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
           position: "absolute",
           top: 0,
           width: surfaceWidth,
+          zIndex: 3,
         } as CSSProperties
       }
     >
       <table role="presentation" style={{ tableLayout: "fixed", width: surfaceWidth }}>
         <tbody role="presentation" style={{ display: "block", height: ROW_HEIGHT }}>
           <BrunoTableRow
-            activeEditorColumnId={activeCenterIndex < 0 ? undefined : session.columnId}
+            activeEditorColumnId={
+              activeCenterIndex < 0 ? undefined : (session.columnId as BrunoTableColumnId)
+            }
+            activeEditorCenterIndex={activeCenterIndex < 0 ? undefined : activeCenterIndex}
             attachBodyLayer={IGNORE_BODY_LAYER_REF}
             center={center}
             centerStartIndex={centerStartIndex}
@@ -5454,6 +5496,12 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
                 }}
               >
                 <BrunoTableRowSelectionCell
+                  id={cellDomId(
+                    instanceId,
+                    tableId,
+                    session.rowId,
+                    BRUNO_TABLE_ROW_SELECTION_COLUMN_ID,
+                  )}
                   logicalRowIndex={rowIndex ?? 0}
                   rowId={session.rowId}
                   selection={rowSelection}
