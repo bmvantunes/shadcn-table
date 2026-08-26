@@ -76,6 +76,12 @@ function hasSameTraversalAuthority(
   });
 }
 
+function enqueueUnknownProjectionRow(projection: UnknownProjection, rowIndex: number): void {
+  if (projection.pendingRowIndexSet.has(rowIndex)) return;
+  projection.pendingRowIndexSet.add(rowIndex);
+  projection.pendingRowIndexes.push(rowIndex);
+}
+
 export class BrunoTableCellEditTraversalIndex {
   private columns: readonly CompiledColumn[] | undefined;
   private rowSpace: BrunoTableCellEditTraversalRowSpace | undefined;
@@ -578,12 +584,8 @@ export class BrunoTableCellEditTraversalIndex {
     this.unknownMissingRowIdSet.delete(rowId);
     const projection = this.unknownProjection;
     const rowIndex = projection?.rowIndexById.get(rowId);
-    if (
-      projection !== undefined &&
-      rowIndex !== undefined &&
-      projection.pendingRowIndexSet.add(rowIndex)
-    ) {
-      projection.pendingRowIndexes.push(rowIndex);
+    if (projection !== undefined && rowIndex !== undefined) {
+      enqueueUnknownProjectionRow(projection, rowIndex);
     }
   };
 
@@ -599,14 +601,13 @@ export class BrunoTableCellEditTraversalIndex {
       return;
     }
     if (this.dirtyRowIds.has(rowId)) {
-      if (!this.unknownMissingRowIdSet.has(rowId) && projection.pendingRowIndexSet.add(rowIndex)) {
-        projection.pendingRowIndexes.push(rowIndex);
-      }
+      if (!this.unknownMissingRowIdSet.has(rowId))
+        enqueueUnknownProjectionRow(projection, rowIndex);
       return;
     }
     const rowCache = this.rowCacheById.get(rowId);
     if (rowCache === undefined || rowCache.validationGeneration !== this.validationGeneration) {
-      if (projection.pendingRowIndexSet.add(rowIndex)) projection.pendingRowIndexes.push(rowIndex);
+      enqueueUnknownProjectionRow(projection, rowIndex);
       return;
     }
     projection.validRowIndexes.push(rowIndex);

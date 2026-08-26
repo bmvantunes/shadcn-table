@@ -726,6 +726,45 @@ describe("BrunoTable editable traversal index", () => {
     expect(missingCase.index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("late-0");
   });
 
+  it("deduplicates repeated late row and draft invalidations during projection", () => {
+    const rowIds = ["repeat-0", "repeat-1", "repeat-2", "repeat-3"];
+    const rows = new Map<string, Row>(
+      rowIds.map((id) => [id, { id, enabled: false, alternate: false } satisfies Row]),
+    );
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_REPEAT",
+        field: "enabled" as const,
+        headerName: "Repeat",
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      },
+    ]);
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const index = new BrunoTableCellEditTraversalIndex(
+      getRow,
+      (_rowId, row) => (row as Row).enabled,
+      true,
+    );
+    const projection = rowSpace(rowIds);
+    index.reconcile(columns, projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+
+    index.reconcileRows(undefined);
+    index.reconcile(columns, projection);
+    index.buildNextSlice(80, Number.POSITIVE_INFINITY);
+    getRow.mockClear();
+    rows.set("repeat-0", { id: "repeat-0", enabled: true, alternate: false });
+    for (let repeat = 0; repeat < 100; repeat += 1) {
+      index.reconcileRows(new Set(["repeat-0"]));
+      index.invalidateCell("repeat-0", columns[0]!.columnId);
+    }
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+
+    expect(getRow).toHaveBeenCalledTimes(1);
+    expect(index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("repeat-0");
+  });
+
   it("charges still-missing late rows against every production slice", () => {
     const rowCount = 40;
     const columnCount = 40;
