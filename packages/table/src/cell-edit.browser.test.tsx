@@ -193,6 +193,130 @@ test("cancels before a live blank-policy change can reinterpret the active candi
   await expect.element(screen.getByRole("gridcell", { name: "", exact: true })).toBeInTheDocument();
 });
 
+test("retains the editor and blocks every commit while live edit permission is denied", async () => {
+  type PermissionRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly allowed: boolean;
+  }>;
+  type HarnessHandle = Readonly<{ setAllowed: (allowed: boolean) => void }>;
+  const harnessRef = createRef<HarnessHandle>();
+  const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+    const [allowed, setAllowed] = useState(true);
+    useImperativeHandle(ref, () => ({ setAllowed }), []);
+    const permissionColumns = [
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: ({ row }: { readonly row: PermissionRow; readonly value: string }) =>
+          row.allowed,
+      },
+    ] satisfies BrunoTableColumns<PermissionRow>;
+    return (
+      <BrunoTableClient
+        tableId="TABLE_ID_LIVE_EDIT_PERMISSION"
+        columns={permissionColumns}
+        initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+        clientSource={{
+          rows: [{ id: "row", value: "source", allowed }],
+          totalRows: 1,
+          version: allowed ? 1 : 2,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={() => 1n}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    );
+  });
+  const screen = await render(<Harness ref={harnessRef} />);
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_LIVE_EDIT_PERMISSION" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await userEvent.fill(editor, "candidate");
+
+  flushSync(() => harnessRef.current?.setAllowed(false));
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveValue("candidate");
+  await expect.element(editor).toHaveAttribute("aria-invalid", "true");
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("This cell is no longer editable.");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).toHaveFocus();
+  await expect.element(editor).toHaveValue("candidate");
+
+  flushSync(() => harnessRef.current?.setAllowed(true));
+  await expect.element(editor).not.toHaveAttribute("aria-invalid", "true");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("gridcell", { name: "candidate", exact: true }))
+    .toBeVisible();
+});
+
+test("preserves a Select editor across an equivalent fresh helper definition", async () => {
+  type SelectRow = Readonly<{ readonly id: string; readonly choice: "a" | "b" }>;
+  const compileSelectColumns = () =>
+    [
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_CHOICE",
+        field: "choice",
+        headerName: "Choice",
+        options: ["a", "b"],
+        isEditable: true,
+      }),
+    ] satisfies BrunoTableColumns<SelectRow>;
+  type HarnessHandle = Readonly<{ rerenderColumns: () => void }>;
+  const harnessRef = createRef<HarnessHandle>();
+  const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
+    const [revision, setRevision] = useState(1);
+    useImperativeHandle(
+      ref,
+      () => ({ rerenderColumns: () => setRevision((current) => current + 1) }),
+      [],
+    );
+    const selectColumns = compileSelectColumns();
+    return (
+      <BrunoTableClient
+        tableId="TABLE_ID_SELECT_RECOMPILE"
+        columns={selectColumns}
+        initialOrderBy={[{ columnId: "COL_ID_CHOICE", direction: "asc" }]}
+        clientSource={{
+          rows: [{ id: "row", choice: "a" }],
+          totalRows: 1,
+          version: revision,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={() => 1n}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    );
+  });
+  const screen = await render(<Harness ref={harnessRef} />);
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SELECT_RECOMPILE" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("combobox", { name: "Edit Choice" });
+  await userEvent.selectOptions(editor, "scalar:1");
+  const nativeEditor = editor.element();
+
+  flushSync(() => harnessRef.current?.rerenderColumns());
+  await expect.element(editor).toHaveFocus();
+  expect(screen.getByRole("combobox", { name: "Edit Choice" }).element()).toBe(nativeEditor);
+  await expect.element(editor).toHaveValue("scalar:1");
+
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("gridcell", { name: "b", exact: true })).toBeVisible();
+});
+
 test.each(["ltr", "rtl"] as const)(
   "keeps one native Number editor node across %s responsive and pinned layout changes",
   async (direction) => {

@@ -898,7 +898,68 @@ describe("BrunoTable Cell Edit Session", () => {
     });
     expect(selectRuntime.start("row", "COL_ID_CHOICE")).toBe(true);
     selectRuntime.updateActiveCandidate("a", false);
+    selectRuntime.reconcileColumns(compileSelect(false));
+    expect(selectRuntime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      columnId: "COL_ID_CHOICE",
+    });
+    expect(selectRuntime.getActiveCandidateSnapshot()).toMatchObject({ rawText: "a" });
     selectRuntime.reconcileColumns(compileSelect(true));
     expect(selectRuntime.getSessionSnapshot()).toEqual({ kind: "idle" });
+  });
+
+  it("blocks an active commit while dynamic edit permission is denied and recovers in place", () => {
+    type PermissionRow = Readonly<{ readonly value: string; readonly allowed: boolean }>;
+    let liveRow: PermissionRow = { value: "source", allowed: true };
+    const compilePermissionColumns = (
+      predicate: (context: { readonly row: PermissionRow; readonly value: string }) => boolean,
+    ) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: predicate,
+        },
+      ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compilePermissionColumns(({ row: candidateRow }) => candidateRow.allowed),
+      getRow: () => liveRow,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("candidate", false);
+
+    liveRow = { ...liveRow, allowed: false };
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This cell is no longer editable.",
+    });
+    expect(runtime.commit("candidate")).toBe(false);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+
+    liveRow = { ...liveRow, allowed: true };
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing" });
+    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
+
+    runtime.reconcileColumns(compilePermissionColumns(() => false));
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This cell is no longer editable.",
+    });
+    runtime.reconcileColumns(
+      compilePermissionColumns(() => {
+        throw new Error("policy failed");
+      }),
+    );
+    expect(runtime.commit("candidate")).toBe(false);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+
+    runtime.reconcileColumns(compilePermissionColumns(() => true));
+    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
+    expect(runtime.commit("candidate")).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("candidate");
   });
 });

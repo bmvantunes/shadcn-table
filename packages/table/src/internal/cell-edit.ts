@@ -28,6 +28,7 @@ type ActiveSession = Readonly<{
   readonly selectInitialText: boolean;
   readonly rowMissing: boolean;
   readonly invalidMessage?: string;
+  readonly permissionMessage?: string;
 }>;
 
 type DraftEntry = Readonly<{
@@ -40,7 +41,11 @@ type DraftPatch =
   | Readonly<{ readonly kind: "set"; readonly cellKey: string; readonly value: unknown }>;
 
 type CommitEvaluation =
-  | Readonly<{ readonly kind: "invalid"; readonly message: string }>
+  | Readonly<{
+      readonly kind: "invalid";
+      readonly message: string;
+      readonly reason?: "permission";
+    }>
   | Readonly<{
       readonly kind: "accepted";
       readonly cellKey: string;
@@ -116,7 +121,9 @@ const brunoTableCellEditMachine = createMachine({
             session: ({ context, event }) =>
               context.session === undefined
                 ? undefined
-                : Object.freeze({ ...context.session, column: event.column }),
+                : reconcileSessionPermission(
+                    Object.freeze({ ...context.session, column: event.column }),
+                  ),
           }),
         },
         RECONCILE_ROW: {
@@ -125,7 +132,9 @@ const brunoTableCellEditMachine = createMachine({
               const session = context.session;
               if (session === undefined) return undefined;
               return typeof event.row === "object" && event.row !== null
-                ? Object.freeze({ ...session, row: event.row, rowMissing: false })
+                ? reconcileSessionPermission(
+                    Object.freeze({ ...session, row: event.row, rowMissing: false }),
+                  )
                 : Object.freeze({ ...session, rowMissing: true });
             },
           }),
@@ -174,7 +183,9 @@ const brunoTableCellEditMachine = createMachine({
               const evaluation = context.evaluation;
               return session === undefined || evaluation?.kind !== "invalid"
                 ? session
-                : Object.freeze({ ...session, invalidMessage: evaluation.message });
+                : evaluation.reason === "permission"
+                  ? Object.freeze({ ...session, permissionMessage: evaluation.message })
+                  : Object.freeze({ ...session, invalidMessage: evaluation.message });
             },
             affectedCellKeys: [],
             draftPatch: undefined,
@@ -238,6 +249,30 @@ function prepareSession(
 }
 
 export const BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH = 65_536;
+const BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE = "This cell is no longer editable.";
+
+function reconcileSessionPermission(session: ActiveSession): ActiveSession {
+  const permissionMessage = isSessionEditable(session)
+    ? undefined
+    : BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
+  if (session.permissionMessage === permissionMessage) return session;
+  const { permissionMessage: _previousPermissionMessage, ...retained } = session;
+  return Object.freeze({
+    ...retained,
+    ...(permissionMessage === undefined ? {} : { permissionMessage }),
+  });
+}
+
+function isSessionEditable(session: ActiveSession): boolean {
+  const policy = session.column.isEditable;
+  if (policy === true) return true;
+  if (typeof policy !== "function") return false;
+  try {
+    return Reflect.apply(policy, undefined, [{ row: session.row, value: session.before }]) === true;
+  } catch {
+    return false;
+  }
+}
 
 function evaluateCandidate(
   session: ActiveSession | undefined,
@@ -252,6 +287,13 @@ function evaluateCandidate(
     return Object.freeze({
       kind: "invalid",
       message: "This row was removed from the server. Changes cannot be saved.",
+    });
+  }
+  if (!isSessionEditable(session)) {
+    return Object.freeze({
+      kind: "invalid",
+      message: BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE,
+      reason: "permission",
     });
   }
   if (rawText.length > BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH) {
@@ -760,6 +802,7 @@ export class BrunoTableCellEditRuntime {
     const previousKey = this.activeCellKey;
     const snapshot = this.actor.getSnapshot();
     const session = snapshot.value === "editing" ? snapshot.context.session : undefined;
+    const invalidMessage = session?.permissionMessage ?? session?.invalidMessage;
     const next =
       session === undefined
         ? IDLE_SESSION
@@ -770,9 +813,7 @@ export class BrunoTableCellEditRuntime {
             initialText: session.initialText,
             selectInitialText: session.selectInitialText,
             rowMissing: session.rowMissing,
-            ...(session.invalidMessage === undefined
-              ? {}
-              : { invalidMessage: session.invalidMessage }),
+            ...(invalidMessage === undefined ? {} : { invalidMessage }),
           });
     const nextKey = next.kind === "editing" ? cellKey(next.rowId, next.columnId) : undefined;
     if (previousKey === undefined && next.kind === "editing") {
@@ -928,20 +969,30 @@ function isCompatibleActiveColumn(
 ): boolean {
   return (
     previousColumn.field === nextColumn.field &&
+    hasEquivalentEditSemantics(previousColumn, nextColumn) &&
+    sameBlankPolicy(previousColumn, nextColumn) &&
+    nextColumn.isEditable !== undefined &&
+    nextColumn.isEditable !== false
+  );
+}
+
+function hasEquivalentEditSemantics(
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn,
+): boolean {
+  const previousSelectAuthority = previousColumn.semantics.selectEditAuthority;
+  const nextSelectAuthority = nextColumn.semantics.selectEditAuthority;
+  if (previousSelectAuthority !== undefined || nextSelectAuthority !== undefined) {
+    return sameStringSequence(previousSelectAuthority, nextSelectAuthority);
+  }
+  return (
     previousColumn.semantics.decodeRuntimeAuthority ===
       nextColumn.semantics.decodeRuntimeAuthority &&
     previousColumn.semantics.editorFamily === nextColumn.semantics.editorFamily &&
     previousColumn.semantics.editSessionAuthority.formatCanonicalText ===
       nextColumn.semantics.editSessionAuthority.formatCanonicalText &&
     previousColumn.semantics.editSessionAuthority.parseCanonicalText ===
-      nextColumn.semantics.editSessionAuthority.parseCanonicalText &&
-    sameSelectDomain(
-      previousColumn.semantics.selectCanonicalOptions,
-      nextColumn.semantics.selectCanonicalOptions,
-    ) &&
-    sameBlankPolicy(previousColumn, nextColumn) &&
-    nextColumn.isEditable !== undefined &&
-    nextColumn.isEditable !== false
+      nextColumn.semantics.editSessionAuthority.parseCanonicalText
   );
 }
 
@@ -955,7 +1006,7 @@ function sameBlankPolicy(
   );
 }
 
-function sameSelectDomain(
+function sameStringSequence(
   previousOptions: readonly string[] | undefined,
   nextOptions: readonly string[] | undefined,
 ): boolean {

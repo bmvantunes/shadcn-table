@@ -10,7 +10,10 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
-import { getBrunoTableSelectCanonicalOptions } from "./select-value-type-provenance";
+import {
+  getBrunoTableSelectCanonicalOptions,
+  getBrunoTableSelectValueTypeFingerprint,
+} from "./select-value-type-provenance";
 import { isBrunoTableServerBigDecimalValueType } from "../public-types";
 
 type SemanticsOverrides = {
@@ -54,6 +57,7 @@ export type CompiledColumnValueSemantics = {
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly selectCanonicalOptions?: readonly string[];
+  readonly selectEditAuthority?: readonly string[];
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
@@ -206,6 +210,10 @@ export function compileColumnValueSemantics(
     descriptor.editorFamily === "select"
       ? getBrunoTableSelectCanonicalOptions(selection)
       : undefined;
+  const selectEditAuthority =
+    descriptor.editorFamily === "select"
+      ? getBrunoTableSelectValueTypeFingerprint(selection)
+      : undefined;
 
   return Object.freeze({
     codecId: descriptor.codecId,
@@ -215,6 +223,7 @@ export function compileColumnValueSemantics(
     cellAlign,
     editorLayout,
     ...(selectCanonicalOptions === undefined ? {} : { selectCanonicalOptions }),
+    ...(selectEditAuthority === undefined ? {} : { selectEditAuthority }),
     width,
     aggregateResults: descriptor.aggregateResults,
     ...(descriptor.aggregateAlgebra === undefined
