@@ -28,6 +28,7 @@ type RuntimeValueTypeDescriptor = {
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
+  readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -54,6 +55,7 @@ export type CompiledColumnValueSemantics = {
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
+  readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly selectCanonicalOptions?: readonly string[];
@@ -224,6 +226,9 @@ export function compileColumnValueSemantics(
     editorLayout,
     ...(selectCanonicalOptions === undefined ? {} : { selectCanonicalOptions }),
     ...(selectEditAuthority === undefined ? {} : { selectEditAuthority }),
+    ...(descriptor.booleanEditorCanonicalValues === undefined
+      ? {}
+      : { booleanEditorCanonicalValues: descriptor.booleanEditorCanonicalValues }),
     width,
     aggregateResults: descriptor.aggregateResults,
     ...(descriptor.aggregateAlgebra === undefined
@@ -272,6 +277,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const codecVersion = selection["codecVersion"];
   const filterFamily = selection["filterFamily"];
   const editorFamily = selection["editorFamily"];
+  const booleanEditorValues = selection["booleanEditorValues"];
   const cellAlign = selection["cellAlign"];
   const editorLayout = selection["editorLayout"];
   const defaultWidth = selection["defaultWidth"];
@@ -326,11 +332,29 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const encodePersistedFunction = requireFunction(encodePersisted, "encodePersisted");
   const decodePersistedFunction = requireFunction(decodePersisted, "decodePersisted");
 
+  const decodeRuntimeValue = (input: unknown) =>
+    safeDecode(decodeRuntimeFunction, input, "decodeRuntime");
+  const equivalentValue = (left: unknown, right: unknown) =>
+    validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right]));
+  const formatCanonicalTextValue = (value: unknown) =>
+    validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value]));
+  const parseCanonicalTextValue = (text: string) =>
+    safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText");
+  const booleanEditorCanonicalValues = snapshotBooleanEditorCanonicalValues(
+    editorFamily,
+    booleanEditorValues,
+    decodeRuntimeValue,
+    equivalentValue,
+    formatCanonicalTextValue,
+    parseCanonicalTextValue,
+  );
+
   const descriptor: RuntimeValueTypeDescriptor = {
     codecId,
     codecVersion,
     filterFamily,
     editorFamily,
+    ...(booleanEditorCanonicalValues === undefined ? {} : { booleanEditorCanonicalValues }),
     cellAlign,
     editorLayout,
     defaultWidth,
@@ -339,26 +363,81 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     ...(isBrunoTableServerBigDecimalValueType(selection)
       ? { serverAggregateAuthority: "effect-bigdecimal" as const }
       : {}),
-    decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
+    decodeRuntime: decodeRuntimeValue,
     decodeRuntimeAuthority: decodeRuntimeFunction,
     equivalentAuthority: equivalentFunction,
     formatCanonicalTextAuthority: formatCanonicalTextFunction,
     parseCanonicalTextAuthority: parseCanonicalTextFunction,
     formatDisplayAuthority: formatDisplayFunction,
-    equivalent: (left, right) =>
-      validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
+    equivalent: equivalentValue,
     compare: (left, right) =>
       validateOrdering(Reflect.apply(compareFunction, undefined, [left, right])),
-    formatCanonicalText: (value) =>
-      validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value])),
-    parseCanonicalText: (text) =>
-      safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText"),
+    formatCanonicalText: formatCanonicalTextValue,
+    parseCanonicalText: parseCanonicalTextValue,
     formatDisplay: (value) =>
       validateText(Reflect.apply(formatDisplayFunction, undefined, [value])),
     encodePersisted: (value) => Reflect.apply(encodePersistedFunction, undefined, [value]),
     decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
+}
+
+function snapshotBooleanEditorCanonicalValues(
+  editorFamily: BrunoTableEditorFamily,
+  input: unknown,
+  decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>,
+  equivalent: (left: unknown, right: unknown) => boolean,
+  formatCanonicalText: (value: unknown) => string,
+  parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>,
+): readonly [falseValue: string, trueValue: string] | undefined {
+  if (editorFamily !== "boolean") {
+    if (input !== undefined) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues requires the Boolean editor family.",
+      );
+    }
+    return undefined;
+  }
+  if (!Array.isArray(input) || input.length !== 2 || !(0 in input) || !(1 in input)) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable Boolean Value Types require exactly [falseValue, trueValue].",
+    );
+  }
+  const decodedFalse = decodeRuntime(input[0]);
+  const decodedTrue = decodeRuntime(input[1]);
+  if (decodedFalse._tag !== "Success" || decodedTrue._tag !== "Success") {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable booleanEditorValues must belong to the Value Type domain.",
+    );
+  }
+  try {
+    if (equivalent(decodedFalse.value, decodedTrue.value)) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues must represent two distinct values.",
+      );
+    }
+    const falseText = formatCanonicalText(decodedFalse.value);
+    const trueText = formatCanonicalText(decodedTrue.value);
+    const parsedFalse = parseCanonicalText(falseText);
+    const parsedTrue = parseCanonicalText(trueText);
+    if (
+      falseText === trueText ||
+      parsedFalse._tag !== "Success" ||
+      parsedTrue._tag !== "Success" ||
+      !equivalent(parsedFalse.value, decodedFalse.value) ||
+      !equivalent(parsedTrue.value, decodedTrue.value)
+    ) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues must round-trip through distinct canonical text.",
+      );
+    }
+    return Object.freeze([falseText, trueText]);
+  } catch (error) {
+    if (error instanceof ValueSemanticsConfigurationError) throw error;
+    throw new ValueSemanticsConfigurationError(
+      `BrunoTable booleanEditorValues are invalid: ${safeErrorMessage(error)}`,
+    );
+  }
 }
 
 function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
@@ -561,6 +640,7 @@ function createBooleanValueType(): RuntimeValueTypeDescriptor {
     codecVersion: 1,
     filterFamily: "boolean",
     editorFamily: "boolean",
+    booleanEditorCanonicalValues: Object.freeze(["false", "true"]),
     cellAlign: "center",
     editorLayout: "center",
     defaultWidth: 88,

@@ -16,7 +16,7 @@ import {
   BrunoTableToolbar,
 } from "./index";
 
-import type { BrunoTableColumns } from "./index";
+import type { BrunoTableClientProps, BrunoTableColumns } from "./index";
 
 type Row = {
   readonly id: string;
@@ -80,6 +80,11 @@ const clientSource = {
   version: 1,
   status: "ready" as const,
 };
+
+function ForwardedClient(props: BrunoTableClientProps<Row, typeof columns, bigint>) {
+  return <BrunoTableClient {...props} />;
+}
+void ForwardedClient;
 
 const whitespaceIdentityColumns = [
   {

@@ -29,6 +29,13 @@ type RowCache = {
   readonly eligiblePredicateColumnIds: Set<string>;
 };
 
+function hasSamePredicateAuthority(
+  left: CompiledFieldColumn,
+  right: CompiledFieldColumn | undefined,
+): boolean {
+  return right !== undefined && left.field === right.field && left.isEditable === right.isEditable;
+}
+
 export class BrunoTableCellEditTraversalIndex {
   private columns: readonly CompiledColumn[] | undefined;
   private rowSpace: BrunoTableCellEditTraversalRowSpace | undefined;
@@ -307,10 +314,14 @@ export class BrunoTableCellEditTraversalIndex {
     );
     const changedColumnIds = new Set<string>();
     for (const [columnId, column] of previousColumns) {
-      if (nextColumns.get(columnId) !== column) changedColumnIds.add(columnId);
+      if (!hasSamePredicateAuthority(column, nextColumns.get(columnId))) {
+        changedColumnIds.add(columnId);
+      }
     }
     for (const [columnId, column] of nextColumns) {
-      if (previousColumns.get(columnId) !== column) changedColumnIds.add(columnId);
+      if (!hasSamePredicateAuthority(column, previousColumns.get(columnId))) {
+        changedColumnIds.add(columnId);
+      }
     }
     if (changedColumnIds.size === 0) return;
     for (const [rowId, rowCache] of this.rowCacheById) {

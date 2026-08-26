@@ -162,6 +162,48 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.getCachedRowCount()).toBe(2);
   });
 
+  it("reuses predicate evidence across equivalent column recompiles", () => {
+    const predicate = ({ row }: { readonly row: Row }) => row.enabled;
+    const makeEquivalentColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_ENABLED",
+          field: "enabled" as const,
+          headerName: "Enabled",
+          valueType: "boolean" as const,
+          isEditable: predicate,
+        },
+      ]);
+    const rows = new Map<string, Row>([
+      ["first", { id: "first", enabled: true, alternate: false }],
+      ["second", { id: "second", enabled: false, alternate: false }],
+    ]);
+    const evaluate = vi.fn((_rowId: string, row: Row) => row.enabled);
+    const index = new BrunoTableCellEditTraversalIndex(
+      (rowId) => rows.get(rowId),
+      evaluate as never,
+    );
+
+    index.reconcile(makeEquivalentColumns(), rowSpace(["first", "second"]));
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    index.reconcile(makeEquivalentColumns(), rowSpace(["first", "second"]));
+    expect(evaluate).toHaveBeenCalledTimes(2);
+
+    index.reconcile(
+      compileColumns([
+        {
+          columnId: "COL_ID_ENABLED",
+          field: "enabled" as const,
+          headerName: "Enabled",
+          valueType: "boolean" as const,
+          isEditable: ({ row }: { readonly row: Row }) => row.alternate,
+        },
+      ]),
+      rowSpace(["first", "second"]),
+    );
+    expect(evaluate).toHaveBeenCalledTimes(4);
+  });
+
   it("cycles exact horizontal and vertical range eligibility from indexed evidence", () => {
     const rangeRows = new Map<string, Row>([
       ["first", { id: "first", enabled: true, alternate: false }],

@@ -233,6 +233,20 @@ export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
  * One explicit runtime value domain. BrunoTable snapshots this descriptor into a private compiled
  * plan during column normalization; mounted cells never discover or dispatch value kinds.
  */
+type BrunoTableEditorCapability<
+  TValue,
+  TEditorFamily extends BrunoTableEditorFamily,
+> = TEditorFamily extends "boolean"
+  ? {
+      readonly editorFamily: "boolean";
+      /** Exact false-state and true-state values used by the native Boolean editor. */
+      readonly booleanEditorValues: readonly [falseValue: TValue, trueValue: TValue];
+    }
+  : {
+      readonly editorFamily: TEditorFamily;
+      readonly booleanEditorValues?: never;
+    };
+
 export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
@@ -242,7 +256,6 @@ export type BrunoTableValueType<
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: TFilterFamily;
-  readonly editorFamily: TEditorFamily;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -257,12 +270,13 @@ export type BrunoTableValueType<
   readonly formatDisplay: (this: void, value: TValue) => string;
   readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
   readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
-} & ([TAggregateResults] extends [never]
-  ? InferredAggregateCapability<TValue>
-  : AggregateAlgebraRequirement<TValue, TAggregateResults> &
-      ([keyof TAggregateResults] extends [never]
-        ? { readonly aggregateResults?: TAggregateResults }
-        : { readonly aggregateResults: TAggregateResults }));
+} & BrunoTableEditorCapability<TValue, TEditorFamily> &
+  ([TAggregateResults] extends [never]
+    ? InferredAggregateCapability<TValue>
+    : AggregateAlgebraRequirement<TValue, TAggregateResults> &
+        ([keyof TAggregateResults] extends [never]
+          ? { readonly aggregateResults?: TAggregateResults }
+          : { readonly aggregateResults: TAggregateResults }));
 
 type NonArithmeticAggregateResults = Readonly<{
   readonly countDistinct?: "bigint";
@@ -749,11 +763,20 @@ type ComputedColumn<
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };
 
+type ErasedEditorCapability =
+  | {
+      readonly editorFamily: "boolean";
+      readonly booleanEditorValues: readonly [unknown, unknown];
+    }
+  | {
+      readonly editorFamily: Exclude<BrunoTableEditorFamily, "boolean">;
+      readonly booleanEditorValues?: never;
+    };
+
 type ErasedValueType = {
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
-  readonly editorFamily: BrunoTableEditorFamily;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -766,7 +789,7 @@ type ErasedValueType = {
   readonly formatDisplay: (...parameters: never[]) => unknown;
   readonly encodePersisted: (...parameters: never[]) => unknown;
   readonly decodePersisted: (input: unknown) => unknown;
-};
+} & ErasedEditorCapability;
 
 type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
   ColumnLayout & {
@@ -780,6 +803,8 @@ type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
     readonly enableFilter?: never;
     readonly enableSorting?: never;
     readonly isEditable?: never;
+    readonly blankValue?: never;
+    readonly validate?: never;
     readonly format?: never;
   };
 

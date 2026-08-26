@@ -2324,6 +2324,15 @@ const customComputedValueColumns = [
     valueFormatter: ({ value }) => value.minor.toString(10),
   }),
 ] satisfies BrunoTableColumns<AmountRow>;
+const computedWithErasedEditOptions = {
+  ...customComputedValueColumns[0],
+  blankValue: null,
+  validate: () => undefined,
+};
+const invalidErasedComputedEditOptions = [
+  // @ts-expect-error computed columns reject edit-only options after intermediate widening.
+  computedWithErasedEditOptions,
+] satisfies BrunoTableColumns<AmountRow>;
 
 expectTypeOf<
   BrunoTableColumnValue<AmountRow, typeof customComputedValueColumns, "COL_ID_AMOUNT_COPY">
@@ -2335,6 +2344,7 @@ const customNumericFilter = [
 
 void customNumericFilter;
 void customComputedValueColumns;
+void invalidErasedComputedEditOptions;
 
 const invalidColumnIds = [
   {
@@ -3248,6 +3258,41 @@ const invalidWidenedNullableEditColumns = [
   },
 ] satisfies BrunoTableColumns<NullableEditRow>;
 
+type ExactToggle = "N" | "Y";
+const exactToggleValueType = {
+  codecId: "example/toggle",
+  codecVersion: 1,
+  filterFamily: "equality",
+  editorFamily: "boolean",
+  booleanEditorValues: ["N", "Y"],
+  cellAlign: "center",
+  editorLayout: "center",
+  defaultWidth: 88,
+  decodeRuntime: (input: unknown) =>
+    input === "N" || input === "Y"
+      ? { _tag: "Success" as const, value: input }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+  equivalent: (left: ExactToggle, right: ExactToggle) => left === right,
+  compare: (left: ExactToggle, right: ExactToggle) => (left === right ? 0 : left === "N" ? -1 : 1),
+  formatCanonicalText: (value: ExactToggle) => value,
+  parseCanonicalText: (text: string) =>
+    text === "N" || text === "Y"
+      ? { _tag: "Success" as const, value: text }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+  formatDisplay: (value: ExactToggle) => value,
+  encodePersisted: (value: ExactToggle) => value,
+  decodePersisted: (input: unknown) =>
+    input === "N" || input === "Y"
+      ? { _tag: "Success" as const, value: input }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+} satisfies BrunoTableValueType<ExactToggle, "equality", "boolean">;
+const { booleanEditorValues: omittedToggleEditorValues, ...toggleWithoutEditorValues } =
+  exactToggleValueType;
+void omittedToggleEditorValues;
+// @ts-expect-error custom Boolean editors require an exact false/true domain mapping.
+const invalidToggleValueType: BrunoTableValueType<ExactToggle, "equality", "boolean"> =
+  toggleWithoutEditorValues;
+
 void invalidColumnIds;
 void invalidField;
 void ambiguousColumn;
@@ -3314,3 +3359,5 @@ void invalidWidenedOnlyEditableClient;
 void invalidWidenedNullableEditColumns;
 void invalidMissingNullableBlankColumns;
 void invalidMissingNullableBlankHelperColumns;
+void exactToggleValueType;
+void invalidToggleValueType;

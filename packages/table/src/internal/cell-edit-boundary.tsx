@@ -119,7 +119,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
         const rawText =
           element instanceof HTMLInputElement && element.type === "checkbox"
-            ? String(element.checked)
+            ? column.semantics.booleanEditorCanonicalValues![element.checked ? 1 : 0]
             : column.semantics.editorFamily === "number" && rawNumberSeed.current !== undefined
               ? rawNumberSeed.current
               : String(Reflect.get(element, "value"));
@@ -143,6 +143,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       const editor = control.current?.closest<HTMLElement>("[data-bruno-cell-editor]") ?? null;
       const document = editor?.ownerDocument;
       if (editor === null || document === undefined) return;
+      const editSurface = editor.closest<HTMLElement>("[data-bruno-cell-edit-surface]");
       let blockedClickTarget: EventTarget | null = null;
       const commitOutsidePointer = (event: PointerEvent) => {
         blockedClickTarget = null;
@@ -150,7 +151,8 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           event.target instanceof Node &&
           (editor.contains(event.target) ||
             (event.target instanceof Element &&
-              event.target.closest("[data-bruno-cell-edit-cancel]") !== null))
+              editSurface?.contains(event.target.closest("[data-bruno-cell-edit-cancel]")) ===
+                true))
         ) {
           return;
         }
@@ -187,6 +189,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     }, [onCommittedOutsideCellPointer, runtime]);
     if (session.kind !== "editing") return null;
     const blankValue = column.kind === "field" ? column.blankValue : undefined;
+    const booleanEditorValues = column.semantics.booleanEditorCanonicalValues;
     const renderBooleanSelect =
       column.semantics.editorFamily === "boolean" && blankValue !== undefined;
     return (
@@ -197,9 +200,12 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             aria-describedby={errorId}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
-            defaultChecked={candidate.rawText === "true"}
+            defaultChecked={candidate.rawText === booleanEditorValues?.[1]}
             onChange={(event) =>
-              runtime.updateActiveCandidate(String(event.currentTarget.checked), false)
+              runtime.updateActiveCandidate(
+                booleanEditorValues![event.currentTarget.checked ? 1 : 0],
+                false,
+              )
             }
             type="checkbox"
           />
@@ -212,14 +218,14 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
             defaultValue={
               candidate.kind === "blank"
                 ? BLANK_EDITOR_OPTION
-                : candidate.rawText === "true"
+                : candidate.rawText === booleanEditorValues?.[1]
                   ? scalarEditorOption(1)
                   : scalarEditorOption(0)
             }
             onChange={(event) => {
               const selected = event.currentTarget.value;
               runtime.updateActiveCandidate(
-                selected === scalarEditorOption(1) ? "true" : "false",
+                booleanEditorValues![selected === scalarEditorOption(1) ? 1 : 0],
                 false,
                 selected === BLANK_EDITOR_OPTION ? "blank" : "scalar",
               );

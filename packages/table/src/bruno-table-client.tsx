@@ -64,6 +64,9 @@ export function BrunoTableClient<
   const TColumns extends BrunoTableColumns<TRow>,
   TGetRowVersion extends (row: TRow) => unknown = (row: TRow) => unknown,
 >(props: BrunoTableEditableClientProps<TRow, TColumns, TGetRowVersion>): ReactNode;
+export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>, TRowVersion>(
+  props: BrunoTableClientProps<TRow, TColumns, TRowVersion>,
+): ReactNode;
 export function BrunoTableClient<TRow, const TColumns extends BrunoTableColumns<TRow>>(
   props: BrunoTableReadOnlyClientProps<TRow, TColumns>,
 ): ReactNode;

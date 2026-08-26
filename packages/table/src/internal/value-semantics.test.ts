@@ -466,6 +466,54 @@ describe("compiled Column Value Semantics", () => {
     ).toThrow(ColumnConfigurationError);
   });
 
+  it("compiles an exact two-state authority for custom Boolean editors", () => {
+    type Toggle = "N" | "Y";
+    const toggle: BrunoTableValueType<Toggle, "equality", "boolean"> = {
+      codecId: "example/toggle",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "boolean",
+      booleanEditorValues: ["N", "Y"],
+      cellAlign: "center",
+      editorLayout: "center",
+      defaultWidth: 88,
+      decodeRuntime: (input) =>
+        input === "N" || input === "Y"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected N or Y." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left === "N" ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) =>
+        text === "N" || text === "Y"
+          ? { _tag: "Success", value: text }
+          : { _tag: "Failure", message: "Expected N or Y." },
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        input === "N" || input === "Y"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected N or Y." },
+    };
+    const compileToggle = (valueType: unknown) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_TOGGLE",
+          field: "code",
+          headerName: "Toggle",
+          valueType: valueType as never,
+        },
+      ])[0]!.semantics;
+
+    expect(compileToggle(toggle).booleanEditorCanonicalValues).toStrictEqual(["N", "Y"]);
+    expect(() => compileToggle({ ...toggle, booleanEditorValues: ["N", "N"] })).toThrow(
+      "must represent two distinct values",
+    );
+    const { booleanEditorValues: omitted, ...withoutMapping } = toggle;
+    void omitted;
+    expect(() => compileToggle(withoutMapping)).toThrow("require exactly [falseValue, trueValue]");
+  });
+
   it("snapshots an exact aggregate algebra and rejects hostile capability pairs", () => {
     type Money = Readonly<{ readonly minorUnits: bigint }>;
     const mutable = {

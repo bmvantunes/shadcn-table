@@ -126,6 +126,63 @@ test("commits through one parse-validation gate and preserves invalid editor evi
   expect(grid.element()).toHaveFocus();
 });
 
+test("does not exempt another Table Instance's detached Cancel control", async () => {
+  const renderTables = (secondRows: readonly Row[]) => (
+    <>
+      <BrunoTableClient
+        tableId="TABLE_ID_CANCEL_OWNER_A"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: [rows[0]!], totalRows: 1, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+      <BrunoTableClient
+        tableId="TABLE_ID_CANCEL_OWNER_B"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        initialFilters={[{ columnId: "COL_ID_NAME", type: "equals", filter: "Grace" }]}
+        clientSource={{
+          rows: secondRows,
+          totalRows: secondRows.length,
+          version: secondRows[0]?.name === "Hidden" ? 3 : 2,
+          status: "ready",
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    </>
+  );
+  const screen = await render(renderTables([rows[1]!]));
+  const firstGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_CANCEL_OWNER_A" });
+  const secondGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_CANCEL_OWNER_B" });
+
+  await userEvent.click(secondGrid.getByRole("gridcell", { name: "8", exact: true }));
+  await userEvent.keyboard("{F2}");
+  await expect.element(secondGrid.getByRole("spinbutton", { name: "Edit Score" })).toBeVisible();
+  await screen.rerender(renderTables([{ ...rows[1]!, name: "Hidden" }]));
+  await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
+
+  firstGrid.element().focus();
+  await userEvent.keyboard("{ArrowRight}{F2}");
+  const firstEditor = firstGrid.getByRole("spinbutton", { name: "Edit Score" });
+  await userEvent.fill(firstEditor, "99");
+  const foreignCancel = screen.getByRole("button", { name: "Cancel editing" });
+  foreignCancel
+    .element()
+    .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  (foreignCancel.element() as HTMLButtonElement).click();
+
+  await expect.element(firstEditor).toHaveFocus();
+  await expect.element(firstEditor).toHaveAttribute("aria-invalid", "true");
+  await expect.element(screen.getByRole("button", { name: "Cancel editing" })).toBeVisible();
+  expect(secondGrid.getByRole("spinbutton", { name: "Edit Score" }).all()).toHaveLength(1);
+});
+
 test("cancels before a live blank-policy change can reinterpret the active candidate", async () => {
   type NullableRow = Readonly<{
     readonly id: string;
@@ -1680,9 +1737,38 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
   type ChoiceRow = Readonly<{
     readonly id: string;
     readonly flag: boolean | null;
+    readonly toggle: "N" | "Y";
+    readonly nullableToggle: "N" | "Y" | null;
     readonly nullableChoice: "" | "ready" | null;
     readonly requiredChoice: "" | "ready";
   }>;
+  const toggleValueType: BrunoTableValueType<"N" | "Y", "equality", "boolean"> = {
+    codecId: "test/toggle",
+    codecVersion: 1,
+    filterFamily: "equality",
+    editorFamily: "boolean",
+    booleanEditorValues: ["N", "Y"],
+    cellAlign: "center",
+    editorLayout: "center",
+    defaultWidth: 88,
+    decodeRuntime: (input) =>
+      input === "N" || input === "Y"
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected N or Y." },
+    equivalent: (left, right) => left === right,
+    compare: (left, right) => (left === right ? 0 : left === "N" ? -1 : 1),
+    formatCanonicalText: (value) => value,
+    parseCanonicalText: (text) =>
+      text === "N" || text === "Y"
+        ? { _tag: "Success", value: text }
+        : { _tag: "Failure", message: "Expected N or Y." },
+    formatDisplay: (value) => value,
+    encodePersisted: (value) => value,
+    decodePersisted: (input) =>
+      input === "N" || input === "Y"
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected N or Y." },
+  };
   const choiceColumns = [
     {
       columnId: "COL_ID_FLAG",
@@ -1693,6 +1779,24 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
       blankValue: null,
       cellRenderer: ({ value }: { readonly value: ChoiceRow["flag"] }) =>
         value === null ? "Flag blank" : value ? "Flag true" : "Flag false",
+    },
+    {
+      columnId: "COL_ID_TOGGLE",
+      field: "toggle",
+      headerName: "Toggle",
+      valueType: toggleValueType,
+      isEditable: true,
+      cellRenderer: ({ value }: { readonly value: ChoiceRow["toggle"] }) => `Toggle ${value}`,
+    },
+    {
+      columnId: "COL_ID_NULLABLE_TOGGLE",
+      field: "nullableToggle",
+      headerName: "Nullable toggle",
+      valueType: toggleValueType,
+      isEditable: true,
+      blankValue: null,
+      cellRenderer: ({ value }: { readonly value: ChoiceRow["nullableToggle"] }) =>
+        value === null ? "Toggle blank" : `Nullable toggle ${value}`,
     },
     BrunoTableSelectColumn({
       columnId: "COL_ID_NULLABLE_CHOICE",
@@ -1724,6 +1828,8 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
           {
             id: "choice",
             flag: null,
+            toggle: "N",
+            nullableToggle: null,
             nullableChoice: null,
             requiredChoice: "ready",
           },
@@ -1747,6 +1853,26 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
   await userEvent.keyboard("{Enter}");
   await expect
     .element(screen.getByRole("gridcell", { name: "Flag false", exact: true }))
+    .toBeVisible();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "Toggle N", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const toggleEditor = screen.getByRole("checkbox", { name: "Edit Toggle" });
+  await expect.element(toggleEditor).not.toBeChecked();
+  await userEvent.click(toggleEditor);
+  await userEvent.click(screen.getByRole("gridcell", { name: "Toggle blank", exact: true }));
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Toggle Y", exact: true }))
+    .toBeVisible();
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "Toggle blank", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const nullableToggleEditor = screen.getByRole("combobox", { name: "Edit Nullable toggle" });
+  await expect.element(nullableToggleEditor).toHaveValue("blank");
+  await userEvent.selectOptions(nullableToggleEditor, "scalar:0");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("gridcell", { name: "Nullable toggle N", exact: true }))
     .toBeVisible();
 
   await userEvent.click(screen.getByRole("gridcell", { name: "Nullable blank", exact: true }));
