@@ -924,13 +924,15 @@ describe("BrunoTable Cell Edit Session", () => {
         },
       ]);
     const runtime = new BrunoTableCellEditRuntime({
-      columns: compilePermissionColumns(({ row: candidateRow }) => candidateRow.allowed),
+      columns: compilePermissionColumns(
+        ({ row: candidateRow, value }) => candidateRow.allowed && value !== "locked",
+      ),
       getRow: () => liveRow,
     });
     expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
     runtime.updateActiveCandidate("candidate", false);
 
-    liveRow = { ...liveRow, allowed: false };
+    liveRow = { value: "locked", allowed: true };
     runtime.reconcileActiveRow();
     expect(runtime.getSessionSnapshot()).toMatchObject({
       kind: "editing",
@@ -939,7 +941,7 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.commit("candidate")).toBe(false);
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
 
-    liveRow = { ...liveRow, allowed: true };
+    liveRow = { value: "source", allowed: true };
     runtime.reconcileActiveRow();
     expect(runtime.getSessionSnapshot()).toMatchObject({ kind: "editing" });
     expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
@@ -961,5 +963,36 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
     expect(runtime.commit("candidate")).toBe(true);
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("candidate");
+
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.reconcileColumns(compilePermissionColumns(({ value }) => value === "candidate"));
+    liveRow = { value: "locked", allowed: true };
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).not.toHaveProperty("invalidMessage");
+  });
+
+  it("clears a row-missing overlay on identity return and reveals prior validation", () => {
+    let liveRow: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => liveRow });
+    expect(runtime.start("row-1", "COL_ID_QUANTITY")).toBe(true);
+    expect(runtime.commit("not-an-integer")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      invalidMessage: "Expected signed base-10 integer digits.",
+    });
+
+    liveRow = undefined;
+    runtime.reconcileActiveRow();
+    expect(runtime.commit("not-an-integer")).toBe(false);
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      rowMissing: true,
+      invalidMessage: "This row was removed from the server. Changes cannot be saved.",
+    });
+
+    liveRow = row;
+    runtime.reconcileActiveRow();
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      rowMissing: false,
+      invalidMessage: "Expected signed base-10 integer digits.",
+    });
   });
 });

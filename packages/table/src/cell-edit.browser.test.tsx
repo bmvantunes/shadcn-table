@@ -199,19 +199,23 @@ test("retains the editor and blocks every commit while live edit permission is d
     readonly value: string;
     readonly allowed: boolean;
   }>;
-  type HarnessHandle = Readonly<{ setAllowed: (allowed: boolean) => void }>;
+  type HarnessHandle = Readonly<{ setValue: (value: string) => void }>;
   const harnessRef = createRef<HarnessHandle>();
   const Harness = forwardRef<HarnessHandle>(function Harness(_props, ref) {
-    const [allowed, setAllowed] = useState(true);
-    useImperativeHandle(ref, () => ({ setAllowed }), []);
+    const [value, setValue] = useState("source");
+    useImperativeHandle(ref, () => ({ setValue }), []);
     const permissionColumns = [
       {
         columnId: "COL_ID_VALUE",
         field: "value",
         headerName: "Value",
         valueType: "text",
-        isEditable: ({ row }: { readonly row: PermissionRow; readonly value: string }) =>
-          row.allowed,
+        isEditable: ({
+          value: liveValue,
+        }: {
+          readonly row: PermissionRow;
+          readonly value: string;
+        }) => liveValue !== "locked",
       },
     ] satisfies BrunoTableColumns<PermissionRow>;
     return (
@@ -220,9 +224,9 @@ test("retains the editor and blocks every commit while live edit permission is d
         columns={permissionColumns}
         initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
         clientSource={{
-          rows: [{ id: "row", value: "source", allowed }],
+          rows: [{ id: "row", value, allowed: true }],
           totalRows: 1,
-          version: allowed ? 1 : 2,
+          version: value === "source" ? 1 : 2,
           status: "ready",
         }}
         getRowId={(row) => row.id}
@@ -239,7 +243,7 @@ test("retains the editor and blocks every commit while live edit permission is d
   const editor = screen.getByRole("textbox", { name: "Edit Value" });
   await userEvent.fill(editor, "candidate");
 
-  flushSync(() => harnessRef.current?.setAllowed(false));
+  flushSync(() => harnessRef.current?.setValue("locked"));
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveValue("candidate");
   await expect.element(editor).toHaveAttribute("aria-invalid", "true");
@@ -250,7 +254,7 @@ test("retains the editor and blocks every commit while live edit permission is d
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveValue("candidate");
 
-  flushSync(() => harnessRef.current?.setAllowed(true));
+  flushSync(() => harnessRef.current?.setValue("source"));
   await expect.element(editor).not.toHaveAttribute("aria-invalid", "true");
   await userEvent.keyboard("{Enter}");
   await expect.element(editor).not.toBeInTheDocument();
@@ -1158,6 +1162,10 @@ test("keeps one Row Identity edit session through sort, filter, deletion, and re
     .element(screen.getByRole("textbox", { name: "Edit Value" }))
     .toHaveValue("Candidate survives");
   await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("textbox", { name: "Edit Value" }))
+    .toHaveAttribute("aria-invalid", "true");
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Candidate remains invalid.");
   await expect
     .element(screen.getByRole("checkbox", { name: "Select row 2", exact: true }))
     .toBeVisible();

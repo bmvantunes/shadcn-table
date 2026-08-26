@@ -24,6 +24,7 @@ type ActiveSession = Readonly<{
   readonly column: CompiledFieldColumn;
   readonly row: object;
   readonly before: unknown;
+  readonly beforeFromDraft: boolean;
   readonly initialText: string;
   readonly selectInitialText: boolean;
   readonly rowMissing: boolean;
@@ -44,7 +45,7 @@ type CommitEvaluation =
   | Readonly<{
       readonly kind: "invalid";
       readonly message: string;
-      readonly reason?: "permission";
+      readonly reason?: "permission" | "rowMissing";
     }>
   | Readonly<{
       readonly kind: "accepted";
@@ -185,7 +186,9 @@ const brunoTableCellEditMachine = createMachine({
                 ? session
                 : evaluation.reason === "permission"
                   ? Object.freeze({ ...session, permissionMessage: evaluation.message })
-                  : Object.freeze({ ...session, invalidMessage: evaluation.message });
+                  : evaluation.reason === "rowMissing"
+                    ? session
+                    : Object.freeze({ ...session, invalidMessage: evaluation.message });
             },
             affectedCellKeys: [],
             draftPatch: undefined,
@@ -234,6 +237,7 @@ function prepareSession(
       column,
       row,
       before,
+      beforeFromDraft: event.hasDraft,
       initialText:
         event.mode === "replace"
           ? event.producedText
@@ -250,6 +254,8 @@ function prepareSession(
 
 export const BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH = 65_536;
 const BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE = "This cell is no longer editable.";
+const BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE =
+  "This row was removed from the server. Changes cannot be saved.";
 
 function reconcileSessionPermission(session: ActiveSession): ActiveSession {
   const permissionMessage = isSessionEditable(session)
@@ -268,7 +274,10 @@ function isSessionEditable(session: ActiveSession): boolean {
   if (policy === true) return true;
   if (typeof policy !== "function") return false;
   try {
-    return Reflect.apply(policy, undefined, [{ row: session.row, value: session.before }]) === true;
+    const value = session.beforeFromDraft
+      ? session.before
+      : Reflect.get(session.row, session.column.field);
+    return Reflect.apply(policy, undefined, [{ row: session.row, value }]) === true;
   } catch {
     return false;
   }
@@ -286,7 +295,8 @@ function evaluateCandidate(
   if (session.rowMissing) {
     return Object.freeze({
       kind: "invalid",
-      message: "This row was removed from the server. Changes cannot be saved.",
+      message: BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE,
+      reason: "rowMissing",
     });
   }
   if (!isSessionEditable(session)) {
@@ -802,7 +812,12 @@ export class BrunoTableCellEditRuntime {
     const previousKey = this.activeCellKey;
     const snapshot = this.actor.getSnapshot();
     const session = snapshot.value === "editing" ? snapshot.context.session : undefined;
-    const invalidMessage = session?.permissionMessage ?? session?.invalidMessage;
+    const invalidMessage =
+      session === undefined
+        ? undefined
+        : session.rowMissing
+          ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+          : (session.permissionMessage ?? session.invalidMessage);
     const next =
       session === undefined
         ? IDLE_SESSION
