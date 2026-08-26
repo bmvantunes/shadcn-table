@@ -36,6 +36,7 @@ type UnknownProjection = {
   readonly validRowIndexes: number[];
   readonly eligiblePredicateRowIndexes: number[];
   readonly pendingRowIndexes: number[];
+  readonly pendingRowIndexSet: Set<number>;
   rowIndex: number;
 };
 
@@ -277,6 +278,7 @@ export class BrunoTableCellEditTraversalIndex {
           validRowIndexes: [],
           eligiblePredicateRowIndexes: [],
           pendingRowIndexes: [],
+          pendingRowIndexSet: new Set(),
           rowIndex: 0,
         };
         continue;
@@ -287,8 +289,15 @@ export class BrunoTableCellEditTraversalIndex {
       if (built > 0 && remainingPredicateCells < predicateColumnCount) break;
       if (rowIndex === undefined) {
         this.pendingDetachedRowCursor += 1;
-        this.removeRowCache(detachedRowId!);
-        this.pendingDirtyRowIds.delete(detachedRowId!);
+        const rowId = detachedRowId!;
+        if (this.pendingDirtyRowIds.has(rowId)) {
+          this.removeRowCache(rowId);
+          const row = this.getRow(rowId);
+          if (typeof row === "object" && row !== null) {
+            this.rowCacheById.set(rowId, this.createRowCache(rowId, row));
+          }
+        }
+        this.pendingDirtyRowIds.delete(rowId);
         remainingPredicateCells -= predicateColumnCount;
         built += 1;
         continue;
@@ -296,6 +305,8 @@ export class BrunoTableCellEditTraversalIndex {
       this.pendingRowCursor += 1;
       const rowId = this.rowIds[rowIndex];
       if (rowId === undefined) continue;
+      removeSorted(this.validRowIndexes, rowIndex);
+      removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
       if (this.pendingDirtyRowIds.delete(rowId)) this.removeRowCache(rowId);
       const row = this.getRow(rowId);
       if (typeof row !== "object" || row === null) continue;
@@ -348,7 +359,10 @@ export class BrunoTableCellEditTraversalIndex {
       this.verticalRangeCache = undefined;
       return true;
     }
-    for (const rowId of changedRowIds) this.dirtyRowIds.add(rowId);
+    for (const rowId of changedRowIds) {
+      this.dirtyRowIds.add(rowId);
+      this.mergeLateUnknownInvalidation(rowId);
+    }
     if (changedRowIds.size > 0) this.verticalRangeCache = undefined;
     return changedRowIds.size > 0;
   };
@@ -356,6 +370,7 @@ export class BrunoTableCellEditTraversalIndex {
   public readonly invalidateCell = (rowId: string, columnId: string): void => {
     if (this.allRowsDirty) {
       this.dirtyRowIds.add(rowId);
+      this.mergeLateUnknownInvalidation(rowId);
       return;
     }
     let columnIds = this.dirtyColumnIdsByRowId.get(rowId);
@@ -435,6 +450,20 @@ export class BrunoTableCellEditTraversalIndex {
   public readonly getCachedVerticalRangeDestinationCount = (): number =>
     this.verticalRangeCache?.destinations.length ?? 0;
 
+  private readonly mergeLateUnknownInvalidation = (rowId: string): void => {
+    if (!this.allRowsDirty) return;
+    this.unknownMissingRowIdSet.delete(rowId);
+    const projection = this.unknownProjection;
+    const rowIndex = projection?.rowIndexById.get(rowId);
+    if (
+      projection !== undefined &&
+      rowIndex !== undefined &&
+      projection.pendingRowIndexSet.add(rowIndex)
+    ) {
+      projection.pendingRowIndexes.push(rowIndex);
+    }
+  };
+
   private readonly buildUnknownProjectionRow = (projection: UnknownProjection): void => {
     const rowIndex = projection.rowIndex;
     projection.rowIndex += 1;
@@ -443,12 +472,14 @@ export class BrunoTableCellEditTraversalIndex {
     if (rowId === undefined) return;
     projection.rowIndexById.set(rowId, rowIndex);
     if (this.dirtyRowIds.has(rowId)) {
-      if (!this.unknownMissingRowIdSet.has(rowId)) projection.pendingRowIndexes.push(rowIndex);
+      if (!this.unknownMissingRowIdSet.has(rowId) && projection.pendingRowIndexSet.add(rowIndex)) {
+        projection.pendingRowIndexes.push(rowIndex);
+      }
       return;
     }
     const rowCache = this.rowCacheById.get(rowId);
     if (rowCache === undefined || rowCache.validationGeneration !== this.validationGeneration) {
-      projection.pendingRowIndexes.push(rowIndex);
+      if (projection.pendingRowIndexSet.add(rowIndex)) projection.pendingRowIndexes.push(rowIndex);
       return;
     }
     projection.validRowIndexes.push(rowIndex);

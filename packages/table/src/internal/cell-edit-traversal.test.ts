@@ -518,6 +518,68 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`unknown-${String(rowCount - 1)}`);
   });
 
+  it("restarts paced unknown evidence for late row, draft, and missing-return invalidations", () => {
+    const rowIds = ["late-0", "late-1", "late-2", "late-3"];
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LATE_UNKNOWN",
+        field: "enabled" as const,
+        headerName: "Late unknown",
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      },
+    ]);
+    const projection = rowSpace(rowIds);
+    const createCase = () => {
+      const rows = new Map<string, Row>(
+        rowIds.map((id) => [id, { id, enabled: false, alternate: false } satisfies Row]),
+      );
+      const draftedRowIds = new Set<string>();
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => rows.get(rowId),
+        (rowId, row) => (row as Row).enabled || draftedRowIds.has(rowId),
+        true,
+      );
+      index.reconcile(columns, projection);
+      while (index.buildNextSlice(160, Number.POSITIVE_INFINITY));
+      return { draftedRowIds, index, rows };
+    };
+    const drain = (index: BrunoTableCellEditTraversalIndex) => {
+      while (index.buildNextSlice(160, Number.POSITIVE_INFINITY)) {
+        expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+      }
+    };
+
+    const rowCase = createCase();
+    rowCase.index.reconcileRows(undefined);
+    rowCase.index.reconcile(columns, projection);
+    rowCase.index.buildNextSlice(96, Number.POSITIVE_INFINITY);
+    rowCase.rows.set("late-0", { id: "late-0", enabled: true, alternate: false });
+    rowCase.index.reconcileRows(new Set(["late-0"]));
+    drain(rowCase.index);
+    expect(rowCase.index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("late-0");
+
+    const draftCase = createCase();
+    draftCase.index.reconcileRows(undefined);
+    draftCase.index.reconcile(columns, projection);
+    draftCase.index.buildNextSlice(96, Number.POSITIVE_INFINITY);
+    draftCase.draftedRowIds.add("late-0");
+    draftCase.index.invalidateCell("late-0", columns[0]!.columnId);
+    drain(draftCase.index);
+    expect(draftCase.index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("late-0");
+
+    const missingCase = createCase();
+    missingCase.rows.delete("late-0");
+    missingCase.index.reconcileRows(undefined);
+    missingCase.index.reconcile(columns, projection);
+    missingCase.index.buildNextSlice(64, Number.POSITIVE_INFINITY);
+    missingCase.rows.set("late-0", { id: "late-0", enabled: true, alternate: false });
+    missingCase.index.reconcileRows(new Set(["late-0"]));
+    drain(missingCase.index);
+    expect(missingCase.index.getCachedRowCount()).toBe(rowIds.length);
+    expect(missingCase.index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("late-0");
+  });
+
   it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {
     const first: Row = { id: "first", enabled: true, alternate: false };
     const rows = new Map<string, Row>([
