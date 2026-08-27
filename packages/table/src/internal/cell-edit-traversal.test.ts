@@ -659,6 +659,46 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(rowCount - 2, columns[0]!.columnId, 1)?.rowId).toBe("pending-39");
   });
 
+  it("preserves staged row invalidations across a row-space replacement", () => {
+    const rowIds = Array.from({ length: 40 }, (_unused, rowIndex) => `restart-${rowIndex}`);
+    const rows = new Map<string, Row>(
+      rowIds.map((id) => [id, { id, enabled: true, alternate: false }]),
+    );
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_RESTART_EDIT",
+        field: "enabled" as const,
+        headerName: "Restart edit",
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      },
+    ]);
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const initialProjection = rowSpace(rowIds);
+    index.reconcile(columns, initialProjection);
+    while (index.buildNextSlice(8, Number.POSITIVE_INFINITY));
+    evaluate.mockClear();
+
+    rows.set("restart-0", { id: "restart-0", enabled: false, alternate: false });
+    rows.delete("restart-39");
+    index.reconcileRows(new Set(["restart-0", "restart-39"]));
+    expect(index.reconcile(columns, initialProjection)).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+
+    const replacementProjection = rowSpace(rowIds.slice(0, -1));
+    expect(index.reconcile(columns, replacementProjection)).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+    while (index.buildNextSlice(8, Number.POSITIVE_INFINITY)) {
+      expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+    }
+
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+    expect(index.getCachedRowCount()).toBe(rowIds.length - 1);
+  });
+
   it("discovers unknown replacements without tearing down predicate evidence synchronously", () => {
     const rowCount = 40;
     const columnCount = 40;
@@ -848,7 +888,12 @@ describe("BrunoTable editable traversal index", () => {
     getRow.mockClear();
 
     expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
-    expect(getRow).toHaveBeenCalledTimes(2);
+    expect(getRow).not.toHaveBeenCalled();
+    expect(index.getCachedRowCount()).toBe(rowCount);
+    while (index.getCachedRowCount() === rowCount) {
+      expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    }
+    expect(index.getCachedRowCount()).toBe(rowCount - 2);
     expect(index.isReady()).toBe(false);
     expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
     while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));

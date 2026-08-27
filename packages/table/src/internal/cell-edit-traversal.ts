@@ -37,6 +37,9 @@ type UnknownProjection = {
   readonly eligiblePredicateRowIndexes: number[];
   readonly pendingRowIndexes: number[];
   readonly pendingRowIndexSet: Set<number>;
+  readonly pendingDetachedRowIds: string[];
+  readonly pendingDetachedRowIdSet: Set<string>;
+  dirtyRowIterator: IterableIterator<string> | undefined;
   rowIndex: number;
 };
 
@@ -82,6 +85,14 @@ function enqueueUnknownProjectionRow(projection: UnknownProjection, rowIndex: nu
   projection.pendingRowIndexes.push(rowIndex);
 }
 
+function* dirtyRowAuthorities(
+  pendingRowIds: ReadonlySet<string>,
+  incomingRowIds: ReadonlySet<string>,
+): IterableIterator<string> {
+  yield* pendingRowIds;
+  yield* incomingRowIds;
+}
+
 export class BrunoTableCellEditTraversalIndex {
   private columns: readonly CompiledColumn[] | undefined;
   private rowSpace: BrunoTableCellEditTraversalRowSpace | undefined;
@@ -121,8 +132,6 @@ export class BrunoTableCellEditTraversalIndex {
   private readonly pendingPredicateAuthorityColumnIds = new Set<string>();
   private unknownDiscoveryIterator: IterableIterator<[string, RowCache]> | undefined;
   private unknownProjection: UnknownProjection | undefined;
-  private unknownMissingRowIds: string[] = [];
-  private unknownMissingRowIdSet = new Set<string>();
   private unknownDiscoveryRequired = false;
 
   public constructor(
@@ -187,8 +196,6 @@ export class BrunoTableCellEditTraversalIndex {
       if (this.unknownDiscoveryIterator === undefined && this.unknownProjection === undefined) {
         if (this.unknownDiscoveryRequired) {
           this.unknownDiscoveryIterator = this.rowCacheById.entries();
-          this.unknownMissingRowIds = [];
-          this.unknownMissingRowIdSet = new Set();
         } else {
           this.unknownProjection = this.createUnknownProjection(rowSpace);
         }
@@ -228,8 +235,6 @@ export class BrunoTableCellEditTraversalIndex {
       this.unknownDiscoveryRequired = false;
       this.unknownDiscoveryIterator = undefined;
       this.unknownProjection = this.createUnknownProjection(rowSpace);
-      this.unknownMissingRowIds = [];
-      this.unknownMissingRowIdSet = new Set();
       this.verticalRangeCache = undefined;
       return true;
     }
@@ -313,6 +318,26 @@ export class BrunoTableCellEditTraversalIndex {
         const projection = this.unknownProjection;
         if (projection !== undefined) {
           if (projection.rowIndex >= projection.rowSpace.totalRows) {
+            projection.dirtyRowIterator ??= dirtyRowAuthorities(
+              this.pendingDirtyRowIds,
+              this.dirtyRowIds,
+            );
+            const dirtyRow = projection.dirtyRowIterator.next();
+            if (!dirtyRow.done) {
+              const rowId = dirtyRow.value;
+              this.pendingDirtyRowIds.add(rowId);
+              this.dirtyRowIds.delete(rowId);
+              const rowIndex = projection.rowIndexById.get(rowId);
+              if (rowIndex !== undefined) {
+                enqueueUnknownProjectionRow(projection, rowIndex);
+              } else if (!projection.pendingDetachedRowIdSet.has(rowId)) {
+                projection.pendingDetachedRowIdSet.add(rowId);
+                projection.pendingDetachedRowIds.push(rowId);
+              }
+              remainingPredicateCells -= BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST;
+              built += 1;
+              continue;
+            }
             this.installUnknownProjection(projection);
             continue;
           }
@@ -327,10 +352,6 @@ export class BrunoTableCellEditTraversalIndex {
           const row = this.getRow(rowId);
           if (typeof row !== "object" || row === null || rowCache.row !== row) {
             this.dirtyRowIds.add(rowId);
-            if (typeof row !== "object" || row === null) {
-              this.unknownMissingRowIds.push(rowId);
-              this.unknownMissingRowIdSet.add(rowId);
-            }
           } else {
             rowCache.validationGeneration = this.validationGeneration;
           }
@@ -394,10 +415,6 @@ export class BrunoTableCellEditTraversalIndex {
         const rowId = detachedRowId!;
         if (this.pendingDirtyRowIds.has(rowId)) {
           this.removeRowCache(rowId);
-          const row = this.getRow(rowId);
-          if (typeof row === "object" && row !== null) {
-            this.rowCacheById.set(rowId, this.createRowCache(rowId, row));
-          }
         }
         this.pendingDirtyRowIds.delete(rowId);
         continue;
@@ -452,18 +469,14 @@ export class BrunoTableCellEditTraversalIndex {
       this.validationGeneration += 1;
       this.allRowsDirty = true;
       this.unknownDiscoveryRequired = true;
-      this.dirtyRowIds.clear();
       this.pendingRowIndexes = [];
       this.pendingRowIndexSet.clear();
       this.pendingRowCursor = 0;
       this.pendingDetachedRowIds = [];
       this.pendingDetachedRowIdSet.clear();
       this.pendingDetachedRowCursor = 0;
-      this.pendingDirtyRowIds.clear();
       this.unknownDiscoveryIterator = undefined;
       this.unknownProjection = undefined;
-      this.unknownMissingRowIds = [];
-      this.unknownMissingRowIdSet = new Set();
       this.verticalRangeCache = undefined;
       return true;
     }
@@ -587,11 +600,12 @@ export class BrunoTableCellEditTraversalIndex {
 
   private readonly mergeLateUnknownInvalidation = (rowId: string): void => {
     if (!this.allRowsDirty) return;
-    this.unknownMissingRowIdSet.delete(rowId);
     const projection = this.unknownProjection;
     const rowIndex = projection?.rowIndexById.get(rowId);
     if (projection !== undefined && rowIndex !== undefined) {
       enqueueUnknownProjectionRow(projection, rowIndex);
+      this.pendingDirtyRowIds.add(rowId);
+      this.dirtyRowIds.delete(rowId);
     }
   };
 
@@ -607,8 +621,9 @@ export class BrunoTableCellEditTraversalIndex {
       return;
     }
     if (this.dirtyRowIds.has(rowId)) {
-      if (!this.unknownMissingRowIdSet.has(rowId))
-        enqueueUnknownProjectionRow(projection, rowIndex);
+      enqueueUnknownProjectionRow(projection, rowIndex);
+      this.pendingDirtyRowIds.add(rowId);
+      this.dirtyRowIds.delete(rowId);
       return;
     }
     const rowCache = this.rowCacheById.get(rowId);
@@ -630,17 +645,13 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingRowIndexes = projection.pendingRowIndexes;
     this.pendingRowIndexSet = projection.pendingRowIndexSet;
     this.pendingRowCursor = 0;
-    this.pendingDetachedRowIds = this.unknownMissingRowIds;
-    this.pendingDetachedRowIdSet = new Set(this.pendingDetachedRowIds);
+    this.pendingDetachedRowIds = projection.pendingDetachedRowIds;
+    this.pendingDetachedRowIdSet = projection.pendingDetachedRowIdSet;
     this.pendingDetachedRowCursor = 0;
-    this.pendingDirtyRowIds = this.dirtyRowIds;
-    this.dirtyRowIds = new Set();
     this.dirtyColumnIdsByRowId.clear();
     this.allRowsDirty = false;
     this.unknownDiscoveryRequired = false;
     this.unknownProjection = undefined;
-    this.unknownMissingRowIds = [];
-    this.unknownMissingRowIdSet = new Set();
     this.verticalRangeCache = undefined;
   };
 
@@ -654,6 +665,9 @@ export class BrunoTableCellEditTraversalIndex {
     eligiblePredicateRowIndexes: [],
     pendingRowIndexes: [],
     pendingRowIndexSet: new Set(),
+    pendingDetachedRowIds: [],
+    pendingDetachedRowIdSet: new Set(),
+    dirtyRowIterator: undefined,
     rowIndex: 0,
   });
 
@@ -674,8 +688,6 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingPredicateAuthorityColumnIds.clear();
     this.unknownDiscoveryIterator = undefined;
     this.unknownProjection = undefined;
-    this.unknownMissingRowIds = [];
-    this.unknownMissingRowIdSet = new Set();
     this.allRowsDirty = false;
     this.unknownDiscoveryRequired = false;
     this.verticalRangeCache = undefined;
