@@ -1627,6 +1627,36 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
   actionChild.dispatchEvent(
     new PointerEvent("pointerdown", {
       bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 87,
+    }),
+  );
+  actionButton.element().dispatchEvent(
+    new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 87,
+    }),
+  );
+  actionChild.dispatchEvent(
+    new PointerEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 87,
+    }),
+  );
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, cancelable: true }));
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 2, cancelable: true }));
+  actionChild.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
       button: 1,
       cancelable: true,
       pointerId: 86,
@@ -1683,6 +1713,32 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
       new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 83 }),
     );
   expect(pointerUpAction).toHaveBeenCalledTimes(2);
+
+  actionChild.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 88,
+    }),
+  );
+  actionButton.element().dispatchEvent(
+    new PointerEvent("pointercancel", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 88,
+    }),
+  );
+  actionChild.dispatchEvent(
+    new PointerEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 88,
+    }),
+  );
+  expect(contextMenuAction).toHaveBeenCalledTimes(1);
 
   await userEvent.fill(editor, "5");
   pointerUpAction.mockClear();

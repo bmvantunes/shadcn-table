@@ -161,6 +161,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         Readonly<{
           readonly button: number;
           readonly downTarget: EventTarget | null;
+          readonly pointerId: number;
           readonly upTarget: EventTarget | null;
         }>
       > = [];
@@ -206,38 +207,59 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         const blockedPointer = blockedPointers.get(event.pointerId);
         if (blockedPointer === undefined) return;
         blockedPointers.delete(event.pointerId);
-        blockedClicks.push({ ...blockedPointer, upTarget: event.target });
+        blockedClicks.push({
+          ...blockedPointer,
+          pointerId: event.pointerId,
+          upTarget: event.target,
+        });
         event.preventDefault();
         event.stopImmediatePropagation();
       };
       const clearRejectedPointer = (event: PointerEvent) => {
         blockedPointers.delete(event.pointerId);
       };
-      const suppressRejectedAction = (event: MouseEvent, consumeCompleted: boolean) => {
+      const suppressRejectedAction = (
+        event: MouseEvent,
+        completedMatch: "common-ancestor" | "pointer-or-endpoint",
+      ) => {
         const ownsTarget = (candidate: EventTarget | null) =>
           event.target === candidate ||
           (event.target instanceof Node &&
             candidate instanceof Node &&
             event.target.contains(candidate));
         const blockedClickIndex = blockedClicks.findIndex(
-          ({ button, downTarget, upTarget }) =>
-            button === event.button && ownsTarget(downTarget) && ownsTarget(upTarget),
+          ({ button, downTarget, pointerId, upTarget }) =>
+            button === event.button &&
+            (completedMatch === "common-ancestor"
+              ? ownsTarget(downTarget) && ownsTarget(upTarget)
+              : (event instanceof PointerEvent && event.pointerId === pointerId) ||
+                ownsTarget(downTarget) ||
+                ownsTarget(upTarget)),
         );
         if (blockedClickIndex === -1) {
           let activeRejectedTarget = false;
-          for (const { button, downTarget } of blockedPointers.values()) {
-            if (button !== event.button || !ownsTarget(downTarget)) continue;
+          for (const entry of blockedPointers) {
+            const pointerId = entry[0];
+            const { button, downTarget } = entry[1];
+            if (
+              button !== event.button ||
+              ((!(event instanceof PointerEvent) || event.pointerId !== pointerId) &&
+                !ownsTarget(downTarget))
+            ) {
+              continue;
+            }
             activeRejectedTarget = true;
             break;
           }
           if (!activeRejectedTarget) return;
-        } else if (consumeCompleted) blockedClicks.splice(blockedClickIndex, 1);
+        } else if (completedMatch === "common-ancestor") blockedClicks.splice(blockedClickIndex, 1);
         event.preventDefault();
         event.stopImmediatePropagation();
       };
-      const suppressRejectedClick = (event: MouseEvent) => suppressRejectedAction(event, true);
+      const suppressRejectedClick = (event: MouseEvent) =>
+        suppressRejectedAction(event, "common-ancestor");
       const suppressRejectedContextMenu = (event: MouseEvent) =>
-        suppressRejectedAction(event, false);
+        suppressRejectedAction(event, "pointer-or-endpoint");
       document.addEventListener("pointerdown", commitOutsidePointer, true);
       document.addEventListener("pointerup", suppressRejectedPointerUp, true);
       document.addEventListener("pointercancel", clearRejectedPointer, true);
