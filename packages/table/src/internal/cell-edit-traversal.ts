@@ -50,6 +50,37 @@ export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_TIME_LIMIT_MS = 2;
 // Conservatively charge native row reads and projection writes against the predicate-cell budget.
 export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST = 16;
 
+function hasValueDependentEditEligibility(column: CompiledFieldColumn): boolean {
+  return (
+    column.semantics.editorFamily === "boolean" &&
+    column.semantics.booleanEditorCanonicalValues !== undefined &&
+    column.semantics.booleanEditorDomainExhaustive !== true
+  );
+}
+
+function hasSameValueEligibilityAuthority(
+  left: CompiledFieldColumn,
+  right: CompiledFieldColumn,
+): boolean {
+  if (left.semantics.decodeRuntimeAuthority !== right.semantics.decodeRuntimeAuthority)
+    return false;
+  const leftValues = left.semantics.booleanEditorCanonicalValues;
+  const rightValues = right.semantics.booleanEditorCanonicalValues;
+  if (leftValues === undefined && rightValues === undefined) return true;
+  return (
+    leftValues !== undefined &&
+    rightValues !== undefined &&
+    leftValues[0] === rightValues[0] &&
+    leftValues[1] === rightValues[1] &&
+    left.semantics.booleanEditorDomainExhaustive ===
+      right.semantics.booleanEditorDomainExhaustive &&
+    left.semantics.editSessionAuthority.formatCanonicalText ===
+      right.semantics.editSessionAuthority.formatCanonicalText &&
+    (left.blankValue !== undefined) === (right.blankValue !== undefined) &&
+    Object.is(left.blankValue?.value, right.blankValue?.value)
+  );
+}
+
 function hasSamePredicateAuthority(
   left: CompiledFieldColumn,
   right: CompiledFieldColumn | undefined,
@@ -58,7 +89,7 @@ function hasSamePredicateAuthority(
     right !== undefined &&
     left.field === right.field &&
     left.isEditable === right.isEditable &&
-    left.semantics.decodeRuntimeAuthority === right.semantics.decodeRuntimeAuthority
+    hasSameValueEligibilityAuthority(left, right)
   );
 }
 
@@ -81,7 +112,7 @@ function hasSameTraversalAuthority(
       (nextColumn.kind === "field" &&
         column.field === nextColumn.field &&
         column.isEditable === nextColumn.isEditable &&
-        column.semantics.decodeRuntimeAuthority === nextColumn.semantics.decodeRuntimeAuthority)
+        hasSameValueEligibilityAuthority(column, nextColumn))
     );
   });
 }
@@ -136,6 +167,8 @@ export class BrunoTableCellEditTraversalIndex {
   private pendingDirtyRowIds = new Set<string>();
   private pendingPredicateAuthorityRowIterator: IterableIterator<string> | undefined;
   private readonly pendingPredicateAuthorityColumnIds = new Set<string>();
+  private pendingPredicateAuthorityEligibleRowIndexes: number[] | undefined;
+  private pendingPredicateAuthorityProjectionRowIndex = 0;
   private unknownDiscoveryIterator: IterableIterator<[string, RowCache]> | undefined;
   private unknownDirtyRestorationIterator: IterableIterator<string> | undefined;
   private unknownProjection: UnknownProjection | undefined;
@@ -178,10 +211,16 @@ export class BrunoTableCellEditTraversalIndex {
         this.columnIndexById.set(column.columnId, columnIndex);
       }
       this.staticColumnIndexes = columns.flatMap((column, columnIndex) =>
-        column.kind === "field" && column.isEditable === true ? [columnIndex] : [],
+        column.kind === "field" &&
+        column.isEditable === true &&
+        !hasValueDependentEditEligibility(column)
+          ? [columnIndex]
+          : [],
       );
       this.predicateColumns = columns.flatMap((column, columnIndex) =>
-        column.kind === "field" && typeof column.isEditable === "function"
+        column.kind === "field" &&
+        (typeof column.isEditable === "function" ||
+          (column.isEditable === true && hasValueDependentEditEligibility(column)))
           ? [{ column, columnIndex }]
           : [],
       );
@@ -408,18 +447,34 @@ export class BrunoTableCellEditTraversalIndex {
             const column = this.predicateColumnsById.get(columnId);
             if (column !== undefined) this.evaluateCell(authorityRowId, rowCache, column);
           }
-          const rowIndex = this.rowIndexById.get(authorityRowId);
-          if (rowIndex !== undefined) {
-            if (rowCache.eligiblePredicateColumnIds.size === 0) {
-              removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
-            } else {
-              insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
-            }
-          }
         }
         continue;
       }
+      const authorityProjection = this.pendingPredicateAuthorityEligibleRowIndexes;
+      if (authorityProjection !== undefined) {
+        const rowIndex = this.pendingPredicateAuthorityProjectionRowIndex;
+        if (rowIndex < this.rowIds.length) {
+          if (built > 0 && remainingPredicateCells < 1) break;
+          this.pendingPredicateAuthorityProjectionRowIndex += 1;
+          remainingPredicateCells -= 1;
+          built += 1;
+          const rowId = this.rowIds[rowIndex];
+          if (
+            rowId !== undefined &&
+            this.rowCacheById.get(rowId)?.eligiblePredicateColumnIds.size !== 0
+          ) {
+            authorityProjection.push(rowIndex);
+          }
+          continue;
+        }
+        this.eligiblePredicateRowIndexes = authorityProjection;
+        this.pendingPredicateAuthorityEligibleRowIndexes = undefined;
+        this.pendingPredicateAuthorityProjectionRowIndex = 0;
+        continue;
+      }
       if (this.pendingPredicateAuthorityColumnIds.size > 0) {
+        this.pendingPredicateAuthorityEligibleRowIndexes = [];
+        this.pendingPredicateAuthorityProjectionRowIndex = 0;
         for (const columnId of this.pendingPredicateAuthorityColumnIds) {
           if (!this.predicateColumnsById.has(columnId)) {
             this.eligiblePredicateRowIdsByColumnId.delete(columnId);
@@ -483,6 +538,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.dirtyRowIds.size === 0 &&
     this.dirtyColumnIdsByRowId.size === 0 &&
     this.pendingPredicateAuthorityRowIterator === undefined &&
+    this.pendingPredicateAuthorityEligibleRowIndexes === undefined &&
     this.pendingPredicateAuthorityColumnIds.size === 0 &&
     this.pendingRowCursor >= this.pendingRowIndexes.length &&
     this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length;
@@ -713,6 +769,8 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingDirtyRowIds.clear();
     this.pendingPredicateAuthorityRowIterator = undefined;
     this.pendingPredicateAuthorityColumnIds.clear();
+    this.pendingPredicateAuthorityEligibleRowIndexes = undefined;
+    this.pendingPredicateAuthorityProjectionRowIndex = 0;
     this.unknownDiscoveryIterator = undefined;
     this.unknownDirtyRestorationIterator = undefined;
     this.unknownProjection = undefined;
@@ -746,6 +804,9 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingRowCursor +
     (this.pendingDetachedRowIds.length - this.pendingDetachedRowCursor) +
     (this.pendingPredicateAuthorityRowIterator === undefined
+      ? 0
+      : SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT + 1) +
+    (this.pendingPredicateAuthorityEligibleRowIndexes === undefined
       ? 0
       : SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT + 1);
 
@@ -829,6 +890,8 @@ export class BrunoTableCellEditTraversalIndex {
       this.pendingPredicateAuthorityColumnIds.add(columnId);
     }
     this.pendingPredicateAuthorityRowIterator = this.rowCacheById.keys();
+    this.pendingPredicateAuthorityEligibleRowIndexes = undefined;
+    this.pendingPredicateAuthorityProjectionRowIndex = 0;
     this.verticalRangeCache = undefined;
   };
 
@@ -918,7 +981,7 @@ export class BrunoTableCellEditTraversalIndex {
       const column = columns[candidate];
       if (
         column?.kind === "field" &&
-        typeof column.isEditable === "function" &&
+        this.predicateColumnsById.has(column.columnId) &&
         this.eligiblePredicateRowIdsByColumnId.get(column.columnId)?.has(rowId) === true
       ) {
         return candidate;
@@ -1013,9 +1076,9 @@ export class BrunoTableCellEditTraversalIndex {
     const columnIndex = this.columnIndexById.get(columnId);
     const column = columnIndex === undefined ? undefined : this.columns?.[columnIndex];
     if (column?.kind !== "field") return false;
-    if (column.isEditable === true) return true;
+    if (column.isEditable === true && !this.predicateColumnsById.has(columnId)) return true;
     return (
-      typeof column.isEditable === "function" &&
+      this.predicateColumnsById.has(columnId) &&
       this.eligiblePredicateRowIdsByColumnId.get(columnId)?.has(rowId) === true
     );
   };

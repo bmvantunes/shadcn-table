@@ -439,7 +439,7 @@ function evaluateCandidate(
     cellKey: cellKey(session.rowId, session.column.columnId),
     value: after,
     removeDraft,
-    ...(changed && !equivalentSource
+    ...(changed && (!equivalentSource || session.beforeFromDraft)
       ? {
           change: Object.freeze({
             rowId: session.rowId,

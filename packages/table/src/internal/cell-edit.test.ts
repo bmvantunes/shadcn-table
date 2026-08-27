@@ -1393,6 +1393,41 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(onCommit).toHaveBeenCalledOnce();
   });
 
+  it("records a draft-backed revert to the canonical source value", () => {
+    type TextRow = Readonly<{ readonly value: string }>;
+    const liveRow: TextRow = { value: "A" };
+    const onCommit = vi.fn();
+    const textColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<TextRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: textColumns,
+      getRow: () => liveRow,
+      onCommit,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("C")).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("C");
+    onCommit.mockClear();
+
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("A")).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    expect(onCommit).toHaveBeenCalledWith({
+      rowId: "row",
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      before: "C",
+      after: "A",
+    });
+  });
+
   it("rejects Boolean editor admission when the canonical value is outside its mapping", () => {
     type ToggleRow = Readonly<{ readonly toggle: "M" | "N" | "Y" }>;
     let liveRow: ToggleRow = { toggle: "M" };
@@ -1439,6 +1474,76 @@ describe("BrunoTable Cell Edit Session", () => {
       kind: "editing",
       invalidMessage: "This cell is no longer editable.",
     });
+  });
+
+  it("skips unmapped Boolean values during traversal and reconciles live mapping changes", () => {
+    type ToggleRow = Readonly<{ readonly id: string; readonly toggle: "M" | "N" | "Y" }>;
+    const decodeToggle = (input: unknown) =>
+      input === "M" || input === "N" || input === "Y"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected M, N, or Y." } as const);
+    const formatToggle = (value: ToggleRow["toggle"]) => value;
+    const makeColumns = (
+      booleanEditorValues: readonly [ToggleRow["toggle"], ToggleRow["toggle"]],
+    ) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_TOGGLE",
+          field: "toggle",
+          headerName: "Toggle",
+          valueType: {
+            codecId: "test/traversal-three-state-toggle",
+            codecVersion: 1,
+            filterFamily: "equality",
+            editorFamily: "boolean",
+            booleanEditorValues,
+            cellAlign: "center",
+            editorLayout: "center",
+            defaultWidth: 88,
+            decodeRuntime: decodeToggle,
+            equivalent: Object.is,
+            compare: () => 0 as const,
+            formatCanonicalText: formatToggle,
+            parseCanonicalText: decodeToggle,
+            formatDisplay: formatToggle,
+            encodePersisted: formatToggle,
+            decodePersisted: decodeToggle,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<ToggleRow>);
+    const rows = new Map<string, ToggleRow>([
+      ["mapped-start", { id: "mapped-start", toggle: "N" }],
+      ["unmapped", { id: "unmapped", toggle: "M" }],
+      ["mapped-end", { id: "mapped-end", toggle: "Y" }],
+    ]);
+    const columns = makeColumns(["N", "Y"]);
+    const rowIds = [...rows.keys()];
+    const rowSpace = {
+      totalRows: rowIds.length,
+      getRowId: (rowIndex: number) => rowIds[rowIndex],
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+    expect(runtime.isEditable("mapped-start", "COL_ID_TOGGLE")).toBe(true);
+    expect(runtime.isEditable("unmapped", "COL_ID_TOGGLE")).toBe(false);
+    expect(runtime.isEditable("mapped-end", "COL_ID_TOGGLE")).toBe(true);
+    runtime.reconcileTraversal(columns, rowSpace);
+    expect(runtime.findTraversalDestination(0, "COL_ID_TOGGLE", 1)?.rowId).toBe("mapped-end");
+    expect(runtime.findTraversalDestination(2, "COL_ID_TOGGLE", -1)?.rowId).toBe("mapped-start");
+
+    rows.set("unmapped", { id: "unmapped", toggle: "N" });
+    runtime.reconcileTraversalRows(new Set(["unmapped"]));
+    expect(runtime.findTraversalDestination(0, "COL_ID_TOGGLE", 1)?.rowId).toBe("unmapped");
+
+    rows.set("unmapped", { id: "unmapped", toggle: "M" });
+    runtime.reconcileTraversalRows(new Set(["unmapped"]));
+    const remappedColumns = makeColumns(["M", "Y"]);
+    runtime.reconcileColumns(remappedColumns);
+    runtime.reconcileTraversal(remappedColumns, rowSpace);
+    expect(runtime.findTraversalDestination(0, "COL_ID_TOGGLE", 1)?.rowId).toBe("unmapped");
   });
 
   it("rotates canonical source caches when decoder authority changes", () => {

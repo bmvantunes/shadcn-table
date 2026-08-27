@@ -3241,7 +3241,7 @@ test("does not open a custom Boolean editor for a canonical value outside its ma
     codecVersion: 1,
     filterFamily: "equality",
     editorFamily: "boolean",
-    booleanEditorValues: ["N", "Y"],
+    booleanEditorValues: ["M", "Y"],
     cellAlign: "center",
     editorLayout: "center",
     defaultWidth: 88,
@@ -3270,10 +3270,11 @@ test("does not open a custom Boolean editor for a canonical value outside its ma
       initialOrderBy={[{ columnId: "COL_ID_TOGGLE", direction: "asc" }]}
       clientSource={{
         rows: [
-          { id: "mapped", toggle: "N" },
-          { id: "unmapped", toggle: "M" },
+          { id: "mapped-start", toggle: "M" },
+          { id: "unmapped", toggle: "N" },
+          { id: "mapped-end", toggle: "Y" },
         ],
-        totalRows: 2,
+        totalRows: 3,
         version: 1,
         status: "ready",
       }}
@@ -3284,7 +3285,7 @@ test("does not open a custom Boolean editor for a canonical value outside its ma
     />,
   );
 
-  const unmapped = screen.getByRole("gridcell", { name: "M", exact: true });
+  const unmapped = screen.getByRole("gridcell", { name: "N", exact: true });
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_UNMAPPED_BOOLEAN" });
   await userEvent.click(unmapped);
   await userEvent.keyboard("{F2}");
@@ -3292,9 +3293,15 @@ test("does not open a custom Boolean editor for a canonical value outside its ma
   await expect.element(grid).toHaveFocus();
   await expect.element(grid).toHaveAttribute("aria-activedescendant", unmapped.element().id);
 
-  await userEvent.click(screen.getByRole("gridcell", { name: "N", exact: true }));
+  const mappedStart = screen.getByRole("gridcell", { name: "M", exact: true });
+  const mappedEnd = screen.getByRole("gridcell", { name: "Y", exact: true });
+  await userEvent.click(mappedStart);
   await userEvent.keyboard("{F2}");
   await expect.element(screen.getByRole("checkbox", { name: "Edit Toggle" })).toBeVisible();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(grid).toHaveAttribute("aria-activedescendant", mappedEnd.element().id);
+  await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
+  await expect.element(grid).toHaveAttribute("aria-activedescendant", mappedStart.element().id);
 });
 
 test("contains a wrong-domain custom parser Success while preserving candidate focus", async () => {

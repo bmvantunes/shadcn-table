@@ -481,8 +481,13 @@ describe("BrunoTable editable traversal index", () => {
     expect(evaluate).toHaveBeenCalledTimes(80);
     expect(index.isReady()).toBe(false);
 
-    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+    for (let slice = 1; slice < rowCount / 2; slice += 1) {
+      expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    }
     expect(evaluate).toHaveBeenCalledTimes(rowCount * columnCount);
+    expect(index.isReady()).toBe(false);
+    expect(index.find(0, "COL_ID_AUTHORITY_0", 1)).toBeUndefined();
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(false);
     expect(index.isReady()).toBe(true);
     expect(index.find(0, "COL_ID_AUTHORITY_0", 1)?.columnId).toBe("COL_ID_AUTHORITY_1");
   });

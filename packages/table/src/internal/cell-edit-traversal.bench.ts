@@ -505,6 +505,9 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         3,
       );
       const p99Ms = assertBudgetSamples("large predicate-authority slice", sliceSamples);
+      if (sliceSamples.length > 600) {
+        throw new Error("Large predicate-authority replacement exceeded its linear slice bound.");
+      }
       console.log(
         JSON.stringify({
           benchmark: "BrunoTable large predicate-authority replacement",

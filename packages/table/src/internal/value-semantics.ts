@@ -29,6 +29,7 @@ type RuntimeValueTypeDescriptor = {
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
   readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
+  readonly booleanEditorDomainExhaustive?: true;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -56,6 +57,7 @@ export type CompiledColumnValueSemantics = {
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
   readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
+  readonly booleanEditorDomainExhaustive?: true;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly selectCanonicalOptions?: readonly string[];
@@ -229,6 +231,9 @@ export function compileColumnValueSemantics(
     ...(descriptor.booleanEditorCanonicalValues === undefined
       ? {}
       : { booleanEditorCanonicalValues: descriptor.booleanEditorCanonicalValues }),
+    ...(descriptor.booleanEditorDomainExhaustive === true
+      ? { booleanEditorDomainExhaustive: true as const }
+      : {}),
     width,
     aggregateResults: descriptor.aggregateResults,
     ...(descriptor.aggregateAlgebra === undefined
@@ -641,6 +646,7 @@ function createBooleanValueType(): RuntimeValueTypeDescriptor {
     filterFamily: "boolean",
     editorFamily: "boolean",
     booleanEditorCanonicalValues: Object.freeze(["false", "true"]),
+    booleanEditorDomainExhaustive: true,
     cellAlign: "center",
     editorLayout: "center",
     defaultWidth: 88,
