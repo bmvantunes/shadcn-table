@@ -153,11 +153,10 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       if (editor === null || document === undefined) return;
       const editSurface = editor.closest<HTMLElement>("[data-bruno-cell-edit-surface]");
       const tableBoundary = editor.closest<HTMLElement>("[data-bruno-table]");
-      let blockedPointerId: number | null = null;
-      let blockedClickTarget: EventTarget | null = null;
+      const blockedPointerTargets = new Map<number, EventTarget | null>();
+      const blockedClickTargetCounts = new Map<EventTarget | null, number>();
       const commitOutsidePointer = (event: PointerEvent) => {
-        blockedPointerId = null;
-        blockedClickTarget = null;
+        blockedClickTargetCounts.clear();
         if (
           event.target instanceof Node &&
           (editor.contains(event.target) ||
@@ -174,8 +173,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           isBrunoTableHotkeyHeld("Shift") &&
           brunoTableCellRangePointerHit(event.target, grid) !== undefined;
         if (!runtime.commitActiveCandidate()) {
-          blockedPointerId = event.pointerId;
-          blockedClickTarget = event.target;
+          blockedPointerTargets.set(event.pointerId, event.target);
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
@@ -196,20 +194,31 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         }
       };
       const suppressRejectedPointerUp = (event: PointerEvent) => {
-        if (event.pointerId !== blockedPointerId) return;
-        blockedPointerId = null;
+        if (!blockedPointerTargets.has(event.pointerId)) return;
+        const blockedTarget = blockedPointerTargets.get(event.pointerId) ?? null;
+        blockedPointerTargets.delete(event.pointerId);
+        blockedClickTargetCounts.set(
+          blockedTarget,
+          (blockedClickTargetCounts.get(blockedTarget) ?? 0) + 1,
+        );
         event.preventDefault();
         event.stopImmediatePropagation();
       };
       const clearRejectedPointer = (event: PointerEvent) => {
-        if (event.pointerId !== blockedPointerId) return;
-        blockedPointerId = null;
-        blockedClickTarget = null;
+        blockedPointerTargets.delete(event.pointerId);
       };
       const suppressRejectedClick = (event: MouseEvent) => {
-        const blocked = blockedClickTarget;
-        blockedClickTarget = null;
-        if (blocked === null || event.target !== blocked) return;
+        const blockedCount = blockedClickTargetCounts.get(event.target) ?? 0;
+        if (blockedCount === 0) {
+          let activeRejectedTarget = false;
+          for (const target of blockedPointerTargets.values()) {
+            if (target !== event.target) continue;
+            activeRejectedTarget = true;
+            break;
+          }
+          if (!activeRejectedTarget) return;
+        } else if (blockedCount === 1) blockedClickTargetCounts.delete(event.target);
+        else blockedClickTargetCounts.set(event.target, blockedCount - 1);
         event.preventDefault();
         event.stopImmediatePropagation();
       };

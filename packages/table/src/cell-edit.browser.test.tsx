@@ -1570,7 +1570,7 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
   actionButton
     .element()
     .dispatchEvent(
-      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 82 }),
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 82 }),
     );
   actionButton
     .element()
@@ -1579,9 +1579,24 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
     );
   actionButton
     .element()
+    .dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 82 }),
+    );
+  actionButton
+    .element()
     .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  expect(pointerUpAction).toHaveBeenCalledTimes(1);
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(pointerUpAction).not.toHaveBeenCalled();
   expect(clickAction).not.toHaveBeenCalled();
+
+  actionButton
+    .element()
+    .dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 80 }),
+    );
+  expect(pointerUpAction).toHaveBeenCalledTimes(1);
 
   actionButton
     .element()
