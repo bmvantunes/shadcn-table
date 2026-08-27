@@ -204,6 +204,10 @@ export class BrunoTableCellEditTraversalIndex {
     }
     this.columns = columns;
     this.rowSpace = rowSpace;
+    if (projectionChanged && this.pendingPredicateAuthorityEligibleRowIndexes !== undefined) {
+      this.pendingPredicateAuthorityEligibleRowIndexes = undefined;
+      this.pendingPredicateAuthorityProjectionRowIndex = 0;
+    }
     if (columnsChanged) {
       const previousPredicateColumns = this.predicateColumnsById;
       this.columnIndexById.clear();
@@ -896,6 +900,7 @@ export class BrunoTableCellEditTraversalIndex {
   };
 
   private readonly reconcileDirtyCells = (): void => {
+    const eligibilityChanged = this.dirtyColumnIdsByRowId.size > 0;
     for (const [rowId, columnIds] of this.dirtyColumnIdsByRowId) {
       const rowIndex = this.rowIndexById.get(rowId);
       const rowCache = this.rowCacheById.get(rowId);
@@ -918,6 +923,10 @@ export class BrunoTableCellEditTraversalIndex {
     }
     for (const rowId of this.dirtyColumnIdsByRowId.keys()) this.reconcileVerticalRangeRow(rowId);
     this.dirtyColumnIdsByRowId.clear();
+    if (eligibilityChanged && this.pendingPredicateAuthorityEligibleRowIndexes !== undefined) {
+      this.pendingPredicateAuthorityEligibleRowIndexes = [];
+      this.pendingPredicateAuthorityProjectionRowIndex = 0;
+    }
   };
 
   private readonly removeRowCache = (rowId: string): void => {

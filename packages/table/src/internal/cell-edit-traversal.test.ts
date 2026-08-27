@@ -542,6 +542,59 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.findFromRowBoundary(1, -1)).toBeUndefined();
   });
 
+  it("restarts an authority projection for row-space and draft interleavings", () => {
+    const rows = new Map<string, Row>([
+      ["a", { id: "a", enabled: false, alternate: false }],
+      ["b", { id: "b", enabled: false, alternate: false }],
+      ["c", { id: "c", enabled: false, alternate: false }],
+      ["d", { id: "d", enabled: true, alternate: false }],
+    ]);
+    const draftedRowIds = new Set<string>();
+    const makeColumns = () =>
+      compileColumns([
+        {
+          columnId: "COL_ID_INTERLEAVED_AUTHORITY",
+          field: "enabled" as const,
+          headerName: "Interleaved authority",
+          valueType: "boolean" as const,
+          isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+        },
+      ]);
+    const index = new BrunoTableCellEditTraversalIndex(
+      (rowId) => rows.get(rowId),
+      (rowId, row) => (row as Row).enabled || draftedRowIds.has(rowId),
+      true,
+    );
+    const forward = rowSpace(["a", "b", "c", "d"]);
+    const reversed = rowSpace(["d", "c", "b", "a"]);
+    const initialColumns = makeColumns();
+    index.reconcile(initialColumns, forward);
+    while (index.buildNextSlice(1, Number.POSITIVE_INFINITY));
+
+    const reorderedColumns = makeColumns();
+    index.reconcile(reorderedColumns, forward);
+    for (let row = 0; row < rows.size; row += 1) {
+      expect(index.buildNextSlice(1, Number.POSITIVE_INFINITY)).toBe(true);
+    }
+    expect(index.buildNextSlice(2, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(index.isReady()).toBe(false);
+    index.reconcile(reorderedColumns, reversed);
+    while (index.buildNextSlice(1, Number.POSITIVE_INFINITY));
+    expect(index.find(1, "COL_ID_INTERLEAVED_AUTHORITY", -1)?.rowId).toBe("d");
+
+    const draftedColumns = makeColumns();
+    index.reconcile(draftedColumns, reversed);
+    for (let row = 0; row < rows.size; row += 1) {
+      expect(index.buildNextSlice(1, Number.POSITIVE_INFINITY)).toBe(true);
+    }
+    expect(index.buildNextSlice(3, Number.POSITIVE_INFINITY)).toBe(true);
+    draftedRowIds.add("b");
+    index.invalidateCell("b", "COL_ID_INTERLEAVED_AUTHORITY");
+    index.reconcile(draftedColumns, reversed);
+    while (index.buildNextSlice(1, Number.POSITIVE_INFINITY));
+    expect(index.find(3, "COL_ID_INTERLEAVED_AUTHORITY", -1)?.rowId).toBe("b");
+  });
+
   it("validates row references after an unknown publication without rebuilding unchanged rows", () => {
     const rows = new Map<string, Row>([
       ["first", { id: "first", enabled: false, alternate: false }],
