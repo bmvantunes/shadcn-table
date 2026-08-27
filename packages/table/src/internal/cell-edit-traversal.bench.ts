@@ -33,6 +33,7 @@ const compilePredicateColumns = (firstPredicate = stablePredicate) =>
   );
 const columns = compilePredicateColumns();
 const equivalentColumns = compilePredicateColumns();
+const equivalentRecompileColumns = Array.from({ length: 100 }, () => compilePredicateColumns());
 const changedAuthorityColumns = compilePredicateColumns(changedPredicate);
 const allChangedAuthorityColumns = compileColumns(
   Array.from({ length: columnCount }, (_unused, columnIndex) => ({
@@ -981,12 +982,16 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
     { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
   );
 
+  let equivalentRecompileIndex = 0;
   bench(
     "reconciles an equivalent 5,000 by 150 recompile without predicate callbacks",
     () => {
       equivalentAuthorityPredicateEvaluations = 0;
+      const nextColumns =
+        equivalentRecompileColumns[equivalentRecompileIndex % equivalentRecompileColumns.length]!;
+      equivalentRecompileIndex += 1;
       const startedAt = performance.now();
-      equivalentAuthorityIndex.reconcile(equivalentColumns, forwardRowSpace);
+      equivalentAuthorityIndex.reconcile(nextColumns, forwardRowSpace);
       recordBudgetSample(
         "equivalent predicate-authority reconciliation",
         equivalentAuthoritySamples,
