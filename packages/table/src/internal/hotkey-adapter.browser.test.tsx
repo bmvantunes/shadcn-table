@@ -10,6 +10,7 @@ import {
   useBrunoTableGridHotkeys,
   useBrunoTableHotkeyWorkflowAction,
   type BrunoTableGridHotkeyCommands,
+  type BrunoTableHotkeyGesture,
 } from "./hotkey-adapter";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableNavigationRuntime } from "./navigation";
@@ -64,6 +65,27 @@ afterEach(async () => {
 });
 
 describe("BrunoTable hotkey Adapter browser contract", () => {
+  test("runs exactly one semantic Shift+Tab command after live prevention", async () => {
+    const tab = vi.fn((event: BrunoTableHotkeyGesture) => event.preventDefault());
+    const shiftTab = vi.fn();
+    const screen = await render(
+      <AdapterProbe commands={probeCommands({ shiftTab, tab })} label="Shift Tab prevention" />,
+    );
+    const owner = screen.getByRole("region", { name: "Shift Tab prevention" }).element();
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+      shiftKey: true,
+    });
+
+    owner.dispatchEvent(event);
+
+    expect(tab).toHaveBeenCalledOnce();
+    expect(shiftTab).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   test.each([
     { platform: "windows" as const, modifier: { ctrlKey: true } },
     { platform: "mac" as const, modifier: { metaKey: true } },
@@ -257,7 +279,7 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
   });
 
   test.each(["active-first", "active-last"] as const)(
-    "gives an active document Escape gesture exclusive ownership when mounted $order",
+    "keeps table-owned Escape in its realm and uses the sole-active document fallback when mounted $order",
     async (order) => {
       let active = true;
       const activeEscape = vi.fn((event: { readonly preventDefault: () => void }) =>
@@ -289,17 +311,53 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
       focused.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
+      expect(activeEscape).not.toHaveBeenCalled();
+      expect(focusedEscape).toHaveBeenCalledOnce();
+
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      );
       expect(activeEscape).toHaveBeenCalledOnce();
-      expect(focusedEscape).not.toHaveBeenCalled();
+      expect(focusedEscape).toHaveBeenCalledOnce();
 
       active = false;
       focused.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
       expect(activeEscape).toHaveBeenCalledOnce();
-      expect(focusedEscape).toHaveBeenCalledOnce();
+      expect(focusedEscape).toHaveBeenCalledTimes(2);
     },
   );
+
+  test("leaves document Escape unowned when two table workflows are active", async () => {
+    const firstEscape = vi.fn();
+    const secondEscape = vi.fn();
+    await render(
+      <>
+        <AdapterProbe
+          commands={probeCommands({
+            documentEscapeActive: () => true,
+            escape: firstEscape,
+          })}
+          label="First active gesture table"
+        />
+        <AdapterProbe
+          commands={probeCommands({
+            documentEscapeActive: () => true,
+            escape: secondEscape,
+          })}
+          label="Second active gesture table"
+        />
+      </>,
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+
+    expect(firstEscape).not.toHaveBeenCalled();
+    expect(secondEscape).not.toHaveBeenCalled();
+  });
 
   test("registers Mod+A only for an installed Row Selection command", async () => {
     const manager = getHotkeyManager();

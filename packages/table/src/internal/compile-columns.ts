@@ -39,6 +39,8 @@ export type CompiledFieldColumn = CompiledColumnBase & {
   readonly groupBy: boolean;
   readonly aggFunc?: BrunoTableAggFunc;
   readonly isEditable?: boolean | RuntimeCallback;
+  readonly blankValue?: Readonly<{ readonly value: null | undefined }>;
+  readonly validate?: RuntimeCallback;
   readonly groupKeyValueFormatter?: RuntimeCallback;
   readonly groupKeyCellClassName?: string | RuntimeCallback;
   readonly groupKeyCellRenderer?: RuntimeCallback;
@@ -90,6 +92,8 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   const hasEnableSetFilter = Object.hasOwn(candidate, "enableSetFilter");
   const hasEnableSorting = Object.hasOwn(candidate, "enableSorting");
   const hasIsEditable = Object.hasOwn(candidate, "isEditable");
+  const hasValidate = Object.hasOwn(candidate, "validate");
+  const hasBlankValue = Object.hasOwn(candidate, "blankValue");
   const hasValueFormatter = Object.hasOwn(candidate, "valueFormatter");
   const hasCellClassName = Object.hasOwn(candidate, "cellClassName");
   const hasCellRenderer = Object.hasOwn(candidate, "cellRenderer");
@@ -237,6 +241,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   }
 
   if (hasField) {
+    const blankValue = candidate["blankValue"];
+    if (hasBlankValue && blankValue !== null && blankValue !== undefined) {
+      throw new ColumnConfigurationError(
+        `BrunoTable blankValue must be null or undefined: ${columnId}`,
+      );
+    }
     if (hasFields || hasValueGetter) {
       throw new ColumnConfigurationError(
         `BrunoTable column cannot combine field with fields or valueGetter: ${columnId}`,
@@ -254,6 +264,32 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
     if (hasIsEditable && typeof isEditable !== "boolean" && typeof isEditable !== "function") {
       throw new ColumnConfigurationError(
         `BrunoTable isEditable must be a boolean or function when provided: ${columnId}`,
+      );
+    }
+    if (hasBlankValue && (isEditable === undefined || isEditable === false)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable blankValue requires a potentially editable field column: ${columnId}`,
+      );
+    }
+    const validate = hasValidate ? candidate["validate"] : undefined;
+    if (validate !== undefined && typeof validate !== "function") {
+      throw new ColumnConfigurationError(
+        `BrunoTable validate must be a function when provided: ${columnId}`,
+      );
+    }
+    if (typeof validate === "function" && (isEditable === undefined || isEditable === false)) {
+      throw new ColumnConfigurationError(
+        `BrunoTable validate requires a potentially editable field column: ${columnId}`,
+      );
+    }
+    if (
+      isEditable !== undefined &&
+      isEditable !== false &&
+      semantics.editorFamily === "select" &&
+      semantics.selectEditAuthority === undefined
+    ) {
+      throw new ColumnConfigurationError(
+        `BrunoTable custom Value Types cannot use the Select editor family for editing; use BrunoTableSelectColumn. Column: ${columnId}`,
       );
     }
 
@@ -333,6 +369,10 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       ...(typeof isEditable === "boolean" || typeof isEditable === "function"
         ? { isEditable: isEditable as boolean | RuntimeCallback }
         : {}),
+      ...(hasBlankValue
+        ? { blankValue: Object.freeze({ value: blankValue as null | undefined }) }
+        : {}),
+      ...(typeof validate === "function" ? { validate: validate as RuntimeCallback } : {}),
       ...(aggFunc === undefined ? {} : { aggFunc }),
       ...groupPresentation.compiled,
       ...aggregatePresentation.compiled,
@@ -357,6 +397,11 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   if (hasEnableSetFilter) {
     throw new ColumnConfigurationError(
       `BrunoTable computed columns cannot configure enableSetFilter: ${columnId}`,
+    );
+  }
+  if (hasBlankValue) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot declare blankValue: ${columnId}`,
     );
   }
 
@@ -387,6 +432,11 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
   if (hasIsEditable) {
     throw new ColumnConfigurationError(
       `BrunoTable computed columns cannot declare isEditable: ${columnId}`,
+    );
+  }
+  if (hasValidate) {
+    throw new ColumnConfigurationError(
+      `BrunoTable computed columns cannot declare validate: ${columnId}`,
     );
   }
 
@@ -453,6 +503,7 @@ function nullableSafeSemantics(
             : -1
           : 1
         : semantics.compare(left, right),
+    formatCanonicalText: (value) => (value == null ? "" : semantics.formatCanonicalText(value)),
     formatDisplay: (value) => (value == null ? "" : semantics.formatDisplay(value)),
   });
 }

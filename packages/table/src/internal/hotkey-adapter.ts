@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 
 import type { Hotkey, RegisterableHotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import type { RefCallback, RefObject } from "react";
+import type { BrunoTableCellEditMovement } from "./cell-edit";
 import type { BrunoTableNavigationCommand } from "./navigation";
 
 // Supported by the manager and KeyboardEvent, but omitted from 0.10.0's
@@ -22,6 +23,19 @@ type BrunoTableHotkeyBinding = Readonly<{
 
 export type BrunoTableHotkeyGesture = Readonly<Pick<KeyboardEvent, "defaultPrevented" | "target">> &
   Pick<KeyboardEvent, "preventDefault">;
+
+function brunoTableLiveHotkeyGesture(event: KeyboardEvent): BrunoTableHotkeyGesture {
+  const gesture = {
+    preventDefault: () => event.preventDefault(),
+    target: event.target,
+  } as BrunoTableHotkeyGesture;
+  Object.defineProperty(gesture, "defaultPrevented", {
+    configurable: false,
+    enumerable: true,
+    get: () => event.defaultPrevented,
+  });
+  return gesture;
+}
 
 export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
   "Escape",
@@ -45,6 +59,7 @@ export const BRUNO_TABLE_ESCAPE_HOTKEYS: readonly Hotkey[] = Object.freeze([
 export type BrunoTableGridHotkeyCommands = Readonly<{
   documentEscapeActive?: (() => boolean) | undefined;
   escape: (event: BrunoTableHotkeyGesture) => void;
+  tab?: ((event: BrunoTableHotkeyGesture, direction: -1 | 1) => void) | undefined;
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
   copy: (event: BrunoTableHotkeyGesture) => void;
@@ -81,12 +96,33 @@ const documentEscapeRegistrations = new WeakMap<
 
 function activeDocumentEscapeRegistration(
   document: Document | undefined,
+  eventTarget: EventTarget | null,
 ): BrunoTableDocumentEscapeRegistration | undefined {
   if (document === undefined) return undefined;
-  for (const registration of documentEscapeRegistrations.get(document) ?? []) {
-    if (registration.isActive()) return registration;
+  const registrations = documentEscapeRegistrations.get(document) ?? [];
+  const DocumentElement = document.defaultView?.Element;
+  const targetBoundary =
+    DocumentElement !== undefined && eventTarget instanceof DocumentElement
+      ? eventTarget.closest("[data-bruno-table]")
+      : null;
+  if (targetBoundary !== null) {
+    for (const registration of registrations) {
+      if (
+        registration.isActive() &&
+        registration.owner.current?.closest("[data-bruno-table]") === targetBoundary
+      ) {
+        return registration;
+      }
+    }
+    return undefined;
   }
-  return undefined;
+  let soleActiveRegistration: BrunoTableDocumentEscapeRegistration | undefined;
+  for (const registration of registrations) {
+    if (!registration.isActive()) continue;
+    if (soleActiveRegistration !== undefined) return undefined;
+    soleActiveRegistration = registration;
+  }
+  return soleActiveRegistration;
 }
 
 function createBrunoTableGridHotkeyBindings(
@@ -98,7 +134,18 @@ function createBrunoTableGridHotkeyBindings(
       allowInTextInput: true,
       onTrigger: commands.escape,
     })),
-    { hotkey: "Shift+Tab", allowInTextInput: true, onTrigger: commands.shiftTab },
+    {
+      hotkey: "Tab",
+      onTrigger: (event) => commands.tab?.(event, 1),
+    },
+    {
+      hotkey: "Shift+Tab",
+      allowInTextInput: true,
+      onTrigger: (event) => {
+        commands.tab?.(event, -1);
+        if (!event.defaultPrevented) commands.shiftTab(event);
+      },
+    },
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
     { hotkey: "Mod+C", onTrigger: commands.copy },
@@ -324,6 +371,7 @@ export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
   BRUNO_TABLE_ROW_SELECTION_HOTKEYS.length;
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
 export const BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT: number = 2;
+export const BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT: number = 5;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
 
@@ -377,12 +425,14 @@ export function brunoTableHotkeyRegistrationBound(
   activeFilterWorkflows = 0,
   rowSelection = false,
   grouping = false,
+  activeEditor = false,
 ): number {
   return (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
     activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT +
     (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0) +
-    (grouping ? BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT : 0)
+    (grouping ? BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT : 0) +
+    (activeEditor ? BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT : 0)
   );
 }
 
@@ -411,11 +461,7 @@ function useBrunoTableHotkeys(
     hotkey: binding.hotkey,
     callback: (event) => {
       if (event.isComposing) return;
-      binding.onTrigger({
-        defaultPrevented: event.defaultPrevented,
-        preventDefault: event.preventDefault.bind(event),
-        target: event.target,
-      });
+      binding.onTrigger(brunoTableLiveHotkeyGesture(event));
     },
     options: { ignoreInputs: binding.allowInTextInput !== true },
   }));
@@ -479,12 +525,16 @@ export function useBrunoTableGridHotkeys(
   const bindings = createBrunoTableGridHotkeyBindings(commands);
   const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
+    allowInTextInput: true,
     onTrigger: (event: BrunoTableHotkeyGesture) => {
+      if (event.defaultPrevented) return;
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);
       if (index < BRUNO_TABLE_ESCAPE_HOTKEYS.length) {
-        if (event.defaultPrevented) return;
         const registration = documentEscapeRegistrationRef.current;
-        const activeRegistration = activeDocumentEscapeRegistration(target.current?.ownerDocument);
+        const activeRegistration = activeDocumentEscapeRegistration(
+          target.current?.ownerDocument,
+          event.target,
+        );
         if (activeRegistration !== undefined) {
           if (activeRegistration !== registration) return;
         } else if (!ownsTarget) return;
@@ -503,6 +553,66 @@ export function useBrunoTableGridHotkeys(
   useBrunoTableHotkeys(
     reactDocumentTargetRef as unknown as RefObject<HTMLElement | null>,
     escapeBindings,
+    "allow",
+  );
+}
+
+export function useBrunoTableCellEditorHotkeys(
+  target: RefObject<HTMLElement | null>,
+  commands: Readonly<{
+    readonly cancel: () => void;
+    readonly commit: (movement: BrunoTableCellEditMovement) => boolean;
+  }>,
+): void {
+  const commandsRef = useRef(commands);
+  useLayoutEffect(() => {
+    commandsRef.current = commands;
+  }, [commands]);
+  useBrunoTableHotkeys(
+    target,
+    [
+      {
+        hotkey: "Escape",
+        allowInTextInput: true,
+        onTrigger: (event) => {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          commandsRef.current.cancel();
+        },
+      },
+      {
+        hotkey: "Enter",
+        allowInTextInput: true,
+        onTrigger: (event) => {
+          if (event.defaultPrevented) return;
+          if (commandsRef.current.commit("enter-forward")) event.preventDefault();
+        },
+      },
+      {
+        hotkey: "Shift+Enter",
+        allowInTextInput: true,
+        onTrigger: (event) => {
+          if (event.defaultPrevented) return;
+          if (commandsRef.current.commit("enter-backward")) event.preventDefault();
+        },
+      },
+      {
+        hotkey: "Tab",
+        allowInTextInput: true,
+        onTrigger: (event) => {
+          if (event.defaultPrevented) return;
+          if (commandsRef.current.commit("tab-forward")) event.preventDefault();
+        },
+      },
+      {
+        hotkey: "Shift+Tab",
+        allowInTextInput: true,
+        onTrigger: (event) => {
+          if (event.defaultPrevented) return;
+          if (commandsRef.current.commit("tab-backward")) event.preventDefault();
+        },
+      },
+    ],
     "allow",
   );
 }

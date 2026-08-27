@@ -34,7 +34,6 @@ import {
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
-  type BrunoTableEditingCapability,
   type BrunoTableFilterableColumnId,
   type BrunoTableGridFilterCommandCapability,
   type BrunoTableFilterExpressions,
@@ -59,6 +58,10 @@ type Equal<TLeft, TRight> =
     : false;
 
 type Expect<TValue extends true> = TValue;
+
+// @ts-expect-error Select editor option provenance is supplied only by BrunoTableSelectColumn.
+type EmittedUnsupportedCustomSelect = BrunoTableValueType<string, "select", "select">;
+void (0 as unknown as EmittedUnsupportedCustomSelect);
 
 type ExactMoney = Readonly<{ readonly minorUnits: bigint }>;
 const emittedExactMoneyAlgebra = BrunoTableAggregateAlgebra<ExactMoney>({
@@ -192,6 +195,234 @@ type Order = {
   readonly multiplier: number;
   readonly hiddenLabel: string;
 };
+
+type EmittedNullableEditRow = Readonly<{
+  readonly id: string;
+  readonly nullable: number | null;
+  readonly optional: number | undefined;
+  readonly ambiguous: number | null | undefined;
+  readonly required: number;
+}>;
+
+const emittedNullableEditColumns = [
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedNullableEditColumns;
+
+type EmittedNullableChoiceEditRow = Readonly<{
+  readonly id: string;
+  readonly flag: boolean | null;
+  readonly nullableChoice: "" | "ready" | null;
+  readonly requiredChoice: "" | "ready";
+}>;
+const emittedNullableChoiceEditColumns = [
+  {
+    columnId: "COL_ID_FLAG",
+    field: "flag",
+    headerName: "Flag",
+    valueType: "boolean",
+    isEditable: true,
+    blankValue: null,
+  },
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_NULLABLE_CHOICE",
+    field: "nullableChoice",
+    headerName: "Nullable choice",
+    options: ["", "ready"],
+    isEditable: true,
+    blankValue: null,
+  }),
+  BrunoTableSelectColumn({
+    columnId: "COL_ID_REQUIRED_CHOICE",
+    field: "requiredChoice",
+    headerName: "Required choice",
+    options: ["", "ready"],
+    isEditable: true,
+  }),
+] satisfies BrunoTableColumns<EmittedNullableChoiceEditRow>;
+void emittedNullableChoiceEditColumns;
+
+const emittedInvalidNullableEditColumns = [
+  // @ts-expect-error emitted nullable fields require their exact blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+    blankValue: undefined,
+  },
+  // @ts-expect-error emitted non-nullish fields reject a blank representation.
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: true,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidNullableEditColumns;
+
+const emittedInvalidMissingNullableBlankColumns = [
+  // @ts-expect-error emitted editable null fields require blankValue.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error emitted editable undefined fields require blankValue.
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: true,
+  },
+  // @ts-expect-error emitted ambiguous nullish fields require an explicit choice.
+  {
+    columnId: "COL_ID_AMBIGUOUS",
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    valueType: "number",
+    isEditable: true,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidMissingNullableBlankColumns;
+
+const emittedInvalidMissingNullableBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error emitted Helper cannot infer nullable editability without blankValue.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error emitted Helper rejects nullable editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_OPTIONAL",
+    // @ts-expect-error emitted Helper cannot infer optional editability without blankValue.
+    field: "optional",
+    headerName: "Optional",
+    // @ts-expect-error emitted Helper rejects optional editability without blankValue.
+    isEditable: true,
+  }),
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_AMBIGUOUS",
+    // @ts-expect-error emitted Helper cannot infer ambiguous editability without blankValue.
+    field: "ambiguous",
+    headerName: "Ambiguous",
+    // @ts-expect-error emitted Helper rejects ambiguous editability without blankValue.
+    isEditable: true,
+  }),
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidMissingNullableBlankHelperColumns;
+
+const emittedInvalidStaticFalseBlankColumns = [
+  // @ts-expect-error emitted literal static-false editability rejects an edit blank policy.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: false,
+    blankValue: null,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidStaticFalseBlankColumns;
+const emittedInvalidStaticFalseBlankHelperColumns = [
+  BrunoTableNumberColumn({
+    columnId: "COL_ID_NULLABLE",
+    // @ts-expect-error emitted Helpers cannot infer a compatible field for this invalid capability.
+    field: "nullable",
+    headerName: "Nullable",
+    // @ts-expect-error emitted Helpers reject literal static-false editability with blank policy.
+    isEditable: false,
+    // @ts-expect-error emitted Helpers reject a blank policy without potential editability.
+    blankValue: null,
+  }),
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidStaticFalseBlankHelperColumns;
+const emittedWidenedEditablePolicy: boolean = Math.random() > 0.5;
+const emittedWidenedRequiredEditColumns = [
+  {
+    columnId: "COL_ID_REQUIRED",
+    field: "required",
+    headerName: "Required",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+  },
+] as const satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedWidenedRequiredEditColumns;
+const emittedWidenedOnlyEditableClientProps = {
+  tableId: "emitted-widened-only-editability",
+  columns: emittedWidenedRequiredEditColumns,
+  initialOrderBy: [{ columnId: "COL_ID_REQUIRED", direction: "asc" }],
+  getRowId: (row: EmittedNullableEditRow) => row.id,
+  editable: true,
+  getRowVersion: () => 1n,
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: { rows: [], totalRows: 0, version: 1, status: "ready" },
+} as const;
+// @ts-expect-error emitted widened boolean alone cannot prove Table-level edit capability.
+const emittedInvalidWidenedOnlyEditableClient: BrunoTableClientProps<
+  EmittedNullableEditRow,
+  typeof emittedWidenedRequiredEditColumns,
+  bigint
+> = emittedWidenedOnlyEditableClientProps;
+void emittedInvalidWidenedOnlyEditableClient;
+const emittedInvalidWidenedNullableEditColumns = [
+  // @ts-expect-error emitted nullable widened booleans cannot choose an exact blank representation.
+  {
+    columnId: "COL_ID_NULLABLE",
+    field: "nullable",
+    headerName: "Nullable",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+  },
+  // @ts-expect-error emitted nullable widened booleans cannot pair safely with blankValue.
+  {
+    columnId: "COL_ID_OPTIONAL",
+    field: "optional",
+    headerName: "Optional",
+    valueType: "number",
+    isEditable: emittedWidenedEditablePolicy,
+    blankValue: undefined,
+  },
+] satisfies BrunoTableColumns<EmittedNullableEditRow>;
+void emittedInvalidWidenedNullableEditColumns;
 
 const emittedHelperGroupedColumns = [
   BrunoTableTextColumn({
@@ -1184,6 +1415,196 @@ const emittedStatusColumn = BrunoTableSelectColumn.withDefaults({
   options: ["open", "closed"],
 });
 
+type EmittedPresetEditRow = Readonly<{
+  readonly nullable: number | null;
+  readonly optional: number | undefined;
+  readonly required: number;
+  readonly nullableStatus: "open" | "closed" | null;
+  readonly requiredStatus: "open" | "closed";
+}>;
+const invalidEmittedRawValidationColumns = [
+  // @ts-expect-error emitted validation is edit-only and requires potential editability.
+  {
+    columnId: "COL_ID_READ_ONLY_VALIDATE",
+    field: "required",
+    headerName: "Read-only validate",
+    valueType: "number",
+    validate: () => undefined,
+  },
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void invalidEmittedRawValidationColumns;
+// @ts-expect-error emitted preset validation requires literal true or predicate editability.
+BrunoTableNumberColumn.withDefaults({
+  validate: () => undefined,
+});
+const emittedNullableNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+const emittedPresetEditColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_NULLABLE_PRESET",
+    field: "nullable",
+    headerName: "Nullable preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPresetEditColumns;
+const emittedOptionalPresetEditColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_OPTIONAL_PRESET",
+    field: "optional",
+    headerName: "Optional preset",
+    blankValue: undefined,
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedOptionalPresetEditColumns;
+const emittedPredicateNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: ({ row, value }) => {
+    type RowIsUnknown = Expect<Equal<typeof row, unknown>>;
+    type ValueIsExact = Expect<Equal<typeof value, number | null | undefined>>;
+    void (null as unknown as RowIsUnknown);
+    void (null as unknown as ValueIsExact);
+    return value !== undefined;
+  },
+  blankValue: null,
+});
+const emittedPredicateNumberColumns = [
+  emittedPredicateNumberPreset({
+    columnId: "COL_ID_PREDICATE_NUMBER_PRESET",
+    field: "nullable",
+    headerName: "Predicate Number preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPredicateNumberColumns;
+const emittedPredicateSelectPreset = BrunoTableSelectColumn.withDefaults({
+  options: ["open", "closed"],
+  isEditable: ({ row, value }) => {
+    type SelectRowIsUnknown = Expect<Equal<typeof row, unknown>>;
+    type SelectValueIsExact = Expect<Equal<typeof value, "open" | "closed" | null | undefined>>;
+    void (null as unknown as SelectRowIsUnknown);
+    void (null as unknown as SelectValueIsExact);
+    return value !== undefined;
+  },
+  blankValue: null,
+});
+const emittedPredicateSelectColumns = [
+  emittedPredicateSelectPreset({
+    columnId: "COL_ID_PREDICATE_SELECT_PRESET",
+    field: "nullableStatus",
+    headerName: "Predicate Select preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedPredicateSelectColumns;
+const invalidEmittedRequiredSelectPreset = emittedPredicateSelectPreset({
+  columnId: "COL_ID_INVALID_REQUIRED_SELECT_PRESET",
+  // @ts-expect-error an inherited null blank policy cannot target a required Select field.
+  field: "requiredStatus",
+  headerName: "Invalid required Select preset",
+});
+void invalidEmittedRequiredSelectPreset;
+const emittedWidenedEditableDefaults: { readonly isEditable?: boolean } = { isEditable: true };
+const emittedWidenedNumberPreset = BrunoTableNumberColumn.withDefaults(
+  emittedWidenedEditableDefaults,
+);
+const invalidEmittedWidenedNullablePreset = emittedWidenedNumberPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_PRESET",
+  // @ts-expect-error widened editability may be true, so nullable fields require a blank policy.
+  field: "nullable",
+  headerName: "Widened nullable preset",
+});
+void invalidEmittedWidenedNullablePreset;
+const invalidEmittedWidenedNullablePresetWithBlank = emittedWidenedNumberPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_PRESET_WITH_BLANK",
+  // @ts-expect-error widened editability cannot prove the nullable field capability.
+  field: "nullable",
+  headerName: "Widened nullable preset with blank",
+  // @ts-expect-error a blank policy still requires exact true or predicate editability.
+  blankValue: null,
+});
+void invalidEmittedWidenedNullablePresetWithBlank;
+const validEmittedWidenedRequiredPreset = [
+  emittedWidenedNumberPreset({
+    columnId: "COL_ID_WIDENED_REQUIRED_PRESET",
+    field: "required",
+    headerName: "Widened required preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void validEmittedWidenedRequiredPreset;
+const emittedComputedFromEditPresetColumns = [
+  emittedNullableNumberPreset({
+    columnId: "COL_ID_COMPUTED_PRESET",
+    fields: ["required"],
+    headerName: "Computed preset",
+    valueGetter: ({ row }) => row.required,
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+const emittedComputedFromEditPreset = emittedComputedFromEditPresetColumns[0]!;
+type EmittedComputedEditPresetOmitsEditability = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["isEditable"], undefined>
+>;
+type EmittedComputedEditPresetOmitsBlank = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["blankValue"], undefined>
+>;
+type EmittedComputedEditPresetOmitsValidation = Expect<
+  Equal<(typeof emittedComputedFromEditPreset)["validate"], undefined>
+>;
+void (null as unknown as EmittedComputedEditPresetOmitsEditability);
+void (null as unknown as EmittedComputedEditPresetOmitsBlank);
+void (null as unknown as EmittedComputedEditPresetOmitsValidation);
+const emittedInvalidPresetField = emittedNullableNumberPreset({
+  columnId: "COL_ID_REQUIRED_PRESET",
+  // @ts-expect-error emitted null blank preset requires a field containing null.
+  field: "required",
+  headerName: "Required preset",
+});
+void emittedInvalidPresetField;
+const emittedInvalidDisabledPresetField = emittedNullableNumberPreset({
+  columnId: "COL_ID_DISABLED_PRESET",
+  // @ts-expect-error emitted inherited blank cannot combine with isEditable false.
+  field: "nullable",
+  headerName: "Disabled preset",
+  // @ts-expect-error emitted effective false-plus-blank shape is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledPresetField;
+const emittedEditableWithoutBlankPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+});
+const emittedValidRequiredEditableWithoutBlank = [
+  emittedEditableWithoutBlankPreset({
+    columnId: "COL_ID_REQUIRED_EDITABLE_PRESET",
+    field: "required",
+    headerName: "Required editable preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedValidRequiredEditableWithoutBlank;
+const emittedValidatedNumberPreset = BrunoTableNumberColumn.withDefaults({
+  isEditable: true,
+  validate: () => undefined,
+});
+const emittedInvalidDisabledValidatedPreset = emittedValidatedNumberPreset({
+  columnId: "COL_ID_DISABLED_VALIDATED_PRESET",
+  // @ts-expect-error emitted inherited validation cannot combine with false editability.
+  field: "required",
+  headerName: "Disabled validated preset",
+  // @ts-expect-error emitted effective false-plus-validation shape is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledValidatedPreset;
+const emittedInvalidNullableWithoutBlank = emittedEditableWithoutBlankPreset({
+  columnId: "COL_ID_NULLABLE_WITHOUT_BLANK",
+  // @ts-expect-error emitted nullable editable preset applications require an exact blank policy.
+  field: "nullable",
+  headerName: "Nullable without blank",
+});
+void emittedInvalidNullableWithoutBlank;
+// @ts-expect-error emitted blank preset requires literal isEditable true.
+BrunoTableNumberColumn.withDefaults({
+  isEditable: false,
+  blankValue: null,
+});
+
 const emittedComputedNumberColumn = BrunoTableNumberColumn.withDefaults({
   headerName: "Calculated price",
   enableFilter: true,
@@ -1372,6 +1793,16 @@ const exactAmountComputedColumns = [
     valueFormatter: ({ value }) => value.minor.toString(10),
   }),
 ] satisfies BrunoTableColumns<AmountRow>;
+const emittedComputedWithErasedEditOptions = {
+  ...exactAmountComputedColumns[0],
+  blankValue: null,
+  validate: () => undefined,
+};
+const emittedInvalidErasedComputedEditOptions = [
+  // @ts-expect-error emitted computed columns reject edit-only options after widening.
+  emittedComputedWithErasedEditOptions,
+] satisfies BrunoTableColumns<AmountRow>;
+void emittedInvalidErasedComputedEditOptions;
 
 type ExactComputedAmount = Expect<
   Equal<
@@ -1749,11 +2180,11 @@ void BrunoTableClient({
 const emittedToolbar = BrunoTableToolbar({ children: "Filters" });
 void emittedToolbar;
 
-type EmittedEditableClientProps<TColumns extends BrunoTableColumns<Order>> = Omit<
-  BrunoTableClientProps<Order, TColumns>,
-  "editable" | "getRowVersion" | "onSaveEdits"
-> &
-  BrunoTableEditingCapability<Order, TColumns, bigint>;
+type EmittedEditableClientProps<TColumns extends BrunoTableColumns<Order>> = BrunoTableClientProps<
+  Order,
+  TColumns,
+  bigint
+>;
 
 const editableProps = {
   tableId: "orders",
@@ -1777,6 +2208,18 @@ const editableProps = {
     status: "ready",
   },
 } satisfies EmittedEditableClientProps<Columns>;
+// @ts-expect-error Emitted editable named props require the third Row Version authority generic.
+const emittedErasedNamedProps: BrunoTableClientProps<Order, Columns> = editableProps;
+void emittedErasedNamedProps;
+const emittedExactNamedProps: BrunoTableClientProps<Order, Columns, bigint> = editableProps;
+const emittedExactNamedVersion: bigint = emittedExactNamedProps.getRowVersion(
+  emittedExactNamedProps.clientSource.rows[0]!,
+);
+void emittedExactNamedVersion;
+// @ts-expect-error Explicit editable calls require the third Row Version authority generic.
+void BrunoTableClient<Order, Columns>(editableProps);
+void BrunoTableClient<Order, Columns, (row: Order) => bigint>(editableProps);
+void BrunoTableClient(editableProps);
 
 const noSortingProps = {
   tableId: "unsortable-orders",
@@ -1813,6 +2256,32 @@ const widenedEditableProps = {
     status: "ready",
   },
 } satisfies EmittedEditableClientProps<typeof widenedColumns>;
+
+const emittedNonEditableColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+  },
+] as const satisfies BrunoTableColumns<Order>;
+const emittedInvalidNamedEditableProps = {
+  tableId: "emitted-invalid-editable",
+  columns: emittedNonEditableColumns,
+  initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  editable: true,
+  getRowVersion: (row: Order) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+} as const;
+// @ts-expect-error emitted named props preserve the exact potentially-editable tuple proof.
+const emittedInvalidNamedEditableAssignment: BrunoTableClientProps<
+  Order,
+  typeof emittedNonEditableColumns,
+  bigint
+> = emittedInvalidNamedEditableProps;
+void emittedInvalidNamedEditableAssignment;
 
 const invalidProps = {
   tableId: "orders",
@@ -2275,6 +2744,47 @@ const invalidCustomNumericOperand = [
   { columnId: "COL_ID_AMOUNT", type: "greaterThan", filter: 10 },
 ] satisfies BrunoTableFilterExpressions<AmountRow, typeof exactAmountColumns>;
 
+type EmittedExactToggle = "N" | "Y";
+const emittedExactToggleValueType = {
+  codecId: "example/emitted-toggle",
+  codecVersion: 1,
+  filterFamily: "equality",
+  editorFamily: "boolean",
+  booleanEditorValues: ["N", "Y"],
+  cellAlign: "center",
+  editorLayout: "center",
+  defaultWidth: 88,
+  decodeRuntime: (input: unknown) =>
+    input === "N" || input === "Y"
+      ? { _tag: "Success" as const, value: input }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+  equivalent: (left: EmittedExactToggle, right: EmittedExactToggle) => left === right,
+  compare: (left: EmittedExactToggle, right: EmittedExactToggle) =>
+    left === right ? 0 : left === "N" ? -1 : 1,
+  formatCanonicalText: (value: EmittedExactToggle) => value,
+  parseCanonicalText: (text: string) =>
+    text === "N" || text === "Y"
+      ? { _tag: "Success" as const, value: text }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+  formatDisplay: (value: EmittedExactToggle) => value,
+  encodePersisted: (value: EmittedExactToggle) => value,
+  decodePersisted: (input: unknown) =>
+    input === "N" || input === "Y"
+      ? { _tag: "Success" as const, value: input }
+      : { _tag: "Failure" as const, message: "Expected N or Y." },
+} satisfies BrunoTableValueType<EmittedExactToggle, "equality", "boolean">;
+const {
+  booleanEditorValues: emittedOmittedToggleEditorValues,
+  ...emittedToggleWithoutEditorValues
+} = emittedExactToggleValueType;
+void emittedOmittedToggleEditorValues;
+// @ts-expect-error emitted custom Boolean editors require an exact false/true mapping.
+const emittedInvalidToggleValueType: BrunoTableValueType<
+  EmittedExactToggle,
+  "equality",
+  "boolean"
+> = emittedToggleWithoutEditorValues;
+
 const builtInValueType: BrunoTableBuiltInValueType = "bigint";
 
 void (0 as unknown as Price);
@@ -2346,3 +2856,5 @@ void invalidCustomComputedDependency;
 void invalidIncompleteSelectDomain;
 void invalidCustomNumericOperand;
 void builtInValueType;
+void emittedExactToggleValueType;
+void emittedInvalidToggleValueType;

@@ -13,7 +13,88 @@ import type {
 type EmittedPriceRow = {
   readonly price: BigDecimal.BigDecimal;
   readonly quantity: bigint;
+  readonly nullablePrice: BigDecimal.BigDecimal | null;
+  readonly optionalPrice: BigDecimal.BigDecimal | undefined;
 };
+
+const emittedEditableBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+// @ts-expect-error emitted BigDecimal preset validation requires potential editability.
+BrunoTableBigDecimalColumn.withDefaults({
+  validate: () => undefined,
+});
+const emittedEditableBigDecimalColumns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_DIRECT_NULLABLE_PRICE",
+    field: "nullablePrice",
+    headerName: "Direct nullable price",
+    isEditable: true,
+    blankValue: null,
+    validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+  }),
+  emittedEditableBigDecimalPreset({
+    columnId: "COL_ID_OPTIONAL_PRICE_PRESET",
+    field: "optionalPrice",
+    headerName: "Optional price preset",
+    blankValue: undefined,
+  }),
+] satisfies BrunoTableColumns<EmittedPriceRow>;
+void emittedEditableBigDecimalColumns;
+const emittedPredicateBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: ({ value }) => value !== undefined,
+  blankValue: null,
+});
+const emittedPredicateBigDecimalColumns = [
+  emittedPredicateBigDecimalPreset({
+    columnId: "COL_ID_PREDICATE_BIGDECIMAL_PRESET",
+    field: "nullablePrice",
+    headerName: "Predicate BigDecimal preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPriceRow>;
+void emittedPredicateBigDecimalColumns;
+const emittedInvalidDisabledBigDecimalPreset = emittedEditableBigDecimalPreset({
+  columnId: "COL_ID_DISABLED_PRICE_PRESET",
+  // @ts-expect-error emitted inherited blank cannot combine with isEditable false.
+  field: "nullablePrice",
+  headerName: "Disabled price preset",
+  // @ts-expect-error emitted effective false-plus-blank shape is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledBigDecimalPreset;
+const emittedValidatedBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+  validate: () => undefined,
+});
+const emittedInvalidDisabledValidatedBigDecimalPreset = emittedValidatedBigDecimalPreset({
+  columnId: "COL_ID_DISABLED_VALIDATED_PRICE_PRESET",
+  // @ts-expect-error inherited BigDecimal validation cannot combine with false editability.
+  field: "price",
+  headerName: "Disabled validated price preset",
+  // @ts-expect-error effective false-plus-validation is rejected.
+  isEditable: false,
+});
+void emittedInvalidDisabledValidatedBigDecimalPreset;
+const emittedEditableBigDecimalWithoutBlank = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+});
+const emittedValidRequiredBigDecimalWithoutBlank = [
+  emittedEditableBigDecimalWithoutBlank({
+    columnId: "COL_ID_REQUIRED_PRICE_WITHOUT_BLANK",
+    field: "price",
+    headerName: "Required price without blank",
+  }),
+] satisfies BrunoTableColumns<EmittedPriceRow>;
+void emittedValidRequiredBigDecimalWithoutBlank;
+const emittedInvalidNullableBigDecimalWithoutBlank = emittedEditableBigDecimalWithoutBlank({
+  columnId: "COL_ID_NULLABLE_PRICE_WITHOUT_BLANK",
+  // @ts-expect-error emitted nullable editable BigDecimal applications require a blank policy.
+  field: "nullablePrice",
+  headerName: "Nullable price without blank",
+});
+void emittedInvalidNullableBigDecimalWithoutBlank;
 
 const emittedPriceColumn = BrunoTableBigDecimalColumn.withDefaults({
   headerName: "Price",

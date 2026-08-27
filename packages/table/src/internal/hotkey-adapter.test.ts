@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
+  BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_ESCAPE_HOTKEYS,
   BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,
   BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT,
@@ -30,14 +31,15 @@ describe("BrunoTable hotkey Adapter contract", () => {
 
   it("does not admit a per-cell, per-row, or per-header registration dimension", () => {
     expect(BRUNO_TABLE_ESCAPE_HOTKEYS).toHaveLength(16);
-    expect(BRUNO_TABLE_GRID_HOTKEYS).toHaveLength(59);
-    expect(BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT).toBe(43);
+    expect(BRUNO_TABLE_GRID_HOTKEYS).toHaveLength(60);
+    expect(BRUNO_TABLE_GRID_LOCAL_HOTKEY_REGISTRATION_COUNT).toBe(44);
     expect(BRUNO_TABLE_GRID_DOCUMENT_ESCAPE_HOTKEY_REGISTRATION_COUNT).toBe(16);
-    expect(BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT).toBe(59);
-    expect(BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT).toBe(59);
+    expect(BRUNO_TABLE_REACT_HOTKEY_REGISTRATION_COUNT).toBe(60);
+    expect(BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT).toBe(60);
     expect(BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT).toBe(1);
     expect(BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT).toBe(1);
     expect(BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT).toBe(2);
+    expect(BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT).toBe(5);
     expect(brunoTableHotkeyRegistrationBound(0, 0)).toBe(
       BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
     );
@@ -51,6 +53,10 @@ describe("BrunoTable hotkey Adapter contract", () => {
     );
     expect(brunoTableHotkeyRegistrationBound(0, 0, 0, false, true)).toBe(
       BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT + BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT,
+    );
+    expect(brunoTableHotkeyRegistrationBound(0, 0, 0, false, false, true)).toBe(
+      BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
+        BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT,
     );
   });
 });

@@ -133,10 +133,12 @@ export type BrunoTableViewportAdapterState = Readonly<{
   viewportSnapshot: BrunoTableViewportSnapshot;
   attach: (element: HTMLElement | null) => void;
   attachBodyLayer: RefCallback<HTMLElement>;
+  attachPinnedEditorHost: RefCallback<HTMLElement>;
   attachRowLayer: (element: HTMLElement | null) => void;
   attachScrollbarOverlay: (element: HTMLElement | null) => void;
   subscribeViewportEnvironment: (listener: () => void) => () => void;
   scrollByLogical: (delta: number) => boolean;
+  adjustVerticalByLogical: (delta: number) => number | undefined;
   previewColumnWidth: (columnId: string, width: number) => void;
   clearColumnWidthPreview: (publishSnapshot?: boolean) => void;
   revealCell: (
@@ -221,14 +223,17 @@ export function BrunoTableViewportAdapterBoundary({
     subscribe: viewport.subscribe,
     getSnapshot: viewport.getSnapshot,
     setLayout: viewport.setLayout,
+    setLeadingUtilityWidth: viewport.setLeadingUtilityWidth,
     resetVertical: viewport.resetVertical,
     dispose: viewport.dispose,
     attach: viewport.attach,
     attachBodyLayer: viewport.attachBodyLayer,
+    attachPinnedEditorHost: viewport.attachPinnedEditorHost,
     attachRowLayer: viewport.attachRowLayer,
     attachScrollbarOverlay: viewport.attachScrollbarOverlay,
     subscribeEnvironment: viewport.subscribeEnvironment,
     scrollByLogical: viewport.scrollByLogical,
+    adjustVerticalByLogical: viewport.adjustVerticalByLogical,
     previewColumnWidth: viewport.previewColumnWidth,
     clearColumnWidthPreview: viewport.clearColumnWidthPreview,
     revealCell: viewport.revealCell,
@@ -248,6 +253,9 @@ export function BrunoTableViewportAdapterBoundary({
     viewportBindings.getSnapshot,
     viewportBindings.getSnapshot,
   );
+  useLayoutEffect(() => {
+    viewportBindings.setLeadingUtilityWidth(leadingUtilityWidth);
+  }, [leadingUtilityWidth, viewportBindings]);
   const filterPositionResetEpoch = useSyncExternalStore(
     runtime.subscribeFilterPositionReset,
     runtime.getFilterPositionResetEpochSnapshot,
@@ -361,10 +369,12 @@ export function BrunoTableViewportAdapterBoundary({
     viewportSnapshot,
     attach: viewportBindings.attach,
     attachBodyLayer: viewportBindings.attachBodyLayer,
+    attachPinnedEditorHost: viewportBindings.attachPinnedEditorHost,
     attachRowLayer: viewportBindings.attachRowLayer,
     attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
     subscribeViewportEnvironment: viewportBindings.subscribeEnvironment,
     scrollByLogical: viewportBindings.scrollByLogical,
+    adjustVerticalByLogical: viewportBindings.adjustVerticalByLogical,
     previewColumnWidth: viewportBindings.previewColumnWidth,
     clearColumnWidthPreview: viewportBindings.clearColumnWidthPreview,
     revealCell: viewportBindings.revealCell,

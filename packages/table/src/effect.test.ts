@@ -518,6 +518,125 @@ describe("BrunoTableBigDecimalColumn", () => {
     ).toBe("GBP 1.25");
   });
 
+  it("preserves BigDecimal field edit policies through helper and preset precedence", () => {
+    const presetValidate = vi.fn(() => "preset invalid");
+    const individualValidate = vi.fn(() => undefined);
+    const preset = BrunoTableBigDecimalColumn.withDefaults({
+      isEditable: true,
+      blankValue: null,
+      validate: presetValidate,
+    });
+    const direct = BrunoTableBigDecimalColumn({
+      columnId: "COL_ID_DIRECT_NULLABLE",
+      field: "nullable",
+      headerName: "Direct nullable",
+      isEditable: true,
+      blankValue: null,
+      validate: individualValidate,
+    } as never) as Readonly<Record<string, unknown>>;
+    const inherited = Reflect.apply(preset, undefined, [
+      { columnId: "COL_ID_NULLABLE", field: "nullable", headerName: "Nullable" },
+    ]) as Readonly<Record<string, unknown>>;
+    const overridden = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        blankValue: undefined,
+        validate: individualValidate,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const computed = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_COMPUTED",
+        fields: ["price"],
+        valueGetter: ({ row }: { readonly row: { readonly price: BigDecimal.BigDecimal } }) =>
+          row.price,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+
+    expect(direct).toMatchObject({ isEditable: true, blankValue: null });
+    expect(direct["validate"]).toBe(individualValidate);
+    expect(inherited).toMatchObject({ isEditable: true, blankValue: null });
+    expect(inherited["validate"]).toBe(presetValidate);
+    expect(overridden).toHaveProperty("blankValue", undefined);
+    expect(overridden["validate"]).toBe(individualValidate);
+    expect(computed).not.toHaveProperty("isEditable");
+    expect(computed).not.toHaveProperty("blankValue");
+    expect(computed).not.toHaveProperty("validate");
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED",
+          field: "nullable",
+          headerName: "Disabled",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("blankValue requires potential field editability");
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_INVALID_VALIDATE",
+          field: "nullable",
+          headerName: "Invalid validate",
+          validate: "not-a-function",
+        },
+      ]),
+    ).toThrow("validate must be a function");
+    const undefinedValidate = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_UNDEFINED_VALIDATE",
+        field: "nullable",
+        headerName: "Undefined validate",
+        validate: undefined,
+      },
+    ]);
+    expect(() => compileColumns([undefinedValidate])).not.toThrow();
+
+    const validate = () => undefined;
+    expect(() =>
+      Reflect.apply(BrunoTableBigDecimalColumn, undefined, [
+        {
+          columnId: "COL_ID_READ_ONLY_VALIDATE",
+          field: "price",
+          headerName: "Read-only validate",
+          validate,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+    expect(() =>
+      Reflect.apply(BrunoTableBigDecimalColumn.withDefaults, undefined, [{ validate }]),
+    ).toThrow("validate requires potential field editability");
+    const validatedPreset = Reflect.apply(BrunoTableBigDecimalColumn.withDefaults, undefined, [
+      { isEditable: true, validate },
+    ]) as (...arguments_: unknown[]) => unknown;
+    expect(() =>
+      Reflect.apply(validatedPreset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED_VALIDATE",
+          field: "price",
+          headerName: "Disabled validate",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("validate requires potential field editability");
+
+    const predicate = vi.fn(() => true);
+    const predicatePreset = BrunoTableBigDecimalColumn.withDefaults({
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateColumn = Reflect.apply(predicatePreset, undefined, [
+      {
+        columnId: "COL_ID_PREDICATE_NULLABLE",
+        field: "nullable",
+        headerName: "Predicate nullable",
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    expect(predicateColumn).toMatchObject({ isEditable: predicate, blankValue: null });
+  });
+
   it("preserves capability-valid grouped presentation through presets", () => {
     const totalPriceColumn = BrunoTableBigDecimalColumn.withDefaults({
       headerName: "Total price",

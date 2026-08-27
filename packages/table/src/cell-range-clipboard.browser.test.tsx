@@ -1270,14 +1270,22 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
     focusedGrid.element().dispatchEvent(firstEscape);
     await settleBrunoTableBrowserFrames();
     expect(firstEscape.defaultPrevented).toBe(true);
+    await expect.element(activeBabbage).toHaveAttribute("aria-selected", "true");
+    await expect.element(activeCurie).toHaveAttribute("aria-selected", "true");
+    await expect.element(focusedAda).not.toHaveAttribute("aria-selected");
+    await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
+
+    const outsideEscape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    document.body.dispatchEvent(outsideEscape);
+    await settleBrunoTableBrowserFrames();
+    expect(outsideEscape.defaultPrevented).toBe(true);
     await expect.element(activeAda).toHaveAttribute("aria-selected", "true");
     await expect.element(activeBabbage).not.toHaveAttribute("aria-selected");
     await expect.element(activeCurie).not.toHaveAttribute("aria-selected");
-    await expect.element(focusedAda).toHaveAttribute("aria-selected", "true");
-    await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
-
-    await userEvent.keyboard("{Escape}");
-    await settleBrunoTableBrowserFrames();
     await expect.element(focusedAda).not.toHaveAttribute("aria-selected");
     await expect.element(focusedScore).toHaveAttribute("aria-selected", "true");
   });

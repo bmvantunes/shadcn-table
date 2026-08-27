@@ -5,7 +5,12 @@ import {
   BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE,
   brunoTableColumnCssVariable,
 } from "./column-management";
-import { BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT, BrunoTableViewportRuntime } from "./virtual-viewport";
+import {
+  BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
+  BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+  BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+  BrunoTableViewportRuntime,
+} from "./virtual-viewport";
 
 type TestRtlScrollType = "negative" | "default" | "reverse";
 
@@ -291,6 +296,44 @@ describe("BrunoTableViewportRuntime", () => {
     callbacks[1]!(0);
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("applies edit-anchor deltas through authoritative segmented logical coordinates", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(200_000, columns);
+    viewport.attach(element);
+    viewport.revealCell(120_000, "COL_ID_NAME");
+    callbacks.shift()!(0);
+    const before = viewport.getSnapshot().virtualWindow.rowStart;
+
+    viewport.adjustVerticalByLogical(36_000);
+    callbacks.shift()!(0);
+
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeGreaterThan(before + 900);
+    expect(element.scrollTop).toBeLessThanOrEqual(BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT);
   });
 
   it("frame-batches pinned-aware scrollbar geometry onto only the overlay subtree", () => {
@@ -778,6 +821,9 @@ describe("BrunoTableViewportRuntime", () => {
       });
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       const maximum = 800;
+      const gridSetProperty = vi.fn();
+      const hostSetProperty = vi.fn();
+      const hostRemoveProperty = vi.fn();
       const element = {
         addEventListener: vi.fn(),
         clientHeight: 480,
@@ -787,16 +833,35 @@ describe("BrunoTableViewportRuntime", () => {
         removeEventListener: vi.fn(),
         scrollLeft: rtlType === "reverse" ? maximum : 0,
         scrollTop: 0,
-        style: { setProperty: vi.fn() },
+        style: { setProperty: gridSetProperty },
       } as unknown as HTMLElement;
       const viewport = new BrunoTableViewportRuntime();
       viewport.setLayout(2, columns);
       viewport.attach(element);
+      viewport.attachPinnedEditorHost({
+        style: { removeProperty: hostRemoveProperty, setProperty: hostSetProperty },
+      } as unknown as HTMLElement);
 
       viewport.revealCell(0, "COL_ID_RTL_9", "header");
       callbacks.shift()!(0);
       expect(element.scrollLeft).toBe(
         rtlType === "negative" ? -maximum : rtlType === "reverse" ? 0 : maximum,
+      );
+      expect(hostSetProperty).toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+        `${maximum}px`,
+      );
+      expect(hostSetProperty).toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+        "200px",
+      );
+      expect(gridSetProperty).not.toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+        expect.any(String),
+      );
+      expect(gridSetProperty).not.toHaveBeenCalledWith(
+        BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+        expect.any(String),
       );
       expect(viewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe("COL_ID_RTL_9");
 
@@ -1110,6 +1175,7 @@ describe("BrunoTableViewportRuntime", () => {
     ]);
     const removeProperty = vi.fn();
     const setProperty = vi.fn();
+    const hostSetProperty = vi.fn();
     const element = {
       addEventListener: vi.fn(),
       clientHeight: 480,
@@ -1125,11 +1191,23 @@ describe("BrunoTableViewportRuntime", () => {
     const publications = vi.fn();
     viewport.setLayout(2, columns);
     viewport.attach(element);
+    viewport.attachPinnedEditorHost({
+      style: { removeProperty: vi.fn(), setProperty: hostSetProperty },
+    } as unknown as HTMLElement);
+    hostSetProperty.mockClear();
     viewport.subscribe(publications);
     const publicationsBeforePreview = publications.mock.calls.length;
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(1);
 
     viewport.previewColumnWidth("COL_ID_PREVIEW_START", 300);
+    expect(hostSetProperty).toHaveBeenCalledWith(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      "0px",
+    );
+    expect(hostSetProperty).toHaveBeenLastCalledWith(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      "500px",
+    );
     expect(viewport.getSnapshot().virtualWindow.pinnedStart).toHaveLength(0);
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd).toHaveLength(0);
     expect(publications.mock.calls.length).toBeGreaterThan(publicationsBeforePreview);
@@ -1146,7 +1224,16 @@ describe("BrunoTableViewportRuntime", () => {
     );
     expect(viewport.getSnapshot().virtualWindow.pinnedEnd[0]?.columnId).toBe("COL_ID_PREVIEW_END");
 
+    hostSetProperty.mockClear();
     viewport.clearColumnWidthPreview();
+    expect(hostSetProperty).toHaveBeenCalledWith(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      "0px",
+    );
+    expect(hostSetProperty).toHaveBeenLastCalledWith(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      "500px",
+    );
     expect(viewport.getSnapshot().virtualWindow.pinnedStart[0]?.columnId).toBe(
       "COL_ID_PREVIEW_START",
     );
@@ -2659,6 +2746,71 @@ describe("BrunoTableViewportRuntime", () => {
     expect(rtlViewport.getSnapshot().virtualWindow.center.at(-1)?.columnId).toBe(
       "COL_ID_CENTER_UTILITY_5",
     );
+  });
+
+  it("reconciles a live leading utility gutter once and restores the pinned layout", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LIVE_UTILITY_START",
+        field: "name",
+        headerName: "Live utility start",
+        valueType: "text",
+        pinned: "start",
+        width: 170,
+      },
+      {
+        columnId: "COL_ID_LIVE_UTILITY_CENTER",
+        field: "name",
+        headerName: "Live utility center",
+        valueType: "text",
+        width: 500,
+      },
+      {
+        columnId: "COL_ID_LIVE_UTILITY_END",
+        field: "name",
+        headerName: "Live utility end",
+        valueType: "text",
+        pinned: "end",
+        width: 170,
+      },
+    ]);
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 440,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    const listener = vi.fn();
+    viewport.subscribe(listener);
+
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 440,
+      virtualWindow: { pinningSuspended: false },
+    });
+    expect(viewport.setLeadingUtilityWidth(0)).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+
+    expect(viewport.setLeadingUtilityWidth(40)).toBe(true);
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 400,
+      virtualWindow: { pinningSuspended: true },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(viewport.setLeadingUtilityWidth(40)).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    expect(viewport.setLeadingUtilityWidth(0)).toBe(true);
+    expect(viewport.getSnapshot()).toMatchObject({
+      width: 440,
+      virtualWindow: { pinningSuspended: false },
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("bounds, reveals, and restores an oversized centreless pinned layout", () => {

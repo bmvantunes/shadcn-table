@@ -10,6 +10,10 @@ import type {
   BrunoTableNumberFormat,
   BrunoTableOrdering,
 } from "../public-types";
+import {
+  getBrunoTableSelectCanonicalOptions,
+  getBrunoTableSelectValueTypeFingerprint,
+} from "./select-value-type-provenance";
 import { isBrunoTableServerBigDecimalValueType } from "../public-types";
 
 type SemanticsOverrides = {
@@ -24,6 +28,8 @@ type RuntimeValueTypeDescriptor = {
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
+  readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
+  readonly booleanEditorDomainExhaustive?: true;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -34,6 +40,7 @@ type RuntimeValueTypeDescriptor = {
   readonly decodeRuntimeAuthority?: unknown;
   readonly equivalentAuthority?: unknown;
   readonly formatCanonicalTextAuthority?: unknown;
+  readonly parseCanonicalTextAuthority?: unknown;
   readonly formatDisplayAuthority?: unknown;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
   readonly compare: (left: unknown, right: unknown) => BrunoTableOrdering;
@@ -49,8 +56,12 @@ export type CompiledColumnValueSemantics = {
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
   readonly editorFamily: BrunoTableEditorFamily;
+  readonly booleanEditorCanonicalValues?: readonly [falseValue: string, trueValue: string];
+  readonly booleanEditorDomainExhaustive?: true;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
+  readonly selectCanonicalOptions?: readonly string[];
+  readonly selectEditAuthority?: readonly string[];
   readonly width: number;
   readonly aggregateResults: BrunoTableAggregateResults;
   readonly aggregateAlgebra?: CompiledAggregateAlgebra;
@@ -58,6 +69,11 @@ export type CompiledColumnValueSemantics = {
   readonly decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>;
   /** Stable private authority used to invalidate decoded Server projections. */
   readonly decodeRuntimeAuthority: unknown;
+  /** Stable private authority used to decide whether an active editor may retain its candidate. */
+  readonly editSessionAuthority: Readonly<{
+    readonly formatCanonicalText: unknown;
+    readonly parseCanonicalText: unknown;
+  }>;
   /** Stable private authority for grouped representative retention and Copy observability. */
   readonly groupedRetentionAuthority: Readonly<{
     readonly equivalent: unknown;
@@ -194,6 +210,14 @@ export function compileColumnValueSemantics(
     }
     formatDisplay = (value) => formatter.format(assertFiniteNumber(value));
   }
+  const selectCanonicalOptions =
+    descriptor.editorFamily === "select"
+      ? getBrunoTableSelectCanonicalOptions(selection)
+      : undefined;
+  const selectEditAuthority =
+    descriptor.editorFamily === "select"
+      ? getBrunoTableSelectValueTypeFingerprint(selection)
+      : undefined;
 
   return Object.freeze({
     codecId: descriptor.codecId,
@@ -202,6 +226,14 @@ export function compileColumnValueSemantics(
     editorFamily: descriptor.editorFamily,
     cellAlign,
     editorLayout,
+    ...(selectCanonicalOptions === undefined ? {} : { selectCanonicalOptions }),
+    ...(selectEditAuthority === undefined ? {} : { selectEditAuthority }),
+    ...(descriptor.booleanEditorCanonicalValues === undefined
+      ? {}
+      : { booleanEditorCanonicalValues: descriptor.booleanEditorCanonicalValues }),
+    ...(descriptor.booleanEditorDomainExhaustive === true
+      ? { booleanEditorDomainExhaustive: true as const }
+      : {}),
     width,
     aggregateResults: descriptor.aggregateResults,
     ...(descriptor.aggregateAlgebra === undefined
@@ -212,6 +244,11 @@ export function compileColumnValueSemantics(
       : { serverAggregateAuthority: descriptor.serverAggregateAuthority }),
     decodeRuntime: (input) => descriptor.decodeRuntime(input),
     decodeRuntimeAuthority: descriptor.decodeRuntimeAuthority ?? descriptor.decodeRuntime,
+    editSessionAuthority: Object.freeze({
+      formatCanonicalText:
+        descriptor.formatCanonicalTextAuthority ?? descriptor.formatCanonicalText,
+      parseCanonicalText: descriptor.parseCanonicalTextAuthority ?? descriptor.parseCanonicalText,
+    }),
     groupedRetentionAuthority: Object.freeze({
       equivalent: descriptor.equivalentAuthority ?? descriptor.equivalent,
       formatCanonicalText:
@@ -245,6 +282,7 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const codecVersion = selection["codecVersion"];
   const filterFamily = selection["filterFamily"];
   const editorFamily = selection["editorFamily"];
+  const booleanEditorValues = selection["booleanEditorValues"];
   const cellAlign = selection["cellAlign"];
   const editorLayout = selection["editorLayout"];
   const defaultWidth = selection["defaultWidth"];
@@ -299,11 +337,29 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
   const encodePersistedFunction = requireFunction(encodePersisted, "encodePersisted");
   const decodePersistedFunction = requireFunction(decodePersisted, "decodePersisted");
 
+  const decodeRuntimeValue = (input: unknown) =>
+    safeDecode(decodeRuntimeFunction, input, "decodeRuntime");
+  const equivalentValue = (left: unknown, right: unknown) =>
+    validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right]));
+  const formatCanonicalTextValue = (value: unknown) =>
+    validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value]));
+  const parseCanonicalTextValue = (text: string) =>
+    safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText");
+  const booleanEditorCanonicalValues = snapshotBooleanEditorCanonicalValues(
+    editorFamily,
+    booleanEditorValues,
+    decodeRuntimeValue,
+    equivalentValue,
+    formatCanonicalTextValue,
+    parseCanonicalTextValue,
+  );
+
   const descriptor: RuntimeValueTypeDescriptor = {
     codecId,
     codecVersion,
     filterFamily,
     editorFamily,
+    ...(booleanEditorCanonicalValues === undefined ? {} : { booleanEditorCanonicalValues }),
     cellAlign,
     editorLayout,
     defaultWidth,
@@ -312,25 +368,81 @@ function snapshotCustomValueType(selection: unknown): RuntimeValueTypeDescriptor
     ...(isBrunoTableServerBigDecimalValueType(selection)
       ? { serverAggregateAuthority: "effect-bigdecimal" as const }
       : {}),
-    decodeRuntime: (input) => safeDecode(decodeRuntimeFunction, input, "decodeRuntime"),
+    decodeRuntime: decodeRuntimeValue,
     decodeRuntimeAuthority: decodeRuntimeFunction,
     equivalentAuthority: equivalentFunction,
     formatCanonicalTextAuthority: formatCanonicalTextFunction,
+    parseCanonicalTextAuthority: parseCanonicalTextFunction,
     formatDisplayAuthority: formatDisplayFunction,
-    equivalent: (left, right) =>
-      validateBoolean(Reflect.apply(equivalentFunction, undefined, [left, right])),
+    equivalent: equivalentValue,
     compare: (left, right) =>
       validateOrdering(Reflect.apply(compareFunction, undefined, [left, right])),
-    formatCanonicalText: (value) =>
-      validateText(Reflect.apply(formatCanonicalTextFunction, undefined, [value])),
-    parseCanonicalText: (text) =>
-      safeDecode(parseCanonicalTextFunction, text, "parseCanonicalText"),
+    formatCanonicalText: formatCanonicalTextValue,
+    parseCanonicalText: parseCanonicalTextValue,
     formatDisplay: (value) =>
       validateText(Reflect.apply(formatDisplayFunction, undefined, [value])),
     encodePersisted: (value) => Reflect.apply(encodePersistedFunction, undefined, [value]),
     decodePersisted: (input) => safeDecode(decodePersistedFunction, input, "decodePersisted"),
   };
   return Object.freeze(descriptor);
+}
+
+function snapshotBooleanEditorCanonicalValues(
+  editorFamily: BrunoTableEditorFamily,
+  input: unknown,
+  decodeRuntime: (input: unknown) => BrunoTableDecodeResult<unknown>,
+  equivalent: (left: unknown, right: unknown) => boolean,
+  formatCanonicalText: (value: unknown) => string,
+  parseCanonicalText: (text: string) => BrunoTableDecodeResult<unknown>,
+): readonly [falseValue: string, trueValue: string] | undefined {
+  if (editorFamily !== "boolean") {
+    if (input !== undefined) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues requires the Boolean editor family.",
+      );
+    }
+    return undefined;
+  }
+  if (!Array.isArray(input) || input.length !== 2 || !(0 in input) || !(1 in input)) {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable Boolean Value Types require exactly [falseValue, trueValue].",
+    );
+  }
+  const decodedFalse = decodeRuntime(input[0]);
+  const decodedTrue = decodeRuntime(input[1]);
+  if (decodedFalse._tag !== "Success" || decodedTrue._tag !== "Success") {
+    throw new ValueSemanticsConfigurationError(
+      "BrunoTable booleanEditorValues must belong to the Value Type domain.",
+    );
+  }
+  try {
+    if (equivalent(decodedFalse.value, decodedTrue.value)) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues must represent two distinct values.",
+      );
+    }
+    const falseText = formatCanonicalText(decodedFalse.value);
+    const trueText = formatCanonicalText(decodedTrue.value);
+    const parsedFalse = parseCanonicalText(falseText);
+    const parsedTrue = parseCanonicalText(trueText);
+    if (
+      falseText === trueText ||
+      parsedFalse._tag !== "Success" ||
+      parsedTrue._tag !== "Success" ||
+      !equivalent(parsedFalse.value, decodedFalse.value) ||
+      !equivalent(parsedTrue.value, decodedTrue.value)
+    ) {
+      throw new ValueSemanticsConfigurationError(
+        "BrunoTable booleanEditorValues must round-trip through distinct canonical text.",
+      );
+    }
+    return Object.freeze([falseText, trueText]);
+  } catch (error) {
+    if (error instanceof ValueSemanticsConfigurationError) throw error;
+    throw new ValueSemanticsConfigurationError(
+      `BrunoTable booleanEditorValues are invalid: ${safeErrorMessage(error)}`,
+    );
+  }
 }
 
 function snapshotAggregateResults(input: unknown): BrunoTableAggregateResults {
@@ -533,6 +645,8 @@ function createBooleanValueType(): RuntimeValueTypeDescriptor {
     codecVersion: 1,
     filterFamily: "boolean",
     editorFamily: "boolean",
+    booleanEditorCanonicalValues: Object.freeze(["false", "true"]),
+    booleanEditorDomainExhaustive: true,
     cellAlign: "center",
     editorLayout: "center",
     defaultWidth: 88,

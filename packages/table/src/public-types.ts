@@ -233,16 +233,32 @@ export type BrunoTableNumberFormat = Intl.NumberFormatOptions;
  * One explicit runtime value domain. BrunoTable snapshots this descriptor into a private compiled
  * plan during column normalization; mounted cells never discover or dispatch value kinds.
  */
+type BrunoTableEditorCapability<
+  TValue,
+  TEditorFamily extends Exclude<BrunoTableEditorFamily, "select">,
+> = TEditorFamily extends "boolean"
+  ? {
+      readonly editorFamily: "boolean";
+      /** Exact false-state and true-state values used by the native Boolean editor. */
+      readonly booleanEditorValues: readonly [falseValue: TValue, trueValue: TValue];
+    }
+  : {
+      readonly editorFamily: TEditorFamily;
+      readonly booleanEditorValues?: never;
+    };
+
 export type BrunoTableValueType<
   TValue,
   TFilterFamily extends BrunoTableFilterFamily = BrunoTableFilterFamily,
-  TEditorFamily extends BrunoTableEditorFamily = BrunoTableEditorFamily,
+  TEditorFamily extends Exclude<BrunoTableEditorFamily, "select"> = Exclude<
+    BrunoTableEditorFamily,
+    "select"
+  >,
   TAggregateResults extends BrunoTableAggregateResults = never,
 > = {
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: TFilterFamily;
-  readonly editorFamily: TEditorFamily;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -257,12 +273,13 @@ export type BrunoTableValueType<
   readonly formatDisplay: (this: void, value: TValue) => string;
   readonly encodePersisted: (this: void, value: TValue) => BrunoTableJsonValue;
   readonly decodePersisted: (this: void, input: unknown) => BrunoTableDecodeResult<TValue>;
-} & ([TAggregateResults] extends [never]
-  ? InferredAggregateCapability<TValue>
-  : AggregateAlgebraRequirement<TValue, TAggregateResults> &
-      ([keyof TAggregateResults] extends [never]
-        ? { readonly aggregateResults?: TAggregateResults }
-        : { readonly aggregateResults: TAggregateResults }));
+} & BrunoTableEditorCapability<TValue, TEditorFamily> &
+  ([TAggregateResults] extends [never]
+    ? InferredAggregateCapability<TValue>
+    : AggregateAlgebraRequirement<TValue, TAggregateResults> &
+        ([keyof TAggregateResults] extends [never]
+          ? { readonly aggregateResults?: TAggregateResults }
+          : { readonly aggregateResults: TAggregateResults }));
 
 type NonArithmeticAggregateResults = Readonly<{
   readonly countDistinct?: "bigint";
@@ -613,6 +630,53 @@ type ValueGetterParams<TRow, TFields extends NonEmptyFields<TRow>> = {
   readonly row: Pick<TRow, TFields[number]>;
 };
 
+type EditableBlankRepresentation<TValue> = null extends TValue
+  ? undefined extends TValue
+    ? {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: null | undefined;
+      }
+    : {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: null;
+      }
+  : undefined extends TValue
+    ? {
+        /** Exact nullish value produced when an editor commits an empty candidate. */
+        readonly blankValue: undefined;
+      }
+    : { readonly blankValue?: never };
+
+/**
+ * Plain structural arrays cannot admit a widened nullable boolean together with `blankValue`
+ * without also admitting literal `false`. Nullable editability is therefore statically explicit.
+ */
+type NonPotentialFieldEditingCapability<TValue> = null extends TValue
+  ? {
+      readonly isEditable?: false;
+      readonly blankValue?: never;
+      readonly validate?: never;
+    }
+  : undefined extends TValue
+    ? {
+        readonly isEditable?: false;
+        readonly blankValue?: never;
+        readonly validate?: never;
+      }
+    : {
+        /** A widened boolean remains runtime-defended but cannot prove Table edit capability. */
+        readonly isEditable?: boolean;
+        readonly blankValue?: never;
+        readonly validate?: never;
+      };
+
+type FieldEditingCapability<TRow, TValue> =
+  | NonPotentialFieldEditingCapability<TValue>
+  | ({
+      readonly isEditable: true | ((parameters: ValueParams<TRow, TValue>) => boolean);
+      readonly validate?: (parameters: ValueParams<TRow, TValue>) => string | undefined;
+    } & EditableBlankRepresentation<TValue>);
+
 type FieldColumn<
   TRow,
   TField extends FieldKey<TRow>,
@@ -625,11 +689,11 @@ type FieldColumn<
     readonly headerName: string;
     readonly valueType: TValueType;
     readonly enableSorting?: boolean;
-    readonly isEditable?: boolean | ((parameters: ValueParams<TRow, TRow[TField]>) => boolean);
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
     readonly fields?: never;
     readonly valueGetter?: never;
-  } & FieldColumnFilteringCapability &
+  } & FieldEditingCapability<TRow, TRow[TField]> &
+  FieldColumnFilteringCapability &
   GroupKeyPresentation<TRow[TField], TColumnId, TField> &
   AggregatePresentation<TRow[TField], TValueType, TColumnId, TField>;
 
@@ -639,7 +703,7 @@ type RawCustomFieldValueType<
 > = BrunoTableValueType<
   NonNullish<TValue>,
   BrunoTableFilterFamily,
-  BrunoTableEditorFamily,
+  Exclude<BrunoTableEditorFamily, "select">,
   TAggregateResults
 >;
 
@@ -697,14 +761,25 @@ type ComputedColumn<
     readonly enableFilter?: never;
     readonly enableSorting?: never;
     readonly isEditable?: never;
+    readonly blankValue?: never;
+    readonly validate?: never;
     readonly format?: TValueType extends "number" ? BrunoTableNumberFormat : never;
   };
+
+type ErasedEditorCapability =
+  | {
+      readonly editorFamily: "boolean";
+      readonly booleanEditorValues: readonly [unknown, unknown];
+    }
+  | {
+      readonly editorFamily: Exclude<BrunoTableEditorFamily, "boolean">;
+      readonly booleanEditorValues?: never;
+    };
 
 type ErasedValueType = {
   readonly codecId: string;
   readonly codecVersion: number;
   readonly filterFamily: BrunoTableFilterFamily;
-  readonly editorFamily: BrunoTableEditorFamily;
   readonly cellAlign: BrunoTableCellAlign;
   readonly editorLayout: BrunoTableEditorLayout;
   readonly defaultWidth: number;
@@ -717,7 +792,7 @@ type ErasedValueType = {
   readonly formatDisplay: (...parameters: never[]) => unknown;
   readonly encodePersisted: (...parameters: never[]) => unknown;
   readonly decodePersisted: (input: unknown) => unknown;
-};
+} & ErasedEditorCapability;
 
 type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
   ColumnLayout & {
@@ -731,6 +806,8 @@ type ErasedCustomComputedColumn<TRow> = ColumnPresentation<TRow, never> &
     readonly enableFilter?: never;
     readonly enableSorting?: never;
     readonly isEditable?: never;
+    readonly blankValue?: never;
+    readonly validate?: never;
     readonly format?: never;
   };
 
@@ -847,7 +924,7 @@ export type BrunoTableComputedColumnDefinition<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue> | ErasedValueType,
 > = ComputedColumn<TRow, TFields, TValue, TValueType>;
 
 /** @internal Shared only with BrunoTable's first-party Column Helper implementation. */
@@ -862,7 +939,7 @@ export type BrunoTableComputedColumnInput<
   TRow,
   TFields extends NonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue> | ErasedValueType,
 > = ComputedColumnOptions<TRow, TFields, TValue, TValueType> &
   ComputedColumnDependencies<TRow, TFields, TValue>;
 
@@ -1521,7 +1598,7 @@ export type BrunoTableEditableCapability<
     : {
         readonly editable: true;
         readonly getRowVersion: (row: TRow) => TRowVersion;
-        readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
+        readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, NoInfer<TRowVersion>>;
       } & BrunoTableNoGroupingCapability;
 
 export type BrunoTableEditingCapability<
@@ -1562,21 +1639,67 @@ type ComponentCommonProps<
     ? { readonly initialOrderBy?: never }
     : { readonly initialOrderBy: BrunoTableSortBy<TColumns> });
 
-export type BrunoTableClientProps<TRow, TColumns extends BrunoTableColumns<TRow>> = Omit<
-  ComponentCommonProps<TRow, TColumns, true>,
-  "initialOrderBy"
-> &
+type BrunoTableClientSourceProps<TRow, TColumns extends BrunoTableColumns<TRow>> = {
+  readonly initialOrderBy: BrunoTableSortBy<TColumns>;
+  readonly getRowId: (row: TRow) => BrunoTableRowId;
+  readonly clientSource: BrunoTableClientSource<TRow>;
+  readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
+  /** Enables session-only Row Selection for ordinary Client source rows. */
+  readonly rowSelection?: true;
+  readonly externalFilters?: never;
+  readonly viewportSource?: never;
+};
+
+type BrunoTablePotentiallyEditableColumnRequirement<TColumns extends readonly unknown[]> =
+  number extends TColumns["length"]
+    ? unknown
+    : Extract<
+          TColumns[number],
+          { readonly isEditable: true | ((...parameters: never[]) => boolean) }
+        > extends never
+      ? { readonly columns: never }
+      : unknown;
+
+export type BrunoTableReadOnlyClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableClientSourceProps<TRow, TColumns> &
+  Omit<ComponentCommonProps<TRow, TColumns, true>, "initialOrderBy"> &
   BrunoTableReadOnlyCapability &
-  BrunoTableGroupingCapability<TRow, TColumns> & {
-    readonly initialOrderBy: BrunoTableSortBy<TColumns>;
-    readonly getRowId: (row: TRow) => BrunoTableRowId;
-    readonly clientSource: BrunoTableClientSource<TRow>;
-    readonly quickFilterFields?: BrunoTableQuickFilterFields<TRow>;
-    /** Enables session-only Row Selection for ordinary Client source rows. */
-    readonly rowSelection?: true;
-    readonly externalFilters?: never;
-    readonly viewportSource?: never;
+  BrunoTableGroupingCapability<TRow, TColumns>;
+
+type EditableClientComposition<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableClientSourceProps<TRow, TColumns> &
+  Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
+  BrunoTablePotentiallyEditableColumnRequirement<TColumns>;
+
+export type BrunoTableEditableClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TGetRowVersion extends (row: TRow) => unknown,
+> = EditableClientComposition<TRow, TColumns> &
+  Omit<
+    BrunoTableEditableCapability<TRow, TColumns, ReturnType<TGetRowVersion>>,
+    "getRowVersion" | "onSaveEdits"
+  > & {
+    readonly getRowVersion: TGetRowVersion;
+    readonly onSaveEdits: BrunoTableSaveEditsHandler<
+      TRow,
+      TColumns,
+      NoInfer<ReturnType<TGetRowVersion>>
+    >;
   };
+
+export type BrunoTableClientProps<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = never,
+> =
+  | BrunoTableReadOnlyClientProps<TRow, TColumns>
+  | (EditableClientComposition<TRow, TColumns> &
+      BrunoTableEditableCapability<TRow, TColumns, TRowVersion>);
 
 export type BrunoTableServerProps<
   TRow,

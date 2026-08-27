@@ -1,4 +1,5 @@
 import * as BigDecimal from "effect/BigDecimal";
+import { expectTypeOf } from "vitest";
 
 import { BrunoTableBigDecimalColumn, BrunoTableBigDecimalValueType } from "@bruno/table/effect";
 import type {
@@ -15,6 +16,105 @@ type PriceRow = {
   readonly referencePrice?: BigDecimal.BigDecimal;
   readonly symbol: string;
 };
+
+type EditableBigDecimalRow = {
+  readonly required: BigDecimal.BigDecimal;
+  readonly nullable: BigDecimal.BigDecimal | null;
+  readonly optional: BigDecimal.BigDecimal | undefined;
+};
+
+const directEditableBigDecimalColumns = [
+  BrunoTableBigDecimalColumn({
+    columnId: "COL_ID_NULLABLE_BIGDECIMAL",
+    field: "nullable",
+    headerName: "Nullable BigDecimal",
+    isEditable: true,
+    blankValue: null,
+    validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void directEditableBigDecimalColumns;
+
+const nullableBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+  blankValue: null,
+  validate: ({ value }) => (value === undefined ? "Unexpected undefined" : undefined),
+});
+const nullableBigDecimalPresetColumns = [
+  nullableBigDecimalPreset({
+    columnId: "COL_ID_NULLABLE_BIGDECIMAL_PRESET",
+    field: "nullable",
+    headerName: "Nullable BigDecimal preset",
+  }),
+  nullableBigDecimalPreset({
+    columnId: "COL_ID_OPTIONAL_BIGDECIMAL_PRESET",
+    field: "optional",
+    headerName: "Optional BigDecimal preset",
+    blankValue: undefined,
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void nullableBigDecimalPresetColumns;
+const predicateBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: ({ row, value }) => {
+    expectTypeOf(row).toEqualTypeOf<unknown>();
+    expectTypeOf(value).toEqualTypeOf<BigDecimal.BigDecimal | null | undefined>();
+    return value !== undefined;
+  },
+  blankValue: null,
+});
+const predicateBigDecimalColumns = [
+  predicateBigDecimalPreset({
+    columnId: "COL_ID_PREDICATE_BIGDECIMAL_PRESET",
+    field: "nullable",
+    headerName: "Predicate BigDecimal preset",
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void predicateBigDecimalColumns;
+const invalidDisabledBigDecimalPreset = nullableBigDecimalPreset({
+  columnId: "COL_ID_DISABLED_BIGDECIMAL_PRESET",
+  // @ts-expect-error inherited blank cannot combine with isEditable false.
+  field: "nullable",
+  headerName: "Disabled BigDecimal preset",
+  // @ts-expect-error the effective false-plus-blank shape is rejected.
+  isEditable: false,
+});
+void invalidDisabledBigDecimalPreset;
+const editableBigDecimalWithoutBlank = BrunoTableBigDecimalColumn.withDefaults({
+  isEditable: true,
+});
+const invalidNullableBigDecimalWithoutBlank = editableBigDecimalWithoutBlank({
+  columnId: "COL_ID_NULLABLE_BIGDECIMAL_WITHOUT_BLANK",
+  // @ts-expect-error nullable editable BigDecimal applications require a blank policy.
+  field: "nullable",
+  headerName: "Nullable BigDecimal without blank",
+});
+void invalidNullableBigDecimalWithoutBlank;
+const widenedBigDecimalDefaults: { readonly isEditable?: boolean } = { isEditable: true };
+const widenedBigDecimalPreset = BrunoTableBigDecimalColumn.withDefaults(widenedBigDecimalDefaults);
+const invalidWidenedNullableBigDecimal = widenedBigDecimalPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_BIGDECIMAL",
+  // @ts-expect-error widened editability may be true, so nullable fields require a blank policy.
+  field: "nullable",
+  headerName: "Widened nullable BigDecimal",
+});
+void invalidWidenedNullableBigDecimal;
+const invalidWidenedNullableBigDecimalWithBlank = widenedBigDecimalPreset({
+  columnId: "COL_ID_WIDENED_NULLABLE_BIGDECIMAL_WITH_BLANK",
+  // @ts-expect-error widened editability cannot prove the nullable field capability.
+  field: "nullable",
+  headerName: "Widened nullable BigDecimal with blank",
+  // @ts-expect-error a blank policy still requires exact true or predicate editability.
+  blankValue: null,
+});
+void invalidWidenedNullableBigDecimalWithBlank;
+const validWidenedRequiredBigDecimal = [
+  widenedBigDecimalPreset({
+    columnId: "COL_ID_WIDENED_REQUIRED_BIGDECIMAL",
+    field: "required",
+    headerName: "Widened required BigDecimal",
+  }),
+] satisfies BrunoTableColumns<EditableBigDecimalRow>;
+void validWidenedRequiredBigDecimal;
 
 const priceColumn = BrunoTableBigDecimalColumn.withDefaults({
   headerName: "Price",

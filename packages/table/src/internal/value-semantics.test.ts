@@ -259,6 +259,77 @@ describe("compiled Column Value Semantics", () => {
     expect(() => compileColumns([computedColumn as never])).not.toThrow();
   });
 
+  it("applies exact field edit policies through preset precedence and omits them for computed columns", () => {
+    const presetValidate = vi.fn(() => "preset invalid");
+    const individualValidate = vi.fn(() => undefined);
+    const preset = BrunoTableNumberColumn.withDefaults({
+      isEditable: true,
+      blankValue: null,
+      validate: presetValidate,
+    });
+    const inherited = Reflect.apply(preset, undefined, [
+      { columnId: "COL_ID_NULLABLE", field: "nullable", headerName: "Nullable" },
+    ]) as Readonly<Record<string, unknown>>;
+    const overridden = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        blankValue: undefined,
+        validate: individualValidate,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+    const computed = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_COMPUTED",
+        fields: ["price"],
+        valueGetter: ({ row }: { readonly row: Pick<SemanticRow, "price"> }) => row.price,
+      },
+    ]) as Readonly<Record<string, unknown>>;
+
+    expect(inherited).toMatchObject({ isEditable: true, blankValue: null });
+    expect(inherited["validate"]).toBe(presetValidate);
+    expect(overridden).toHaveProperty("blankValue", undefined);
+    expect(overridden["validate"]).toBe(individualValidate);
+    expect(computed).not.toHaveProperty("isEditable");
+    expect(computed).not.toHaveProperty("blankValue");
+    expect(computed).not.toHaveProperty("validate");
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_DISABLED",
+          field: "nullable",
+          headerName: "Disabled",
+          isEditable: false,
+        },
+      ]),
+    ).toThrow("blankValue requires potential field editability");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+        { isEditable: false, blankValue: null },
+      ]),
+    ).toThrow("preset blankValue requires potential editability");
+
+    const predicate = vi.fn(() => true);
+    const predicateNumberPreset = BrunoTableNumberColumn.withDefaults({
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateSelectPreset = BrunoTableSelectColumn.withDefaults({
+      options: ["open", "closed"],
+      isEditable: predicate,
+      blankValue: null,
+    });
+    const predicateNumber = Reflect.apply(predicateNumberPreset, undefined, [
+      { columnId: "COL_ID_PREDICATE_NUMBER", field: "nullable", headerName: "Number" },
+    ]) as Readonly<Record<string, unknown>>;
+    const predicateSelect = Reflect.apply(predicateSelectPreset, undefined, [
+      { columnId: "COL_ID_PREDICATE_SELECT", field: "status", headerName: "Select" },
+    ]) as Readonly<Record<string, unknown>>;
+    expect(predicateNumber).toMatchObject({ isEditable: predicate, blankValue: null });
+    expect(predicateSelect).toMatchObject({ isEditable: predicate, blankValue: null });
+  });
+
   it("snapshots custom Value Type methods and validates their boundary results", () => {
     const custom: BrunoTableValueType<string, "equality", "text"> = {
       codecId: "example/upper-text",
@@ -393,6 +464,54 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow(ColumnConfigurationError);
+  });
+
+  it("compiles an exact two-state authority for custom Boolean editors", () => {
+    type Toggle = "N" | "Y";
+    const toggle: BrunoTableValueType<Toggle, "equality", "boolean"> = {
+      codecId: "example/toggle",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "boolean",
+      booleanEditorValues: ["N", "Y"],
+      cellAlign: "center",
+      editorLayout: "center",
+      defaultWidth: 88,
+      decodeRuntime: (input) =>
+        input === "N" || input === "Y"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected N or Y." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left === "N" ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) =>
+        text === "N" || text === "Y"
+          ? { _tag: "Success", value: text }
+          : { _tag: "Failure", message: "Expected N or Y." },
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => value,
+      decodePersisted: (input) =>
+        input === "N" || input === "Y"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected N or Y." },
+    };
+    const compileToggle = (valueType: unknown) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_TOGGLE",
+          field: "code",
+          headerName: "Toggle",
+          valueType: valueType as never,
+        },
+      ])[0]!.semantics;
+
+    expect(compileToggle(toggle).booleanEditorCanonicalValues).toStrictEqual(["N", "Y"]);
+    expect(() => compileToggle({ ...toggle, booleanEditorValues: ["N", "N"] })).toThrow(
+      "must represent two distinct values",
+    );
+    const { booleanEditorValues: omitted, ...withoutMapping } = toggle;
+    void omitted;
+    expect(() => compileToggle(withoutMapping)).toThrow("require exactly [falseValue, trueValue]");
   });
 
   it("snapshots an exact aggregate algebra and rejects hostile capability pairs", () => {
@@ -564,6 +683,38 @@ describe("compiled Column Value Semantics", () => {
     });
   });
 
+  it("rejects a custom Select editor family without helper-owned option provenance", () => {
+    const unsupported = {
+      codecId: "test/custom-select",
+      codecVersion: 1,
+      filterFamily: "select",
+      editorFamily: "select",
+      cellAlign: "start",
+      editorLayout: "fullWidth",
+      defaultWidth: 120,
+      decodeRuntime: (input: unknown) => ({ _tag: "Success", value: String(input) }),
+      equivalent: Object.is,
+      compare: () => 0,
+      formatCanonicalText: String,
+      parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input: unknown) => ({ _tag: "Success", value: String(input) }),
+    };
+
+    expect(() =>
+      compileColumns([
+        {
+          columnId: "COL_ID_UNSUPPORTED_SELECT",
+          field: "value",
+          headerName: "Unsupported Select",
+          valueType: unsupported as never,
+          isEditable: true,
+        },
+      ]),
+    ).toThrow("custom Value Types cannot use the Select editor family");
+  });
+
   it("rejects malformed helper and presentation configuration", () => {
     const callSelectAtRuntime = BrunoTableSelectColumn as unknown as (
       options: Readonly<Record<string, unknown>>,
@@ -701,6 +852,24 @@ describe("compiled Column Value Semantics", () => {
         },
       ]),
     ).toThrow("cellRenderer must be a function");
+  });
+
+  it("preserves typed validation callbacks through field Column Helpers", () => {
+    const validate = ({ value }: { readonly value: number }) =>
+      value >= 0 ? undefined : "Price must be non-negative.";
+    const helperColumns = [
+      BrunoTableNumberColumn({
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        isEditable: true,
+        validate,
+      }),
+    ] satisfies BrunoTableColumns<SemanticRow>;
+
+    expect(helperColumns[0]?.validate).toBe(validate);
+    const compiled = compileColumns(helperColumns)[0];
+    expect(compiled?.kind === "field" ? compiled.validate : undefined).toBe(validate);
   });
 
   it("snapshots reusable preset defaults before later caller mutation", () => {

@@ -98,6 +98,9 @@ const INITIAL_VIEWPORT: BrunoTableViewportSnapshot = Object.freeze({
 });
 
 export const BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM = 32;
+export const BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE =
+  "--bruno-table-viewport-logical-scroll-left";
+export const BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE = "--bruno-table-viewport-inline-size";
 const MAX_REVERSE_RTL_LAYOUT_DEFERRALS = 8;
 const HORIZONTAL_RECONCILIATION_SETTLED = Symbol("horizontal-reconciliation-settled");
 type HorizontalReconciliation = number | typeof HORIZONTAL_RECONCILIATION_SETTLED;
@@ -106,6 +109,7 @@ export class BrunoTableViewportRuntime {
   private readonly listeners = new Set<Listener>();
   private readonly environmentListeners = new Set<Listener>();
   private readonly bodyLayers = new Set<HTMLElement>();
+  private pinnedEditorHost: HTMLElement | null = null;
   private element: HTMLElement | null = null;
   private rowLayer: HTMLElement | null = null;
   private scrollbarOverlay: HTMLElement | null = null;
@@ -150,11 +154,13 @@ export class BrunoTableViewportRuntime {
   private layoutKey = "";
   private layoutPinningKey = "";
   private snapshot: BrunoTableViewportSnapshot = INITIAL_VIEWPORT;
+  private leadingUtilityWidth: number;
 
   public constructor(
     private readonly headerHeight: number = ROW_HEIGHT,
-    private readonly leadingUtilityWidth: number = 0,
+    leadingUtilityWidth: number = 0,
   ) {
+    this.leadingUtilityWidth = normalizedLeadingUtilityWidth(leadingUtilityWidth);
     this.layout = createLayout(0, [], headerHeight);
   }
 
@@ -183,6 +189,27 @@ export class BrunoTableViewportRuntime {
     if (next === current) return false;
     this.setLogicalScrollLeft(element, next);
     this.schedulePublish();
+    return true;
+  };
+
+  public readonly adjustVerticalByLogical = (delta: number): number | undefined => {
+    const element = this.element;
+    if (element === null || !Number.isFinite(delta) || delta === 0) return element?.scrollTop;
+    const current = this.readLogicalScrollTop(element, false);
+    this.setLogicalScrollTop(element, current + delta);
+    this.schedulePublish();
+    return element.scrollTop;
+  };
+
+  public readonly setLeadingUtilityWidth = (leadingUtilityWidth: number): boolean => {
+    const next = normalizedLeadingUtilityWidth(leadingUtilityWidth);
+    if (next === this.leadingUtilityWidth) return false;
+    const element = this.element;
+    const previousHorizontalCoordinate =
+      element === null ? undefined : this.captureLayoutSourceCoordinate(element);
+    this.leadingUtilityWidth = next;
+    if (element === null) return true;
+    this.reconcileHorizontalAfterLayoutSourceChange(element, previousHorizontalCoordinate);
     return true;
   };
 
@@ -224,6 +251,13 @@ export class BrunoTableViewportRuntime {
       logicalScrollMaximum(this.layout, element.clientHeight),
     );
     this.setLogicalScrollTop(element, clampedLogicalScrollTop);
+    this.reconcileHorizontalAfterLayoutSourceChange(element, previousHorizontalCoordinate);
+  };
+
+  private readonly reconcileHorizontalAfterLayoutSourceChange = (
+    element: HTMLElement,
+    previousHorizontalCoordinate: HorizontalCoordinateSample | undefined,
+  ): void => {
     this.layoutReconciliationPending = true;
     this.layoutReconciliationDeferrals = 0;
     this.pendingLayoutHorizontalCoordinate = previousHorizontalCoordinate;
@@ -316,6 +350,7 @@ export class BrunoTableViewportRuntime {
       );
       void element.scrollWidth;
       this.setLogicalScrollLeft(element, previewScrollLeft);
+      this.writePinnedEditorGeometry(previewScrollLeft);
       this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft);
       return;
     }
@@ -349,6 +384,7 @@ export class BrunoTableViewportRuntime {
             );
       this.logicalScrollLeft = restoredLogicalScrollLeft;
       this.setLogicalScrollLeft(this.element, restoredLogicalScrollLeft);
+      this.writePinnedEditorGeometry(restoredLogicalScrollLeft);
       this.writeScrollbarOverlay(this.element, logicalScrollTop, restoredLogicalScrollLeft);
       if (publishSnapshot) {
         this.publishSnapshot(
@@ -601,6 +637,13 @@ export class BrunoTableViewportRuntime {
     };
   };
 
+  public readonly attachPinnedEditorHost = (element: HTMLElement | null): void => {
+    if (this.pinnedEditorHost === element) return;
+    this.clearPinnedEditorGeometry(this.pinnedEditorHost);
+    this.pinnedEditorHost = element;
+    this.writePinnedEditorGeometry(this.logicalScrollLeft);
+  };
+
   public readonly attachScrollbarOverlay = (element: HTMLElement | null): void => {
     if (this.scrollbarOverlay === element) return;
     this.scrollbarOverlay = element;
@@ -624,6 +667,8 @@ export class BrunoTableViewportRuntime {
     this.element = null;
     this.rowLayer = null;
     this.bodyLayers.clear();
+    this.clearPinnedEditorGeometry(this.pinnedEditorHost);
+    this.pinnedEditorHost = null;
     this.scrollbarOverlay = null;
     this.scrollbarOverlayDirection = undefined;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
@@ -838,6 +883,7 @@ export class BrunoTableViewportRuntime {
     logicalScrollLeft: number,
   ): void {
     this.logicalScrollLeft = logicalScrollLeft;
+    this.writePinnedEditorGeometry(logicalScrollLeft);
     const structuralLogicalScrollTop = quantizeScroll(logicalScrollTop);
     const structuralLogicalScrollLeft = quantizeScroll(logicalScrollLeft);
     const next = createViewportSnapshot(this.layout, {
@@ -850,6 +896,26 @@ export class BrunoTableViewportRuntime {
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft);
     this.writeBodyLayerOffset(nextRowLayerOffset);
     if (this.previewLayout === undefined) this.publishSnapshot(next);
+  }
+
+  private writePinnedEditorGeometry(logicalScrollLeft: number): void {
+    const host = this.pinnedEditorHost;
+    const element = this.element;
+    if (host === null || element === null) return;
+    host.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
+      `${logicalScrollLeft}px`,
+    );
+    host.style.setProperty(
+      BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE,
+      `${element.clientWidth}px`,
+    );
+  }
+
+  private clearPinnedEditorGeometry(host: HTMLElement | null): void {
+    if (host === null) return;
+    host.style.removeProperty(BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE);
+    host.style.removeProperty(BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE);
   }
 
   private writeBodyLayerOffset(nextOffset: string): void {
@@ -1738,6 +1804,10 @@ function quantizeScroll(value: number): number {
   return (
     Math.floor(value / BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM) * BRUNO_TABLE_VIEWPORT_SCROLL_QUANTUM
   );
+}
+
+function normalizedLeadingUtilityWidth(value: number): number {
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
 }
 
 function rowLayerTransform(offset: string): string {

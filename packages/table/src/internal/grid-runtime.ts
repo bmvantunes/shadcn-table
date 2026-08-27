@@ -56,6 +56,7 @@ import {
 } from "./grid-preferences";
 
 type Listener = () => void;
+type RowChangeListener = (changedRowIds: ReadonlySet<BrunoTableRowId> | undefined) => void;
 /**
  * Optional editor-owned gate for commands that can change the filtered row projection.
  * The registered editor owns parsing, validation, and focus restoration; returning false
@@ -339,6 +340,8 @@ export type BrunoTableRuntimeView = {
   readonly subscribeSourceVersion: (listener: Listener) => () => void;
   readonly subscribeBody: (listener: Listener) => () => void;
   readonly subscribeRowSpace: (listener: Listener) => () => void;
+  /** Private causal row-change seam for non-React indexes. */
+  readonly subscribeRowChanges: (listener: RowChangeListener) => () => void;
   readonly subscribeRow: (rowId: BrunoTableRowId, listener: Listener) => () => void;
   readonly subscribeRowCell: (
     rowId: BrunoTableRowId,
@@ -681,6 +684,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly sourceVersionListeners = new Set<Listener>();
   private readonly bodyListeners = new Set<Listener>();
   private readonly rowSpaceListeners = new Set<Listener>();
+  private readonly rowChangeListeners = new Set<RowChangeListener>();
   private readonly rowListeners = new Map<BrunoTableRowId, Set<Listener>>();
   private readonly rowSnapshots = new Map<BrunoTableRowId, BrunoTableRowSnapshot>();
   private readonly rowCellListeners = new Map<BrunoTableRowId, Map<string, Set<Listener>>>();
@@ -906,6 +910,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeSourceVersion: this.subscribeSourceVersion,
         subscribeBody: this.subscribeBody,
         subscribeRowSpace: this.subscribeRowSpace,
+        subscribeRowChanges: this.subscribeRowChanges,
         subscribeRow: this.subscribeRow,
         subscribeRowCell: this.subscribeRowCell,
         subscribeCell: this.subscribeCell,
@@ -1203,6 +1208,12 @@ export class BrunoTableGridRuntime<TRow> {
     if (rowSpaceChanged) {
       firstError = firstNotificationFailure(firstError, notify(this.rowSpaceListeners));
     }
+    if (rowSpaceChanged || changedRowIds === undefined || changedRowIds.size > 0) {
+      firstError = firstNotificationFailure(
+        firstError,
+        notifyRowChangeListeners(this.rowChangeListeners, changedRowIds),
+      );
+    }
     return firstNotificationFailure(
       firstError,
       suppressClientFineNotifications
@@ -1368,6 +1379,11 @@ export class BrunoTableGridRuntime<TRow> {
 
   public readonly subscribeRowSpace = (listener: Listener): (() => void) =>
     subscribe(this.rowSpaceListeners, listener);
+
+  public readonly subscribeRowChanges = (listener: RowChangeListener): (() => void) => {
+    this.rowChangeListeners.add(listener);
+    return () => this.rowChangeListeners.delete(listener);
+  };
 
   public readonly subscribeRow = (rowId: BrunoTableRowId, listener: Listener): (() => void) => {
     let listeners = this.rowListeners.get(rowId);
@@ -3538,14 +3554,28 @@ function firstNotificationFailure(
   return current ?? next;
 }
 
-function notify(listeners: Set<Listener>): NotificationFailure | undefined {
+function notifyListeners<TArguments extends readonly unknown[]>(
+  listeners: ReadonlySet<(...arguments_: TArguments) => void>,
+  ...arguments_: TArguments
+): NotificationFailure | undefined {
   let firstError: NotificationFailure | undefined;
   for (const listener of listeners) {
     try {
-      listener();
+      listener(...arguments_);
     } catch (error) {
       firstError ??= notificationFailure(error);
     }
   }
   return firstError;
+}
+
+function notify(listeners: Set<Listener>): NotificationFailure | undefined {
+  return notifyListeners(listeners);
+}
+
+function notifyRowChangeListeners(
+  listeners: Set<RowChangeListener>,
+  changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
+): NotificationFailure | undefined {
+  return notifyListeners(listeners, changedRowIds);
 }

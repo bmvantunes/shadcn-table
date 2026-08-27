@@ -1,4 +1,4 @@
-import { getBrunoTableSelectValueTypeFingerprint } from "../column-helpers";
+import { getBrunoTableSelectValueTypeFingerprint } from "./select-value-type-provenance";
 
 import type { CompiledColumn } from "./compile-columns";
 

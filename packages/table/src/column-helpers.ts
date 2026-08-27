@@ -1,5 +1,9 @@
 import { BrunoTableComputedColumn } from "./public-types";
 import { attachBrunoTableColumnHelperProvenance } from "./internal/column-helper-provenance";
+import {
+  attachBrunoTableSelectValueTypeProvenance,
+  getBrunoTableSelectValueTypeFingerprint,
+} from "./internal/select-value-type-provenance";
 
 import type {
   BrunoTableBuiltInValueType,
@@ -21,18 +25,21 @@ import type {
   BrunoTableOrdering,
   BrunoTableValueType,
 } from "./public-types";
+import type {
+  EffectiveFieldPresetCapability,
+  PresetEditingDefaults,
+} from "./internal/preset-capability";
 
 export type BrunoTableSelectValue = string | number | bigint | boolean;
 
-const selectValueTypeFingerprints = new WeakMap<object, readonly string[]>();
+export { getBrunoTableSelectValueTypeFingerprint };
 
-export function getBrunoTableSelectValueTypeFingerprint(
-  valueType: unknown,
-): readonly string[] | undefined {
-  return typeof valueType === "object" && valueType !== null
-    ? selectValueTypeFingerprints.get(valueType)
-    : undefined;
-}
+type InternalSelectValueType<TValue> = Omit<
+  BrunoTableValueType<TValue, "select", "text">,
+  "editorFamily"
+> & {
+  readonly editorFamily: "select";
+};
 
 type FieldOfKind<TRow, TValueKind> = {
   readonly [TField in BrunoTableFieldKey<TRow>]: [BrunoTableNonNullish<TRow[TField]>] extends [
@@ -102,7 +109,8 @@ type FieldInput<
   TField extends BrunoTableFieldKey<TRow>,
   TValueType extends
     | BrunoTableBuiltInValueType
-    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>,
+    | BrunoTableValueType<BrunoTableNonNullish<TRow[TField]>>
+    | InternalSelectValueType<BrunoTableNonNullish<TRow[TField]>>,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
 > = DistributiveOmit<
   BrunoTableFieldColumnInput<TRow, TField, TValueType, void, TColumnId>,
@@ -113,7 +121,10 @@ type ComputedOptions<
   TRow,
   TFields extends BrunoTableNonEmptyFields<TRow>,
   TValue,
-  TValueType extends BrunoTableBuiltInValueType | BrunoTableValueType<TValue>,
+  TValueType extends
+    | BrunoTableBuiltInValueType
+    | BrunoTableValueType<TValue>
+    | InternalSelectValueType<TValue>,
 > = Omit<
   BrunoTableComputedColumnInput<TRow, TFields, TValue, TValueType>,
   "fields" | "valueGetter" | "valueType"
@@ -136,7 +147,7 @@ type NumberBuiltIn = BuiltInDefaults<"number", "end", "inline", 120>;
 type BigIntBuiltIn = BuiltInDefaults<"bigint", "end", "inline", 140>;
 type BooleanBuiltIn = BuiltInDefaults<"boolean", "center", "center", 88>;
 
-type PresetDefaults = {
+type PresetDefaults<TValue> = {
   readonly headerName?: string;
   readonly width?: number;
   readonly cellAlign?: BrunoTableCellAlign;
@@ -144,15 +155,31 @@ type PresetDefaults = {
   readonly enableFilter?: boolean;
   readonly enableSetFilter?: boolean;
   readonly enableSorting?: boolean;
-  readonly isEditable?: boolean;
   readonly cellClassName?: string;
-};
+} & PresetEditingDefaults<TValue>;
 
-type NumberPresetDefaults = PresetDefaults & {
+type NumberPresetDefaults = PresetDefaults<number> & {
   readonly format?: BrunoTableNumberFormat;
 };
 
-type FieldOnlyPresetKey = "enableFilter" | "enableSetFilter" | "enableSorting" | "isEditable";
+type FieldOnlyPresetKey =
+  | "enableFilter"
+  | "enableSetFilter"
+  | "enableSorting"
+  | "isEditable"
+  | "blankValue"
+  | "validate";
+
+const fieldOnlyPresetKeyEvidence = {
+  enableFilter: true,
+  enableSetFilter: true,
+  enableSorting: true,
+  isEditable: true,
+  blankValue: true,
+  validate: true,
+} as const satisfies Readonly<Record<FieldOnlyPresetKey, true>>;
+
+const fieldOnlyPresetKeys = new Set<PropertyKey>(Reflect.ownKeys(fieldOnlyPresetKeyEvidence));
 
 type ComputedPresetDefaults<TDefaults> = Omit<TDefaults, FieldOnlyPresetKey>;
 
@@ -160,7 +187,7 @@ type BuiltInColumnPreset<
   TValue,
   TValueType extends BrunoTableBuiltInValueType,
   TBuiltIn,
-  TDefaults extends PresetDefaults,
+  TDefaults extends PresetDefaults<TValue>,
 > = {
   <
     TRow,
@@ -173,6 +200,7 @@ type BuiltInColumnPreset<
   >(
     options: TOptions &
       FieldIdentity<TField, TColumnId> &
+      EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
       OnlyKnownKeys<TOptions, FieldInput<TRow, TField, TValueType, TColumnId>>,
   ): PresetResult<
     TBuiltIn,
@@ -208,7 +236,7 @@ type BuiltInColumnHelper<
   TValue,
   TValueType extends BrunoTableBuiltInValueType,
   TBuiltIn,
-  TPresetDefaults extends PresetDefaults,
+  TPresetDefaults extends PresetDefaults<TValue>,
 > = {
   <
     TRow,
@@ -258,6 +286,8 @@ const presetDefaultKeys = new Set<PropertyKey>([
   "enableSetFilter",
   "enableSorting",
   "isEditable",
+  "blankValue",
+  "validate",
   "cellClassName",
 ]);
 const numberPresetDefaultKeys = new Set<PropertyKey>([...presetDefaultKeys, "format"]);
@@ -279,6 +309,8 @@ const fieldColumnOptionKeys = new Set<PropertyKey>([
   "enableSetFilter",
   "enableSorting",
   "isEditable",
+  "blankValue",
+  "validate",
   "groupBy",
   "groupKeyValueFormatter",
   "groupKeyCellClassName",
@@ -363,6 +395,27 @@ function mergeRuntimeColumn(
 }
 
 function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
+  if (
+    Object.hasOwn(options, "blankValue") &&
+    options["isEditable"] !== true &&
+    typeof options["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable blankValue requires potential field editability.");
+  }
+  if (
+    Object.hasOwn(options, "validate") &&
+    options["validate"] !== undefined &&
+    typeof options["validate"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable validate must be a function.");
+  }
+  if (
+    typeof options["validate"] === "function" &&
+    options["isEditable"] !== true &&
+    typeof options["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable validate requires potential field editability.");
+  }
   const hasGroupPresentation =
     Object.hasOwn(options, "groupKeyValueFormatter") ||
     Object.hasOwn(options, "groupKeyCellClassName") ||
@@ -403,10 +456,7 @@ function omitFieldOnlyPresetDefaults(defaults: RuntimeColumnOptions): RuntimeCol
     Reflect.ownKeys(defaults)
       .filter(
         (key) =>
-          key !== "enableFilter" &&
-          key !== "enableSetFilter" &&
-          key !== "enableSorting" &&
-          key !== "isEditable" &&
+          !fieldOnlyPresetKeys.has(key) &&
           key !== "groupBy" &&
           key !== "groupKeyValueFormatter" &&
           key !== "groupKeyCellClassName" &&
@@ -446,7 +496,7 @@ function BrunoTableTextColumnBase(options: RuntimeColumnOptions) {
   return mergeRuntimeColumn(textBuiltInDefaults, {}, options);
 }
 
-function BrunoTableTextColumnWithDefaults<const TDefaults extends PresetDefaults>(
+function BrunoTableTextColumnWithDefaults<const TDefaults extends PresetDefaults<string>>(
   defaults: TDefaults,
 ): BuiltInColumnPreset<string, "text", TextBuiltIn, TDefaults> {
   const defaultsSnapshot = snapshotPresetDefaults(defaults, presetDefaultKeys);
@@ -455,7 +505,7 @@ function BrunoTableTextColumnWithDefaults<const TDefaults extends PresetDefaults
     TField extends FieldOfKind<TRow, string>,
     const TOptions extends ApplyDefaults<FieldInput<TRow, TField, "text">, TDefaults>,
   >(
-    options: TOptions,
+    options: TOptions & EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions>,
   ): PresetResult<
     TextBuiltIn,
     TDefaults,
@@ -488,7 +538,7 @@ export const BrunoTableTextColumn: BuiltInColumnHelper<
   string,
   "text",
   TextBuiltIn,
-  PresetDefaults
+  PresetDefaults<string>
 > = Object.assign(BrunoTableTextColumnBase, {
   withDefaults: BrunoTableTextColumnWithDefaults,
 });
@@ -524,7 +574,7 @@ function BrunoTableNumberColumnWithDefaults<const TDefaults extends NumberPreset
     TField extends FieldOfKind<TRow, number>,
     const TOptions extends ApplyDefaults<FieldInput<TRow, TField, "number">, TDefaults>,
   >(
-    options: TOptions,
+    options: TOptions & EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions>,
   ): PresetResult<
     NumberBuiltIn,
     TDefaults,
@@ -584,7 +634,7 @@ function BrunoTableBigIntColumnBase(options: RuntimeColumnOptions) {
   return mergeRuntimeColumn(bigIntBuiltInDefaults, {}, options);
 }
 
-function BrunoTableBigIntColumnWithDefaults<const TDefaults extends PresetDefaults>(
+function BrunoTableBigIntColumnWithDefaults<const TDefaults extends PresetDefaults<bigint>>(
   defaults: TDefaults,
 ): BuiltInColumnPreset<bigint, "bigint", BigIntBuiltIn, TDefaults> {
   const defaultsSnapshot = snapshotPresetDefaults(defaults, presetDefaultKeys);
@@ -593,7 +643,7 @@ function BrunoTableBigIntColumnWithDefaults<const TDefaults extends PresetDefaul
     TField extends FieldOfKind<TRow, bigint>,
     const TOptions extends ApplyDefaults<FieldInput<TRow, TField, "bigint">, TDefaults>,
   >(
-    options: TOptions,
+    options: TOptions & EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions>,
   ): PresetResult<
     BigIntBuiltIn,
     TDefaults,
@@ -626,7 +676,7 @@ export const BrunoTableBigIntColumn: BuiltInColumnHelper<
   bigint,
   "bigint",
   BigIntBuiltIn,
-  PresetDefaults
+  PresetDefaults<bigint>
 > = Object.assign(BrunoTableBigIntColumnBase, {
   withDefaults: BrunoTableBigIntColumnWithDefaults,
 });
@@ -653,7 +703,7 @@ function BrunoTableBooleanColumnBase(options: RuntimeColumnOptions) {
   return mergeRuntimeColumn(booleanBuiltInDefaults, {}, options);
 }
 
-function BrunoTableBooleanColumnWithDefaults<const TDefaults extends PresetDefaults>(
+function BrunoTableBooleanColumnWithDefaults<const TDefaults extends PresetDefaults<boolean>>(
   defaults: TDefaults,
 ): BuiltInColumnPreset<boolean, "boolean", BooleanBuiltIn, TDefaults> {
   const defaultsSnapshot = snapshotPresetDefaults(defaults, presetDefaultKeys);
@@ -662,7 +712,7 @@ function BrunoTableBooleanColumnWithDefaults<const TDefaults extends PresetDefau
     TField extends FieldOfKind<TRow, boolean>,
     const TOptions extends ApplyDefaults<FieldInput<TRow, TField, "boolean">, TDefaults>,
   >(
-    options: TOptions,
+    options: TOptions & EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions>,
   ): PresetResult<
     BooleanBuiltIn,
     TDefaults,
@@ -695,7 +745,7 @@ export const BrunoTableBooleanColumn: BuiltInColumnHelper<
   boolean,
   "boolean",
   BooleanBuiltIn,
-  PresetDefaults
+  PresetDefaults<boolean>
 > = Object.assign(BrunoTableBooleanColumnBase, {
   withDefaults: BrunoTableBooleanColumnWithDefaults,
 });
@@ -703,7 +753,7 @@ export const BrunoTableBooleanColumn: BuiltInColumnHelper<
 type NonEmptySelectOptions<TValue extends BrunoTableSelectValue = BrunoTableSelectValue> =
   readonly [TValue, ...TValue[]];
 
-type SelectValueType<TValue> = BrunoTableValueType<TValue, "select", "select">;
+type SelectValueType<TValue> = InternalSelectValueType<TValue>;
 
 type SelectBuiltIn<TValue> = {
   readonly valueType: SelectValueType<TValue>;
@@ -738,9 +788,23 @@ type SelectComputedInput<
   readonly options: TOptions;
 };
 
-type SelectPresetDefaults<TOptions extends NonEmptySelectOptions> = PresetDefaults & {
+type SelectPresetDefaults<TOptions extends NonEmptySelectOptions> = PresetDefaults<
+  TOptions[number]
+> & {
   readonly options: TOptions;
 };
+
+type EffectiveSelectPresetCapability<
+  TRow,
+  TField extends BrunoTableFieldKey<TRow>,
+  TDefaultOptions extends NonEmptySelectOptions,
+  TColumnId extends BrunoTableColumnId,
+  TDefaults,
+  TOptions,
+> = EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
+  (Merge<TDefaults, TOptions> extends SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>
+    ? unknown
+    : never);
 
 type SelectColumnPreset<
   TDefaultOptions extends NonEmptySelectOptions,
@@ -757,6 +821,14 @@ type SelectColumnPreset<
   >(
     options: TOptions &
       FieldIdentity<TField, TColumnId> &
+      EffectiveSelectPresetCapability<
+        TRow,
+        TField,
+        TDefaultOptions,
+        TColumnId,
+        TDefaults,
+        TOptions
+      > &
       ExactSelectDomain<TDefaultOptions[number], BrunoTableNonNullish<TRow[TField]>> &
       OnlyKnownKeys<
         TOptions,
@@ -932,6 +1004,14 @@ function BrunoTableSelectColumnWithDefaults<
     > & { readonly options?: never },
   >(
     options: TOptions &
+      EffectiveSelectPresetCapability<
+        TRow,
+        TField,
+        TDefaultOptions,
+        BrunoTableColumnId,
+        TDefaults,
+        TOptions
+      > &
       ExactSelectDomain<TDefaultOptions[number], BrunoTableNonNullish<TRow[TField]>>,
   ): PresetResult<
     SelectBuiltIn<BrunoTableNonNullish<TRow[TField]>>,
@@ -1025,6 +1105,30 @@ function snapshotPresetDefaults(
     }
   }
 
+  if (
+    Object.hasOwn(defaults, "blankValue") &&
+    defaults["isEditable"] !== true &&
+    typeof defaults["isEditable"] !== "function"
+  ) {
+    throw new TypeError(
+      "BrunoTable Column Helper preset blankValue requires potential editability.",
+    );
+  }
+  if (
+    Object.hasOwn(defaults, "validate") &&
+    defaults["validate"] !== undefined &&
+    typeof defaults["validate"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable Column Helper preset validate must be a function.");
+  }
+  if (
+    typeof defaults["validate"] === "function" &&
+    defaults["isEditable"] !== true &&
+    typeof defaults["isEditable"] !== "function"
+  ) {
+    throw new TypeError("BrunoTable Column Helper preset validate requires potential editability.");
+  }
+
   const format = defaults["format"];
   const options = defaults["options"];
   validateRuntimeFormat(format);
@@ -1065,9 +1169,7 @@ function validateRuntimeColumnOptions(
   }
 }
 
-function createSelectValueType(
-  options: readonly unknown[],
-): BrunoTableValueType<unknown, "select", "select"> {
+function createSelectValueType(options: readonly unknown[]): SelectValueType<unknown> {
   const kind = typeof options[0];
   if (!isSelectPrimitiveKind(kind) || options.some((option) => typeof option !== kind)) {
     throw new TypeError(
@@ -1105,7 +1207,7 @@ function createSelectValueType(
       : ({ _tag: "Success", value: option } as const);
   };
 
-  const descriptor: BrunoTableValueType<unknown, "select", "select"> = {
+  const descriptor: SelectValueType<unknown> = {
     codecId: "@bruno/table/select",
     codecVersion: 1,
     filterFamily: "select",
@@ -1137,7 +1239,7 @@ function createSelectValueType(
       return decodeOption(decodeSelectPrimitive(input["value"]));
     },
   };
-  selectValueTypeFingerprints.set(descriptor, Object.freeze([kind, ...canonicalOptions]));
+  attachBrunoTableSelectValueTypeProvenance(descriptor, kind, canonicalOptions);
   return Object.freeze(descriptor);
 }
 
