@@ -610,6 +610,55 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, columns[0]!.columnId, 1)?.rowId).toBe(`known-${String(rowCount - 1)}`);
   });
 
+  it("enqueues late invalidations without rebuilding a large pending tail", () => {
+    const rowCount = 40;
+    const columnCount = 40;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_unused, rowIndex) => {
+        const id = `pending-${String(rowIndex)}`;
+        return [id, { id, enabled: true, alternate: false }];
+      }),
+    );
+    const columns = compileColumns(
+      Array.from({ length: columnCount }, (_unused, columnIndex) => ({
+        columnId: `COL_ID_PENDING_${String(columnIndex)}`,
+        field: "enabled" as const,
+        headerName: `Pending ${String(columnIndex)}`,
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      })),
+    );
+    const evaluate = vi.fn((_rowId: string, row: object) => (row as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const projection = rowSpace([...rows.keys()]);
+    index.reconcile(columns, projection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+
+    for (const [rowId, row] of rows) rows.set(rowId, { ...row, enabled: false });
+    index.reconcileRows(new Set(rows.keys()));
+    expect(index.reconcile(columns, projection)).toBe(true);
+    expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
+    evaluate.mockClear();
+
+    rows.set("pending-0", { id: "pending-0", enabled: true, alternate: false });
+    rows.set("pending-39", { id: "pending-39", enabled: true, alternate: false });
+    index.reconcileRows(new Set(["pending-0"]));
+    for (let repetition = 0; repetition < 100; repetition += 1) {
+      index.reconcileRows(new Set(["pending-39"]));
+    }
+    expect(index.reconcile(columns, projection)).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY)) {
+      expect(index.find(1, columns[0]!.columnId, -1)).toBeUndefined();
+    }
+
+    expect(evaluate).toHaveBeenCalledTimes((rowCount - 1) * columnCount);
+    expect(index.find(1, columns[0]!.columnId, -1)?.rowId).toBe("pending-0");
+    expect(index.find(rowCount - 2, columns[0]!.columnId, 1)?.rowId).toBe("pending-39");
+  });
+
   it("discovers unknown replacements without tearing down predicate evidence synchronously", () => {
     const rowCount = 40;
     const columnCount = 40;

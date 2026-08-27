@@ -3,6 +3,7 @@ import { bench, describe } from "vite-plus/test";
 import { compileColumns, type CompiledFieldColumn } from "./compile-columns";
 import {
   BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT,
+  BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
   BrunoTableCellEditTraversalIndex,
 } from "./cell-edit-traversal";
 
@@ -133,9 +134,13 @@ function assertBudgetSamples(name: string, samples: readonly number[], expected?
   return p99Ms;
 }
 
+const assertedBudgetSeries = new WeakSet<number[]>();
+
 function recordBudgetSample(name: string, samples: number[], elapsedMs: number): void {
   samples.push(elapsedMs);
-  if (samples.length === 100) assertBudgetSamples(name, samples, 100);
+  if (samples.length < 100 || assertedBudgetSeries.has(samples)) return;
+  assertBudgetSamples(name, samples);
+  assertedBudgetSeries.add(samples);
 }
 
 describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz reference)", () => {
@@ -464,6 +469,103 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "stages late invalidations independently of a 100,000-row pending tail",
+    () => {
+      const pendingRows = Array.from(
+        { length: staticRowCount },
+        (_unused, rowIndex): Row => ({
+          id: `pending-row-${String(rowIndex)}`,
+          editable: true,
+        }),
+      );
+      const pendingRowsById = new Map(pendingRows.map((row) => [row.id, row]));
+      const pendingRowSpace = Object.freeze({
+        totalRows: pendingRows.length,
+        getRowId: (rowIndex: number) => pendingRows[rowIndex]?.id,
+      });
+      const pendingColumns = compileColumns([
+        {
+          columnId: "COL_ID_PENDING_EDIT",
+          field: "editable" as const,
+          headerName: "Pending edit",
+          valueType: "boolean" as const,
+          isEditable: stablePredicate,
+        },
+      ]);
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => pendingRowsById.get(rowId),
+        (_rowId, row) => {
+          predicateEvaluations += 1;
+          return (row as Row).editable;
+        },
+        true,
+      );
+      index.reconcile(pendingColumns, pendingRowSpace);
+      while (index.buildNextSlice());
+
+      for (const row of pendingRows) {
+        pendingRowsById.set(row.id, { ...row, editable: false });
+      }
+      index.reconcileRows(new Set(pendingRowsById.keys()));
+      index.reconcile(pendingColumns, pendingRowSpace);
+      index.buildNextSlice();
+      predicateEvaluations = 0;
+
+      const stagingSamples: number[] = [];
+      for (let sampleIndex = 0; sampleIndex < 100; sampleIndex += 1) {
+        const row = pendingRows[staticRowCount - 1 - sampleIndex]!;
+        pendingRowsById.set(row.id, { ...row, editable: true });
+        const startedAt = performance.now();
+        index.reconcileRows(new Set([row.id]));
+        index.reconcile(pendingColumns, pendingRowSpace);
+        stagingSamples.push(performance.now() - startedAt);
+        if (predicateEvaluations !== 0 || index.isReady()) {
+          throw new Error("Late invalidation exposed synchronous or partial traversal evidence.");
+        }
+      }
+
+      const processedRow = pendingRows[0]!;
+      pendingRowsById.set(processedRow.id, { ...processedRow, editable: true });
+      const processedStartedAt = performance.now();
+      index.reconcileRows(new Set([processedRow.id]));
+      index.reconcile(pendingColumns, pendingRowSpace);
+      stagingSamples.push(performance.now() - processedStartedAt);
+      if (predicateEvaluations !== 0 || index.isReady()) {
+        throw new Error("Processed late invalidation exposed synchronous or partial evidence.");
+      }
+
+      const sliceSamples: number[] = [];
+      while (!index.isReady()) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        sliceSamples.push(performance.now() - startedAt);
+      }
+      if (
+        index.find(1, pendingColumns[0]!.columnId, -1)?.rowId !== processedRow.id ||
+        index.find(staticRowCount - 102, pendingColumns[0]!.columnId, 1)?.rowId !==
+          pendingRows[staticRowCount - 100]!.id
+      ) {
+        throw new Error("Late invalidation rebuild did not install exact latest evidence.");
+      }
+
+      const stagingP99Ms = assertBudgetSamples("late invalidation staging", stagingSamples);
+      const p99Ms = assertBudgetSamples("late invalidation slice", sliceSamples);
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable late pending-tail invalidation",
+          rowCount: pendingRows.length,
+          stagingP99Ms,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "keeps 100,000-row known and unknown publications analytical for static editability",
     () => {
       let rowReads = 0;
@@ -615,7 +717,10 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       predicateEvaluations = 0;
       index.reconcileRows(undefined);
       index.reconcile(columns, rowSpace);
-      index.buildNextSlice(rowCount * 2 * 16, Number.POSITIVE_INFINITY);
+      index.buildNextSlice(
+        rowCount * 2 * BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
+        Number.POSITIVE_INFINITY,
+      );
       missingRowsById.clear();
       index.reconcileRows(new Set(rows.map((row) => row.id)));
       rowReads = 0;

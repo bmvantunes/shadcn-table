@@ -44,7 +44,7 @@ const SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT = 1_024;
 export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_PREDICATE_CELL_LIMIT = 4_096;
 export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_SLICE_TIME_LIMIT_MS = 2;
 // Conservatively charge native row reads and projection writes against the predicate-cell budget.
-const UNKNOWN_DISCOVERY_ROW_COST = 16;
+export const BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST = 16;
 
 function hasSamePredicateAuthority(
   left: CompiledFieldColumn,
@@ -110,8 +110,10 @@ export class BrunoTableCellEditTraversalIndex {
   private allRowsDirty = false;
   private validationGeneration = 0;
   private pendingRowIndexes: number[] = [];
+  private pendingRowIndexSet = new Set<number>();
   private pendingRowCursor = 0;
   private pendingDetachedRowIds: string[] = [];
+  private pendingDetachedRowIdSet = new Set<string>();
   private pendingDetachedRowCursor = 0;
   private pendingDirtyRowIds = new Set<string>();
   private pendingPredicateAuthorityRowIds: string[] = [];
@@ -274,10 +276,12 @@ export class BrunoTableCellEditTraversalIndex {
     this.validRowIndexes = validRowIndexes;
     this.eligiblePredicateRowIndexes = eligiblePredicateRowIndexes;
     this.pendingRowIndexes = pendingRowIndexes;
+    this.pendingRowIndexSet = new Set(pendingRowIndexes);
     this.pendingRowCursor = 0;
     this.pendingDetachedRowIds = [...dirtyWorkRowIds].filter(
       (rowId) => !this.rowIndexById.has(rowId),
     );
+    this.pendingDetachedRowIdSet = new Set(this.pendingDetachedRowIds);
     this.pendingDetachedRowCursor = 0;
     this.pendingDirtyRowIds.clear();
     for (const rowId of dirtyWorkRowIds) this.pendingDirtyRowIds.add(rowId);
@@ -313,7 +317,7 @@ export class BrunoTableCellEditTraversalIndex {
             continue;
           }
           this.buildUnknownProjectionRow(projection);
-          remainingPredicateCells -= UNKNOWN_DISCOVERY_ROW_COST;
+          remainingPredicateCells -= BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST;
           built += 1;
           continue;
         }
@@ -330,7 +334,7 @@ export class BrunoTableCellEditTraversalIndex {
           } else {
             rowCache.validationGeneration = this.validationGeneration;
           }
-          remainingPredicateCells -= UNKNOWN_DISCOVERY_ROW_COST;
+          remainingPredicateCells -= BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST;
           built += 1;
           continue;
         }
@@ -384,6 +388,7 @@ export class BrunoTableCellEditTraversalIndex {
       if (built > 0 && remainingPredicateCells < predicateColumnCount) break;
       if (rowIndex === undefined) {
         this.pendingDetachedRowCursor += 1;
+        this.pendingDetachedRowIdSet.delete(detachedRowId!);
         remainingPredicateCells -= predicateColumnCount;
         built += 1;
         const rowId = detachedRowId!;
@@ -398,6 +403,7 @@ export class BrunoTableCellEditTraversalIndex {
         continue;
       }
       this.pendingRowCursor += 1;
+      this.pendingRowIndexSet.delete(rowIndex);
       remainingPredicateCells -= predicateColumnCount;
       built += 1;
       const rowId = this.rowIds[rowIndex];
@@ -420,10 +426,12 @@ export class BrunoTableCellEditTraversalIndex {
     }
     if (this.pendingRowCursor >= this.pendingRowIndexes.length) {
       this.pendingRowIndexes = [];
+      this.pendingRowIndexSet.clear();
       this.pendingRowCursor = 0;
     }
     if (this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length) {
       this.pendingDetachedRowIds = [];
+      this.pendingDetachedRowIdSet.clear();
       this.pendingDetachedRowCursor = 0;
     }
     return !this.isReady();
@@ -446,8 +454,10 @@ export class BrunoTableCellEditTraversalIndex {
       this.unknownDiscoveryRequired = true;
       this.dirtyRowIds.clear();
       this.pendingRowIndexes = [];
+      this.pendingRowIndexSet.clear();
       this.pendingRowCursor = 0;
       this.pendingDetachedRowIds = [];
+      this.pendingDetachedRowIdSet.clear();
       this.pendingDetachedRowCursor = 0;
       this.pendingDirtyRowIds.clear();
       this.unknownDiscoveryIterator = undefined;
@@ -618,8 +628,10 @@ export class BrunoTableCellEditTraversalIndex {
     this.validRowIndexes = projection.validRowIndexes;
     this.eligiblePredicateRowIndexes = projection.eligiblePredicateRowIndexes;
     this.pendingRowIndexes = projection.pendingRowIndexes;
+    this.pendingRowIndexSet = projection.pendingRowIndexSet;
     this.pendingRowCursor = 0;
     this.pendingDetachedRowIds = this.unknownMissingRowIds;
+    this.pendingDetachedRowIdSet = new Set(this.pendingDetachedRowIds);
     this.pendingDetachedRowCursor = 0;
     this.pendingDirtyRowIds = this.dirtyRowIds;
     this.dirtyRowIds = new Set();
@@ -651,8 +663,10 @@ export class BrunoTableCellEditTraversalIndex {
     this.dirtyRowIds.clear();
     this.dirtyColumnIdsByRowId.clear();
     this.pendingRowIndexes = [];
+    this.pendingRowIndexSet.clear();
     this.pendingRowCursor = 0;
     this.pendingDetachedRowIds = [];
+    this.pendingDetachedRowIdSet.clear();
     this.pendingDetachedRowCursor = 0;
     this.pendingDirtyRowIds.clear();
     this.pendingPredicateAuthorityRowIds = [];
@@ -669,21 +683,20 @@ export class BrunoTableCellEditTraversalIndex {
 
   private readonly stageDirtyRows = (): void => {
     if (this.dirtyRowIds.size === 0) return;
-    const pendingRowIndexes = new Set(this.pendingRowIndexes.slice(this.pendingRowCursor));
-    const pendingDetachedRowIds = new Set(
-      this.pendingDetachedRowIds.slice(this.pendingDetachedRowCursor),
-    );
     for (const rowId of this.dirtyRowIds) {
       const rowIndex = this.rowIndexById.get(rowId);
       this.pendingDirtyRowIds.add(rowId);
       this.dirtyColumnIdsByRowId.delete(rowId);
-      if (rowIndex === undefined) pendingDetachedRowIds.add(rowId);
-      else pendingRowIndexes.add(rowIndex);
+      if (rowIndex === undefined) {
+        if (!this.pendingDetachedRowIdSet.has(rowId)) {
+          this.pendingDetachedRowIdSet.add(rowId);
+          this.pendingDetachedRowIds.push(rowId);
+        }
+      } else if (!this.pendingRowIndexSet.has(rowIndex)) {
+        this.pendingRowIndexSet.add(rowIndex);
+        this.pendingRowIndexes.push(rowIndex);
+      }
     }
-    this.pendingRowIndexes = [...pendingRowIndexes].sort((left, right) => left - right);
-    this.pendingRowCursor = 0;
-    this.pendingDetachedRowIds = [...pendingDetachedRowIds];
-    this.pendingDetachedRowCursor = 0;
     this.dirtyRowIds.clear();
     this.verticalRangeCache = undefined;
   };

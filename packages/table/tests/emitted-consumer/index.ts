@@ -1571,6 +1571,14 @@ void emittedInvalidDisabledPresetField;
 const emittedEditableWithoutBlankPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
 });
+const emittedValidRequiredEditableWithoutBlank = [
+  emittedEditableWithoutBlankPreset({
+    columnId: "COL_ID_REQUIRED_EDITABLE_PRESET",
+    field: "required",
+    headerName: "Required editable preset",
+  }),
+] satisfies BrunoTableColumns<EmittedPresetEditRow>;
+void emittedValidRequiredEditableWithoutBlank;
 const emittedValidatedNumberPreset = BrunoTableNumberColumn.withDefaults({
   isEditable: true,
   validate: () => undefined,

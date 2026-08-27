@@ -443,6 +443,13 @@ const emittedProducedTextEvidenceRejectedSmokes = await Promise.all(
       ),
       expected: "is an unsupported produced-text lifecycle",
     },
+    {
+      source: emittedProducedTextInstallerSmoke.replace(
+        'target.removeEventListener("beforeinput", listener);',
+        "",
+      ),
+      expected: "expected exactly one removeEventListener:beforeinput lifecycle",
+    },
   ].map(async ({ source, expected }) => ({
     ast: await parseAstAsync(source, { lang: "js" }),
     expected,
