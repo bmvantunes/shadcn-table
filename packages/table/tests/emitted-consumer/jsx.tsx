@@ -131,6 +131,37 @@ const validEmittedEditableClient = (
 );
 void validEmittedEditableClient;
 
+const emittedEditablePropsWithoutMode = {
+  tableId: "TABLE_ID_EMITTED_CONSUMER_OWNED_EDIT_MODE",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+  clientSource,
+  getRowId: (row: Row) => row.id,
+  editable: true,
+  getRowVersion: (row: Row) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+} as const;
+const invalidEmittedControlledEditMode = {
+  ...emittedEditablePropsWithoutMode,
+  // @ts-expect-error Published declarations keep Edit Mode user-owned.
+  editMode: "batch",
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+const invalidEmittedInitialEditMode = {
+  ...emittedEditablePropsWithoutMode,
+  // @ts-expect-error Published declarations reject an initial Edit Mode.
+  initialEditMode: "batch",
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+const invalidEmittedEditModeCallback = {
+  ...emittedEditablePropsWithoutMode,
+  // @ts-expect-error Published declarations reject controlled Edit Mode callbacks.
+  onEditModeChange: () => undefined,
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+void [
+  invalidEmittedControlledEditMode,
+  invalidEmittedInitialEditMode,
+  invalidEmittedEditModeCallback,
+];
+
 const invalidEmittedEditableWithoutVersion = (
   <BrunoTableClient
     tableId="TABLE_ID_EMITTED_EDITABLE_WITHOUT_VERSION"

@@ -446,6 +446,8 @@ describe("BrunoTableServer", () => {
       await expect
         .element(page.getByRole("gridcell", { name: "Loading Desk" }).first())
         .toBeVisible();
+      expect(page.getByRole("switch", { name: "Batch editing" }).query()).toBeNull();
+      expect(page.getByRole("region", { name: "Edit safety" }).query()).toBeNull();
       await expect
         .element(page.getByRole("gridcell", { name: "Loading Rows" }).first())
         .toBeVisible();

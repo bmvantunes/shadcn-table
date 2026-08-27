@@ -1976,6 +1976,8 @@ test("traverses editable cells from Navigation Mode and yields natively only at 
   );
 
   await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  await expect.element(screen.getByRole("switch", { name: "Batch editing" })).toHaveFocus();
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
   await expect.element(screen.getByRole("button", { name: "Sort rows, 1 active" })).toHaveFocus();
 
   await userEvent.click(screen.getByRole("gridcell", { name: "last", exact: true }));
@@ -1991,6 +1993,8 @@ test("supports reverse commit movement and exits backward at the first eligible 
   );
   await userEvent.click(screen.getByRole("gridcell", { name: "Ada", exact: true }));
   await userEvent.keyboard("{F2}{Shift>}{Tab}{/Shift}");
+  await expect.element(screen.getByRole("switch", { name: "Batch editing" })).toHaveFocus();
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
   await expect.element(screen.getByRole("button", { name: "Sort rows, 1 active" })).toHaveFocus();
 });
 
@@ -2168,6 +2172,8 @@ test("reveals an exact far predicate destination in both directions before nativ
     .toBeInTheDocument();
   await userEvent.keyboard("{F2}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Destination" })).toHaveFocus();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(screen.getByRole("button", { name: "Reset edits" })).toHaveFocus();
   await userEvent.keyboard("{Tab}");
   await expect.element(screen.getByRole("button", { name: "After tall grid" })).toHaveFocus();
 });

@@ -63,6 +63,8 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
   copy: (event: BrunoTableHotkeyGesture) => void;
+  undo?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
+  redo?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   selectAll?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   resize: (
     event: BrunoTableHotkeyGesture,
@@ -149,6 +151,15 @@ function createBrunoTableGridHotkeyBindings(
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
     { hotkey: "Mod+C", onTrigger: commands.copy },
+    ...(commands.undo === undefined
+      ? []
+      : ([{ hotkey: "Mod+Z", onTrigger: commands.undo }] as const)),
+    ...(commands.redo === undefined
+      ? []
+      : ([
+          { hotkey: "Mod+Shift+Z", onTrigger: commands.redo },
+          { hotkey: "Mod+Y", onTrigger: commands.redo },
+        ] as const)),
     ...(commands.selectAll === undefined
       ? []
       : ([{ hotkey: "Mod+A", onTrigger: commands.selectAll }] as const)),

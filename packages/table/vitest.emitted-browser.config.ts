@@ -8,6 +8,8 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       "@bruno/shadcn/direction",
+      "@bruno/shadcn/switch",
+      "@bruno/shadcn/alert-dialog",
       "react",
       "react/jsx-runtime",
       "react-dom/client",

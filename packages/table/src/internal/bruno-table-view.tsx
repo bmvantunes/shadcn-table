@@ -76,6 +76,14 @@ import { useQueuer } from "@tanstack/react-pacer";
 import type { BrunoTableColumnId } from "../public-types";
 
 import type { CompiledColumn } from "./compile-columns";
+import {
+  brunoTableCellPresentationUsesRawRow as cellPresentationUsesRawRow,
+  brunoTableProxyPresentationUsesRawRow as proxyPresentationUsesRawRow,
+  resolveBrunoTableCellClassName as resolveCellClassName,
+  resolveBrunoTableCellContent as resolveCellContent,
+  resolveBrunoTableProxyCellClassName as resolveProxyCellClassName,
+  resolveBrunoTableProxyCellContent as resolveProxyCellContent,
+} from "./cell-presentation";
 import { prepareBrunoTableGroupingRemovalFocus } from "./client-grouping-focus";
 import { useBrunoTableGridTabStopHandoff } from "./focus";
 import {
@@ -177,6 +185,8 @@ import {
 } from "./cell-range-clipboard";
 import {
   BrunoTableCellEditRuntime,
+  isBrunoTableCellEditDraftReviewSourceRow,
+  type BrunoTableCellEditDraftReviewSourceRow,
   type BrunoTableCellEditMovement,
   type BrunoTableCellEditMovementOrigin,
   type BrunoTableCellEditProjection,
@@ -184,6 +194,8 @@ import {
 } from "./cell-edit";
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
 import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
+import { BrunoTableEditSafetyFooter } from "./edit-chrome";
+import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
@@ -253,6 +265,9 @@ const VISUALLY_HIDDEN: CSSProperties = {
 };
 
 const BrunoTableCellEditContext = createContext<BrunoTableCellEditRuntime | undefined>(undefined);
+const BrunoTableEditMemoryContext = createContext<BrunoTableEditMemoryRuntime | undefined>(
+  undefined,
+);
 const NO_CELL_EDIT_PROJECTION: BrunoTableCellEditProjection = Object.freeze({
   active: false,
   hasDraft: false,
@@ -404,7 +419,33 @@ export type BrunoTableViewProps<
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   /** Private Editable Client-only Cell Edit Session capability. */
   readonly cellEdit?: BrunoTableCellEditRuntime | undefined;
+  /** Private Editable Client-only edit memory and safety chrome capability. */
+  readonly editMemory?: BrunoTableEditMemoryRuntime | undefined;
+  /** Private Editable Client-only Reset Review renderer. */
+  readonly renderResetReview?:
+    | ((rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode)
+    | undefined;
 };
+
+function getBrunoTableGridAriaKeyShortcuts({
+  copyEnabled,
+  editMemoryEnabled,
+  rowSelectionEnabled,
+}: Readonly<{
+  readonly copyEnabled: boolean;
+  readonly editMemoryEnabled: boolean;
+  readonly rowSelectionEnabled: boolean;
+}>): string {
+  const shortcuts = ["Alt+ArrowLeft", "Alt+ArrowRight", "Shift+F10", "ContextMenu"];
+  if (copyEnabled) shortcuts.push("Control+C", "Meta+C");
+  if (rowSelectionEnabled) {
+    shortcuts.push("Space", "Shift+Space", "Control+A", "Meta+A");
+  }
+  if (editMemoryEnabled) {
+    shortcuts.push("Control+Z", "Meta+Z", "Control+Shift+Z", "Meta+Shift+Z", "Control+Y", "Meta+Y");
+  }
+  return shortcuts.join(" ");
+}
 
 export type BrunoTableColumnFilterRendererProps = {
   readonly column: CompiledColumn;
@@ -488,6 +529,8 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   gridOwnedControls,
   rowSelection,
   cellRange,
+  editMemory,
+  renderResetReview,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
@@ -530,6 +573,9 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowSelection={rowSelection}
           cellRange={cellRange}
         />
+        {editMemory === undefined || renderResetReview === undefined ? null : (
+          <BrunoTableEditSafetyFooter runtime={editMemory} renderReview={renderResetReview} />
+        )}
       </div>
     </section>
   );
@@ -544,7 +590,9 @@ export function BrunoTableView<TRuntime extends BrunoTableRuntimeView, TAdapter>
 ): ReactElement {
   return (
     <BrunoTableCellEditContext value={props.cellEdit}>
-      <MemoizedBrunoTableView {...props} />
+      <BrunoTableEditMemoryContext value={props.editMemory}>
+        <MemoizedBrunoTableView {...props} />
+      </BrunoTableEditMemoryContext>
     </BrunoTableCellEditContext>
   );
 }
@@ -1481,6 +1529,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
+  const editMemory = useContext(BrunoTableEditMemoryContext);
   const getActiveEditRowId = useCallback((): string | undefined => {
     const session = cellEdit?.getSessionSnapshot();
     return session?.kind === "editing" ? session.rowId : undefined;
@@ -2795,6 +2844,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       startReplaceFromProducedTextRef.current(text),
     );
   }, [cellEdit]);
+  useLayoutEffect(
+    () =>
+      editMemory?.registerGridFocusCommand(() =>
+        gridElement.current?.focus({ preventScroll: true }),
+      ),
+    [editMemory],
+  );
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
     const reconcileAndScheduleTraversal = () => {
@@ -2806,12 +2862,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       }
     };
     reconcileAndScheduleTraversal();
+    cellEdit.reconcileSourceRows(undefined);
     cellEdit.reconcileActiveRow();
     const unsubscribeTraversalInvalidation = cellEdit.subscribeTraversalInvalidation(
       reconcileAndScheduleTraversal,
     );
     const unsubscribe = runtime.subscribeRowChanges((changedRowIds) => {
       cellEdit.reconcileTraversalRows(changedRowIds);
+      cellEdit.reconcileSourceRows(changedRowIds);
       cellEdit.reconcileActiveRow(changedRowIds);
     });
     return () => {
@@ -2855,10 +2913,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   };
   useBrunoTableGridHotkeys(gridElement, {
     documentEscapeActive: () =>
-      columnGesture.current !== undefined ||
-      cellRange?.isPointerGestureActive() === true ||
-      cellEdit?.getSessionSnapshot().kind === "editing",
+      editMemory?.getResetReviewSnapshot().open !== true &&
+      (columnGesture.current !== undefined ||
+        cellRange?.isPointerGestureActive() === true ||
+        cellEdit?.getSessionSnapshot().kind === "editing"),
     escape: (event) => {
+      if (editMemory?.getResetReviewSnapshot().open === true) return;
       if (cellRange?.cancelPointerGesture() === true) {
         event.preventDefault();
         return;
@@ -2915,6 +2975,20 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     },
     headerMenu: runHeaderMenu,
     copy: runCopy,
+    ...(editMemory === undefined
+      ? {}
+      : {
+          undo: (event: BrunoTableHotkeyGesture) => {
+            if (!ownsGridSurface(event)) return;
+            if (!editMemory.undo()) return;
+            event.preventDefault();
+          },
+          redo: (event: BrunoTableHotkeyGesture) => {
+            if (!ownsGridSurface(event)) return;
+            if (!editMemory.redo()) return;
+            event.preventDefault();
+          },
+        }),
     ...(rowSelection === undefined ? {} : { selectAll: runSelectAll }),
     resize: runColumnResize,
     activate: runActivation,
@@ -2948,15 +3022,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           columnWindow.pinnedEnd.length +
           (rowSelection === undefined ? 0 : 1)
         }
-        aria-keyshortcuts={
-          rowSelection === undefined
-            ? copyEnabled
-              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C"
-              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu"
-            : copyEnabled
-              ? "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Control+C Meta+C Space Shift+Space Control+A Meta+A"
-              : "Alt+ArrowLeft Alt+ArrowRight Shift+F10 ContextMenu Space Shift+Space Control+A Meta+A"
-        }
+        aria-keyshortcuts={getBrunoTableGridAriaKeyShortcuts({
+          copyEnabled,
+          editMemoryEnabled: editMemory !== undefined,
+          rowSelectionEnabled: rowSelection !== undefined,
+        })}
         onFocus={(event) => {
           if (event.target === event.currentTarget) {
             navigation.activateForFocus();
@@ -5310,6 +5380,33 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot) : undefined;
   const presentationColumn = snapshot.column;
   const row = rowSnapshot?.row;
+  const draftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(row) ? row : undefined;
+  const subscribeDraftReview = useMemo(
+    () =>
+      draftReviewSource === undefined
+        ? (_listener: () => void) => () => undefined
+        : draftReviewSource.subscribe,
+    [draftReviewSource],
+  );
+  const getDraftReviewSnapshot = useMemo(
+    () => (draftReviewSource === undefined ? () => undefined : draftReviewSource.getSnapshot),
+    [draftReviewSource],
+  );
+  const draftReview = useSyncExternalStore(
+    subscribeDraftReview,
+    getDraftReviewSnapshot,
+    getDraftReviewSnapshot,
+  );
+  const draftReviewKind =
+    presentationColumn?.kind === "field" && presentationColumn.field === "serverText"
+      ? "server"
+      : presentationColumn?.kind === "field" && presentationColumn.field === "mineText"
+        ? "mine"
+        : undefined;
+  const draftReviewRow =
+    draftReviewKind === "server" ? draftReview?.serverRow : draftReview?.projectedRow;
+  const draftReviewValue =
+    draftReviewKind === "server" ? draftReview?.serverNow : draftReview?.mine;
   const unavailable =
     presentationColumn === undefined ||
     (rowAware ? rowSnapshot?.kind === "unavailable" : cellSnapshot?.kind === "unavailable");
@@ -5320,9 +5417,11 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const value = edit.hasDraft ? edit.draft : sourceValue;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
   const className =
-    invalid || unavailable || rowMissing || presentationColumn === undefined
-      ? undefined
-      : resolveCellClassName(presentationColumn, row, value);
+    draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
+      ? resolveProxyCellClassName(draftReview.column, draftReviewRow, draftReviewValue)
+      : invalid || unavailable || rowMissing || presentationColumn === undefined
+        ? undefined
+        : resolveCellClassName(presentationColumn, row, value);
   const content =
     unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
       <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
@@ -5340,7 +5439,10 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     overflow: edit.active ? "visible" : "hidden",
     padding: 0,
     position: edit.active ? "relative" : undefined,
-    textAlign: presentationColumn?.semantics.cellAlign,
+    textAlign:
+      draftReviewKind === undefined
+        ? presentationColumn?.semantics.cellAlign
+        : draftReview?.column.semantics.cellAlign,
     transform: `var(${brunoTableColumnCssVariable("transform", column.columnId)}, none)`,
     width: `var(${brunoTableColumnCssVariable("width", column.columnId)}, ${String(column.semantics.width)}px)`,
     zIndex: edit.active ? 10 : undefined,
@@ -5987,71 +6089,6 @@ function hasRenderableChildren(children: ReactNode): boolean {
       (child as ReactElement<{ readonly children?: ReactNode }>).props.children,
     );
   });
-}
-
-function cellPresentationUsesRawRow(column: CompiledColumn): boolean {
-  return (
-    column.valueFormatter !== undefined ||
-    typeof column.cellClassName === "function" ||
-    column.cellRenderer !== undefined
-  );
-}
-
-function proxyPresentationUsesRawRow(column: CompiledColumn): boolean {
-  return column.valueFormatter !== undefined;
-}
-
-function resolveCellText(column: CompiledColumn, row: unknown, value: unknown): string {
-  if (column.valueFormatter !== undefined) {
-    const formatted = Reflect.apply(column.valueFormatter, undefined, [{ row, value }]);
-    if (typeof formatted === "string") return formatted;
-  }
-  if (value === null || value === undefined) return "";
-  return column.semantics.formatDisplay(value);
-}
-
-function resolveCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
-  if (column.cellRenderer !== undefined) return resolveCellRenderer(column, row, value);
-  const booleanContent = resolveBooleanCellContent(column, value);
-  if (booleanContent !== undefined) return booleanContent;
-  return resolveCellText(column, row, value);
-}
-
-function resolveProxyCellContent(column: CompiledColumn, row: unknown, value: unknown): ReactNode {
-  const booleanContent = resolveBooleanCellContent(column, value);
-  if (booleanContent !== undefined) return booleanContent;
-  return resolveCellText(column, row, value);
-}
-
-function resolveBooleanCellContent(column: CompiledColumn, value: unknown): ReactNode | undefined {
-  if (
-    column.valueFormatter === undefined &&
-    column.valueType === "boolean" &&
-    typeof value === "boolean"
-  ) {
-    return <input aria-label={column.headerName} checked={value} disabled type="checkbox" />;
-  }
-  return undefined;
-}
-
-function resolveCellClassName(
-  column: CompiledColumn,
-  row: unknown,
-  value: unknown,
-): string | undefined {
-  if (typeof column.cellClassName === "string") return column.cellClassName;
-  if (column.cellClassName === undefined) return undefined;
-  const className = Reflect.apply(column.cellClassName, undefined, [{ row, value }]);
-  return typeof className === "string" ? className : undefined;
-}
-
-function resolveCellRenderer(
-  column: CompiledColumn,
-  row: unknown,
-  value: unknown,
-): ReactNode | undefined {
-  if (column.cellRenderer === undefined) return undefined;
-  return Reflect.apply(column.cellRenderer, undefined, [{ row, value }]) as ReactNode | undefined;
 }
 
 const DEFAULT_LOADING_ROW_COUNT = 5;

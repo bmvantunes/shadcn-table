@@ -1,4 +1,12 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { ReactNode } from "react";
 
@@ -8,6 +16,7 @@ import type {
   BrunoTableEditableClientProps,
   BrunoTableJsonValue,
   BrunoTableReadOnlyClientProps,
+  BrunoTableSortBy,
 } from "./public-types";
 import {
   BrunoTableToolbar,
@@ -40,7 +49,13 @@ import {
 import { recordBrunoTableToolbarLifetime } from "./internal/toolbar-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./internal/row-selection";
 import { BrunoTableCellRangeRuntime } from "./internal/cell-range-clipboard";
-import { BrunoTableCellEditRuntime } from "./internal/cell-edit";
+import {
+  BrunoTableCellEditRuntime,
+  type BrunoTableCellEditDraftReviewSourceRow,
+} from "./internal/cell-edit";
+import { resolveBrunoTableCellContent } from "./internal/cell-presentation";
+import { BrunoTableEditModeControl } from "./internal/edit-chrome";
+import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
@@ -192,9 +207,20 @@ function BrunoTableClientInstance<
               ? Object.freeze({ _tag: "Success" as const, value })
               : Object.freeze({ _tag: "Failure" as const });
           },
+          getRowVersion: (row) =>
+            typeof props.getRowVersion === "function"
+              ? Reflect.apply(props.getRowVersion, undefined, [row as TRow])
+              : undefined,
           incrementalTraversal: true,
         })
       : undefined,
+  );
+  const [editMemory] = useState(() => (editable ? new BrunoTableEditMemoryRuntime() : undefined));
+  const renderResetReview = useCallback(
+    (reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => (
+      <BrunoTableResetReviewTable sourceTableId={tableId} reviewRows={reviewRows} />
+    ),
+    [tableId],
   );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
@@ -206,6 +232,14 @@ function BrunoTableClientInstance<
     projectionStore.setRowSelection(rowSelection);
   }, [projectionStore, rowSelection]);
   useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
+  useLayoutEffect(() => {
+    editMemory?.activate();
+    return () => editMemory?.dispose();
+  }, [editMemory]);
+  useLayoutEffect(() => {
+    if (editMemory === undefined || cellEdit === undefined) return;
+    return editMemory.connectCellEdit(cellEdit);
+  }, [cellEdit, editMemory]);
   useLayoutEffect(() => cellEdit?.reconcileColumns(compiledColumns), [cellEdit, compiledColumns]);
 
   useLayoutEffect(() => {
@@ -227,13 +261,17 @@ function BrunoTableClientInstance<
   const gridOwnedControls = useMemo(
     () => (
       <>
-        {editable ? null : (
+        {editable ? (
+          editMemory === undefined ? null : (
+            <BrunoTableEditModeControl runtime={editMemory} />
+          )
+        ) : (
           <BrunoTableClientGroupBy columns={compiledColumns} runtime={runtimeView} />
         )}
         <BrunoTableActiveFilters />
       </>
     ),
-    [compiledColumns, editable, runtimeView],
+    [compiledColumns, editable, editMemory, runtimeView],
   );
 
   useLayoutEffect(() => {
@@ -309,11 +347,115 @@ function BrunoTableClientInstance<
           rowSelection={rowSelection}
           cellRange={cellRange}
           cellEdit={cellEdit}
+          editMemory={editMemory}
+          renderResetReview={renderResetReview}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />
       </BrunoTableToolbarProvider>
     </BrunoTableClientFilterProvider>
+  );
+}
+
+type BrunoTableResetReviewDisplayRow = BrunoTableCellEditDraftReviewSourceRow;
+
+const BrunoTableResetReviewValue = memo(function BrunoTableResetReviewValue({
+  row,
+  kind,
+}: Readonly<{
+  readonly row: BrunoTableResetReviewDisplayRow;
+  readonly kind: "server" | "mine";
+}>): ReactNode {
+  const snapshot = useSyncExternalStore(row.subscribe, row.getSnapshot, row.getSnapshot);
+  const sourceRow = kind === "server" ? snapshot.serverRow : snapshot.projectedRow;
+  if (sourceRow === undefined) return "Row missing";
+  const value = kind === "server" ? snapshot.serverNow : snapshot.mine;
+  const content =
+    kind === "mine" && snapshot.candidateText !== undefined
+      ? snapshot.candidateText
+      : resolveBrunoTableCellContent(snapshot.column, sourceRow, value);
+  return content;
+});
+
+const BrunoTableResetReviewStatus = memo(function BrunoTableResetReviewStatus({
+  row,
+}: Readonly<{ readonly row: BrunoTableResetReviewDisplayRow }>): ReactNode {
+  const snapshot = useSyncExternalStore(row.subscribe, row.getSnapshot, row.getSnapshot);
+  return snapshot.status;
+});
+
+const brunoTableResetReviewColumns = [
+  {
+    columnId: "COL_ID_ROW",
+    field: "rowId",
+    headerName: "Row",
+    valueType: "text",
+    pinned: "start",
+  },
+  {
+    columnId: "COL_ID_COLUMN",
+    field: "columnLabel",
+    headerName: "Column",
+    valueType: "text",
+    pinned: "start",
+  },
+  {
+    columnId: "COL_ID_SERVER_NOW",
+    field: "serverText",
+    headerName: "Server now",
+    valueType: "text",
+    cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
+      <BrunoTableResetReviewValue row={row} kind="server" />
+    ),
+  },
+  {
+    columnId: "COL_ID_YOURS",
+    field: "mineText",
+    headerName: "Yours",
+    valueType: "text",
+    cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
+      <BrunoTableResetReviewValue row={row} kind="mine" />
+    ),
+  },
+  {
+    columnId: "COL_ID_STATUS",
+    field: "statusText",
+    headerName: "Status",
+    valueType: "text",
+    cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
+      <BrunoTableResetReviewStatus row={row} />
+    ),
+  },
+] satisfies BrunoTableColumns<BrunoTableResetReviewDisplayRow>;
+const BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY = [
+  { columnId: "COL_ID_ROW", direction: "asc" },
+] as const satisfies BrunoTableSortBy<typeof brunoTableResetReviewColumns>;
+const getBrunoTableResetReviewRowId = (row: BrunoTableResetReviewDisplayRow): string => row.id;
+
+function BrunoTableResetReviewTable({
+  sourceTableId,
+  reviewRows,
+}: Readonly<{
+  readonly sourceTableId: string;
+  readonly reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[];
+}>): ReactNode {
+  const rows = reviewRows;
+  if (rows.length === 0) {
+    return <p role="status">All changes now match the server.</p>;
+  }
+  return (
+    <BrunoTableClient
+      tableId={`${sourceTableId}:reset-review`}
+      columns={brunoTableResetReviewColumns}
+      initialOrderBy={BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY}
+      clientSource={{
+        rows,
+        totalRows: rows.length,
+        version: rows.length,
+        status: "ready",
+      }}
+      getRowId={getBrunoTableResetReviewRowId}
+    />
   );
 }
 
