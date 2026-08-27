@@ -1502,6 +1502,8 @@ test("rolls back Shift pointer range activation when the edit commit is invalid"
 test("keeps Shift interactive cell descendants behind the outside commit gate", async () => {
   const pointerUpAction = vi.fn();
   const clickAction = vi.fn();
+  const auxiliaryAction = vi.fn();
+  const contextMenuAction = vi.fn();
   const interactiveColumns = [
     {
       columnId: "COL_ID_NAME",
@@ -1527,7 +1529,13 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
       isEditable: true,
       pinned: "end",
       cellRenderer: ({ value }) => (
-        <button type="button" onPointerUp={pointerUpAction} onClick={clickAction}>
+        <button
+          type="button"
+          onPointerUp={pointerUpAction}
+          onClick={clickAction}
+          onAuxClick={auxiliaryAction}
+          onContextMenu={contextMenuAction}
+        >
           <span>{value}</span>
         </button>
       ),
@@ -1559,6 +1567,8 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
 
   expect(pointerUpAction).not.toHaveBeenCalled();
   expect(clickAction).not.toHaveBeenCalled();
+  expect(auxiliaryAction).not.toHaveBeenCalled();
+  expect(contextMenuAction).not.toHaveBeenCalled();
   await expect.element(editor).toHaveFocus();
   await expect.element(editor).toHaveAttribute("aria-invalid", "true");
 
@@ -1592,6 +1602,50 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
   expect(clickAction).not.toHaveBeenCalled();
 
   const actionChild = actionButton.element().querySelector("span")!;
+  actionChild.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 85,
+    }),
+  );
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, cancelable: true }));
+  actionButton.element().dispatchEvent(
+    new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      pointerId: 85,
+    }),
+  );
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 2, cancelable: true }));
+  actionChild.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 1,
+      cancelable: true,
+      pointerId: 86,
+    }),
+  );
+  actionButton.element().dispatchEvent(
+    new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 1,
+      cancelable: true,
+      pointerId: 86,
+    }),
+  );
+  actionButton
+    .element()
+    .dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1, cancelable: true }));
+  expect(auxiliaryAction).not.toHaveBeenCalled();
+  expect(contextMenuAction).not.toHaveBeenCalled();
+
   actionChild.dispatchEvent(
     new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 84 }),
   );
@@ -1633,12 +1687,16 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
   await userEvent.fill(editor, "5");
   pointerUpAction.mockClear();
   clickAction.mockClear();
+  auxiliaryAction.mockClear();
+  contextMenuAction.mockClear();
   await userEvent.keyboard("{Shift>}");
   await userEvent.click(actionButton, { modifiers: ["Shift"] });
   await userEvent.keyboard("{/Shift}");
 
   expect(pointerUpAction).toHaveBeenCalledTimes(1);
   expect(clickAction).toHaveBeenCalledTimes(1);
+  expect(auxiliaryAction).not.toHaveBeenCalled();
+  expect(contextMenuAction).not.toHaveBeenCalled();
   await expect.element(editor).not.toBeInTheDocument();
 });
 
