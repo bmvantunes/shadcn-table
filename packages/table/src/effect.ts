@@ -778,7 +778,11 @@ function validateCapabilityCombination(options: RuntimeColumnOptions): void {
   ) {
     throw new TypeError("BrunoTable BigDecimal blankValue requires potential field editability.");
   }
-  if (Object.hasOwn(options, "validate") && typeof options["validate"] !== "function") {
+  if (
+    Object.hasOwn(options, "validate") &&
+    options["validate"] !== undefined &&
+    typeof options["validate"] !== "function"
+  ) {
     throw new TypeError("BrunoTable BigDecimal validate must be a function.");
   }
   if (

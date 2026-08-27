@@ -329,6 +329,36 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     },
   );
 
+  test("leaves document Escape unowned when two table workflows are active", async () => {
+    const firstEscape = vi.fn();
+    const secondEscape = vi.fn();
+    await render(
+      <>
+        <AdapterProbe
+          commands={probeCommands({
+            documentEscapeActive: () => true,
+            escape: firstEscape,
+          })}
+          label="First active gesture table"
+        />
+        <AdapterProbe
+          commands={probeCommands({
+            documentEscapeActive: () => true,
+            escape: secondEscape,
+          })}
+          label="Second active gesture table"
+        />
+      </>,
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+    );
+
+    expect(firstEscape).not.toHaveBeenCalled();
+    expect(secondEscape).not.toHaveBeenCalled();
+  });
+
   test("registers Mod+A only for an installed Row Selection command", async () => {
     const manager = getHotkeyManager();
     const selectAll = vi.fn();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BrunoTableNumberColumn } from "./column-helpers";
+import { compileColumns } from "./internal/compile-columns";
 
 describe("BrunoTable Column Helper runtime capability guards", () => {
   it("rejects a non-function validator before returning a helper column", () => {
@@ -14,19 +15,29 @@ describe("BrunoTable Column Helper runtime capability guards", () => {
         },
       ]),
     ).toThrow("validate must be a function");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn, undefined, [
-        {
-          columnId: "COL_ID_UNDEFINED_VALIDATE",
-          field: "value",
-          headerName: "Value",
-          validate: undefined,
-        },
-      ]),
-    ).toThrow("validate must be a function");
-    expect(() =>
-      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [{ validate: undefined }]),
-    ).toThrow("preset validate must be a function");
+    const direct = Reflect.apply(BrunoTableNumberColumn, undefined, [
+      {
+        columnId: "COL_ID_UNDEFINED_VALIDATE",
+        field: "value",
+        headerName: "Value",
+        validate: undefined,
+      },
+    ]);
+    expect(() => compileColumns([direct])).not.toThrow();
+
+    const preset = Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [
+      { validate: undefined },
+    ]);
+    expect(typeof preset).toBe("function");
+    if (typeof preset !== "function") throw new Error("Expected a Number Column preset.");
+    const presetColumn = Reflect.apply(preset, undefined, [
+      {
+        columnId: "COL_ID_UNDEFINED_PRESET_VALIDATE",
+        field: "value",
+        headerName: "Preset value",
+      },
+    ]);
+    expect(() => compileColumns([presetColumn])).not.toThrow();
   });
 
   it("rejects validation without effective potential editability", () => {

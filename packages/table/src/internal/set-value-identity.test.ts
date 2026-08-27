@@ -29,5 +29,8 @@ describe("BrunoTable Set value identity", () => {
     expect(
       hasBrunoTableSetValue(column, createBrunoTableSetValueIndex(column, [undefined]), null),
     ).toBe(true);
+    expect(hasBrunoTableSetValue(column, createBrunoTableSetValueIndex(column, [null]), "")).toBe(
+      false,
+    );
   });
 });

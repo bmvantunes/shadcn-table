@@ -138,6 +138,32 @@ describe("BrunoTable editable traversal index", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
+  it("retains dirty-cell authority through a synchronous projection rebuild", () => {
+    const row: Row = { id: "row", enabled: false, alternate: false };
+    const columns = makeColumns();
+    let draftEligible = false;
+    const evaluate = vi.fn(
+      (_rowId: string, _row: object, column: CompiledFieldColumn) =>
+        column.columnId === "COL_ID_ENABLED" && draftEligible,
+    );
+    const index = new BrunoTableCellEditTraversalIndex(() => row, evaluate);
+
+    index.reconcile(columns, rowSpace([row.id]));
+    expect(index.findFromRowBoundary(0, 1)).toBeUndefined();
+
+    draftEligible = true;
+    evaluate.mockClear();
+    index.invalidateCell(row.id, "COL_ID_ENABLED");
+    index.reconcile(columns, rowSpace([row.id]));
+
+    expect(evaluate).toHaveBeenCalledTimes(columns.length);
+    expect(index.findFromRowBoundary(0, 1)).toEqual({
+      rowIndex: 0,
+      rowId: row.id,
+      columnId: "COL_ID_ENABLED",
+    });
+  });
+
   it("atomically discards in-flight predicate evidence when columns become static", () => {
     const rowIds = Array.from({ length: 40 }, (_unused, index) => `transition-${String(index)}`);
     const rows = new Map(

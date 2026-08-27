@@ -294,7 +294,11 @@ export class BrunoTableCellEditTraversalIndex {
       return true;
     }
 
-    const dirtyWorkRowIds = new Set([...this.pendingDirtyRowIds, ...this.dirtyRowIds]);
+    const dirtyWorkRowIds = new Set([
+      ...this.pendingDirtyRowIds,
+      ...this.dirtyRowIds,
+      ...this.dirtyColumnIdsByRowId.keys(),
+    ]);
 
     const rowIds = Array.from({ length: rowSpace.totalRows }, (_, rowIndex) =>
       rowSpace.getRowId(rowIndex),

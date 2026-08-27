@@ -272,12 +272,12 @@ function compileColumn(candidate: unknown, index: number, seen: Set<string>): Co
       );
     }
     const validate = hasValidate ? candidate["validate"] : undefined;
-    if (hasValidate && typeof validate !== "function") {
+    if (validate !== undefined && typeof validate !== "function") {
       throw new ColumnConfigurationError(
         `BrunoTable validate must be a function when provided: ${columnId}`,
       );
     }
-    if (hasValidate && (isEditable === undefined || isEditable === false)) {
+    if (typeof validate === "function" && (isEditable === undefined || isEditable === false)) {
       throw new ColumnConfigurationError(
         `BrunoTable validate requires a potentially editable field column: ${columnId}`,
       );
