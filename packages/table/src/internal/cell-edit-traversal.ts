@@ -54,7 +54,12 @@ function hasSamePredicateAuthority(
   left: CompiledFieldColumn,
   right: CompiledFieldColumn | undefined,
 ): boolean {
-  return right !== undefined && left.field === right.field && left.isEditable === right.isEditable;
+  return (
+    right !== undefined &&
+    left.field === right.field &&
+    left.isEditable === right.isEditable &&
+    left.semantics.decodeRuntimeAuthority === right.semantics.decodeRuntimeAuthority
+  );
 }
 
 function hasSameTraversalAuthority(
@@ -75,7 +80,8 @@ function hasSameTraversalAuthority(
       column.kind !== "field" ||
       (nextColumn.kind === "field" &&
         column.field === nextColumn.field &&
-        column.isEditable === nextColumn.isEditable)
+        column.isEditable === nextColumn.isEditable &&
+        column.semantics.decodeRuntimeAuthority === nextColumn.semantics.decodeRuntimeAuthority)
     );
   });
 }
@@ -128,8 +134,7 @@ export class BrunoTableCellEditTraversalIndex {
   private pendingDetachedRowIdSet = new Set<string>();
   private pendingDetachedRowCursor = 0;
   private pendingDirtyRowIds = new Set<string>();
-  private pendingPredicateAuthorityRowIds: string[] = [];
-  private pendingPredicateAuthorityRowCursor = 0;
+  private pendingPredicateAuthorityRowIterator: IterableIterator<string> | undefined;
   private readonly pendingPredicateAuthorityColumnIds = new Set<string>();
   private unknownDiscoveryIterator: IterableIterator<[string, RowCache]> | undefined;
   private unknownDirtyRestorationIterator: IterableIterator<string> | undefined;
@@ -383,12 +388,16 @@ export class BrunoTableCellEditTraversalIndex {
         this.unknownProjection = this.createUnknownProjection(rowSpace);
         continue;
       }
-      const authorityRowId =
-        this.pendingPredicateAuthorityRowIds[this.pendingPredicateAuthorityRowCursor];
-      if (authorityRowId !== undefined) {
+      const authorityIterator = this.pendingPredicateAuthorityRowIterator;
+      if (authorityIterator !== undefined) {
         const authorityCellCount = Math.max(this.pendingPredicateAuthorityColumnIds.size, 1);
         if (built > 0 && remainingPredicateCells < authorityCellCount) break;
-        this.pendingPredicateAuthorityRowCursor += 1;
+        const authorityRow = authorityIterator.next();
+        if (authorityRow.done) {
+          this.pendingPredicateAuthorityRowIterator = undefined;
+          continue;
+        }
+        const authorityRowId = authorityRow.value;
         remainingPredicateCells -= authorityCellCount;
         built += 1;
         const rowCache = this.rowCacheById.get(authorityRowId);
@@ -417,8 +426,6 @@ export class BrunoTableCellEditTraversalIndex {
           }
         }
         this.pendingPredicateAuthorityColumnIds.clear();
-        this.pendingPredicateAuthorityRowIds = [];
-        this.pendingPredicateAuthorityRowCursor = 0;
         continue;
       }
       const rowIndex = this.pendingRowIndexes[this.pendingRowCursor];
@@ -475,7 +482,7 @@ export class BrunoTableCellEditTraversalIndex {
     !this.allRowsDirty &&
     this.dirtyRowIds.size === 0 &&
     this.dirtyColumnIdsByRowId.size === 0 &&
-    this.pendingPredicateAuthorityRowCursor >= this.pendingPredicateAuthorityRowIds.length &&
+    this.pendingPredicateAuthorityRowIterator === undefined &&
     this.pendingPredicateAuthorityColumnIds.size === 0 &&
     this.pendingRowCursor >= this.pendingRowIndexes.length &&
     this.pendingDetachedRowCursor >= this.pendingDetachedRowIds.length;
@@ -704,8 +711,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingDetachedRowIdSet.clear();
     this.pendingDetachedRowCursor = 0;
     this.pendingDirtyRowIds.clear();
-    this.pendingPredicateAuthorityRowIds = [];
-    this.pendingPredicateAuthorityRowCursor = 0;
+    this.pendingPredicateAuthorityRowIterator = undefined;
     this.pendingPredicateAuthorityColumnIds.clear();
     this.unknownDiscoveryIterator = undefined;
     this.unknownDirtyRestorationIterator = undefined;
@@ -739,7 +745,9 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingRowIndexes.length -
     this.pendingRowCursor +
     (this.pendingDetachedRowIds.length - this.pendingDetachedRowCursor) +
-    (this.pendingPredicateAuthorityRowIds.length - this.pendingPredicateAuthorityRowCursor);
+    (this.pendingPredicateAuthorityRowIterator === undefined
+      ? 0
+      : SYNCHRONOUS_INITIAL_PREDICATE_CELL_LIMIT + 1);
 
   private readonly refreshRow = (rowId: string): void => {
     const rowIndex = this.rowIndexById.get(rowId);
@@ -820,8 +828,7 @@ export class BrunoTableCellEditTraversalIndex {
     for (const columnId of changedColumnIds) {
       this.pendingPredicateAuthorityColumnIds.add(columnId);
     }
-    this.pendingPredicateAuthorityRowIds = [...this.rowCacheById.keys()];
-    this.pendingPredicateAuthorityRowCursor = 0;
+    this.pendingPredicateAuthorityRowIterator = this.rowCacheById.keys();
     this.verticalRangeCache = undefined;
   };
 

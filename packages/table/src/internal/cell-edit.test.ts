@@ -1361,4 +1361,134 @@ describe("BrunoTable Cell Edit Session", () => {
       invalidMessage: "Expected signed base-10 integer digits.",
     });
   });
+
+  it("does not create a draft for an untouched candidate after a live source change", () => {
+    type TextRow = Readonly<{ readonly value: string }>;
+    let liveRow: TextRow = { value: "A" };
+    const onCommit = vi.fn();
+    const textColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<TextRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: textColumns,
+      getRow: () => liveRow,
+      onCommit,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    liveRow = { value: "B" };
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.commit("A")).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    expect(onCommit).not.toHaveBeenCalled();
+
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("C")).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("C");
+    expect(onCommit).toHaveBeenCalledOnce();
+  });
+
+  it("rejects Boolean editor admission when the canonical value is outside its mapping", () => {
+    type ToggleRow = Readonly<{ readonly toggle: "M" | "N" | "Y" }>;
+    let liveRow: ToggleRow = { toggle: "M" };
+    const decodeToggle = (input: unknown) =>
+      input === "M" || input === "N" || input === "Y"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected M, N, or Y." } as const);
+    const toggleColumns = compileColumns([
+      {
+        columnId: "COL_ID_TOGGLE",
+        field: "toggle",
+        headerName: "Toggle",
+        valueType: {
+          codecId: "test/three-state-toggle",
+          codecVersion: 1,
+          filterFamily: "equality",
+          editorFamily: "boolean",
+          booleanEditorValues: ["N", "Y"],
+          cellAlign: "center",
+          editorLayout: "center",
+          defaultWidth: 88,
+          decodeRuntime: decodeToggle,
+          equivalent: Object.is,
+          compare: () => 0 as const,
+          formatCanonicalText: (value: ToggleRow["toggle"]) => value,
+          parseCanonicalText: decodeToggle,
+          formatDisplay: (value: ToggleRow["toggle"]) => value,
+          encodePersisted: (value: ToggleRow["toggle"]) => value,
+          decodePersisted: decodeToggle,
+        },
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<ToggleRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: toggleColumns,
+      getRow: () => liveRow,
+    });
+    expect(runtime.start("row", "COL_ID_TOGGLE")).toBe(false);
+    liveRow = { toggle: "N" };
+    expect(runtime.start("row", "COL_ID_TOGGLE")).toBe(true);
+    liveRow = { toggle: "M" };
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This cell is no longer editable.",
+    });
+  });
+
+  it("rotates canonical source caches when decoder authority changes", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    type Decoder = (
+      input: unknown,
+    ) => Readonly<{ readonly _tag: "Success"; readonly value: string }>;
+    const row: CanonicalRow = { value: "raw" };
+    const decodeA = vi.fn<Decoder>(() => ({ _tag: "Success", value: "allow" }));
+    const decodeB = vi.fn<Decoder>(() => ({ _tag: "Success", value: "deny" }));
+    const makeColumns = (decodeRuntime: Decoder) => {
+      const valueType: BrunoTableValueType<string> = {
+        codecId: "test/cache-generation",
+        codecVersion: 1,
+        filterFamily: "equality",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: () => 0 as const,
+        formatCanonicalText: (value) => value,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: (value) => value,
+        encodePersisted: (value) => value,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: ({ value }: { readonly value: string }) => value === "allow",
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const columnsA = makeColumns(decodeA);
+    const runtime = new BrunoTableCellEditRuntime({ columns: columnsA, getRow: () => row });
+    expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(true);
+    expect(decodeA).toHaveBeenCalledOnce();
+
+    runtime.reconcileColumns(makeColumns(decodeB));
+    expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(false);
+    expect(decodeB).toHaveBeenCalledOnce();
+
+    runtime.reconcileColumns(columnsA);
+    expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(true);
+    expect(decodeA).toHaveBeenCalledTimes(2);
+  });
 });

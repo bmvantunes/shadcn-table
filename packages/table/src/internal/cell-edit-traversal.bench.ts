@@ -117,6 +117,56 @@ const staticRowSpace = Object.freeze({
   getRowId: (rowIndex: number) =>
     rowIndex < staticRowCount ? `static-row-${String(rowIndex)}` : undefined,
 });
+const largeAuthorityRows = Array.from(
+  { length: staticRowCount },
+  (_unused, rowIndex): Row => ({
+    id: `authority-row-${String(rowIndex)}`,
+    editable: rowIndex === staticRowCount - 1,
+  }),
+);
+const largeAuthorityRowsById = new Map(largeAuthorityRows.map((row) => [row.id, row]));
+const largeAuthorityRowSpace = Object.freeze({
+  totalRows: largeAuthorityRows.length,
+  getRowId: (rowIndex: number) => largeAuthorityRows[rowIndex]?.id,
+});
+const largeEnabledAuthorityColumns = compileColumns([
+  {
+    columnId: "COL_ID_LARGE_AUTHORITY",
+    field: "editable" as const,
+    headerName: "Large authority",
+    valueType: "boolean" as const,
+    isEditable: stablePredicate,
+  },
+]);
+const largeDisabledAuthorityColumns = compileColumns([
+  {
+    columnId: "COL_ID_LARGE_AUTHORITY",
+    field: "editable" as const,
+    headerName: "Large authority",
+    valueType: "boolean" as const,
+    isEditable: changedPredicate,
+  },
+]);
+let largeAuthorityPredicateEvaluations = 0;
+const largeAuthorityIndex = new BrunoTableCellEditTraversalIndex(
+  (rowId) => largeAuthorityRowsById.get(rowId),
+  (_rowId, row, column) => {
+    largeAuthorityPredicateEvaluations += 1;
+    if (typeof column.isEditable !== "function") {
+      throw new Error("Large authority benchmark lost its predicate column.");
+    }
+    const editable = column.isEditable as unknown as (context: {
+      readonly row: Row;
+      readonly value: boolean;
+    }) => boolean;
+    return editable({ row: row as Row, value: (row as Row).editable });
+  },
+  true,
+);
+largeAuthorityIndex.reconcile(largeEnabledAuthorityColumns, largeAuthorityRowSpace);
+while (largeAuthorityIndex.buildNextSlice());
+largeAuthorityPredicateEvaluations = 0;
+let largeAuthorityEnabled = true;
 
 function percentile99(samples: readonly number[]): number {
   const sorted = [...samples].sort((left, right) => left - right);
@@ -398,6 +448,67 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         JSON.stringify({
           benchmark: "BrunoTable one-row predicate invalidation",
           rowCount: isolatedRows.length,
+          stagingP99Ms,
+          sliceCount: sliceSamples.length,
+          p99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
+    "paces predicate-authority discovery across 100,000 cached rows",
+    () => {
+      const stagingSamples: number[] = [];
+      const sliceSamples: number[] = [];
+      for (let sampleIndex = 0; sampleIndex < 3; sampleIndex += 1) {
+        largeAuthorityPredicateEvaluations = 0;
+        largeAuthorityEnabled = !largeAuthorityEnabled;
+        const replacement = largeAuthorityEnabled
+          ? largeEnabledAuthorityColumns
+          : largeDisabledAuthorityColumns;
+        const startedAt = performance.now();
+        largeAuthorityIndex.reconcile(replacement, largeAuthorityRowSpace);
+        stagingSamples.push(performance.now() - startedAt);
+        if (
+          largeAuthorityPredicateEvaluations !== 0 ||
+          largeAuthorityIndex.isReady() ||
+          largeAuthorityIndex.find(0, replacement[0]!.columnId, 1) !== undefined
+        ) {
+          throw new Error(
+            "Large predicate-authority replacement exposed synchronous or partial evidence.",
+          );
+        }
+        while (!largeAuthorityIndex.isReady()) {
+          const sliceStartedAt = performance.now();
+          largeAuthorityIndex.buildNextSlice();
+          sliceSamples.push(performance.now() - sliceStartedAt);
+        }
+        if (Number(largeAuthorityPredicateEvaluations) !== staticRowCount) {
+          throw new Error("Large predicate-authority replacement did not revisit each row once.");
+        }
+      }
+      const destination = largeAuthorityEnabled
+        ? largeAuthorityIndex.find(staticRowCount - 2, largeEnabledAuthorityColumns[0]!.columnId, 1)
+        : largeAuthorityIndex.find(0, largeDisabledAuthorityColumns[0]!.columnId, 1);
+      const expectedRowId = largeAuthorityEnabled
+        ? largeAuthorityRows.at(-1)!.id
+        : largeAuthorityRows[1]!.id;
+      if (destination?.rowId !== expectedRowId) {
+        throw new Error("Large predicate-authority replacement installed inexact eligibility.");
+      }
+      const stagingP99Ms = assertBudgetSamples(
+        "large predicate-authority staging",
+        stagingSamples,
+        3,
+      );
+      const p99Ms = assertBudgetSamples("large predicate-authority slice", sliceSamples);
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable large predicate-authority replacement",
+          rowCount: largeAuthorityRows.length,
           stagingP99Ms,
           sliceCount: sliceSamples.length,
           p99Ms,

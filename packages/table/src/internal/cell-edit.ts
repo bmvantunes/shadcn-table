@@ -241,6 +241,7 @@ function prepareSession(
   if (event.sourceValue._tag === "Failure") return undefined;
   const sourceValue = event.sourceValue.value;
   const before = event.hasDraft ? event.draftValue : sourceValue;
+  if (!isEditorValueRepresentable(column, before)) return undefined;
   if (typeof column.isEditable === "function") {
     try {
       if (Reflect.apply(column.isEditable, undefined, [{ row, value: before }]) !== true) {
@@ -291,12 +292,13 @@ function reconcileSessionPermission(session: ActiveSession): ActiveSession {
 }
 
 function isSessionEditable(session: ActiveSession): boolean {
+  if (!session.beforeFromDraft && !session.sourceValueAvailable) return false;
+  const value = session.beforeFromDraft ? session.before : session.sourceValue;
+  if (!isEditorValueRepresentable(session.column, value)) return false;
   const policy = session.column.isEditable;
   if (policy === true) return true;
   if (typeof policy !== "function") return false;
   try {
-    if (!session.beforeFromDraft && !session.sourceValueAvailable) return false;
-    const value = session.beforeFromDraft ? session.before : session.sourceValue;
     return Reflect.apply(policy, undefined, [{ row: session.row, value }]) === true;
   } catch {
     return false;
@@ -431,12 +433,13 @@ function evaluateCandidate(
     return Object.freeze({ kind: "invalid", message: "The value is invalid." });
   }
   const changed = !equivalentBefore;
+  const removeDraft = equivalentSource || (!session.beforeFromDraft && equivalentBefore);
   return Object.freeze({
     kind: "accepted",
     cellKey: cellKey(session.rowId, session.column.columnId),
     value: after,
-    removeDraft: equivalentSource,
-    ...(changed
+    removeDraft,
+    ...(changed && !equivalentSource
       ? {
           change: Object.freeze({
             rowId: session.rowId,
@@ -463,6 +466,20 @@ function safeEquivalentEditValue(
     return typeof result === "boolean" ? result : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function isEditorValueRepresentable(column: CompiledFieldColumn, value: unknown): boolean {
+  const booleanValues = column.semantics.booleanEditorCanonicalValues;
+  if (column.semantics.editorFamily !== "boolean" || booleanValues === undefined) return true;
+  if (value === null || value === undefined) {
+    return column.blankValue !== undefined && Object.is(value, column.blankValue.value);
+  }
+  try {
+    const canonicalText = column.semantics.formatCanonicalText(value);
+    return canonicalText === booleanValues[0] || canonicalText === booleanValues[1];
+  } catch {
+    return false;
   }
 }
 
@@ -550,7 +567,7 @@ export class BrunoTableCellEditRuntime {
   private readonly getCanonicalValue:
     | ((rowId: string, columnId: string) => CanonicalSourceValue)
     | undefined;
-  private readonly canonicalSourceValueCache = new WeakMap<
+  private canonicalSourceValueCache = new WeakMap<
     object,
     Map<unknown, Map<string, CanonicalSourceValue>>
   >();
@@ -800,6 +817,7 @@ export class BrunoTableCellEditRuntime {
   public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
     if (this.columns === columns) return;
     const previousFieldColumns = this.fieldColumnsById;
+    this.canonicalSourceValueCache = new WeakMap();
     const nextFieldColumns = indexFieldColumns(columns);
     const previousDrafts = this.draftStore.get();
     const { drafts: nextDrafts, changedKeys } = reconcileDraftsForColumns(
@@ -861,7 +879,6 @@ export class BrunoTableCellEditRuntime {
     column: CompiledFieldColumn,
   ): boolean => {
     if (column.isEditable === undefined || column.isEditable === false) return false;
-    if (typeof column.isEditable !== "function") return true;
     const draft = this.draftStore.get().get(cellKey(rowId, column.columnId));
     let value: unknown;
     if (draft === undefined) {
@@ -871,6 +888,8 @@ export class BrunoTableCellEditRuntime {
     } else {
       value = draft.value;
     }
+    if (!isEditorValueRepresentable(column, value)) return false;
+    if (typeof column.isEditable !== "function") return true;
     try {
       return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
     } catch {

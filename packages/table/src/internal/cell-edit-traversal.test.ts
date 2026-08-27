@@ -487,6 +487,56 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.find(0, "COL_ID_AUTHORITY_0", 1)?.columnId).toBe("COL_ID_AUTHORITY_1");
   });
 
+  it("paces decoder-authority changes that alter predicate eligibility", () => {
+    type DecodeRow = Readonly<{ readonly id: string; readonly value: string }>;
+    const rows = new Map<string, DecodeRow>([["row", { id: "row", value: "raw" }]]);
+    const predicate = ({ value }: { readonly value: string }) => value === "allow";
+    const makeColumns = (canonical: string) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: {
+            codecId: "test/traversal-decoder-authority",
+            codecVersion: 1,
+            filterFamily: "equality",
+            editorFamily: "text",
+            cellAlign: "start",
+            editorLayout: "inline",
+            defaultWidth: 120,
+            decodeRuntime: () => ({ _tag: "Success", value: canonical }) as const,
+            equivalent: Object.is,
+            compare: () => 0 as const,
+            formatCanonicalText: (value: string) => value,
+            parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+            formatDisplay: (value: string) => value,
+            encodePersisted: (value: string) => value,
+            decodePersisted: () => ({ _tag: "Success", value: canonical }) as const,
+          },
+          isEditable: predicate,
+        },
+      ]);
+    const evaluate = vi.fn((_rowId: string, row: object, column: CompiledFieldColumn) => {
+      const decoded = column.semantics.decodeRuntime((row as DecodeRow).value);
+      return decoded._tag === "Success" && predicate({ value: decoded.value as string });
+    });
+    const allowedColumns = makeColumns("allow");
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const projection = rowSpace(["row"]);
+    index.reconcile(allowedColumns, projection);
+    while (index.buildNextSlice(1, Number.POSITIVE_INFINITY));
+    expect(index.findFromRowBoundary(1, -1)?.rowId).toBe("row");
+    evaluate.mockClear();
+
+    expect(index.reconcile(makeColumns("deny"), projection)).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.findFromRowBoundary(1, -1)).toBeUndefined();
+    while (index.buildNextSlice(1, Number.POSITIVE_INFINITY));
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(index.findFromRowBoundary(1, -1)).toBeUndefined();
+  });
+
   it("validates row references after an unknown publication without rebuilding unchanged rows", () => {
     const rows = new Map<string, Row>([
       ["first", { id: "first", enabled: false, alternate: false }],

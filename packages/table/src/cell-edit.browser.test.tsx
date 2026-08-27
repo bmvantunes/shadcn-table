@@ -2226,6 +2226,50 @@ test("reconciles predicate traversal from a live row replacement", async () => {
   );
 });
 
+test("lets a newer live source value win when an untouched editor commits", async () => {
+  type LiveValueRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly revision: bigint;
+  }>;
+  const columns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<LiveValueRow>;
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (row: LiveValueRow, version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CELL_EDIT_LIVE_UNTOUCHED"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{ rows: [row], totalRows: 1, version, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable({ id: "row", value: "A", revision: 1n }, 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_LIVE_UNTOUCHED" });
+  grid.element().focus();
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(editor).toHaveValue("A");
+
+  await screen.rerender(renderTable({ id: "row", value: "B", revision: 2n }, 2));
+  await expect.element(editor).toHaveValue("A");
+  await userEvent.keyboard("{Enter}");
+
+  await expect.element(screen.getByRole("gridcell", { name: "B", exact: true })).toBeVisible();
+  expect(screen.getByRole("gridcell", { name: "A", exact: true }).query()).toBeNull();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+});
+
 test("keeps one Row Identity edit session through sort, filter, deletion, and return", async () => {
   type LiveEditRow = Readonly<{
     readonly id: string;
@@ -3184,6 +3228,73 @@ test("cancels an active custom Boolean editor before its exact mapping can rever
 
   await expect.element(editor).not.toBeInTheDocument();
   await expect.element(grid.getByRole("gridcell", { name: "N", exact: true })).toBeVisible();
+});
+
+test("does not open a custom Boolean editor for a canonical value outside its mapping", async () => {
+  type ToggleRow = Readonly<{ readonly id: string; readonly toggle: "M" | "N" | "Y" }>;
+  const decodeToggle = (input: unknown) =>
+    input === "M" || input === "N" || input === "Y"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected M, N, or Y." } as const);
+  const toggleValueType: BrunoTableValueType<ToggleRow["toggle"], "equality", "boolean"> = {
+    codecId: "test/browser-three-state-toggle",
+    codecVersion: 1,
+    filterFamily: "equality",
+    editorFamily: "boolean",
+    booleanEditorValues: ["N", "Y"],
+    cellAlign: "center",
+    editorLayout: "center",
+    defaultWidth: 88,
+    decodeRuntime: decodeToggle,
+    equivalent: Object.is,
+    compare: () => 0,
+    formatCanonicalText: String,
+    parseCanonicalText: decodeToggle,
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: decodeToggle,
+  };
+  const toggleColumns = [
+    {
+      columnId: "COL_ID_TOGGLE",
+      field: "toggle",
+      headerName: "Toggle",
+      valueType: toggleValueType,
+      isEditable: true,
+    },
+  ] as const satisfies BrunoTableColumns<ToggleRow>;
+  const screen = await render(
+    <BrunoTableClient<ToggleRow, typeof toggleColumns, (row: ToggleRow) => bigint>
+      tableId="TABLE_ID_UNMAPPED_BOOLEAN"
+      columns={toggleColumns}
+      initialOrderBy={[{ columnId: "COL_ID_TOGGLE", direction: "asc" }]}
+      clientSource={{
+        rows: [
+          { id: "mapped", toggle: "N" },
+          { id: "unmapped", toggle: "M" },
+        ],
+        totalRows: 2,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+
+  const unmapped = screen.getByRole("gridcell", { name: "M", exact: true });
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_UNMAPPED_BOOLEAN" });
+  await userEvent.click(unmapped);
+  await userEvent.keyboard("{F2}");
+  expect(screen.getByRole("checkbox", { name: "Edit Toggle" }).query()).toBeNull();
+  await expect.element(grid).toHaveFocus();
+  await expect.element(grid).toHaveAttribute("aria-activedescendant", unmapped.element().id);
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "N", exact: true }));
+  await userEvent.keyboard("{F2}");
+  await expect.element(screen.getByRole("checkbox", { name: "Edit Toggle" })).toBeVisible();
 });
 
 test("contains a wrong-domain custom parser Success while preserving candidate focus", async () => {

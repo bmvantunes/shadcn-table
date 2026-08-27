@@ -402,7 +402,7 @@ function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
   ) {
     throw new TypeError("BrunoTable blankValue requires potential field editability.");
   }
-  if (options["validate"] !== undefined && typeof options["validate"] !== "function") {
+  if (Object.hasOwn(options, "validate") && typeof options["validate"] !== "function") {
     throw new TypeError("BrunoTable validate must be a function.");
   }
   if (
@@ -1110,7 +1110,7 @@ function snapshotPresetDefaults(
       "BrunoTable Column Helper preset blankValue requires potential editability.",
     );
   }
-  if (defaults["validate"] !== undefined && typeof defaults["validate"] !== "function") {
+  if (Object.hasOwn(defaults, "validate") && typeof defaults["validate"] !== "function") {
     throw new TypeError("BrunoTable Column Helper preset validate must be a function.");
   }
   if (

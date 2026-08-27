@@ -14,6 +14,19 @@ describe("BrunoTable Column Helper runtime capability guards", () => {
         },
       ]),
     ).toThrow("validate must be a function");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn, undefined, [
+        {
+          columnId: "COL_ID_UNDEFINED_VALIDATE",
+          field: "value",
+          headerName: "Value",
+          validate: undefined,
+        },
+      ]),
+    ).toThrow("validate must be a function");
+    expect(() =>
+      Reflect.apply(BrunoTableNumberColumn.withDefaults, undefined, [{ validate: undefined }]),
+    ).toThrow("preset validate must be a function");
   });
 
   it("rejects validation without effective potential editability", () => {
