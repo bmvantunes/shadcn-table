@@ -154,9 +154,11 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       const editSurface = editor.closest<HTMLElement>("[data-bruno-cell-edit-surface]");
       const tableBoundary = editor.closest<HTMLElement>("[data-bruno-table]");
       const blockedPointerTargets = new Map<number, EventTarget | null>();
-      const blockedClickTargetCounts = new Map<EventTarget | null, number>();
+      const blockedClicks: Array<
+        Readonly<{ readonly downTarget: EventTarget | null; readonly upTarget: EventTarget | null }>
+      > = [];
       const commitOutsidePointer = (event: PointerEvent) => {
-        blockedClickTargetCounts.clear();
+        blockedClicks.length = 0;
         if (
           event.target instanceof Node &&
           (editor.contains(event.target) ||
@@ -195,12 +197,9 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
       };
       const suppressRejectedPointerUp = (event: PointerEvent) => {
         if (!blockedPointerTargets.has(event.pointerId)) return;
-        const blockedTarget = blockedPointerTargets.get(event.pointerId) ?? null;
+        const downTarget = blockedPointerTargets.get(event.pointerId) ?? null;
         blockedPointerTargets.delete(event.pointerId);
-        blockedClickTargetCounts.set(
-          blockedTarget,
-          (blockedClickTargetCounts.get(blockedTarget) ?? 0) + 1,
-        );
+        blockedClicks.push({ downTarget, upTarget: event.target });
         event.preventDefault();
         event.stopImmediatePropagation();
       };
@@ -208,17 +207,23 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         blockedPointerTargets.delete(event.pointerId);
       };
       const suppressRejectedClick = (event: MouseEvent) => {
-        const blockedCount = blockedClickTargetCounts.get(event.target) ?? 0;
-        if (blockedCount === 0) {
+        const ownsTarget = (candidate: EventTarget | null) =>
+          event.target === candidate ||
+          (event.target instanceof Node &&
+            candidate instanceof Node &&
+            event.target.contains(candidate));
+        const blockedClickIndex = blockedClicks.findIndex(
+          ({ downTarget, upTarget }) => ownsTarget(downTarget) && ownsTarget(upTarget),
+        );
+        if (blockedClickIndex === -1) {
           let activeRejectedTarget = false;
           for (const target of blockedPointerTargets.values()) {
-            if (target !== event.target) continue;
+            if (!ownsTarget(target)) continue;
             activeRejectedTarget = true;
             break;
           }
           if (!activeRejectedTarget) return;
-        } else if (blockedCount === 1) blockedClickTargetCounts.delete(event.target);
-        else blockedClickTargetCounts.set(event.target, blockedCount - 1);
+        } else blockedClicks.splice(blockedClickIndex, 1);
         event.preventDefault();
         event.stopImmediatePropagation();
       };
