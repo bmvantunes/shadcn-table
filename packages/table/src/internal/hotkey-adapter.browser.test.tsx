@@ -10,6 +10,7 @@ import {
   useBrunoTableGridHotkeys,
   useBrunoTableHotkeyWorkflowAction,
   type BrunoTableGridHotkeyCommands,
+  type BrunoTableHotkeyGesture,
 } from "./hotkey-adapter";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableNavigationRuntime } from "./navigation";
@@ -65,7 +66,7 @@ afterEach(async () => {
 
 describe("BrunoTable hotkey Adapter browser contract", () => {
   test("runs exactly one semantic Shift+Tab command after live prevention", async () => {
-    const tab = vi.fn((event) => event.preventDefault());
+    const tab = vi.fn((event: BrunoTableHotkeyGesture) => event.preventDefault());
     const shiftTab = vi.fn();
     const screen = await render(
       <AdapterProbe commands={probeCommands({ shiftTab, tab })} label="Shift Tab prevention" />,

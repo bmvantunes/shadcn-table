@@ -584,6 +584,16 @@ describe("BrunoTableBigDecimalColumn", () => {
         },
       ]),
     ).toThrow("validate must be a function");
+    expect(() =>
+      Reflect.apply(preset, undefined, [
+        {
+          columnId: "COL_ID_UNDEFINED_VALIDATE",
+          field: "nullable",
+          headerName: "Undefined validate",
+          validate: undefined,
+        },
+      ]),
+    ).toThrow("validate must be a function");
 
     const validate = () => undefined;
     expect(() =>

@@ -934,6 +934,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
         allAuthorityStagingSamples,
         performance.now() - startedAt,
       );
+      assertBudgetSamples("all predicate-authority staging", allAuthorityStagingSamples);
       if (allAuthorityPredicateEvaluations !== 0 || allAuthorityIndex.isReady()) {
         throw new Error("All-authority replacement performed synchronous predicate work.");
       }
