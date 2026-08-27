@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as BigDecimal from "effect/BigDecimal";
 
 import { BrunoTableSelectColumn } from "../column-helpers";
@@ -36,12 +36,28 @@ const columns = compileColumns([
   },
 ]);
 
+const runtimes = new Set<BrunoTableCellEditRuntimeBase>();
+
 class BrunoTableCellEditRuntime extends BrunoTableCellEditRuntimeBase {
   public constructor(options: ConstructorParameters<typeof BrunoTableCellEditRuntimeBase>[0]) {
     super(options);
+    const disposeBase = this.dispose;
+    Object.defineProperty(this, "dispose", {
+      configurable: true,
+      value: () => {
+        runtimes.delete(this);
+        disposeBase();
+      },
+    });
+    runtimes.add(this);
     this.activate();
   }
 }
+
+afterEach(() => {
+  for (const runtime of runtimes) runtime.dispose();
+  runtimes.clear();
+});
 
 describe("BrunoTable Cell Edit Session", () => {
   it("seeds current-value editing from the canonical source value and rejects unreadable cells", () => {

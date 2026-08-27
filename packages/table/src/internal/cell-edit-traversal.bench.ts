@@ -79,7 +79,7 @@ allAuthorityPredicateEvaluations = 0;
 let equivalentAuthorityPredicateEvaluations = 0;
 const equivalentAuthorityIndex = createIndex(() => {
   equivalentAuthorityPredicateEvaluations += 1;
-});
+}, true);
 equivalentAuthorityPredicateEvaluations = 0;
 const rangeIndex = createIndex();
 const forwardRowIds = rows.map((row) => row.id);
@@ -196,6 +196,7 @@ function recordBudgetSample(name: string, samples: number[], elapsedMs: number):
 describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz reference)", () => {
   const samples: number[] = [];
   const reconciliationSamples: number[] = [];
+  const projectionSliceSamples: number[] = [];
   const rangeSamples: number[] = [];
   const horizontalRangeSamples: number[] = [];
   const equivalentAuthoritySamples: number[] = [];
@@ -1091,12 +1092,11 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
       while (!reconciliationIndex.isReady()) {
         const sliceStartedAt = performance.now();
         reconciliationIndex.buildNextSlice();
-        const elapsedMs = performance.now() - sliceStartedAt;
-        if (elapsedMs > referenceFrameBudgetMs) {
-          throw new Error(
-            `projection reconciliation slice exceeded the frame reference with ${String(elapsedMs)} ms.`,
-          );
-        }
+        recordBudgetSample(
+          "projection reconciliation slice",
+          projectionSliceSamples,
+          performance.now() - sliceStartedAt,
+        );
       }
       reversed = !reversed;
       if (

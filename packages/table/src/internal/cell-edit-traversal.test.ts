@@ -883,7 +883,9 @@ describe("BrunoTable editable traversal index", () => {
     expect(evaluate).not.toHaveBeenCalled();
     expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
     expect(index.buildNextSlice(160, Number.POSITIVE_INFINITY)).toBe(true);
-    expect(getRow).toHaveBeenCalledTimes(10);
+    expect(getRow).toHaveBeenCalledTimes(
+      160 / BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
+    );
     expect(evaluate).not.toHaveBeenCalled();
     expect(index.isReady()).toBe(false);
 

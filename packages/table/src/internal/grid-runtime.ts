@@ -3554,11 +3554,14 @@ function firstNotificationFailure(
   return current ?? next;
 }
 
-function notify(listeners: Set<Listener>): NotificationFailure | undefined {
+function notifyListeners<TArguments extends readonly unknown[]>(
+  listeners: ReadonlySet<(...arguments_: TArguments) => void>,
+  ...arguments_: TArguments
+): NotificationFailure | undefined {
   let firstError: NotificationFailure | undefined;
   for (const listener of listeners) {
     try {
-      listener();
+      listener(...arguments_);
     } catch (error) {
       firstError ??= notificationFailure(error);
     }
@@ -3566,17 +3569,13 @@ function notify(listeners: Set<Listener>): NotificationFailure | undefined {
   return firstError;
 }
 
+function notify(listeners: Set<Listener>): NotificationFailure | undefined {
+  return notifyListeners(listeners);
+}
+
 function notifyRowChangeListeners(
   listeners: Set<RowChangeListener>,
   changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
 ): NotificationFailure | undefined {
-  let firstError: NotificationFailure | undefined;
-  for (const listener of listeners) {
-    try {
-      listener(changedRowIds);
-    } catch (error) {
-      firstError ??= notificationFailure(error);
-    }
-  }
-  return firstError;
+  return notifyListeners(listeners, changedRowIds);
 }
