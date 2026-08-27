@@ -1243,6 +1243,67 @@ test("starts from exact current values, replaces from produced text, and cancels
   expect(onSaveEdits).not.toHaveBeenCalled();
 });
 
+test("seeds custom Value Type editing from the authoritative canonical cell value", async () => {
+  type NormalizedRow = Readonly<{ readonly id: string; readonly value: string }>;
+  const normalizedValueType: BrunoTableValueType<string> = {
+    codecId: "test/browser-normalized-edit-source",
+    codecVersion: 1,
+    filterFamily: "text",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime: (input) =>
+      typeof input === "string"
+        ? { _tag: "Success", value: input.trim().toUpperCase() }
+        : { _tag: "Failure", message: "Expected text." },
+    equivalent: Object.is,
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: (input) =>
+      typeof input === "string"
+        ? { _tag: "Success", value: input }
+        : { _tag: "Failure", message: "Expected text." },
+  };
+  const normalizedColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: normalizedValueType,
+      isEditable: ({ value }: { readonly value: string }) => value === "SOURCE",
+    },
+  ] satisfies BrunoTableColumns<NormalizedRow>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CANONICAL_EDIT_SOURCE"
+      columns={normalizedColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{
+        rows: [{ id: "normalized", value: "  source  " }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={() => 1n}
+      onSaveEdits={() => Promise.resolve()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("gridcell", { name: "SOURCE", exact: true }));
+  await userEvent.keyboard("{F2}");
+  const editor = screen.getByRole("textbox", { name: "Edit Value" });
+  await expect.element(editor).toHaveValue("SOURCE");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("gridcell", { name: "SOURCE", exact: true })).toBeVisible();
+});
+
 test("uses only browser-produced composition text and respects prevented nested Escape", async () => {
   const { grid, screen } = await renderEditableTable();
   grid
@@ -1265,6 +1326,18 @@ test("uses only browser-produced composition text and respects prevented nested 
       cancelable: true,
       data: "pasted",
       inputType: "insertFromPaste",
+    }),
+  );
+  grid.element().addEventListener("beforeinput", (event) => event.preventDefault(), {
+    capture: true,
+    once: true,
+  });
+  grid.element().dispatchEvent(
+    new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      data: "claimed",
+      inputType: "insertText",
     }),
   );
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();

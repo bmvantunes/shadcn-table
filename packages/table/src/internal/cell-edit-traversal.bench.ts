@@ -608,6 +608,96 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
   );
 
   bench(
+    "rebuilds a 100,000-row dirty remap immediately after paced identity discovery",
+    () => {
+      const remapRows = new Map<string, Row>(
+        Array.from({ length: staticRowCount }, (_unused, rowIndex) => {
+          const row = { id: `dirty-remap-${String(rowIndex)}`, editable: true };
+          return [row.id, row];
+        }),
+      );
+      const remapColumns = compileColumns([
+        {
+          columnId: "COL_ID_DIRTY_REMAP",
+          field: "editable" as const,
+          headerName: "Dirty remap",
+          valueType: "boolean" as const,
+          isEditable: stablePredicate,
+        },
+      ]);
+      let projectionReads = 0;
+      const createRemapRowSpace = () =>
+        Object.freeze({
+          totalRows: staticRowCount,
+          getRowId: (rowIndex: number) => {
+            projectionReads += 1;
+            return rowIndex < staticRowCount ? `dirty-remap-${String(rowIndex)}` : undefined;
+          },
+        });
+      let predicateEvaluations = 0;
+      const index = new BrunoTableCellEditTraversalIndex(
+        (rowId) => remapRows.get(rowId),
+        (_rowId, value) => {
+          predicateEvaluations += 1;
+          return (value as Row).editable;
+        },
+        true,
+      );
+      const initialRowSpace = createRemapRowSpace();
+      index.reconcile(remapColumns, initialRowSpace);
+      while (index.buildNextSlice());
+      for (const [rowId, value] of remapRows) {
+        remapRows.set(rowId, { ...value, editable: false });
+      }
+      index.reconcileRows(new Set(remapRows.keys()));
+      index.reconcile(remapColumns, initialRowSpace);
+      projectionReads = 0;
+      predicateEvaluations = 0;
+      index.reconcile(remapColumns, createRemapRowSpace());
+
+      const discoverySamples: number[] = [];
+      while (projectionReads < staticRowCount) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        discoverySamples.push(performance.now() - startedAt);
+        if ((projectionReads < staticRowCount && predicateEvaluations !== 0) || index.isReady()) {
+          throw new Error("Dirty remap exposed predicate or partial traversal during discovery.");
+        }
+      }
+      let firstRebuildMs = discoverySamples.at(-1)!;
+      if (predicateEvaluations === 0) {
+        const firstRebuildStartedAt = performance.now();
+        index.buildNextSlice();
+        firstRebuildMs = performance.now() - firstRebuildStartedAt;
+      }
+      if (predicateEvaluations === 0 || index.isReady()) {
+        throw new Error("Dirty remap inserted a second full bookkeeping pass before rebuilding.");
+      }
+      const rebuildSamples = [firstRebuildMs];
+      while (!index.isReady()) {
+        const startedAt = performance.now();
+        index.buildNextSlice();
+        rebuildSamples.push(performance.now() - startedAt);
+      }
+      if (predicateEvaluations !== staticRowCount || index.find(0, remapColumns[0]!.columnId, 1)) {
+        throw new Error("Dirty remap did not install exact latest predicate evidence.");
+      }
+      const discoveryP99Ms = assertBudgetSamples("dirty-remap discovery slice", discoverySamples);
+      const rebuildP99Ms = assertBudgetSamples("dirty-remap rebuild slice", rebuildSamples);
+      console.log(
+        JSON.stringify({
+          benchmark: "BrunoTable dirty remap without a second identity pass",
+          rowCount: staticRowCount,
+          discoveryP99Ms,
+          rebuildP99Ms,
+          referenceFrameBudgetMs,
+        }),
+      );
+    },
+    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  bench(
     "paces unknown discovery and rebuilding for a 20,000 by 150 replacement",
     () => {
       const unknownRowCount = 20_000;

@@ -26,7 +26,7 @@ import {
 } from "./internal/client-filter-controls";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileColumns } from "./internal/compile-columns";
-import { BrunoTableGridRuntime } from "./internal/grid-runtime";
+import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
 import {
   BrunoTableActiveFilterCount,
@@ -184,6 +184,14 @@ function BrunoTableClientInstance<
       ? new BrunoTableCellEditRuntime({
           columns: compiledColumns,
           getRow: runtime.getRowSnapshot,
+          getCanonicalValue: (rowId, columnId) => {
+            const rowSpace = runtime.getRowSpaceSnapshot();
+            const rowPresent = rowSpace?.getRow(rowId) !== undefined;
+            const value = rowPresent ? rowSpace?.getCellValue(rowId, columnId) : undefined;
+            return rowPresent && !isBrunoTableInvalidCellValue(value)
+              ? Object.freeze({ _tag: "Success" as const, value })
+              : Object.freeze({ _tag: "Failure" as const });
+          },
           incrementalTraversal: true,
         })
       : undefined,

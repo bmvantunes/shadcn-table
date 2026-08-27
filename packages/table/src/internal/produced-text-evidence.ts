@@ -33,7 +33,7 @@ export function installBrunoTableProducedTextEvidence(
     armBrunoTableProducedTextCapture(grid, capture);
   };
   const handleBeforeInput = (event: InputEvent) => {
-    if (!ownsCaptureEvent(event.target)) return;
+    if (event.defaultPrevented || !ownsCaptureEvent(event.target)) return;
     if (event.isComposing || event.inputType === "insertCompositionText") return;
     if (event.inputType === "insertText" || event.inputType === "insertReplacementText") {
       const text =

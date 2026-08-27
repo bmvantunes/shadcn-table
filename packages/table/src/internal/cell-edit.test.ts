@@ -44,6 +44,68 @@ class BrunoTableCellEditRuntime extends BrunoTableCellEditRuntimeBase {
 }
 
 describe("BrunoTable Cell Edit Session", () => {
+  it("seeds current-value editing from the canonical source value and rejects unreadable cells", () => {
+    const commit = vi.fn();
+    const normalizedValueType: BrunoTableValueType<string> = {
+      codecId: "test/normalized-edit-source",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input.trim().toUpperCase() }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+    };
+    const normalizedColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: normalizedValueType,
+        isEditable: ({ value }: { readonly value: string }) => value === "SOURCE",
+      },
+    ]);
+    const normalizedRuntime = new BrunoTableCellEditRuntime({
+      columns: normalizedColumns,
+      getRow: () => ({ value: "  source  " }),
+      onCommit: commit,
+    });
+
+    expect(normalizedRuntime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(normalizedRuntime.getSessionSnapshot()).toMatchObject({ initialText: "SOURCE" });
+    expect(normalizedRuntime.commit("SOURCE")).toBe(true);
+    expect(normalizedRuntime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    expect(commit).not.toHaveBeenCalled();
+
+    const unreadable = Object.defineProperty({}, "value", {
+      get: () => {
+        throw new Error("unreadable");
+      },
+    });
+    const unreadableRuntime = new BrunoTableCellEditRuntime({
+      columns: normalizedColumns,
+      getRow: () => unreadable,
+    });
+    let admitted: boolean | undefined;
+    expect(() => {
+      admitted = unreadableRuntime.start("row", "COL_ID_VALUE");
+    }).not.toThrow();
+    expect(admitted).toBe(false);
+  });
+
   it("retains invalid raw input and commits exact typed values only after one gate", () => {
     const commit = vi.fn();
     const runtime = new BrunoTableCellEditRuntime({

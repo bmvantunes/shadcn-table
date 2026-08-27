@@ -25,6 +25,8 @@ type ActiveSession = Readonly<{
   readonly row: object;
   readonly before: unknown;
   readonly beforeFromDraft: boolean;
+  readonly sourceValue: unknown;
+  readonly sourceValueAvailable: boolean;
   readonly initialText: string;
   readonly selectInitialText: boolean;
   readonly rowMissing: boolean;
@@ -40,6 +42,10 @@ type DraftEntry = Readonly<{
 type DraftPatch =
   | Readonly<{ readonly kind: "remove"; readonly cellKey: string }>
   | Readonly<{ readonly kind: "set"; readonly cellKey: string; readonly value: unknown }>;
+
+type CanonicalSourceValue =
+  | Readonly<{ readonly _tag: "Success"; readonly value: unknown }>
+  | Readonly<{ readonly _tag: "Failure" }>;
 
 type CommitEvaluation =
   | Readonly<{
@@ -68,6 +74,7 @@ type CellEditEvent =
       readonly rowId: string;
       readonly column: CompiledColumn | undefined;
       readonly row: unknown;
+      readonly sourceValue: CanonicalSourceValue;
       readonly hasDraft: boolean;
       readonly draftValue: unknown;
       readonly mode: "current" | "replace";
@@ -80,7 +87,11 @@ type CellEditEvent =
       readonly intent: "scalar" | "blank";
     }>
   | Readonly<{ readonly type: "CANCEL" }>
-  | Readonly<{ readonly type: "RECONCILE_ROW"; readonly row: unknown }>
+  | Readonly<{
+      readonly type: "RECONCILE_ROW";
+      readonly row: unknown;
+      readonly sourceValue: CanonicalSourceValue;
+    }>
   | Readonly<{ readonly type: "RECONCILE_COLUMN"; readonly column: CompiledFieldColumn }>;
 
 const brunoTableCellEditMachine = createMachine({
@@ -134,7 +145,14 @@ const brunoTableCellEditMachine = createMachine({
               if (session === undefined) return undefined;
               return typeof event.row === "object" && event.row !== null
                 ? reconcileSessionPermission(
-                    Object.freeze({ ...session, row: event.row, rowMissing: false }),
+                    Object.freeze({
+                      ...session,
+                      row: event.row,
+                      rowMissing: false,
+                      sourceValue:
+                        event.sourceValue._tag === "Success" ? event.sourceValue.value : undefined,
+                      sourceValueAvailable: event.sourceValue._tag === "Success",
+                    }),
                   )
                 : Object.freeze({ ...session, rowMissing: true });
             },
@@ -220,7 +238,8 @@ function prepareSession(
   ) {
     return undefined;
   }
-  const sourceValue = Reflect.get(row, column.field);
+  if (event.sourceValue._tag === "Failure") return undefined;
+  const sourceValue = event.sourceValue.value;
   const before = event.hasDraft ? event.draftValue : sourceValue;
   if (typeof column.isEditable === "function") {
     try {
@@ -238,6 +257,8 @@ function prepareSession(
       row,
       before,
       beforeFromDraft: event.hasDraft,
+      sourceValue,
+      sourceValueAvailable: true,
       initialText:
         event.mode === "replace"
           ? event.producedText
@@ -274,9 +295,8 @@ function isSessionEditable(session: ActiveSession): boolean {
   if (policy === true) return true;
   if (typeof policy !== "function") return false;
   try {
-    const value = session.beforeFromDraft
-      ? session.before
-      : Reflect.get(session.row, session.column.field);
+    if (!session.beforeFromDraft && !session.sourceValueAvailable) return false;
+    const value = session.beforeFromDraft ? session.before : session.sourceValue;
     return Reflect.apply(policy, undefined, [{ row: session.row, value }]) === true;
   } catch {
     return false;
@@ -401,7 +421,10 @@ function evaluateCandidate(
       });
     }
   }
-  const sourceValue = Reflect.get(session.row, session.column.field);
+  if (!session.sourceValueAvailable) {
+    return Object.freeze({ kind: "invalid", message: "The source value is invalid." });
+  }
+  const sourceValue = session.sourceValue;
   const equivalentBefore = safeEquivalentEditValue(session.column, session.before, after);
   const equivalentSource = safeEquivalentEditValue(session.column, after, sourceValue);
   if (equivalentBefore === undefined || equivalentSource === undefined) {
@@ -524,6 +547,13 @@ export class BrunoTableCellEditRuntime {
   private columns: readonly CompiledColumn[];
   private fieldColumnsById: ReadonlyMap<string, CompiledFieldColumn>;
   private readonly getRow: (rowId: string) => unknown;
+  private readonly getCanonicalValue:
+    | ((rowId: string, columnId: string) => CanonicalSourceValue)
+    | undefined;
+  private readonly canonicalSourceValueCache = new WeakMap<
+    object,
+    Map<unknown, Map<string, CanonicalSourceValue>>
+  >();
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
   private actor = createActor(brunoTableCellEditMachine);
   private actorActive = false;
@@ -553,6 +583,7 @@ export class BrunoTableCellEditRuntime {
     options: Readonly<{
       readonly columns: readonly CompiledColumn[];
       readonly getRow: (rowId: string) => unknown;
+      readonly getCanonicalValue?: (rowId: string, columnId: string) => CanonicalSourceValue;
       readonly onCommit?: (change: BrunoTableCellEditChange) => void;
       readonly incrementalTraversal?: boolean;
     }>,
@@ -560,6 +591,7 @@ export class BrunoTableCellEditRuntime {
     this.columns = options.columns;
     this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
+    this.getCanonicalValue = options.getCanonicalValue;
     this.onCommit = options.onCommit ?? (() => undefined);
     this.traversalIndex = new BrunoTableCellEditTraversalIndex(
       this.getRow,
@@ -729,7 +761,12 @@ export class BrunoTableCellEditRuntime {
       session !== undefined &&
       (changedRowIds === undefined || changedRowIds.has(session.rowId))
     ) {
-      this.actor.send({ type: "RECONCILE_ROW", row: this.getRow(session.rowId) });
+      const row = this.getRow(session.rowId);
+      this.actor.send({
+        type: "RECONCILE_ROW",
+        row,
+        sourceValue: this.readCanonicalSourceValue(session.rowId, row, session.column),
+      });
     }
   };
 
@@ -826,7 +863,14 @@ export class BrunoTableCellEditRuntime {
     if (column.isEditable === undefined || column.isEditable === false) return false;
     if (typeof column.isEditable !== "function") return true;
     const draft = this.draftStore.get().get(cellKey(rowId, column.columnId));
-    const value = draft === undefined ? Reflect.get(row, column.field) : draft.value;
+    let value: unknown;
+    if (draft === undefined) {
+      const sourceValue = this.readCanonicalSourceValue(rowId, row, column);
+      if (sourceValue._tag !== "Success") return false;
+      value = sourceValue.value;
+    } else {
+      value = draft.value;
+    }
     try {
       return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
     } catch {
@@ -849,6 +893,7 @@ export class BrunoTableCellEditRuntime {
       rowId,
       column,
       row,
+      sourceValue: this.readCanonicalSourceValue(rowId, row, column),
       hasDraft: draft !== undefined,
       draftValue: draft?.value,
       mode,
@@ -856,6 +901,60 @@ export class BrunoTableCellEditRuntime {
     });
     this.retainedMovementRowIndex = undefined;
     return this.getSessionSnapshot().kind === "editing";
+  };
+
+  private readonly readCanonicalSourceValue = (
+    rowId: string,
+    row: unknown,
+    column: CompiledColumn | undefined,
+  ): CanonicalSourceValue => {
+    if (column?.kind !== "field" || typeof row !== "object" || row === null) {
+      return Object.freeze({ _tag: "Failure" });
+    }
+    let byAuthority = this.canonicalSourceValueCache.get(row);
+    if (byAuthority === undefined) {
+      byAuthority = new Map();
+      this.canonicalSourceValueCache.set(row, byAuthority);
+    }
+    const authority = column.semantics.decodeRuntimeAuthority;
+    let byField = byAuthority.get(authority);
+    if (byField === undefined) {
+      byField = new Map();
+      byAuthority.set(authority, byField);
+    }
+    const cached = byField.get(column.field);
+    if (cached !== undefined) return cached;
+    let result: CanonicalSourceValue | undefined;
+    if (this.getCanonicalValue !== undefined) {
+      try {
+        const canonical = this.getCanonicalValue(rowId, column.columnId);
+        result =
+          canonical?._tag === "Success" && "value" in canonical
+            ? Object.freeze({ _tag: "Success", value: canonical.value })
+            : Object.freeze({ _tag: "Failure" });
+      } catch {
+        result = Object.freeze({ _tag: "Failure" });
+      }
+    } else {
+      let raw: unknown;
+      try {
+        raw = Reflect.get(row, column.field);
+      } catch {
+        result = Object.freeze({ _tag: "Failure" });
+      }
+      if (result === undefined && (raw === null || raw === undefined)) {
+        result = Object.freeze({ _tag: "Success", value: raw });
+      } else if (result === undefined) {
+        const decoded = column.semantics.decodeRuntime(raw);
+        result =
+          decoded._tag === "Success" && "value" in decoded
+            ? Object.freeze({ _tag: "Success", value: decoded.value })
+            : Object.freeze({ _tag: "Failure" });
+      }
+    }
+    result ??= Object.freeze({ _tag: "Failure" });
+    byField.set(column.field, result);
+    return result;
   };
 
   public readonly commit = (

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { compileColumns, type CompiledFieldColumn } from "./compile-columns";
-import { BrunoTableCellEditTraversalIndex } from "./cell-edit-traversal";
+import {
+  BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
+  BrunoTableCellEditTraversalIndex,
+} from "./cell-edit-traversal";
 
 type Row = Readonly<{
   readonly id: string;
@@ -699,6 +702,45 @@ describe("BrunoTable editable traversal index", () => {
     expect(index.getCachedRowCount()).toBe(rowIds.length - 1);
   });
 
+  it("consumes present dirty identities during replacement projection discovery", () => {
+    const rowIds = Array.from({ length: 40 }, (_unused, rowIndex) => `project-${rowIndex}`);
+    const rows = new Map<string, Row>(
+      rowIds.map((id) => [id, { id, enabled: true, alternate: false }]),
+    );
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_PROJECT_EDIT",
+        field: "enabled" as const,
+        headerName: "Project edit",
+        valueType: "boolean" as const,
+        isEditable: ({ row }: { readonly row: Row }) => row.enabled,
+      },
+    ]);
+    const evaluate = vi.fn((_rowId: string, value: object) => (value as Row).enabled);
+    const index = new BrunoTableCellEditTraversalIndex((rowId) => rows.get(rowId), evaluate, true);
+    const initialProjection = rowSpace(rowIds);
+    index.reconcile(columns, initialProjection);
+    while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
+
+    for (const [rowId, value] of rows) rows.set(rowId, { ...value, enabled: false });
+    index.reconcileRows(new Set(rowIds));
+    index.reconcile(columns, initialProjection);
+    const replacementProjection = rowSpace([...rowIds]);
+    index.reconcile(columns, replacementProjection);
+    evaluate.mockClear();
+
+    expect(
+      index.buildNextSlice(
+        rowIds.length * BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
+        Number.POSITIVE_INFINITY,
+      ),
+    ).toBe(true);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(index.buildNextSlice(1, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
+  });
+
   it("discovers unknown replacements without tearing down predicate evidence synchronously", () => {
     const rowCount = 40;
     const columnCount = 40;
@@ -882,17 +924,16 @@ describe("BrunoTable editable traversal index", () => {
 
     index.reconcileRows(undefined);
     index.reconcile(columns, projection);
-    index.buildNextSlice(rowCount * 2 * 16, Number.POSITIVE_INFINITY);
+    index.buildNextSlice(
+      rowCount * 2 * BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST,
+      Number.POSITIVE_INFINITY,
+    );
     rows.clear();
     index.reconcileRows(new Set(rowIds));
     getRow.mockClear();
 
     expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
-    expect(getRow).not.toHaveBeenCalled();
-    expect(index.getCachedRowCount()).toBe(rowCount);
-    while (index.getCachedRowCount() === rowCount) {
-      expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
-    }
+    expect(getRow).toHaveBeenCalledTimes(2);
     expect(index.getCachedRowCount()).toBe(rowCount - 2);
     expect(index.isReady()).toBe(false);
     expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();

@@ -1668,12 +1668,18 @@ export type BrunoTableReadOnlyClientProps<
   BrunoTableReadOnlyCapability &
   BrunoTableGroupingCapability<TRow, TColumns>;
 
+type EditableClientComposition<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+> = BrunoTableClientSourceProps<TRow, TColumns> &
+  Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
+  BrunoTablePotentiallyEditableColumnRequirement<TColumns>;
+
 export type BrunoTableEditableClientProps<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TGetRowVersion extends (row: TRow) => unknown,
-> = BrunoTableClientSourceProps<TRow, TColumns> &
-  Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
+> = EditableClientComposition<TRow, TColumns> &
   Omit<
     BrunoTableEditableCapability<TRow, TColumns, ReturnType<TGetRowVersion>>,
     "getRowVersion" | "onSaveEdits"
@@ -1684,7 +1690,7 @@ export type BrunoTableEditableClientProps<
       TColumns,
       NoInfer<ReturnType<TGetRowVersion>>
     >;
-  } & BrunoTablePotentiallyEditableColumnRequirement<TColumns>;
+  };
 
 export type BrunoTableClientProps<
   TRow,
@@ -1692,10 +1698,8 @@ export type BrunoTableClientProps<
   TRowVersion = never,
 > =
   | BrunoTableReadOnlyClientProps<TRow, TColumns>
-  | (BrunoTableClientSourceProps<TRow, TColumns> &
-      Omit<ComponentCommonProps<TRow, TColumns, false>, "initialOrderBy"> &
-      BrunoTableEditableCapability<TRow, TColumns, TRowVersion> &
-      BrunoTablePotentiallyEditableColumnRequirement<TColumns>);
+  | (EditableClientComposition<TRow, TColumns> &
+      BrunoTableEditableCapability<TRow, TColumns, TRowVersion>);
 
 export type BrunoTableServerProps<
   TRow,

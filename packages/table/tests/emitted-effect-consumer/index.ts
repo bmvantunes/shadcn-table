@@ -80,6 +80,14 @@ void emittedInvalidDisabledValidatedBigDecimalPreset;
 const emittedEditableBigDecimalWithoutBlank = BrunoTableBigDecimalColumn.withDefaults({
   isEditable: true,
 });
+const emittedValidRequiredBigDecimalWithoutBlank = [
+  emittedEditableBigDecimalWithoutBlank({
+    columnId: "COL_ID_REQUIRED_PRICE_WITHOUT_BLANK",
+    field: "price",
+    headerName: "Required price without blank",
+  }),
+] satisfies BrunoTableColumns<EmittedPriceRow>;
+void emittedValidRequiredBigDecimalWithoutBlank;
 const emittedInvalidNullableBigDecimalWithoutBlank = emittedEditableBigDecimalWithoutBlank({
   columnId: "COL_ID_NULLABLE_PRICE_WITHOUT_BLANK",
   // @ts-expect-error emitted nullable editable BigDecimal applications require a blank policy.

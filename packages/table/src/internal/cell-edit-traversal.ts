@@ -39,6 +39,7 @@ type UnknownProjection = {
   readonly pendingRowIndexSet: Set<number>;
   readonly pendingDetachedRowIds: string[];
   readonly pendingDetachedRowIdSet: Set<string>;
+  readonly claimedDirtyRowIds: Set<string>;
   dirtyRowIterator: IterableIterator<string> | undefined;
   rowIndex: number;
 };
@@ -131,6 +132,7 @@ export class BrunoTableCellEditTraversalIndex {
   private pendingPredicateAuthorityRowCursor = 0;
   private readonly pendingPredicateAuthorityColumnIds = new Set<string>();
   private unknownDiscoveryIterator: IterableIterator<[string, RowCache]> | undefined;
+  private unknownDirtyRestorationIterator: IterableIterator<string> | undefined;
   private unknownProjection: UnknownProjection | undefined;
   private unknownDiscoveryRequired = false;
 
@@ -191,9 +193,14 @@ export class BrunoTableCellEditTraversalIndex {
         (projectionChanged ||
           (traversalAuthorityChanged && hadPredicateColumns !== this.predicateColumns.length > 0))
       ) {
-        this.unknownProjection = this.createUnknownProjection(rowSpace);
+        this.unknownDirtyRestorationIterator = this.unknownProjection.claimedDirtyRowIds.values();
+        this.unknownProjection = undefined;
       }
-      if (this.unknownDiscoveryIterator === undefined && this.unknownProjection === undefined) {
+      if (
+        this.unknownDirtyRestorationIterator === undefined &&
+        this.unknownDiscoveryIterator === undefined &&
+        this.unknownProjection === undefined
+      ) {
         if (this.unknownDiscoveryRequired) {
           this.unknownDiscoveryIterator = this.rowCacheById.entries();
         } else {
@@ -315,6 +322,17 @@ export class BrunoTableCellEditTraversalIndex {
     while (remainingPredicateCells > 0) {
       if (built > 0 && performance.now() - startedAt >= maximumDurationMs) break;
       if (this.allRowsDirty) {
+        const restoredDirtyRow = this.unknownDirtyRestorationIterator?.next();
+        if (restoredDirtyRow?.done === false) {
+          this.pendingDirtyRowIds.add(restoredDirtyRow.value);
+          remainingPredicateCells -= BRUNO_TABLE_CELL_EDIT_TRAVERSAL_UNKNOWN_DISCOVERY_ROW_COST;
+          built += 1;
+          continue;
+        }
+        if (restoredDirtyRow?.done === true) {
+          this.unknownDirtyRestorationIterator = undefined;
+          continue;
+        }
         const projection = this.unknownProjection;
         if (projection !== undefined) {
           if (projection.rowIndex >= projection.rowSpace.totalRows) {
@@ -413,9 +431,7 @@ export class BrunoTableCellEditTraversalIndex {
         remainingPredicateCells -= predicateColumnCount;
         built += 1;
         const rowId = detachedRowId!;
-        if (this.pendingDirtyRowIds.has(rowId)) {
-          this.removeRowCache(rowId);
-        }
+        this.removeRowCache(rowId);
         this.pendingDirtyRowIds.delete(rowId);
         continue;
       }
@@ -427,7 +443,8 @@ export class BrunoTableCellEditTraversalIndex {
       if (rowId === undefined) continue;
       removeSorted(this.validRowIndexes, rowIndex);
       removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
-      if (this.pendingDirtyRowIds.delete(rowId)) this.removeRowCache(rowId);
+      this.pendingDirtyRowIds.delete(rowId);
+      this.removeRowCache(rowId);
       const row = this.getRow(rowId);
       if (typeof row !== "object" || row === null) continue;
       const existing = this.rowCacheById.get(rowId);
@@ -476,6 +493,7 @@ export class BrunoTableCellEditTraversalIndex {
       this.pendingDetachedRowIdSet.clear();
       this.pendingDetachedRowCursor = 0;
       this.unknownDiscoveryIterator = undefined;
+      this.unknownDirtyRestorationIterator = undefined;
       this.unknownProjection = undefined;
       this.verticalRangeCache = undefined;
       return true;
@@ -604,7 +622,8 @@ export class BrunoTableCellEditTraversalIndex {
     const rowIndex = projection?.rowIndexById.get(rowId);
     if (projection !== undefined && rowIndex !== undefined) {
       enqueueUnknownProjectionRow(projection, rowIndex);
-      this.pendingDirtyRowIds.add(rowId);
+      projection.claimedDirtyRowIds.add(rowId);
+      this.pendingDirtyRowIds.delete(rowId);
       this.dirtyRowIds.delete(rowId);
     }
   };
@@ -620,9 +639,10 @@ export class BrunoTableCellEditTraversalIndex {
       projection.validRowIndexes.push(rowIndex);
       return;
     }
-    if (this.dirtyRowIds.has(rowId)) {
+    if (this.pendingDirtyRowIds.has(rowId) || this.dirtyRowIds.has(rowId)) {
       enqueueUnknownProjectionRow(projection, rowIndex);
-      this.pendingDirtyRowIds.add(rowId);
+      projection.claimedDirtyRowIds.add(rowId);
+      this.pendingDirtyRowIds.delete(rowId);
       this.dirtyRowIds.delete(rowId);
       return;
     }
@@ -667,6 +687,7 @@ export class BrunoTableCellEditTraversalIndex {
     pendingRowIndexSet: new Set(),
     pendingDetachedRowIds: [],
     pendingDetachedRowIdSet: new Set(),
+    claimedDirtyRowIds: new Set(),
     dirtyRowIterator: undefined,
     rowIndex: 0,
   });
@@ -687,6 +708,7 @@ export class BrunoTableCellEditTraversalIndex {
     this.pendingPredicateAuthorityRowCursor = 0;
     this.pendingPredicateAuthorityColumnIds.clear();
     this.unknownDiscoveryIterator = undefined;
+    this.unknownDirtyRestorationIterator = undefined;
     this.unknownProjection = undefined;
     this.allRowsDirty = false;
     this.unknownDiscoveryRequired = false;
