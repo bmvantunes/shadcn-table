@@ -134,7 +134,7 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
         : statusParts.length === 0
           ? "No unsaved changes"
           : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
-            ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
+            ? `${String(pendingCount)} unsaved ${pendingCount === 1 ? "change" : "changes"}`
             : statusParts.join(" · ")}
     </span>
   );
