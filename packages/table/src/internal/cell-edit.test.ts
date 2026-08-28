@@ -1269,6 +1269,16 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribe();
     expect(runtime.getRetainedCellStoreCount()).toBe(0);
 
+    for (let index = 0; index < 1_000; index += 1) {
+      const release = runtime.subscribeCell(
+        `idle-${String(index)}`,
+        "COL_ID_SCORE",
+        () => undefined,
+      );
+      release();
+    }
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+
     const unsubscribeActive = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => undefined);
     expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
     expect(runtime.getRetainedCellStoreCount()).toBe(1);
@@ -1286,7 +1296,7 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.dispose();
   });
 
-  it("releases unmounted cell stores after temporary save presentation ends", () => {
+  it("releases unmounted cell stores while durable save evidence remains", () => {
     vi.useFakeTimers();
     try {
       const changeSet = [
@@ -1317,7 +1327,7 @@ describe("BrunoTable Cell Edit Session", () => {
       acceptedRow = Object.freeze({ ...row, score: 7 });
       accepted.reconcileSourceRows(new Set([row.id]));
       unsubscribeAccepted();
-      expect(accepted.getRetainedCellStoreCount()).toBe(1);
+      expect(accepted.getRetainedCellStoreCount()).toBe(0);
       vi.advanceTimersByTime(2_000);
       expect(accepted.getRetainedCellStoreCount()).toBe(0);
 
@@ -1325,7 +1335,7 @@ describe("BrunoTable Cell Edit Session", () => {
       const unsubscribeImmediate = immediate.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
       immediate.rejectSave("immediate", changeSet, true);
       unsubscribeImmediate();
-      expect(immediate.getRetainedCellStoreCount()).toBe(1);
+      expect(immediate.getRetainedCellStoreCount()).toBe(0);
       vi.advanceTimersByTime(5_000);
       expect(immediate.getRetainedCellStoreCount()).toBe(0);
 
@@ -1337,7 +1347,7 @@ describe("BrunoTable Cell Edit Session", () => {
       const unsubscribeBatch = rejectedBatch.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
       rejectedBatch.rejectSave("batch", changeSet, false);
       unsubscribeBatch();
-      expect(rejectedBatch.getRetainedCellStoreCount()).toBe(1);
+      expect(rejectedBatch.getRetainedCellStoreCount()).toBe(0);
       batchRow = Object.freeze({ ...row, score: 7 });
       rejectedBatch.reconcileSourceRows(new Set([row.id]));
       expect(rejectedBatch.getRetainedCellStoreCount()).toBe(0);
@@ -3369,6 +3379,9 @@ describe("BrunoTable Cell Edit Session", () => {
         hasAcceptedOverlay: true,
         saveSucceeded: true,
         acceptedOverlay: undefined,
+        acceptedOverlayPresentationColumn: columns.find(
+          (column) => column.columnId === "COL_ID_SCORE",
+        ),
       });
       vi.advanceTimersByTime(1_999);
       expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveSucceeded).toBe(true);
@@ -3588,6 +3601,19 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.redoBatchDraft()).toBe(true);
     expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
     expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({ conflict: { server: 5 } });
+
+    current = Object.freeze({ ...row, score: row.score, quantity: 3n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(0);
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      base: row.score,
+      mine: 7,
+      serverNow: row.score,
+    });
+    expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
   });
 
   it("preserves undefined server values in rejected Batch conflict history", () => {
@@ -4096,7 +4122,7 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.hasRejectedOperation("operation-128")).toBe(true);
   });
 
-  it("releases the oldest unmounted cell store when rejected evidence is evicted", () => {
+  it("does not retain unmounted cell stores while rejected evidence is bounded", () => {
     const rows = new Map<string, Row>(
       Array.from({ length: 129 }, (_, index) => {
         const id = `row-${String(index)}`;
@@ -4135,7 +4161,7 @@ describe("BrunoTable Cell Edit Session", () => {
     }
 
     expect(runtime.hasRejectedOperation("operation-0")).toBe(false);
-    expect(runtime.getRetainedCellStoreCount()).toBe(128);
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
   });
 
   it("safely rebases an unchanged edited field onto the latest row and Row Version", () => {

@@ -34,7 +34,10 @@ import {
   BrunoTableQuickFilter,
   renderBrunoTableClientColumnFilter,
 } from "./internal/client-filter-controls";
-import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
+import {
+  BrunoTableClientRowPipelineAdapter,
+  type BrunoTableClientProjectionInputSnapshot,
+} from "./internal/client-source-adapter";
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
@@ -68,6 +71,16 @@ function adaptBrunoTableRowVersionExtractor<TRow>(
   extractor: ((row: TRow) => unknown) | undefined,
 ): ((row: object) => unknown) | undefined {
   return extractor === undefined ? undefined : (row) => extractor(row as TRow);
+}
+
+function hasAuthoritativeBrunoTableEditSource(
+  projectionInput: BrunoTableClientProjectionInputSnapshot,
+): boolean {
+  return (
+    projectionInput.sourceRowIds.authoritative &&
+    (projectionInput.publication.status === "ready" ||
+      projectionInput.publication.status === "stale")
+  );
 }
 
 export {
@@ -127,6 +140,9 @@ function BrunoTableClientInstance<
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const editable = props.editable === true;
   const onSaveEdits = props.onSaveEdits;
+  if (editable && typeof props.getRowVersion !== "function") {
+    throw new TypeError("BrunoTable editable Client Tables require getRowVersion.");
+  }
   if (editable && typeof onSaveEdits !== "function") {
     throw new TypeError("BrunoTable editable Client Tables require onSaveEdits.");
   }
@@ -230,8 +246,10 @@ function BrunoTableClientInstance<
           ...(props.getRowVersion === undefined
             ? {}
             : { getRowVersion: adaptBrunoTableRowVersionExtractor(props.getRowVersion)! }),
-          isSourceAuthoritative: () =>
-            rowPipelineAdapter.getProjectionInputSnapshot().sourceRowIds.authoritative,
+          isSourceAuthoritative: () => {
+            const projectionInput = rowPipelineAdapter.getProjectionInputSnapshot();
+            return hasAuthoritativeBrunoTableEditSource(projectionInput);
+          },
           ...(editMemory === undefined
             ? {}
             : {
@@ -355,7 +373,7 @@ function BrunoTableClientInstance<
       groupingProjectionActive,
     );
     editMemory?.setSavePreflightAvailable(
-      rowPipelineAdapter.getProjectionInputSnapshot().sourceRowIds.authoritative,
+      hasAuthoritativeBrunoTableEditSource(rowPipelineAdapter.getProjectionInputSnapshot()),
     );
     cellEdit?.reconcileColumns(compiledColumns, (rowId) => publication.rowSpace?.getRow(rowId));
     if (!groupingProjectionActive) {

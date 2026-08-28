@@ -223,7 +223,7 @@ test("keeps a resolved Batch globally locked behind an Accepted Overlay until li
   resolveSave();
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("Save accepted · waiting for live confirmation · 1 row remaining");
+    .toHaveTextContent("Batch save accepted · waiting for live confirmation · 1 row remaining");
   await expect.element(batchEditing).toBeDisabled();
   const acceptedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
   await expect.element(acceptedCell).toBeVisible();
@@ -312,7 +312,7 @@ test("unlocks a rejected Batch operation without discarding its drafts or histor
 
   await expect
     .element(screen.getByRole("alert"))
-    .toHaveTextContent("Batch compare-and-set failed.");
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
     .toHaveTextContent("1 unsaved change");
@@ -400,10 +400,13 @@ test("retains an Immediate Accepted Overlay and operation gate through live conf
   await expect
     .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
     .toHaveAttribute("aria-busy", "true");
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 Immediate save pending");
   resolveSave();
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("No unsaved changes");
+    .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
   await expect.element(batchEditing).toBeDisabled();
   await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
 
@@ -417,6 +420,76 @@ test("retains an Immediate Accepted Overlay and operation gate through live conf
   await expect
     .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
     .toHaveAttribute("data-bruno-save-success");
+});
+
+test("renders an Accepted Overlay with its submitted column presentation authority", async () => {
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const incompatibleValueType: BrunoTableValueType<number> = {
+    codecId: "test/browser-incompatible-number",
+    codecVersion: 1,
+    filterFamily: "numeric",
+    editorFamily: "number",
+    cellAlign: "end",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime: (input) =>
+      typeof input === "number"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected a number." } as const),
+    equivalent: Object.is,
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: Number(text) }) as const,
+    formatDisplay: (value) => {
+      if (typeof value !== "number") throw new TypeError("Replacement formatter received text.");
+      return String(value);
+    },
+    encodePersisted: String,
+    decodePersisted: (input) =>
+      typeof input === "number"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected a number." } as const),
+  };
+  const incompatibleColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: incompatibleValueType,
+      isEditable: true,
+    },
+  ] as unknown as BrunoTableColumns<Row>;
+  const renderTable = (activeColumns: BrunoTableColumns<Row>) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_ACCEPTED_OVERLAY_PRESENTATION"
+      columns={activeColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(columns));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_ACCEPTED_OVERLAY_PRESENTATION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  resolveSave();
+  await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
+
+  await screen.rerender(renderTable(incompatibleColumns));
+  await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
 });
 
 test("retains a resolved save operation across a non-authoritative loading gap", async () => {
@@ -452,11 +525,14 @@ test("retains a resolved save operation across a non-authoritative loading gap",
   await userEvent.keyboard("{Enter}");
 
   await screen.rerender(renderTable([], 2, "loading"));
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 Immediate save pending");
   resolveSave();
   await expect.element(batchEditing).toBeDisabled();
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("No unsaved changes");
+    .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
 
   await screen.rerender(renderTable(rows, 3, "ready"));
   await expect
@@ -467,6 +543,84 @@ test("retains a resolved save operation across a non-authoritative loading gap",
   const confirmedRows = [{ id: "ada", name: "Augusta", revision: 2n }] as const;
   await screen.rerender(renderTable(confirmedRows, 4, "ready"));
   await expect.element(batchEditing).toBeEnabled();
+});
+
+test("retains a resolved save operation across a terminal source publication", async () => {
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const terminalRows = [{ id: "grace", name: "Grace", revision: 1n }] as const;
+  const renderTable = (
+    sourceRows: readonly Row[],
+    version: number,
+    status: "closed" | "ready" | "stale",
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_SAVE_TERMINAL_GAP"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1, "ready"));
+  const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SAVE_TERMINAL_GAP" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  resolveSave();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
+  await expect.element(batchEditing).toBeDisabled();
+
+  await screen.rerender(renderTable(terminalRows, 2, "closed"));
+  await expect.element(batchEditing).toBeDisabled();
+
+  await screen.rerender(renderTable(terminalRows, 3, "stale"));
+  await expect.element(batchEditing).toBeEnabled();
+});
+
+test("disables Batch Save for terminal source state and restores it for stale authority", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (status: "closed" | "ready" | "stale", version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_BATCH_TERMINAL_PREFLIGHT"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version, status }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable("ready", 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BATCH_TERMINAL_PREFLIGHT" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  const save = screen.getByRole("button", { name: "Save", exact: true });
+  await expect.element(save).toBeEnabled();
+
+  await screen.rerender(renderTable("closed", 2));
+  await expect.element(save).toBeDisabled();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+
+  await screen.rerender(renderTable("stale", 3));
+  await expect.element(save).toBeEnabled();
 });
 
 test("retains an Immediate candidate until save preflight becomes authoritative", async () => {
@@ -641,7 +795,10 @@ test("reports an Immediate save failure persistently and exposes an accessible C
   await userEvent.keyboard("{Enter}");
 
   const alert = screen.getByRole("alert");
-  await expect.element(alert).toHaveTextContent("Version changed on the server.");
+  await expect
+    .element(alert)
+    .toHaveTextContent("Open Operation details for the complete explanation.");
+  await expect.element(alert).not.toHaveTextContent("Version changed on the server.");
   await expect
     .element(grid.getByRole("gridcell", { name: "Ada", exact: true }))
     .toHaveAttribute("data-bruno-save-failed");
@@ -663,6 +820,96 @@ test("reports an Immediate save failure persistently and exposes an accessible C
     .not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Close toast" }));
   await expect.element(alert).not.toBeInTheDocument();
+});
+
+test("retains one concurrent failure when another operation converges", async () => {
+  const sourceRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const rejectSave: Array<(reason: Error) => void> = [];
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectSave.push(reject);
+      }),
+  );
+  const renderTable = (activeRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONCURRENT_FAILURE_CONVERGENCE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: activeRows, totalRows: activeRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(sourceRows, 1));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONCURRENT_FAILURE_CONVERGENCE",
+  });
+  for (const [before, after] of [
+    ["Ada", "Augusta"],
+    ["Grace", "Amazing Grace"],
+  ] as const) {
+    await userEvent.click(grid.getByRole("gridcell", { name: before, exact: true }));
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), after);
+    await userEvent.keyboard("{Enter}");
+  }
+
+  rejectSave[0]!(new Error("Ada save failed."));
+  rejectSave[1]!(new Error("Grace save failed."));
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("2 save operations failed.");
+
+  const partiallyConverged = [{ id: "ada", name: "Augusta", revision: 2n }, sourceRows[1]] as const;
+  await screen.rerender(renderTable(partiallyConverged, 2));
+  const remainingAlert = screen.getByRole("alert");
+  await expect.element(remainingAlert).toHaveTextContent("A save operation failed.");
+  await userEvent.click(screen.getByRole("button", { name: "Operation details" }));
+  const details = screen.getByRole("alertdialog", { name: "Save operation details" });
+  await expect.element(details).toHaveTextContent("Grace save failed.");
+  await expect.element(details).not.toHaveTextContent("Ada save failed.");
+  await userEvent.click(details.getByRole("button", { name: "Close details" }));
+  await userEvent.click(screen.getByRole("button", { name: "Close toast" }));
+  await expect.element(remainingAlert).not.toBeInTheDocument();
+});
+
+test("shares one notification viewport across multiple editable tables", async () => {
+  const renderEditableTable = (tableId: string) => (
+    <BrunoTableClient
+      tableId={tableId}
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.reject(new Error(`Failure for ${tableId}.`))}
+    />
+  );
+  const screen = await render(
+    <div>
+      {renderEditableTable("TABLE_ID_FAILURE_VIEWPORT_FIRST")}
+      {renderEditableTable("TABLE_ID_FAILURE_VIEWPORT_SECOND")}
+    </div>,
+  );
+
+  for (const tableId of ["TABLE_ID_FAILURE_VIEWPORT_FIRST", "TABLE_ID_FAILURE_VIEWPORT_SECOND"]) {
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), `${tableId}-value`);
+    await userEvent.keyboard("{Enter}");
+  }
+
+  const notificationRegions = screen.getByRole("region", { name: "Notifications" }).all();
+  expect(notificationRegions).toHaveLength(1);
+  const alerts = screen.getByRole("alert").all();
+  expect(alerts).toHaveLength(2);
+  await expect.element(alerts[0]!).toHaveTextContent("A save operation failed.");
 });
 
 test("does not reopen stale failure details when a later save fails", async () => {
@@ -689,7 +936,9 @@ test("does not reopen stale failure details when a later save fails", async () =
   await userEvent.keyboard("{Enter}");
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
   await userEvent.keyboard("{Enter}");
-  await expect.element(screen.getByRole("alert")).toHaveTextContent("Failure 1.");
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await userEvent.click(screen.getByRole("button", { name: "Operation details" }));
   const details = screen.getByRole("alertdialog", { name: "Save operation details" });
   await expect.element(details).toBeVisible();
@@ -703,7 +952,9 @@ test("does not reopen stale failure details when a later save fails", async () =
   await userEvent.keyboard("{Enter}");
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Ada");
   await userEvent.keyboard("{Enter}");
-  await expect.element(screen.getByRole("alert")).toHaveTextContent("Failure 2.");
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await expect.element(details).not.toBeInTheDocument();
 });
 
@@ -731,7 +982,7 @@ test("normalizes a synchronous save throw and releases Immediate locks", async (
 
   await expect
     .element(screen.getByRole("alert"))
-    .toHaveTextContent("The save handler threw synchronously.");
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await expect
     .element(grid.getByRole("gridcell", { name: "Ada", exact: true }))
     .not.toHaveAttribute("aria-busy");
@@ -765,7 +1016,7 @@ test("contains a hostile rejection message and still releases Immediate locks", 
 
   await expect
     .element(screen.getByRole("alert"))
-    .toHaveTextContent("The save could not be confirmed.");
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await expect
     .element(grid.getByRole("gridcell", { name: "Ada", exact: true }))
     .not.toHaveAttribute("aria-busy");
@@ -793,7 +1044,7 @@ test("clears Batch rejection presentation and notification on Reset", async () =
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await expect
     .element(screen.getByRole("alert"))
-    .toHaveTextContent("Batch save was not confirmed.");
+    .toHaveTextContent("Open Operation details for the complete explanation.");
 
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
   const resetDialog = screen.getByRole("alertdialog", { name: "Reset Review" });
@@ -867,7 +1118,9 @@ test("clears only an ambiguous failure whose submitted values later converge", a
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
   await userEvent.keyboard("{Enter}");
 
-  await expect.element(screen.getByRole("alert")).toHaveTextContent("Save outcome is unknown.");
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Open Operation details for the complete explanation.");
   await expect
     .element(grid.getByRole("gridcell", { name: "Ada", exact: true }))
     .toHaveAttribute("data-bruno-save-failed");
@@ -1056,10 +1309,18 @@ test("keeps concurrent same-row Immediate operations isolated by Cell Identity",
       changes: [{ columnId: "COL_ID_LAST", field: "last", before: "Lovelace", after: "Byron" }],
     },
   ]);
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("2 Immediate saves pending");
 
   settlements[0]!.resolve();
   await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
   await expect.element(grid.getByRole("gridcell", { name: "Byron", exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent(
+      "1 Immediate save pending · 1 Immediate save accepted · waiting for live confirmation",
+    );
   await expect.element(screen.getByRole("switch", { name: "Batch editing" })).toBeDisabled();
 
   const firstConfirmed = [{ id: "ada", first: "Augusta", last: "Lovelace", revision: 2n }] as const;

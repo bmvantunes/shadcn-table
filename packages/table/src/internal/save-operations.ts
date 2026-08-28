@@ -43,7 +43,8 @@ type SaveOperationRecord = {
   readonly kind: SaveOperationKind;
   changeSet: BrunoTableCellEditSaveChangeSet | undefined;
   readonly actor: ReturnType<typeof createSaveOperationActor>;
-  readonly releaseSaveWork: () => void;
+  releaseSaveWork: (() => void) | undefined;
+  releasePromiseReferences: (() => void) | undefined;
   unsubscribeReconciliation: (() => void) | undefined;
 };
 
@@ -116,7 +117,12 @@ export class BrunoTableSaveOperationRuntime {
     this.unregisterImmediate = undefined;
     for (const operation of this.operations.values()) {
       operation.unsubscribeReconciliation?.();
-      operation.releaseSaveWork();
+      operation.unsubscribeReconciliation = undefined;
+      operation.changeSet = undefined;
+      operation.releasePromiseReferences?.();
+      operation.releasePromiseReferences = undefined;
+      operation.releaseSaveWork?.();
+      operation.releaseSaveWork = undefined;
       this.cellEdit.completeSaveOperation(operation.operationId);
       operation.actor.stop();
     }
@@ -147,6 +153,7 @@ export class BrunoTableSaveOperationRuntime {
       changeSet,
       actor: createSaveOperationActor(),
       releaseSaveWork,
+      releasePromiseReferences: undefined,
       unsubscribeReconciliation: undefined,
     };
     this.operations.set(operationId, operation);
@@ -160,13 +167,35 @@ export class BrunoTableSaveOperationRuntime {
       this.rejectOperation(operation, error);
       return;
     }
+    const settlement: {
+      runtime: BrunoTableSaveOperationRuntime | undefined;
+      operation: SaveOperationRecord | undefined;
+    } = { runtime: this, operation };
+    operation.releasePromiseReferences = () => {
+      settlement.runtime = undefined;
+      settlement.operation = undefined;
+    };
     void Promise.resolve(result).then(
-      () => this.resolveOperation(operation),
-      (error: unknown) => this.rejectOperation(operation, error),
+      () => {
+        const runtime = settlement.runtime;
+        const retainedOperation = settlement.operation;
+        if (runtime !== undefined && retainedOperation !== undefined) {
+          runtime.resolveOperation(retainedOperation);
+        }
+      },
+      (error: unknown) => {
+        const runtime = settlement.runtime;
+        const retainedOperation = settlement.operation;
+        if (runtime !== undefined && retainedOperation !== undefined) {
+          runtime.rejectOperation(retainedOperation, error);
+        }
+      },
     );
   };
 
   private readonly resolveOperation = (operation: SaveOperationRecord): void => {
+    operation.releasePromiseReferences?.();
+    operation.releasePromiseReferences = undefined;
     if (!this.active || this.operations.get(operation.operationId) !== operation) return;
     const changeSet = operation.changeSet;
     if (changeSet === undefined) return;
@@ -175,21 +204,17 @@ export class BrunoTableSaveOperationRuntime {
       if (operation.actor.getSnapshot().value !== "awaitingSource") return;
       this.cellEdit.acceptSave(operation.operationId, changeSet, operation.kind === "batch");
       operation.changeSet = undefined;
-      if (operation.kind === "batch") {
-        this.editMemory.setSaveWorkAwaitingSource(
-          operation.operationId,
-          this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
-        );
-      }
+      this.editMemory.setSaveWorkAwaitingSource(
+        operation.operationId,
+        this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
+      );
     });
     if (operation.actor.getSnapshot().value !== "awaitingSource") return;
     const reconcile = (): void => {
-      if (operation.kind === "batch") {
-        this.editMemory.setSaveWorkAwaitingSource(
-          operation.operationId,
-          this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
-        );
-      }
+      this.editMemory.setSaveWorkAwaitingSource(
+        operation.operationId,
+        this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
+      );
       if (this.cellEdit.getAcceptedOverlayCountForOperation(operation.operationId) > 0) return;
       this.reconcileOperation(operation, false);
     };
@@ -201,6 +226,8 @@ export class BrunoTableSaveOperationRuntime {
   };
 
   private readonly rejectOperation = (operation: SaveOperationRecord, reason: unknown): void => {
+    operation.releasePromiseReferences?.();
+    operation.releasePromiseReferences = undefined;
     if (!this.active || this.operations.get(operation.operationId) !== operation) return;
     const changeSet = operation.changeSet;
     if (changeSet === undefined) return;
@@ -211,7 +238,8 @@ export class BrunoTableSaveOperationRuntime {
       operation.changeSet = undefined;
       this.editMemory.recordSaveFailure(operation.operationId, reason, changeSet);
       this.cellEdit.completeSaveOperation(operation.operationId);
-      operation.releaseSaveWork();
+      operation.releaseSaveWork?.();
+      operation.releaseSaveWork = undefined;
     });
     if (operation.actor.getSnapshot().value !== "rejected") return;
     this.publishCapacityAvailability();
@@ -236,7 +264,8 @@ export class BrunoTableSaveOperationRuntime {
     operation.unsubscribeReconciliation = undefined;
     if (clearFailure) this.editMemory.clearSaveFailure(operation.operationId);
     this.cellEdit.completeSaveOperation(operation.operationId);
-    operation.releaseSaveWork();
+    operation.releaseSaveWork?.();
+    operation.releaseSaveWork = undefined;
     this.operations.delete(operation.operationId);
     this.publishCapacityAvailability();
     operation.actor.stop();

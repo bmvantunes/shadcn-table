@@ -12,11 +12,13 @@ import {
 import { Switch } from "@bruno/shadcn/switch";
 import { ScrollArea } from "@bruno/shadcn/scroll-area";
 import { createToastManager, Toaster } from "@bruno/shadcn/toast";
+import { Store } from "@tanstack/store";
 import {
   memo,
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
   useSyncExternalStore,
   type NamedExoticComponent,
@@ -27,6 +29,23 @@ import {
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
+
+const saveFailureToastManager = createToastManager();
+const saveFailureToasterOwners = new Set<string>();
+const saveFailureToasterOwnerStore = new Store<string | undefined>(undefined);
+
+function registerSaveFailureToasterOwner(ownerId: string): () => void {
+  saveFailureToasterOwners.add(ownerId);
+  if (saveFailureToasterOwnerStore.get() === undefined) {
+    saveFailureToasterOwnerStore.setState(() => ownerId);
+  }
+  return () => {
+    saveFailureToasterOwners.delete(ownerId);
+    if (saveFailureToasterOwnerStore.get() === ownerId) {
+      saveFailureToasterOwnerStore.setState(() => saveFailureToasterOwners.values().next().value);
+    }
+  };
+}
 
 type BrunoTableEditModeControlProps = Readonly<{
   readonly runtime: BrunoTableEditMemoryRuntime;
@@ -91,19 +110,32 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
     );
   if (status.validationCount > 0) statusParts.push(`${String(status.validationCount)} invalid`);
   if (pendingCount > 0) statusParts.push(`${String(pendingCount)} unsaved`);
+  const saveWorkParts: string[] = [];
+  if (saveWork.pendingImmediateCount > 0) {
+    saveWorkParts.push(
+      `${String(saveWork.pendingImmediateCount)} Immediate ${saveWork.pendingImmediateCount === 1 ? "save" : "saves"} pending`,
+    );
+  }
+  if (saveWork.awaitingImmediateCount > 0) {
+    saveWorkParts.push(
+      `${String(saveWork.awaitingImmediateCount)} Immediate ${saveWork.awaitingImmediateCount === 1 ? "save" : "saves"} accepted · waiting for live confirmation`,
+    );
+  }
+  if (saveWork.pendingBatchCount > 0) saveWorkParts.push("Batch save pending");
+  if (saveWork.awaitingBatchRowCount > 0) {
+    saveWorkParts.push(
+      `Batch save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`,
+    );
+  }
   return (
     <span aria-live="polite">
-      {saveWork.awaitingBatchRowCount > 0
-        ? `Save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`
-        : saveWork.pendingBatchCount > 0
-          ? "Saving changes"
-          : statusParts.length === 0
-            ? "No unsaved changes"
-            : status.blockedCount === 0 &&
-                status.validationCount === 0 &&
-                status.conflictCount === 0
-              ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
-              : statusParts.join(" · ")}
+      {saveWorkParts.length > 0
+        ? saveWorkParts.join(" · ")
+        : statusParts.length === 0
+          ? "No unsaved changes"
+          : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
+            ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
+            : statusParts.join(" · ")}
     </span>
   );
 });
@@ -261,21 +293,37 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
     runtime.getSaveFailureSnapshot,
     runtime.getSaveFailureSnapshot,
   );
-  const [toastManager] = useState(createToastManager);
+  const toasterOwnerId = useId();
+  const toastId = `${toasterOwnerId}-bruno-table-save-failure`;
+  const programmaticToastClose = useRef(false);
+  const toasterOwner = useSyncExternalStore(
+    (listener) => {
+      const subscription = saveFailureToasterOwnerStore.subscribe(listener);
+      return () => subscription.unsubscribe();
+    },
+    () => saveFailureToasterOwnerStore.get(),
+    () => saveFailureToasterOwnerStore.get(),
+  );
   const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
   const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
+  useEffect(() => registerSaveFailureToasterOwner(toasterOwnerId), [toasterOwnerId]);
   useEffect(() => {
     if (failure.count === 0) {
-      toastManager.close("bruno-table-save-failure");
+      programmaticToastClose.current = true;
+      saveFailureToastManager.close(toastId);
+      programmaticToastClose.current = false;
       return;
     }
-    toastManager.add({
-      id: "bruno-table-save-failure",
+    saveFailureToastManager.add({
+      id: toastId,
       title:
         failure.count === 1
           ? "A save operation failed."
           : `${String(failure.count)} save operations failed.`,
-      description: failure.messages.join(" "),
+      description:
+        failure.count === 1
+          ? "Open Operation details for the complete explanation."
+          : "Open Operation details for the complete explanations.",
       actionProps: {
         children: "Operation details",
         onClick: () => setDetailsFailureSignature(failureSignature),
@@ -284,14 +332,25 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
       priority: "high",
       type: "error",
       onClose: () => {
+        if (programmaticToastClose.current) return;
         setDetailsFailureSignature(undefined);
         runtime.dismissSaveFailures();
       },
     });
-  }, [failure, failureSignature, runtime, toastManager]);
+  }, [failure, failureSignature, runtime, toastId]);
+  useEffect(
+    () => () => {
+      programmaticToastClose.current = true;
+      saveFailureToastManager.close(toastId);
+      programmaticToastClose.current = false;
+    },
+    [toastId],
+  );
   return (
     <>
-      <Toaster toastManager={toastManager} timeout={0} />
+      {toasterOwner === toasterOwnerId ? (
+        <Toaster toastManager={saveFailureToastManager} timeout={0} />
+      ) : null}
       <AlertDialog
         open={failure.count > 0 && detailsFailureSignature === failureSignature}
         onOpenChange={(open) => setDetailsFailureSignature(open ? failureSignature : undefined)}

@@ -3515,3 +3515,19 @@ test("rejects a widened editable capability without onSaveEdits at runtime", asy
     "BrunoTable editable Client Tables require onSaveEdits.",
   );
 });
+
+test("rejects a widened editable capability without getRowVersion at runtime", async () => {
+  const invalidProps = {
+    tableId: "TABLE_ID_CELL_EDIT_MISSING_ROW_VERSION",
+    columns,
+    initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    clientSource: { rows, totalRows: rows.length, version: 1, status: "ready" },
+    getRowId: (row: Row) => row.id,
+    editable: true,
+    onSaveEdits: () => Promise.resolve(),
+  } as unknown as BrunoTableClientProps<Row, typeof columns, bigint>;
+
+  await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
+    "BrunoTable editable Client Tables require getRowVersion.",
+  );
+});

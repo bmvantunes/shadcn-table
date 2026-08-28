@@ -1,4 +1,5 @@
 import { batch, Store } from "@tanstack/store";
+import { Debouncer } from "@tanstack/react-pacer";
 import { assign, createActor, createMachine } from "xstate";
 
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
@@ -279,6 +280,7 @@ type CanonicalSourceValue =
 
 type SubmittedValueAuthority = Readonly<{
   readonly field: string;
+  readonly presentationColumn?: CompiledFieldColumn;
   readonly decodeRuntime: (input: unknown) => CanonicalSourceValue;
   readonly equivalent: (left: unknown, right: unknown) => boolean;
 }>;
@@ -1265,6 +1267,7 @@ export type BrunoTableCellEditProjection = Readonly<{
   readonly saveSucceeded?: boolean;
   readonly draft?: unknown;
   readonly acceptedOverlay?: unknown;
+  readonly acceptedOverlayPresentationColumn?: CompiledFieldColumn;
 }>;
 export type BrunoTableCellEditMovement =
   | "enter-forward"
@@ -1362,12 +1365,15 @@ export class BrunoTableCellEditRuntime {
   private readonly rejectedOperationIdsByRowId = new Map<string, Set<string>>();
   private readonly rejectedBatchOperationIds = new Set<string>();
   private readonly rejectedCellKeys = new Map<string, Set<string>>();
-  private readonly rejectedCellPresentationTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
+  private readonly rejectedCellPresentationDeadlinesByOperation = new Map<string, number>();
   private readonly successFlashOperationByKey = new Map<string, string>();
-  private readonly successFlashTimersByKey = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly successFlashDeadlinesByKey = new Map<string, number>();
+  private readonly cellPresentationDeadlineQueue = new Debouncer(
+    () => this.expireCellPresentationDeadlines(),
+    {
+      wait: () => this.getCellPresentationDeadlineWait(),
+    },
+  );
   private readonly saveLockedCellKeys = new Map<string, string>();
   private readonly saveLockedCellKeysByOperationRow = new Map<string, Map<string, Set<string>>>();
   private readonly batchSaveOperationIds = new Set<string>();
@@ -1493,9 +1499,7 @@ export class BrunoTableCellEditRuntime {
         return;
       }
       this.cellSubscriberCounts.delete(key);
-      if (this.activeCellKey !== key && !this.hasSaveCellProjection(rowId, columnId)) {
-        this.cellStores.delete(key);
-      }
+      if (this.activeCellKey !== key) this.cellStores.delete(key);
     };
   };
 
@@ -1656,6 +1660,31 @@ export class BrunoTableCellEditRuntime {
       this.publishDraftReview(drafts, new Set(conflicts.keys()));
       this.publishActivitySnapshot();
       for (const key of conflicts.keys()) this.publishCell(key, drafts);
+    });
+    this.publishTraversalInvalidation();
+  };
+
+  private readonly clearConflictEvidence = (keys: ReadonlySet<string>): void => {
+    if (keys.size === 0) return;
+    const drafts = new Map(this.draftStore.get());
+    let undoStack = this.undoStack;
+    let redoStack = this.redoStack;
+    const clearConflict = (entry: DraftEntry | undefined): DraftEntry | undefined => {
+      if (entry?.conflict === undefined) return entry;
+      const { conflict: _conflict, ...retained } = entry;
+      return Object.freeze(retained);
+    };
+    for (const key of keys) {
+      const draft = clearConflict(drafts.get(key));
+      if (draft !== undefined) drafts.set(key, draft);
+      undoStack = transformDraftHistoryCell(undoStack, key, clearConflict);
+      redoStack = transformDraftHistoryCell(redoStack, key, clearConflict);
+    }
+    batch(() => {
+      this.setDraftMemory(drafts, undoStack, redoStack, keys);
+      this.publishDraftReview(drafts, keys);
+      this.publishActivitySnapshot();
+      for (const key of keys) this.publishCell(key, drafts);
     });
     this.publishTraversalInvalidation();
   };
@@ -1904,18 +1933,14 @@ export class BrunoTableCellEditRuntime {
       for (const [evictedOperationId, evictedEvidence] of evicted) {
         this.removeRejectedOperationRows(evictedOperationId, evictedEvidence.keys());
         this.rejectedBatchOperationIds.delete(evictedOperationId);
-        const timer = this.rejectedCellPresentationTimers.get(evictedOperationId);
-        if (timer !== undefined) clearTimeout(timer);
-        this.rejectedCellPresentationTimers.delete(evictedOperationId);
+        this.rejectedCellPresentationDeadlinesByOperation.delete(evictedOperationId);
         this.rejectedOperationStores.get(evictedOperationId)?.setState(() => false);
       }
       this.rejectedOperationStores.get(operationId)?.setState(() => true);
     });
     if (immediateOperation) {
-      this.rejectedCellPresentationTimers.set(
-        operationId,
-        setTimeout(() => this.clearRejectedCellPresentation(operationId), 5_000),
-      );
+      this.rejectedCellPresentationDeadlinesByOperation.set(operationId, Date.now() + 5_000);
+      this.scheduleCellPresentationDeadline();
     }
     if (!immediateOperation) {
       for (const key of affectedKeys) this.publishCell(key, this.draftStore.get());
@@ -2631,6 +2656,7 @@ export class BrunoTableCellEditRuntime {
   ): SubmittedValueAuthority =>
     Object.freeze({
       field: column.field,
+      presentationColumn: column,
       decodeRuntime: (input: unknown): CanonicalSourceValue => {
         if (input === null || input === undefined) {
           return Object.freeze({ _tag: "Success", value: input });
@@ -2732,10 +2758,9 @@ export class BrunoTableCellEditRuntime {
     this.rejectedOperationIdsByRowId.clear();
     this.rejectedBatchOperationIds.clear();
     this.rejectedCellKeys.clear();
-    for (const timer of this.rejectedCellPresentationTimers.values()) clearTimeout(timer);
-    this.rejectedCellPresentationTimers.clear();
-    for (const timer of this.successFlashTimersByKey.values()) clearTimeout(timer);
-    this.successFlashTimersByKey.clear();
+    this.rejectedCellPresentationDeadlinesByOperation.clear();
+    this.cellPresentationDeadlineQueue.cancel();
+    this.successFlashDeadlinesByKey.clear();
     this.successFlashOperationByKey.clear();
     this.saveLockedCellKeys.clear();
     this.saveLockedCellKeysByOperationRow.clear();
@@ -3229,6 +3254,7 @@ export class BrunoTableCellEditRuntime {
           })(this.draftKeysByRowId, changedRowIds);
     for (const key of keys) {
       const draft = previousDrafts.get(key);
+      let reconciledDraft = draft;
       const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
       if (representative === undefined) continue;
       const row = this.getRow(representative.rowId);
@@ -3265,11 +3291,25 @@ export class BrunoTableCellEditRuntime {
           changedKeys.push(key);
           continue;
         }
+        if (
+          source._tag === "Success" &&
+          draft?.conflict !== undefined &&
+          safeEquivalentEditValue(column, draft.base, source.value) === true
+        ) {
+          const clearConflict = (entry: DraftEntry | undefined): DraftEntry | undefined => {
+            if (entry?.conflict === undefined) return entry;
+            const { conflict: _conflict, ...retained } = entry;
+            return Object.freeze(retained);
+          };
+          reconciledDraft = clearConflict(draft);
+          nextUndoStack = transformDraftHistoryCell(nextUndoStack, key, clearConflict);
+          nextRedoStack = transformDraftHistoryCell(nextRedoStack, key, clearConflict);
+        }
         if (source._tag !== "Success" || !isDraftEditable(column, row, representative.mine)) {
           blockedReason = BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
         }
       }
-      const nextDraft = setDraftBlockedReason(draft, blockedReason);
+      const nextDraft = setDraftBlockedReason(reconciledDraft, blockedReason);
       const transformedUndo = transformDraftHistoryCell(nextUndoStack, key, (entry) =>
         setDraftBlockedReason(entry, blockedReason),
       );
@@ -3421,6 +3461,12 @@ export class BrunoTableCellEditRuntime {
             ...(saveFailed ? { saveFailed: true } : {}),
             ...(saveSucceeded ? { saveSucceeded: true } : {}),
             acceptedOverlay: acceptedOverlayEntry.after,
+            ...(acceptedOverlayEntry.valueAuthority.presentationColumn === undefined
+              ? {}
+              : {
+                  acceptedOverlayPresentationColumn:
+                    acceptedOverlayEntry.valueAuthority.presentationColumn,
+                }),
           })
         : draft === undefined && !savePending && !saveFailed && !saveSucceeded
           ? IDLE_CELL
@@ -3448,7 +3494,16 @@ export class BrunoTableCellEditRuntime {
       ...(draft === undefined ? {} : { draft: draft.mine }),
       ...(acceptedOverlayEntry === undefined
         ? {}
-        : { hasAcceptedOverlay: true, acceptedOverlay: acceptedOverlayEntry.after }),
+        : {
+            hasAcceptedOverlay: true,
+            acceptedOverlay: acceptedOverlayEntry.after,
+            ...(acceptedOverlayEntry.valueAuthority.presentationColumn === undefined
+              ? {}
+              : {
+                  acceptedOverlayPresentationColumn:
+                    acceptedOverlayEntry.valueAuthority.presentationColumn,
+                }),
+          }),
       ...(savePending ? { savePending: true } : {}),
       ...(saveFailed ? { saveFailed: true } : {}),
       ...(saveSucceeded ? { saveSucceeded: true } : {}),
@@ -3482,7 +3537,8 @@ export class BrunoTableCellEditRuntime {
       previous.saveFailed === next.saveFailed &&
       previous.saveSucceeded === next.saveSucceeded &&
       Object.is(previous.draft, next.draft) &&
-      Object.is(previous.acceptedOverlay, next.acceptedOverlay)
+      Object.is(previous.acceptedOverlay, next.acceptedOverlay) &&
+      previous.acceptedOverlayPresentationColumn === next.acceptedOverlayPresentationColumn
     ) {
       return;
     }
@@ -3600,6 +3656,7 @@ export class BrunoTableCellEditRuntime {
     const changedKeys = new Set<string>();
     const changedOperationIds = new Set<string>();
     const conflicts = new Map<string, unknown>();
+    const clearedConflicts = new Set<string>();
     let changed = false;
     const operationIds =
       changedRowIds === undefined
@@ -3629,6 +3686,19 @@ export class BrunoTableCellEditRuntime {
             source._tag === "Success" &&
             safeEquivalentEditValues(entry.valueAuthority.equivalent, entry.after, source.value) ===
               true;
+          if (
+            !matches &&
+            this.rejectedBatchOperationIds.has(operationId) &&
+            source._tag === "Success" &&
+            safeEquivalentEditValues(
+              entry.valueAuthority.equivalent,
+              entry.before,
+              source.value,
+            ) === true &&
+            this.draftStore.get().get(cellKey(entry.rowId, entry.columnId))?.conflict !== undefined
+          ) {
+            clearedConflicts.add(cellKey(entry.rowId, entry.columnId));
+          }
           if (
             !matches &&
             this.rejectedBatchOperationIds.has(operationId) &&
@@ -3672,17 +3742,16 @@ export class BrunoTableCellEditRuntime {
       if (remainingByRow.size === 0) {
         next.delete(operationId);
         this.rejectedBatchOperationIds.delete(operationId);
-        const timer = this.rejectedCellPresentationTimers.get(operationId);
-        if (timer !== undefined) clearTimeout(timer);
-        this.rejectedCellPresentationTimers.delete(operationId);
+        this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
       } else {
         next.set(operationId, remainingByRow);
       }
       changedOperationIds.add(operationId);
       changed = true;
     }
+    if (clearedConflicts.size > 0) this.clearConflictEvidence(clearedConflicts);
     if (conflicts.size > 0) this.applyPreflightConflicts(conflicts);
-    if (!changed) return conflicts.size > 0;
+    if (!changed) return conflicts.size > 0 || clearedConflicts.size > 0;
     this.rejectedOperations = next;
     batch(() => {
       for (const operationId of changedOperationIds) {
@@ -3722,7 +3791,7 @@ export class BrunoTableCellEditRuntime {
   };
 
   private readonly clearRejectedCellPresentation = (operationId: string): void => {
-    this.rejectedCellPresentationTimers.delete(operationId);
+    this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
     const evidenceByRow = this.rejectedOperations.get(operationId);
     if (evidenceByRow === undefined) return;
     const changedKeys = new Set<string>();
@@ -3745,9 +3814,7 @@ export class BrunoTableCellEditRuntime {
     this.rejectedOperations = next;
     this.rejectedBatchOperationIds.delete(operationId);
     this.removeRejectedOperationRows(operationId, evidenceByRow.keys());
-    const timer = this.rejectedCellPresentationTimers.get(operationId);
-    if (timer !== undefined) clearTimeout(timer);
-    this.rejectedCellPresentationTimers.delete(operationId);
+    this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
     const changedKeys = new Set<string>();
     this.removeRejectedOperationCellKeys(
       operationId,
@@ -3792,9 +3859,7 @@ export class BrunoTableCellEditRuntime {
       else {
         next.delete(operationId);
         this.rejectedBatchOperationIds.delete(operationId);
-        const timer = this.rejectedCellPresentationTimers.get(operationId);
-        if (timer !== undefined) clearTimeout(timer);
-        this.rejectedCellPresentationTimers.delete(operationId);
+        this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
       }
       changedOperationIds.add(operationId);
     }
@@ -3810,26 +3875,60 @@ export class BrunoTableCellEditRuntime {
     for (const key of changedKeys) this.releaseUnusedCellStore(key);
   };
 
-  private readonly clearSuccessFlash = (
-    key: string,
-    timer: ReturnType<typeof setTimeout>,
-  ): void => {
-    if (this.successFlashTimersByKey.get(key) !== timer) return;
-    this.successFlashTimersByKey.delete(key);
-    this.successFlashOperationByKey.delete(key);
-    this.publishCell(key, this.draftStore.get());
-    this.releaseUnusedCellStore(key);
+  private readonly getCellPresentationDeadlineWait = (): number => {
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const deadline of this.rejectedCellPresentationDeadlinesByOperation.values()) {
+      earliest = Math.min(earliest, deadline);
+    }
+    for (const deadline of this.successFlashDeadlinesByKey.values()) {
+      earliest = Math.min(earliest, deadline);
+    }
+    return Number.isFinite(earliest) ? Math.max(0, earliest - Date.now()) : 0;
+  };
+
+  private readonly scheduleCellPresentationDeadline = (): void => {
+    if (
+      this.rejectedCellPresentationDeadlinesByOperation.size === 0 &&
+      this.successFlashDeadlinesByKey.size === 0
+    ) {
+      this.cellPresentationDeadlineQueue.cancel();
+      return;
+    }
+    this.cellPresentationDeadlineQueue.maybeExecute();
+  };
+
+  private readonly expireCellPresentationDeadlines = (): void => {
+    const now = Date.now();
+    const expiredRejectedOperations: string[] = [];
+    for (const [operationId, deadline] of this.rejectedCellPresentationDeadlinesByOperation) {
+      if (deadline <= now) expiredRejectedOperations.push(operationId);
+    }
+    for (const operationId of expiredRejectedOperations) {
+      this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
+      this.clearRejectedCellPresentation(operationId);
+    }
+    const expired: string[] = [];
+    for (const [key, deadline] of this.successFlashDeadlinesByKey) {
+      if (deadline <= now) expired.push(key);
+    }
+    batch(() => {
+      for (const key of expired) {
+        this.successFlashDeadlinesByKey.delete(key);
+        this.successFlashOperationByKey.delete(key);
+        this.publishCell(key, this.draftStore.get());
+      }
+    });
+    for (const key of expired) this.releaseUnusedCellStore(key);
+    this.scheduleCellPresentationDeadline();
   };
 
   private readonly startSuccessFlash = (operationId: string, keys: ReadonlySet<string>): void => {
     for (const key of keys) {
       if ((this.cellSubscriberCounts.get(key) ?? 0) === 0) continue;
       this.successFlashOperationByKey.set(key, operationId);
-      const existing = this.successFlashTimersByKey.get(key);
-      if (existing !== undefined) clearTimeout(existing);
-      const timer = setTimeout(() => this.clearSuccessFlash(key, timer), 2_000);
-      this.successFlashTimersByKey.set(key, timer);
+      this.successFlashDeadlinesByKey.set(key, Date.now() + 2_000);
     }
+    this.scheduleCellPresentationDeadline();
   };
 
   private readonly releaseUnusedCellStore = (key: string): void => {

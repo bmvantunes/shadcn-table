@@ -5406,23 +5406,63 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       : cellEdit?.hasSaveCellProjection(rowId, column.columnId) === true)
       ? cellEdit
       : undefined;
+  const editSubscriptionActive = useRef(false);
+  const editSnapshotCache = useRef<{
+    cellEdit: BrunoTableCellEditRuntime | undefined;
+    columnId: string;
+    initialized: boolean;
+    rowId: string;
+    snapshot: BrunoTableCellEditProjection;
+  }>({
+    cellEdit: undefined,
+    columnId: "",
+    initialized: false,
+    rowId: "",
+    snapshot: NO_CELL_EDIT_PROJECTION,
+  });
   const subscribeEdit = useMemo(
-    () =>
-      potentialCellEdit === undefined
-        ? (_listener: () => void) => () => undefined
-        : (listener: () => void) =>
-            potentialCellEdit.subscribeCell(rowId, column.columnId, listener),
+    () => (listener: () => void) => {
+      if (potentialCellEdit === undefined) {
+        editSubscriptionActive.current = false;
+        return () => undefined;
+      }
+      editSubscriptionActive.current = true;
+      const unsubscribe = potentialCellEdit.subscribeCell(rowId, column.columnId, listener);
+      return () => {
+        editSubscriptionActive.current = false;
+        unsubscribe();
+      };
+    },
     [potentialCellEdit, column.columnId, rowId],
   );
   const getEditSnapshot = useMemo(
-    () =>
-      potentialCellEdit === undefined
-        ? () => NO_CELL_EDIT_PROJECTION
-        : () => potentialCellEdit.getCellSnapshot(rowId, column.columnId),
+    () => () => {
+      const cache = editSnapshotCache.current;
+      const cacheMatches =
+        cache.cellEdit === potentialCellEdit &&
+        cache.columnId === column.columnId &&
+        cache.rowId === rowId;
+      if (!editSubscriptionActive.current && cache.initialized && cacheMatches) {
+        return cache.snapshot;
+      }
+      const snapshot =
+        potentialCellEdit === undefined
+          ? NO_CELL_EDIT_PROJECTION
+          : potentialCellEdit.getCellSnapshot(rowId, column.columnId);
+      editSnapshotCache.current = {
+        cellEdit: potentialCellEdit,
+        columnId: column.columnId,
+        initialized: true,
+        rowId,
+        snapshot,
+      };
+      return snapshot;
+    },
     [potentialCellEdit, column.columnId, rowId],
   );
   const edit = useSyncExternalStore(subscribeEdit, getEditSnapshot, getEditSnapshot);
-  const rowAware = cellPresentationUsesRawRow(column);
+  const effectivePresentationColumn = edit.acceptedOverlayPresentationColumn ?? column;
+  const rowAware = cellPresentationUsesRawRow(effectivePresentationColumn);
   const subscribe = useMemo(
     () => (listener: () => void) =>
       rowAware
@@ -5440,7 +5480,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
   const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot) : undefined;
-  const presentationColumn = snapshot.column;
+  const presentationColumn = edit.acceptedOverlayPresentationColumn ?? snapshot.column;
   const row = rowSnapshot?.row;
   const draftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(row) ? row : undefined;
   const subscribeDraftReview = useMemo(

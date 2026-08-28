@@ -59,6 +59,8 @@ export type BrunoTableSaveFailureSnapshot = Readonly<{
 export type BrunoTableSaveWorkSnapshot = Readonly<{
   readonly pendingBatchCount: number;
   readonly awaitingBatchRowCount: number;
+  readonly pendingImmediateCount: number;
+  readonly awaitingImmediateCount: number;
 }>;
 
 type EditWorkflowContext = Readonly<{
@@ -109,6 +111,8 @@ const NO_SAVE_FAILURES: BrunoTableSaveFailureSnapshot = Object.freeze({
 const NO_SAVE_WORK: BrunoTableSaveWorkSnapshot = Object.freeze({
   pendingBatchCount: 0,
   awaitingBatchRowCount: 0,
+  pendingImmediateCount: 0,
+  awaitingImmediateCount: 0,
 });
 const CLEAN_CELL_EDIT_ACTIVITY: BrunoTableCellEditActivitySnapshot = Object.freeze({
   activeEditor: false,
@@ -216,7 +220,7 @@ export class BrunoTableEditMemoryRuntime {
   private readonly saveWorkByOperation = new Map<
     string,
     Readonly<{
-      readonly kind: "batch";
+      readonly kind: "batch" | "immediate";
       readonly phase: "pending" | "awaiting-source";
       readonly remainingRows: number;
     }>
@@ -261,6 +265,7 @@ export class BrunoTableEditMemoryRuntime {
     this.immediateSaveCommand = undefined;
     this.conflictReviewCommand = undefined;
     this.gridFocusCommand = undefined;
+    this.cellEdit = undefined;
     if (this.resetFocusFrame !== undefined) cancelAnimationFrame(this.resetFocusFrame);
     this.resetFocusFrame = undefined;
     this.modeStore.setState(() => INITIAL_MODE_SNAPSHOT);
@@ -288,7 +293,11 @@ export class BrunoTableEditMemoryRuntime {
       this.unregisterResetControls.set(element, runtime.registerResetControl(element));
     }
     runtime.setBatchHistoryEnabled(this.modeStore.get().mode === "batch");
-    const reconcile = (): void => this.reconcileCellEditActivity(runtime.getActivitySnapshot());
+    const reconcile = (): void => {
+      if (this.cellEdit === runtime) {
+        this.reconcileCellEditActivity(runtime.getActivitySnapshot());
+      }
+    };
     reconcile();
     const unsubscribe = runtime.subscribeActivity(reconcile);
     return () => {
@@ -526,7 +535,7 @@ export class BrunoTableEditMemoryRuntime {
     kind: "batch" | "immediate" = "immediate",
   ): (() => void) => {
     this.activeSaveWorkCount += 1;
-    if (operationId !== undefined && kind === "batch") {
+    if (operationId !== undefined) {
       this.saveWorkByOperation.set(
         operationId,
         Object.freeze({ kind, phase: "pending", remainingRows: 0 }),
@@ -539,11 +548,7 @@ export class BrunoTableEditMemoryRuntime {
       if (!active) return;
       active = false;
       this.activeSaveWorkCount = Math.max(0, this.activeSaveWorkCount - 1);
-      if (
-        operationId !== undefined &&
-        kind === "batch" &&
-        this.saveWorkByOperation.delete(operationId)
-      ) {
+      if (operationId !== undefined && this.saveWorkByOperation.delete(operationId)) {
         this.publishSaveWork();
       }
       if (this.activeSaveWorkCount === 0 && this.actorActive) {
@@ -557,11 +562,11 @@ export class BrunoTableEditMemoryRuntime {
     remainingRows: number,
   ): void => {
     const operation = this.saveWorkByOperation.get(operationId);
-    if (operation?.kind !== "batch") return;
+    if (operation === undefined) return;
     this.saveWorkByOperation.set(
       operationId,
       Object.freeze({
-        kind: "batch",
+        kind: operation.kind,
         phase: "awaiting-source",
         remainingRows: Math.max(0, remainingRows),
       }),
@@ -776,17 +781,31 @@ export class BrunoTableEditMemoryRuntime {
   private readonly publishSaveWork = (): void => {
     let pendingBatchCount = 0;
     let awaitingBatchRowCount = 0;
+    let pendingImmediateCount = 0;
+    let awaitingImmediateCount = 0;
     for (const operation of this.saveWorkByOperation.values()) {
-      if (operation.phase === "pending") pendingBatchCount += 1;
-      else awaitingBatchRowCount += operation.remainingRows;
+      if (operation.kind === "batch") {
+        if (operation.phase === "pending") pendingBatchCount += 1;
+        else awaitingBatchRowCount += operation.remainingRows;
+      } else if (operation.phase === "pending") pendingImmediateCount += 1;
+      else awaitingImmediateCount += 1;
     }
     const previous = this.saveWorkStore.get();
     if (
       previous.pendingBatchCount === pendingBatchCount &&
-      previous.awaitingBatchRowCount === awaitingBatchRowCount
+      previous.awaitingBatchRowCount === awaitingBatchRowCount &&
+      previous.pendingImmediateCount === pendingImmediateCount &&
+      previous.awaitingImmediateCount === awaitingImmediateCount
     ) {
       return;
     }
-    this.saveWorkStore.setState(() => Object.freeze({ pendingBatchCount, awaitingBatchRowCount }));
+    this.saveWorkStore.setState(() =>
+      Object.freeze({
+        pendingBatchCount,
+        awaitingBatchRowCount,
+        pendingImmediateCount,
+        awaitingImmediateCount,
+      }),
+    );
   };
 }
