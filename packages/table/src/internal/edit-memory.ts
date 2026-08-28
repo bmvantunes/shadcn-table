@@ -491,6 +491,8 @@ export class BrunoTableEditMemoryRuntime {
       !this.actor.getSnapshot().context.saveWorkActive &&
       mode === "batch" &&
       draftCount > 0 &&
+      !this.cellEditActivity.activeEditor &&
+      !this.cellEditActivity.activeCandidatePending &&
       blockedCount === 0 &&
       this.cellEditActivity.validationCount === 0;
     if (this.canSaveStore.get() !== canSave) this.canSaveStore.setState(() => canSave);

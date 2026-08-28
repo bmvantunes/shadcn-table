@@ -1234,11 +1234,13 @@ export class BrunoTableCellEditRuntime {
       previous.nativeInvalid === next.nativeInvalid
     )
       return;
-    this.candidateStore.setState(() => next);
-    this.publishActivitySnapshot();
-    if (this.activeCellKey !== undefined) {
-      this.publishDraftReview(this.draftStore.get(), new Set([this.activeCellKey]));
-    }
+    batch(() => {
+      this.candidateStore.setState(() => next);
+      this.publishActivitySnapshot();
+      if (this.activeCellKey !== undefined) {
+        this.publishDraftReview(this.draftStore.get(), new Set([this.activeCellKey]));
+      }
+    });
   };
 
   public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
@@ -1579,10 +1581,11 @@ export class BrunoTableCellEditRuntime {
       this.publishDraftReview(nextDrafts, new Set(affectedKeys));
       this.publishActivitySnapshot();
       for (const key of affectedKeys) {
-        this.invalidateDraftCell(key);
+        this.invalidateDraftCell(key, false);
         this.publishCell(key, nextDrafts);
       }
     });
+    if (affectedKeys.length > 0) this.publishTraversalInvalidation();
     for (const key of affectedKeys) this.releaseUnusedCellStore(key);
     return previousDrafts.size;
   };

@@ -68,6 +68,13 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.requestSave()).toBe(true);
     expect(save).toHaveBeenCalledOnce();
 
+    expect(cellEdit.start(row.id, "COL_ID_VALUE")).toBe(true);
+    expect(memory.getCanSaveSnapshot()).toBe(false);
+    cellEdit.updateActiveCandidate("pending", false);
+    expect(memory.getCanSaveSnapshot()).toBe(false);
+    expect(cellEdit.cancel()).toBe(true);
+    expect(memory.getCanSaveSnapshot()).toBe(true);
+
     expect(
       cellEdit.applyAcceptedDraftGesture([
         {

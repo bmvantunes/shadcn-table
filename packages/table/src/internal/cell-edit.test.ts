@@ -386,6 +386,22 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribeMembership();
   });
 
+  it("publishes coherent candidate activity and Reset Review evidence in one batch", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    const unsubscribeReview = runtime.subscribeDraftReview(vi.fn());
+    const observedCandidateText: Array<string | undefined> = [];
+    const unsubscribeActivity = runtime.subscribeActivity(() => {
+      observedCandidateText.push(runtime.getDraftReviewSnapshot()[0]?.candidateText);
+    });
+
+    runtime.updateActiveCandidate("7", false);
+
+    expect(observedCandidateText).toEqual(["7"]);
+    unsubscribeActivity();
+    unsubscribeReview();
+  });
+
   it("refreshes observed Reset Review rows after compatible presentation changes", () => {
     type TextRow = Readonly<{ readonly id: string; readonly value: string }>;
     const source: TextRow = Object.freeze({ id: "row", value: "server" });
@@ -454,6 +470,45 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.subscribeTraversalInvalidation(listener);
 
     runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("publishes one traversal invalidation when resetting multiple drafts", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    const listener = vi.fn();
+    runtime.subscribeTraversalInvalidation(listener);
+
+    expect(runtime.resetAllDrafts()).toBe(2);
 
     expect(listener).toHaveBeenCalledOnce();
   });
