@@ -27,6 +27,7 @@ const rows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
 
 test.afterEach(async () => {
   await cleanup();
+  vi.restoreAllMocks();
 });
 
 test("starts in Immediate mode with a persistent clean Edit Safety Footer", async () => {
@@ -43,9 +44,10 @@ test("starts in Immediate mode with a persistent clean Edit Safety Footer", asyn
     />,
   );
 
-  const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
+  const batchEditing = screen.getByRole("switch", { name: "Batch editing", exact: true });
   await expect.element(batchEditing).not.toBeChecked();
   await expect.element(batchEditing).toBeEnabled();
+  expect(batchEditing.element()).not.toHaveAttribute("aria-describedby");
   await expect.element(screen.getByRole("region", { name: "Edit safety" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeDisabled();
   await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
@@ -81,7 +83,7 @@ test("blocks Edit Mode changes while an editor or committed draft owns work", as
       onSaveEdits={vi.fn(() => Promise.resolve())}
     />,
   );
-  const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
+  const batchEditing = screen.getByRole("switch", { name: "Batch editing", exact: true });
 
   await userEvent.click(batchEditing);
   await expect.element(batchEditing).toBeChecked();
@@ -91,6 +93,11 @@ test("blocks Edit Mode changes while an editor or committed draft owns work", as
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).toHaveFocus();
   await expect.element(batchEditing).toBeDisabled();
+  const modeDescriptionId = batchEditing.element().getAttribute("aria-describedby");
+  expect(modeDescriptionId).toBeTruthy();
+  expect(document.getElementById(modeDescriptionId ?? "")?.textContent).toContain(
+    "Finish or reset current edit work",
+  );
 
   await userEvent.keyboard("{Escape}");
   await expect.element(batchEditing).toBeEnabled();
@@ -110,6 +117,46 @@ test("blocks Edit Mode changes while an editor or committed draft owns work", as
   ).toHaveTextContent("1 unsaved change");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
   await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("captures Row Version evidence through the latest extractor", async () => {
+  const initialExtractor = vi.fn((_row: Row) => 1n);
+  const latestExtractor = vi.fn((_row: Row) => 2n);
+  const save = vi.fn(() => Promise.resolve());
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_LATEST_ROW_VERSION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={initialExtractor}
+      onSaveEdits={save}
+    />,
+  );
+
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_LATEST_ROW_VERSION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={latestExtractor}
+      onSaveEdits={save}
+    />,
+  );
+
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_LATEST_ROW_VERSION" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  expect(initialExtractor).not.toHaveBeenCalled();
+  expect(latestExtractor).toHaveBeenCalledWith(rows[0]);
 });
 
 test("reviews pending work before Reset and changes nothing until confirmation", async () => {
@@ -136,7 +183,8 @@ test("reviews pending work before Reset and changes nothing until confirmation",
 
   const reset = screen.getByRole("button", { name: "Reset edits" });
   await userEvent.click(reset);
-  await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
+  const reviewDialog = screen.getByRole("alertdialog", { name: "Reset Review" });
+  await expect.element(reviewDialog).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Keep Editing" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Reset All Changes" })).toBeVisible();
   const resetAll = screen.getByRole("button", { name: "Reset All Changes" });
@@ -145,9 +193,7 @@ test("reviews pending work before Reset and changes nothing until confirmation",
   expect(document.getElementById(resetDescriptionId ?? "")?.textContent).toContain(
     "1 pending changed cell",
   );
-  const reviewGrid = screen.getByRole("grid", {
-    name: "Data for TABLE_ID_RESET_REVIEW:reset-review",
-  });
+  const reviewGrid = reviewDialog.getByRole("grid");
   await expect.element(reviewGrid).toBeVisible();
   await expect
     .element(reviewGrid.getByRole("gridcell", { name: "Ada", exact: true }))
@@ -158,6 +204,14 @@ test("reviews pending work before Reset and changes nothing until confirmation",
   await expect
     .element(reviewGrid.getByRole("gridcell", { name: "Draft", exact: true }))
     .toBeVisible();
+  for (const headerName of ["Server now", "Yours", "Status"] as const) {
+    await expect
+      .element(reviewGrid.getByRole("button", { name: `Sort by ${headerName}` }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(reviewGrid.getByRole("button", { name: `Filter ${headerName}` }))
+      .not.toBeInTheDocument();
+  }
 
   const updatedRows = [{ id: "ada", name: "Adele", revision: 2n }] as const;
   await screen.rerender(
@@ -181,14 +235,19 @@ test("reviews pending work before Reset and changes nothing until confirmation",
     .element(reviewGrid.getByRole("gridcell", { name: "Adele", exact: true }))
     .toBeVisible();
 
-  await userEvent.click(screen.getByRole("button", { name: "Keep Editing" }));
+  (screen.getByRole("button", { name: "Keep Editing" }).element() as HTMLButtonElement).click();
   await expect
     .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
     .not.toBeInTheDocument();
   await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
 
   await userEvent.click(reset);
-  await userEvent.click(screen.getByRole("button", { name: "Reset All Changes" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+    .not.toBeInTheDocument();
   await expect.element(grid).toHaveFocus();
   await expect.element(grid.getByRole("gridcell", { name: "Adele", exact: true })).toBeVisible();
   expect(
@@ -231,14 +290,19 @@ test("reviews and resets a lone invalid active candidate", async () => {
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "invalid candidate");
   await userEvent.keyboard("{Enter}");
 
+  expect(
+    screen
+      .getByRole("region", { name: "Edit safety" })
+      .element()
+      .querySelector('[aria-live="polite"]'),
+  ).toHaveTextContent("1 invalid · 1 unsaved");
+
   const reset = screen.getByRole("button", { name: "Reset edits" });
   await expect.element(reset).toBeEnabled();
   await userEvent.click(reset);
   const review = screen.getByRole("alertdialog", { name: "Reset Review" });
   await expect.element(review).toBeVisible();
-  const reviewGrid = screen.getByRole("grid", {
-    name: "Data for TABLE_ID_RESET_ACTIVE_CANDIDATE:reset-review",
-  });
+  const reviewGrid = review.getByRole("grid");
   await expect
     .element(reviewGrid.getByRole("gridcell", { name: "invalid candidate", exact: true }))
     .toBeVisible();
@@ -254,10 +318,62 @@ test("reviews and resets a lone invalid active candidate", async () => {
   await userEvent.click(reset);
   await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
 
-  await userEvent.click(screen.getByRole("button", { name: "Reset All Changes" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
+  await expect.element(review).not.toBeInTheDocument();
   await expect.element(screen.getByRole("textbox", { name: "Edit Name" })).not.toBeInTheDocument();
   await expect.element(reset).toBeDisabled();
   await expect.element(grid.getByRole("gridcell", { name: "Ada", exact: true })).toBeVisible();
+});
+
+test("keeps Reset Review outside consumer Table Identity registration", async () => {
+  const identityErrors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const otherColumns = [
+    {
+      columnId: "COL_ID_ID",
+      field: "id",
+      headerName: "Identity",
+      valueType: "text",
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <>
+      <BrunoTableClient
+        tableId="TABLE_ID_IDENTITY_OWNER"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={vi.fn(() => Promise.resolve())}
+      />
+      <BrunoTableClient
+        tableId="TABLE_ID_IDENTITY_OWNER:reset-review"
+        columns={otherColumns}
+        initialOrderBy={[{ columnId: "COL_ID_ID", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+      />
+    </>,
+  );
+
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_IDENTITY_OWNER",
+    exact: true,
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
+
+  expect(identityErrors).not.toHaveBeenCalledWith(
+    expect.stringContaining('simultaneous use of tableId "TABLE_ID_IDENTITY_OWNER:reset-review"'),
+  );
 });
 
 test("Reset preserves the owning table's sorting and Row Selection state", async () => {
@@ -302,7 +418,13 @@ test("Reset preserves the owning table's sorting and Row Selection state", async
   await userEvent.keyboard("{Enter}");
 
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
-  await userEvent.click(screen.getByRole("button", { name: "Reset All Changes" }));
+  const resetAllChanges = screen.getByRole("button", { name: "Reset All Changes" });
+  await expect.element(resetAllChanges).toBeEnabled();
+  resetAllChanges.element().scrollIntoView({ block: "center" });
+  (resetAllChanges.element() as HTMLButtonElement).click();
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+    .not.toBeInTheDocument();
 
   await expect.element(screen.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();
   await expect
@@ -310,7 +432,14 @@ test("Reset preserves the owning table's sorting and Row Selection state", async
     .toHaveAttribute("aria-sort", "descending");
 });
 
-test("Reset Review reuses the source column's compiled presentation", async () => {
+test("Reset Review preserves authentic source rows for compiled presentation", async () => {
+  class PrototypeRow {
+    public constructor(
+      public readonly id: string,
+      public readonly name: string,
+      public readonly revision: bigint,
+    ) {}
+  }
   const formattedColumns = [
     {
       columnId: "COL_ID_NAME",
@@ -319,16 +448,26 @@ test("Reset Review reuses the source column's compiled presentation", async () =
       valueType: "text",
       cellAlign: "end",
       isEditable: true,
-      valueFormatter: ({ value }: { readonly value: string }) => `Formatted ${value}`,
-      cellClassName: "source-highlight",
+      cellRenderer: ({ row, value }: { readonly row: PrototypeRow; readonly value: string }) =>
+        row instanceof PrototypeRow && row.name === value
+          ? `Rendered ${row.name}`
+          : "Lost projection",
+      cellClassName: ({ row }: { readonly row: PrototypeRow }) =>
+        row instanceof PrototypeRow ? `source-highlight-${row.name}` : "lost-prototype",
     },
-  ] satisfies BrunoTableColumns<Row>;
+  ] satisfies BrunoTableColumns<PrototypeRow>;
+  const prototypeRows = [new PrototypeRow("ada", "Ada", 1n)] as const;
   const screen = await render(
     <BrunoTableClient
       tableId="TABLE_ID_RESET_PRESENTATION"
       columns={formattedColumns}
       initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      clientSource={{
+        rows: prototypeRows,
+        totalRows: prototypeRows.length,
+        version: 1,
+        status: "ready",
+      }}
       getRowId={(row) => row.id}
       editable
       getRowVersion={(row) => row.revision}
@@ -344,23 +483,115 @@ test("Reset Review reuses the source column's compiled presentation", async () =
   await userEvent.keyboard("{Enter}");
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
 
-  const review = screen.getByRole("grid", {
-    name: "Data for TABLE_ID_RESET_PRESENTATION:reset-review",
-  });
+  const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
   await expect
-    .element(review.getByRole("gridcell", { name: "Formatted Ada", exact: true }))
+    .element(review.getByRole("gridcell", { name: "Rendered Ada", exact: true }))
     .toBeVisible();
   await expect
-    .element(review.getByRole("gridcell", { name: "Formatted Augusta", exact: true }))
+    .element(review.getByRole("gridcell", { name: "Rendered Augusta", exact: true }))
     .toBeVisible();
   const serverValue = review
-    .getByRole("gridcell", { name: "Formatted Ada", exact: true })
+    .getByRole("gridcell", { name: "Rendered Ada", exact: true })
     .element()
     .closest<HTMLElement>("[role=gridcell]");
   expect(serverValue).not.toBeNull();
   expect(serverValue?.className).toContain("source-highlight");
   expect(serverValue?.className).toContain("text-end");
   expect(getComputedStyle(serverValue!).textAlign).toBe("end");
+  const mineValue = review
+    .getByRole("gridcell", { name: "Rendered Augusta", exact: true })
+    .element()
+    .closest<HTMLElement>("[role=gridcell]");
+  expect(mineValue?.className).toContain("source-highlight-Augusta");
+  expect(review.element().textContent).not.toContain("Lost projection");
+});
+
+test("Reset Review applies a row-aware source value formatter to Server and Yours", async () => {
+  const formatterColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      valueFormatter: ({ row, value }: { readonly row: Row; readonly value: string }) =>
+        row.name === value ? `Formatted ${row.name}` : "Mismatched projection",
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_FORMATTER"
+      columns={formatterColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing", exact: true }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RESET_FORMATTER" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+
+  const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
+  await expect
+    .element(review.getByRole("gridcell", { name: "Formatted Ada", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(review.getByRole("gridcell", { name: "Formatted Augusta", exact: true }))
+    .toBeVisible();
+  expect(review.element().textContent).not.toContain("Mismatched projection");
+});
+
+test("keeps consumer serverText and mineText fields on their configured presentation path", async () => {
+  type CollisionRow = Readonly<{
+    readonly id: string;
+    readonly serverText: string;
+    readonly mineText: string;
+  }>;
+  const collisionColumns = [
+    {
+      columnId: "COL_ID_SERVER_TEXT",
+      field: "serverText",
+      headerName: "Consumer Server Text",
+      valueType: "text",
+      cellAlign: "end",
+      cellClassName: "consumer-field",
+    },
+    {
+      columnId: "COL_ID_MINE_TEXT",
+      field: "mineText",
+      headerName: "Consumer Mine Text",
+      valueType: "text",
+      cellAlign: "end",
+      cellClassName: "consumer-field",
+    },
+  ] satisfies BrunoTableColumns<CollisionRow>;
+  const collisionRows = [
+    { id: "row", serverText: "server value", mineText: "mine value" },
+  ] as const;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CONSUMER_REVIEW_FIELD_NAMES"
+      columns={collisionColumns}
+      initialOrderBy={[{ columnId: "COL_ID_SERVER_TEXT", direction: "asc" }]}
+      clientSource={{ rows: collisionRows, totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+    />,
+  );
+
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CONSUMER_REVIEW_FIELD_NAMES" });
+  for (const value of ["server value", "mine value"] as const) {
+    const cell = grid.getByRole("gridcell", { name: value, exact: true }).element();
+    expect(cell.className).toContain("consumer-field");
+    expect(getComputedStyle(cell).textAlign).toBe("end");
+  }
 });
 
 test("keeps Reset Review modal focus contained and restores the opener in StrictMode", async () => {
@@ -412,11 +643,14 @@ test("keeps bounded Batch undo and redo local to the current unsaved session", a
   const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
   await userEvent.click(batchEditing);
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BATCH_HISTORY" });
+  expect(grid.element().getAttribute("aria-keyshortcuts")).not.toMatch(/Control\+Z|Meta\+Z/);
   grid.element().focus();
   await userEvent.keyboard("{Enter}");
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
   await userEvent.keyboard("{Enter}");
   await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
+  expect(grid.element().getAttribute("aria-keyshortcuts")).toMatch(/Control\+Z Meta\+Z/);
+  expect(grid.element().getAttribute("aria-keyshortcuts")).not.toMatch(/Control\+Shift\+Z/);
 
   grid.element().focus();
   await userEvent.keyboard(
@@ -430,6 +664,22 @@ test("keeps bounded Batch undo and redo local to the current unsaved session", a
       .querySelector('[aria-live="polite"]'),
   ).toHaveTextContent("No unsaved changes");
   await expect.element(batchEditing).toBeDisabled();
+  expect(grid.element().getAttribute("aria-keyshortcuts")).not.toMatch(/Control\+Z Meta\+Z/);
+  expect(grid.element().getAttribute("aria-keyshortcuts")).toMatch(/Control\+Shift\+Z/);
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_BATCH_HISTORY"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 2, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+  expect(grid.element().getAttribute("aria-keyshortcuts")).not.toMatch(/Control\+Z Meta\+Z/);
+  expect(grid.element().getAttribute("aria-keyshortcuts")).toMatch(/Control\+Shift\+Z/);
 
   await userEvent.keyboard(
     detectPlatform() === "mac"
@@ -451,7 +701,31 @@ test("keeps bounded Batch undo and redo local to the current unsaved session", a
   expect(screen.getByRole("button", { name: "Reset All Changes" }).element()).toHaveAttribute(
     "aria-describedby",
   );
-  await userEvent.click(screen.getByRole("button", { name: "Reset All Changes" }));
+  const historyDescriptionId = screen
+    .getByRole("button", { name: "Reset All Changes" })
+    .element()
+    .getAttribute("aria-describedby");
+  expect(document.getElementById(historyDescriptionId ?? "")?.textContent).toContain(
+    "1 Batch history command",
+  );
+  (screen.getByRole("button", { name: "Keep Editing" }).element() as HTMLButtonElement).click();
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+    .not.toBeInTheDocument();
+  grid.element().focus();
+  await userEvent.keyboard(
+    detectPlatform() === "mac"
+      ? "{Meta>}{Shift>}z{/Shift}{/Meta}"
+      : "{Control>}{Shift>}z{/Shift}{/Control}",
+  );
+  await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
   await expect.element(batchEditing).toBeEnabled();
 });
 
@@ -567,7 +841,8 @@ test("keeps Reset Review stable while live source convergence prunes drafts and 
       .element()
       .querySelector('[aria-live="polite"]'),
   ).toHaveTextContent("No unsaved changes");
-  await userEvent.click(screen.getByRole("button", { name: "Keep Editing" }));
+  (screen.getByRole("button", { name: "Keep Editing" }).element() as HTMLButtonElement).click();
+  await expect.element(grid).toHaveFocus();
   await expect.element(batchEditing).toBeEnabled();
 });
 
@@ -614,13 +889,17 @@ test("preserves missing-row drafts as blocked work and reconnects the same Row I
   await expect
     .element(
       screen
-        .getByRole("grid", { name: "Data for TABLE_ID_BLOCKED_DRAFT:reset-review" })
+        .getByRole("alertdialog", { name: "Reset Review" })
+        .getByRole("grid")
         .getByRole("gridcell", {
           name: "This row was removed from the server. Changes cannot be saved.",
         }),
     )
     .toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Keep Editing" }));
+  (screen.getByRole("button", { name: "Keep Editing" }).element() as HTMLButtonElement).click();
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+    .not.toBeInTheDocument();
 
   const returnedRows = [{ id: "ada", name: "Ada", revision: 3n }] as const;
   await screen.rerender(

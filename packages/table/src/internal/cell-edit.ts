@@ -10,6 +10,7 @@ import {
 } from "./cell-edit-traversal";
 
 type Listener = () => void;
+const brunoTableCellEditDraftReviewSources = new WeakSet<object>();
 
 export type BrunoTableCellEditChange = Readonly<{
   readonly rowId: string;
@@ -86,11 +87,7 @@ export function isBrunoTableCellEditDraftReviewSourceRow(
   value: unknown,
 ): value is BrunoTableCellEditDraftReviewSourceRow {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    Reflect.get(value, "kind") === "bruno-table-cell-edit-draft-review-source" &&
-    typeof Reflect.get(value, "getSnapshot") === "function" &&
-    typeof Reflect.get(value, "subscribe") === "function"
+    typeof value === "object" && value !== null && brunoTableCellEditDraftReviewSources.has(value)
   );
 }
 
@@ -1007,7 +1004,7 @@ export class BrunoTableCellEditRuntime {
   private readonly getCanonicalValue:
     | ((rowId: string, columnId: string) => CanonicalSourceValue)
     | undefined;
-  private readonly getRowVersion: ((row: object) => unknown) | undefined;
+  private getRowVersion: ((row: object) => unknown) | undefined;
   private canonicalSourceValueCache = new WeakMap<
     object,
     Map<unknown, Map<string, CanonicalSourceValue>>
@@ -1115,6 +1112,12 @@ export class BrunoTableCellEditRuntime {
   public readonly getActivitySnapshot = (): BrunoTableCellEditActivitySnapshot =>
     this.activityStore.get();
 
+  public readonly setRowVersionExtractor = (
+    getRowVersion: ((row: object) => unknown) | undefined,
+  ): void => {
+    this.getRowVersion = getRowVersion;
+  };
+
   public readonly subscribeActivity = (listener: Listener): (() => void) => {
     const subscription = this.activityStore.subscribe(listener);
     return () => subscription.unsubscribe();
@@ -1206,6 +1209,12 @@ export class BrunoTableCellEditRuntime {
       candidate.rawText !== session.initialText ||
       (candidate.kind === "blank" && session.initialText !== "")
     );
+  };
+
+  private readonly hasInvalidActiveCandidate = (): boolean => {
+    const session = this.actor.getSnapshot().context.session;
+    if (session === undefined || !this.hasActiveCandidateWork()) return false;
+    return session.invalidMessage !== undefined || this.candidateStore.get().nativeInvalid;
   };
 
   public readonly updateActiveCandidate = (
@@ -1846,6 +1855,13 @@ export class BrunoTableCellEditRuntime {
       (this.activeCellKey === undefined || !this.draftStore.get().has(this.activeCellKey))
         ? 1
         : 0);
+    const activeCandidateValidationCount =
+      activeCandidatePending &&
+      this.hasInvalidActiveCandidate() &&
+      (this.activeCellKey === undefined || !this.validationDraftKeys.has(this.activeCellKey))
+        ? 1
+        : 0;
+    validationCount += activeCandidateValidationCount;
     const previous = this.activityStore.get();
     if (
       previous.activeEditor === activeEditor &&
@@ -2050,6 +2066,7 @@ export class BrunoTableCellEditRuntime {
             return () => subscription.unsubscribe();
           },
         });
+        brunoTableCellEditDraftReviewSources.add(source);
         this.draftReviewRowsById.set(id, source);
         this.draftReviewRowStoresById.set(id, store);
         membershipChanged = true;
@@ -2085,7 +2102,17 @@ export class BrunoTableCellEditRuntime {
     const reviewVersion = this.draftReviewVersion;
     const canonical = this.readCanonicalSourceValue(draft.rowId, serverRow, column);
     const projectedSource = serverRow ?? draft.baseRow;
-    const projectedRow = Object.freeze({ ...projectedSource, [draft.field]: draft.mine });
+    const projectedRow = Object.freeze(
+      Object.create(Object.getPrototypeOf(projectedSource), {
+        ...Object.getOwnPropertyDescriptors(projectedSource),
+        [draft.field]: {
+          configurable: true,
+          enumerable: true,
+          value: draft.mine,
+          writable: true,
+        },
+      }) as object,
+    );
     const reviewRow: BrunoTableCellEditDraftReviewRow = Object.freeze({
       id,
       reviewVersion,
@@ -2441,20 +2468,23 @@ function reconcileDraftsForColumns(
     ) {
       continue;
     }
-    const decoded = nextColumn.semantics.decodeRuntime(draft.mine);
-    if (decoded._tag === "Failure") {
+    const decodedBase = nextColumn.semantics.decodeRuntime(draft.base);
+    const decodedMine = nextColumn.semantics.decodeRuntime(draft.mine);
+    if (decodedBase._tag === "Failure" || decodedMine._tag === "Failure") {
       nextDrafts ??= new Map(drafts);
       nextDrafts.delete(key);
       changedKeys.push(key);
       continue;
     }
-    if (Object.is(decoded.value, draft.mine)) continue;
+    if (Object.is(decodedBase.value, draft.base) && Object.is(decodedMine.value, draft.mine))
+      continue;
     nextDrafts ??= new Map(drafts);
     nextDrafts.set(
       key,
       Object.freeze({
         ...draft,
-        mine: decoded.value,
+        base: decodedBase.value,
+        mine: decodedMine.value,
       }),
     );
     changedKeys.push(key);

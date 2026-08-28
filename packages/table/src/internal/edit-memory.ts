@@ -19,6 +19,7 @@ export type BrunoTableEditModeSnapshot = Readonly<{
 export type BrunoTableResetReviewSnapshot = Readonly<{
   readonly open: boolean;
   readonly pendingCount: number;
+  readonly historyCount: number;
   readonly canResetAll: boolean;
 }>;
 
@@ -27,6 +28,11 @@ export type BrunoTableEditSafetyStatusSnapshot = Readonly<{
   readonly blockedCount: number;
   readonly validationCount: number;
   readonly conflictCount: number;
+}>;
+
+export type BrunoTableEditHotkeyAvailabilitySnapshot = Readonly<{
+  readonly undo: boolean;
+  readonly redo: boolean;
 }>;
 
 type EditWorkflowContext = Readonly<{
@@ -54,6 +60,7 @@ const INITIAL_MODE_SNAPSHOT: BrunoTableEditModeSnapshot = Object.freeze({
 const CLOSED_RESET_REVIEW: BrunoTableResetReviewSnapshot = Object.freeze({
   open: false,
   pendingCount: 0,
+  historyCount: 0,
   canResetAll: false,
 });
 const CLEAN_EDIT_SAFETY_STATUS: BrunoTableEditSafetyStatusSnapshot = Object.freeze({
@@ -61,6 +68,10 @@ const CLEAN_EDIT_SAFETY_STATUS: BrunoTableEditSafetyStatusSnapshot = Object.free
   blockedCount: 0,
   validationCount: 0,
   conflictCount: 0,
+});
+const NO_EDIT_HOTKEYS: BrunoTableEditHotkeyAvailabilitySnapshot = Object.freeze({
+  undo: false,
+  redo: false,
 });
 const CLEAN_CELL_EDIT_ACTIVITY: BrunoTableCellEditActivitySnapshot = Object.freeze({
   activeEditor: false,
@@ -146,6 +157,9 @@ export class BrunoTableEditMemoryRuntime {
   );
   private readonly canResetStore = new Store(false);
   private readonly canSaveStore = new Store(false);
+  private readonly hotkeyAvailabilityStore = new Store<BrunoTableEditHotkeyAvailabilitySnapshot>(
+    NO_EDIT_HOTKEYS,
+  );
   private readonly resetReviewStore = new Store<BrunoTableResetReviewSnapshot>(CLOSED_RESET_REVIEW);
   private readonly resetReviewRowsStore = new Store<
     readonly BrunoTableCellEditDraftReviewSourceRow[]
@@ -181,17 +195,7 @@ export class BrunoTableEditMemoryRuntime {
     if (this.resetFocusFrame !== undefined) cancelAnimationFrame(this.resetFocusFrame);
     this.resetFocusFrame = undefined;
     this.modeStore.setState(() => INITIAL_MODE_SNAPSHOT);
-    this.reconcileCellEditActivity({
-      activeEditor: false,
-      activeCandidatePending: false,
-      reviewCount: 0,
-      draftCount: 0,
-      undoCount: 0,
-      redoCount: 0,
-      blockedCount: 0,
-      validationCount: 0,
-      conflictCount: 0,
-    });
+    this.reconcileCellEditActivity(CLEAN_CELL_EDIT_ACTIVITY);
     this.resetReviewStore.setState(() => CLOSED_RESET_REVIEW);
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
@@ -217,17 +221,7 @@ export class BrunoTableEditMemoryRuntime {
       this.unsubscribeDraftReview?.();
       this.unsubscribeDraftReview = undefined;
       if (this.cellEdit === runtime) this.cellEdit = undefined;
-      this.reconcileCellEditActivity({
-        activeEditor: false,
-        activeCandidatePending: false,
-        reviewCount: 0,
-        draftCount: 0,
-        undoCount: 0,
-        redoCount: 0,
-        blockedCount: 0,
-        validationCount: 0,
-        conflictCount: 0,
-      });
+      this.reconcileCellEditActivity(CLEAN_CELL_EDIT_ACTIVITY);
       this.resetReviewRowsStore.setState(() => Object.freeze([]));
     };
   };
@@ -278,6 +272,14 @@ export class BrunoTableEditMemoryRuntime {
 
   public readonly subscribeCanSave = (listener: Listener): (() => void) => {
     const subscription = this.canSaveStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly getHotkeyAvailabilitySnapshot = (): BrunoTableEditHotkeyAvailabilitySnapshot =>
+    this.hotkeyAvailabilityStore.get();
+
+  public readonly subscribeHotkeyAvailability = (listener: Listener): (() => void) => {
+    const subscription = this.hotkeyAvailabilityStore.subscribe(listener);
     return () => subscription.unsubscribe();
   };
 
@@ -370,6 +372,7 @@ export class BrunoTableEditMemoryRuntime {
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
     this.resetReviewRowsStore.setState(() => Object.freeze([]));
+    if (!this.canResetStore.get()) this.scheduleGridFocus();
   };
 
   public readonly confirmResetAllChanges = (): boolean => {
@@ -380,11 +383,7 @@ export class BrunoTableEditMemoryRuntime {
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
     this.resetReviewStore.setState(() => CLOSED_RESET_REVIEW);
-    if (this.resetFocusFrame !== undefined) cancelAnimationFrame(this.resetFocusFrame);
-    this.resetFocusFrame = requestAnimationFrame(() => {
-      this.resetFocusFrame = undefined;
-      this.gridFocusCommand?.();
-    });
+    this.scheduleGridFocus();
     return true;
   };
 
@@ -413,11 +412,13 @@ export class BrunoTableEditMemoryRuntime {
       const nextReview = Object.freeze({
         open: context.resetReviewOpen,
         pendingCount: context.activity.reviewCount,
+        historyCount: context.activity.undoCount + context.activity.redoCount,
         canResetAll,
       });
       if (
         previousReview.open !== nextReview.open ||
         previousReview.pendingCount !== nextReview.pendingCount ||
+        previousReview.historyCount !== nextReview.historyCount ||
         previousReview.canResetAll !== nextReview.canResetAll
       ) {
         this.resetReviewStore.setState(() => nextReview);
@@ -431,6 +432,22 @@ export class BrunoTableEditMemoryRuntime {
         this.canResetStore.setState(() => canResetAll);
       }
       this.publishCanSave(mode, context.activity.draftCount, context.activity.blockedCount);
+      const hotkeys = Object.freeze({
+        undo:
+          mode === "batch" &&
+          !context.saveWorkActive &&
+          !context.activity.activeEditor &&
+          context.activity.undoCount > 0,
+        redo:
+          mode === "batch" &&
+          !context.saveWorkActive &&
+          !context.activity.activeEditor &&
+          context.activity.redoCount > 0,
+      });
+      const previousHotkeys = this.hotkeyAvailabilityStore.get();
+      if (previousHotkeys.undo !== hotkeys.undo || previousHotkeys.redo !== hotkeys.redo) {
+        this.hotkeyAvailabilityStore.setState(() => hotkeys);
+      }
     });
   };
 
@@ -442,14 +459,14 @@ export class BrunoTableEditMemoryRuntime {
       if (this.actorActive) this.actor.send({ type: "SYNC_ACTIVITY", activity });
       const previousStatus = this.safetyStatusStore.get();
       if (
-        previousStatus.pendingCount !== activity.draftCount ||
+        previousStatus.pendingCount !== activity.reviewCount ||
         previousStatus.blockedCount !== activity.blockedCount ||
         previousStatus.validationCount !== activity.validationCount ||
         previousStatus.conflictCount !== activity.conflictCount
       ) {
         this.safetyStatusStore.setState(() =>
           Object.freeze({
-            pendingCount: activity.draftCount,
+            pendingCount: activity.reviewCount,
             blockedCount: activity.blockedCount,
             validationCount: activity.validationCount,
             conflictCount: activity.conflictCount,
@@ -483,5 +500,13 @@ export class BrunoTableEditMemoryRuntime {
       this.resetReviewRowsStore.setState(() => runtime.getDraftReviewSourceSnapshot());
     this.unsubscribeDraftReview = runtime.subscribeDraftReview(reconcile);
     reconcile();
+  };
+
+  private readonly scheduleGridFocus = (): void => {
+    if (this.resetFocusFrame !== undefined) cancelAnimationFrame(this.resetFocusFrame);
+    this.resetFocusFrame = requestAnimationFrame(() => {
+      this.resetFocusFrame = undefined;
+      this.gridFocusCommand?.();
+    });
   };
 }

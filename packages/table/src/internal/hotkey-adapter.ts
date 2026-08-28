@@ -383,6 +383,7 @@ export const BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT: number =
 export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
 export const BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT: number = 2;
 export const BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT: number = 5;
+export const BRUNO_TABLE_EDIT_MEMORY_HOTKEY_REGISTRATION_COUNT: number = 3;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
 
@@ -437,13 +438,15 @@ export function brunoTableHotkeyRegistrationBound(
   rowSelection = false,
   grouping = false,
   activeEditor = false,
+  editMemory = false,
 ): number {
   return (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
     activeFilterWorkflows * BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT +
     (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0) +
     (grouping ? BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT : 0) +
-    (activeEditor ? BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT : 0)
+    (activeEditor ? BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT : 0) +
+    (editMemory ? BRUNO_TABLE_EDIT_MEMORY_HOTKEY_REGISTRATION_COUNT : 0)
   );
 }
 

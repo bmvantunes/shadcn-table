@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -59,6 +60,12 @@ import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 
+function adaptBrunoTableRowVersionExtractor<TRow>(
+  extractor: ((row: TRow) => unknown) | undefined,
+): ((row: object) => unknown) | undefined {
+  return extractor === undefined ? undefined : (row) => extractor(row as TRow);
+}
+
 export {
   BrunoTableActiveFilterCount,
   BrunoTableActiveSortCount,
@@ -104,9 +111,11 @@ function BrunoTableClientInstance<
   TRowVersion,
 >({
   props,
+  registerIdentity = true,
   tableId,
 }: Readonly<{
   readonly props: BrunoTableClientProps<TRow, TColumns, TRowVersion>;
+  readonly registerIdentity?: boolean;
   readonly tableId: string;
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
@@ -207,10 +216,9 @@ function BrunoTableClientInstance<
               ? Object.freeze({ _tag: "Success" as const, value })
               : Object.freeze({ _tag: "Failure" as const });
           },
-          getRowVersion: (row) =>
-            typeof props.getRowVersion === "function"
-              ? Reflect.apply(props.getRowVersion, undefined, [row as TRow])
-              : undefined,
+          ...(props.getRowVersion === undefined
+            ? {}
+            : { getRowVersion: adaptBrunoTableRowVersionExtractor(props.getRowVersion)! }),
           incrementalTraversal: true,
         })
       : undefined,
@@ -218,9 +226,9 @@ function BrunoTableClientInstance<
   const [editMemory] = useState(() => (editable ? new BrunoTableEditMemoryRuntime() : undefined));
   const renderResetReview = useCallback(
     (reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => (
-      <BrunoTableResetReviewTable sourceTableId={tableId} reviewRows={reviewRows} />
+      <BrunoTableResetReviewTable reviewRows={reviewRows} />
     ),
-    [tableId],
+    [],
   );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
@@ -231,6 +239,9 @@ function BrunoTableClientInstance<
   useLayoutEffect(() => {
     projectionStore.setRowSelection(rowSelection);
   }, [projectionStore, rowSelection]);
+  useLayoutEffect(() => {
+    cellEdit?.setRowVersionExtractor(adaptBrunoTableRowVersionExtractor(props.getRowVersion));
+  }, [cellEdit, props.getRowVersion]);
   useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
   useLayoutEffect(() => {
     editMemory?.activate();
@@ -318,10 +329,10 @@ function BrunoTableClientInstance<
 
   useLayoutEffect(
     () =>
-      __BRUNO_TABLE_DEVELOPMENT__
+      __BRUNO_TABLE_DEVELOPMENT__ && registerIdentity
         ? registerBrunoTableIdentity(tableId, compiledColumns)
         : undefined,
-    [compiledColumns, tableId],
+    [compiledColumns, registerIdentity, tableId],
   );
 
   useLayoutEffect(() => () => cellRange.dispose(), [cellRange]);
@@ -404,6 +415,8 @@ const brunoTableResetReviewColumns = [
     field: "serverText",
     headerName: "Server now",
     valueType: "text",
+    enableSorting: false,
+    enableFilter: false,
     cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
       <BrunoTableResetReviewValue row={row} kind="server" />
     ),
@@ -413,6 +426,8 @@ const brunoTableResetReviewColumns = [
     field: "mineText",
     headerName: "Yours",
     valueType: "text",
+    enableSorting: false,
+    enableFilter: false,
     cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
       <BrunoTableResetReviewValue row={row} kind="mine" />
     ),
@@ -422,6 +437,8 @@ const brunoTableResetReviewColumns = [
     field: "statusText",
     headerName: "Status",
     valueType: "text",
+    enableSorting: false,
+    enableFilter: false,
     cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
       <BrunoTableResetReviewStatus row={row} />
     ),
@@ -433,28 +450,32 @@ const BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY = [
 const getBrunoTableResetReviewRowId = (row: BrunoTableResetReviewDisplayRow): string => row.id;
 
 function BrunoTableResetReviewTable({
-  sourceTableId,
   reviewRows,
 }: Readonly<{
-  readonly sourceTableId: string;
   readonly reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[];
 }>): ReactNode {
+  const instanceId = useId();
+  const tableId = `BRUNO_TABLE_INTERNAL_RESET_REVIEW_${instanceId}`;
   const rows = reviewRows;
   if (rows.length === 0) {
     return <p role="status">All changes now match the server.</p>;
   }
   return (
-    <BrunoTableClient
-      tableId={`${sourceTableId}:reset-review`}
-      columns={brunoTableResetReviewColumns}
-      initialOrderBy={BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY}
-      clientSource={{
-        rows,
-        totalRows: rows.length,
-        version: rows.length,
-        status: "ready",
+    <BrunoTableClientInstance
+      tableId={tableId}
+      registerIdentity={false}
+      props={{
+        tableId,
+        columns: brunoTableResetReviewColumns,
+        initialOrderBy: BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY,
+        clientSource: {
+          rows,
+          totalRows: rows.length,
+          version: rows.length,
+          status: "ready",
+        },
+        getRowId: getBrunoTableResetReviewRowId,
       }}
-      getRowId={getBrunoTableResetReviewRowId}
     />
   );
 }

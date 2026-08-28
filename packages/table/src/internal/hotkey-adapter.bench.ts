@@ -88,6 +88,15 @@ describe("BrunoTable navigation command seam benchmark (8.33 ms/120 Hz reference
           false,
           true,
         ),
+        bindingDefinitionsWithEditMemory: brunoTableHotkeyRegistrationBound(
+          mountedRows,
+          mountedColumns,
+          0,
+          false,
+          false,
+          false,
+          true,
+        ),
         expectedBaseBindingDefinitions: BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT,
         expectedFilterWorkflowBindingDefinitions:
           BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT,

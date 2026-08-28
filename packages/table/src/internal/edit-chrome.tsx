@@ -28,24 +28,31 @@ type BrunoTableEditModeControlProps = Readonly<{
 export const BrunoTableEditModeControl: NamedExoticComponent<BrunoTableEditModeControlProps> = memo(
   function BrunoTableEditModeControl({ runtime }: BrunoTableEditModeControlProps): ReactElement {
     const id = useId();
+    const descriptionId = `${id}-description`;
     const snapshot = useSyncExternalStore(
       runtime.subscribeMode,
       runtime.getModeSnapshot,
       runtime.getModeSnapshot,
     );
     return (
-      <label className="flex items-center justify-between gap-2 text-xs/relaxed" htmlFor={id}>
-        <span>Batch editing</span>
-        <Switch
-          id={id}
-          size="sm"
-          checked={snapshot.mode === "batch"}
-          disabled={!snapshot.canChange}
-          onCheckedChange={(checked) => {
-            runtime.requestMode(checked ? "batch" : "immediate");
-          }}
-        />
-      </label>
+      <div>
+        <label className="flex items-center justify-between gap-2 text-xs/relaxed" htmlFor={id}>
+          <span>Batch editing</span>
+          <Switch
+            aria-describedby={!snapshot.canChange ? descriptionId : undefined}
+            id={id}
+            size="sm"
+            checked={snapshot.mode === "batch"}
+            disabled={!snapshot.canChange}
+            onCheckedChange={(checked) => {
+              runtime.requestMode(checked ? "batch" : "immediate");
+            }}
+          />
+        </label>
+        <span className="sr-only" id={descriptionId}>
+          Finish or reset current edit work before changing Edit Mode.
+        </span>
+      </div>
     );
   },
 );
@@ -136,6 +143,7 @@ const BrunoTableResetReview = memo(function BrunoTableResetReview({
         <BrunoTableResetReviewContent
           runtime={runtime}
           pendingCount={snapshot.pendingCount}
+          historyCount={snapshot.historyCount}
           canResetAll={snapshot.canResetAll}
           renderReview={renderReview}
         />
@@ -147,11 +155,13 @@ const BrunoTableResetReview = memo(function BrunoTableResetReview({
 const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent({
   runtime,
   pendingCount,
+  historyCount,
   canResetAll,
   renderReview,
 }: {
   readonly runtime: BrunoTableEditMemoryRuntime;
   readonly pendingCount: number;
+  readonly historyCount: number;
   readonly canResetAll: boolean;
   readonly renderReview: (rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode;
 }): ReactElement {
@@ -167,6 +177,7 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
     [runtime],
   );
   const pendingLabel = `${String(pendingCount)} pending changed ${pendingCount === 1 ? "cell" : "cells"}`;
+  const historyLabel = `${String(historyCount)} Batch history ${historyCount === 1 ? "command" : "commands"}`;
   return (
     <AlertDialogContent
       className="max-w-4xl sm:max-w-4xl"
@@ -179,7 +190,8 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
       <AlertDialogHeader>
         <AlertDialogTitle>Reset Review</AlertDialogTitle>
         <AlertDialogDescription id={descriptionId}>
-          <span>{pendingLabel}</span>. Review these changes before discarding them.
+          <span>{pendingLabel}</span>. <span>{historyLabel}</span>. Review these changes before
+          discarding them.
         </AlertDialogDescription>
       </AlertDialogHeader>
       {renderReview(rows)}
@@ -198,7 +210,9 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
           disabled={!canResetAll}
           ref={resetControlRef}
           variant="destructive"
-          onClick={runtime.confirmResetAllChanges}
+          onClick={() => {
+            runtime.confirmResetAllChanges();
+          }}
         >
           Reset All Changes
         </Button>

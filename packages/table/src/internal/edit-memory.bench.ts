@@ -1,9 +1,12 @@
 import { bench, describe } from "vite-plus/test";
 
 import { BrunoTableCellEditRuntime, type BrunoTableCellEditDraftSnapshot } from "./cell-edit";
+import { assertBrunoTableBenchmarkBudget } from "./benchmark-budget";
 import { compileColumns } from "./compile-columns";
 
 const referenceFrameBudgetMs = 8.33;
+const warmupSampleCount = 2;
+const measuredSampleCount = 100;
 const gestureCellCount = 5_000;
 const row = Object.freeze({ value: "server" });
 const columns = compileColumns([
@@ -47,18 +50,18 @@ function createRuntime(onRowRead?: () => void): BrunoTableCellEditRuntime {
   return runtime;
 }
 
-function percentile99(samples: readonly number[]): number {
-  const sorted = [...samples].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1)] ?? 0;
-}
-
-function recordBudgetSample(name: string, samples: number[], elapsedMs: number): void {
+function recordBudgetSample(
+  name: string,
+  samples: number[],
+  elapsedMs: number,
+  warmups = warmupSampleCount,
+): void {
   samples.push(elapsedMs);
-  if (samples.length < 100) return;
-  const p99Ms = percentile99(samples);
-  if (p99Ms > referenceFrameBudgetMs) {
-    throw new Error(`${name} exceeded the frame reference with p99 ${String(p99Ms)} ms.`);
-  }
+  assertBrunoTableBenchmarkBudget(name, samples, {
+    budgetMs: referenceFrameBudgetMs,
+    measuredSampleCount,
+    warmupSampleCount: warmups,
+  });
 }
 
 describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", () => {
@@ -190,6 +193,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         "one-cell retained-history convergence",
         retainedHistorySamples,
         elapsedMs,
+        0,
       );
       if (
         historyReconciliationRuntime.getActivitySnapshot().draftCount !==

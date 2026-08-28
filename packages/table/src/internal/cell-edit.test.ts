@@ -7,6 +7,7 @@ import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 import {
   BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH,
   BrunoTableCellEditRuntime as BrunoTableCellEditRuntimeBase,
+  isBrunoTableCellEditDraftReviewSourceRow,
   type BrunoTableCellEditDraftSnapshot,
 } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
@@ -325,6 +326,26 @@ describe("BrunoTable Cell Edit Session", () => {
     const unsubscribeMembership = runtime.subscribeDraftReview(membershipListener);
     const [rowA, rowB] = runtime.getDraftReviewSourceSnapshot();
     if (rowA === undefined || rowB === undefined) throw new Error("Expected two review rows.");
+    expect(isBrunoTableCellEditDraftReviewSourceRow(rowA)).toBe(true);
+    expect(
+      isBrunoTableCellEditDraftReviewSourceRow({
+        kind: "bruno-table-cell-edit-draft-review-source",
+        getSnapshot: rowA.getSnapshot,
+        subscribe: rowA.subscribe,
+      }),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellEditDraftReviewSourceRow(
+        new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("consumer getter must not run");
+            },
+          },
+        ),
+      ),
+    ).toBe(false);
     const rowAListener = vi.fn();
     const rowBListener = vi.fn();
     const unsubscribeRowA = rowA.subscribe(rowAListener);
@@ -2113,5 +2134,67 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.reconcileColumns(columnsA);
     expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(true);
     expect(decodeA).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-decodes both Base and Mine when decoder authority changes", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const makeColumns = (suffix: string, rejectBase = false) => {
+      const decodeRuntime = (input: unknown) =>
+        rejectBase && String(input).startsWith("base")
+          ? ({ _tag: "Failure", message: "rejected" } as const)
+          : ({
+              _tag: "Success",
+              value: `${String(input).replace(/-[ab]$/, "")}-${suffix}`,
+            } as const);
+      const valueType: BrunoTableValueType<string> = {
+        codecId: `test/redecode-${suffix}`,
+        codecVersion: 1,
+        filterFamily: "equality",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: () => 0 as const,
+        formatCanonicalText: (value) => value,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: (value) => value,
+        encodePersisted: (value) => value,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("a"),
+      getRow: () => ({ value: "server-a" }),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "base-a" },
+          expectedVersion: 1,
+          base: "base-a",
+          mine: "mine-a",
+        },
+      ]),
+    ).toBe(true);
+
+    runtime.reconcileColumns(makeColumns("b"));
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({ base: "base-b", mine: "mine-b" });
+
+    runtime.reconcileColumns(makeColumns("c", true));
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
   });
 });

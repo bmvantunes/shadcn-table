@@ -429,21 +429,22 @@ export type BrunoTableViewProps<
 
 function getBrunoTableGridAriaKeyShortcuts({
   copyEnabled,
-  editMemoryEnabled,
+  redoEnabled,
   rowSelectionEnabled,
+  undoEnabled,
 }: Readonly<{
   readonly copyEnabled: boolean;
-  readonly editMemoryEnabled: boolean;
+  readonly redoEnabled: boolean;
   readonly rowSelectionEnabled: boolean;
+  readonly undoEnabled: boolean;
 }>): string {
   const shortcuts = ["Alt+ArrowLeft", "Alt+ArrowRight", "Shift+F10", "ContextMenu"];
   if (copyEnabled) shortcuts.push("Control+C", "Meta+C");
   if (rowSelectionEnabled) {
     shortcuts.push("Space", "Shift+Space", "Control+A", "Meta+A");
   }
-  if (editMemoryEnabled) {
-    shortcuts.push("Control+Z", "Meta+Z", "Control+Shift+Z", "Meta+Shift+Z", "Control+Y", "Meta+Y");
-  }
+  if (undoEnabled) shortcuts.push("Control+Z", "Meta+Z");
+  if (redoEnabled) shortcuts.push("Control+Shift+Z", "Meta+Shift+Z", "Control+Y", "Meta+Y");
   return shortcuts.join(" ");
 }
 
@@ -2852,6 +2853,24 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     [editMemory],
   );
   useLayoutEffect(() => {
+    const grid = gridElement.current;
+    if (grid === null || editMemory === undefined) return;
+    const reconcile = (): void => {
+      const availability = editMemory.getHotkeyAvailabilitySnapshot();
+      grid.setAttribute(
+        "aria-keyshortcuts",
+        getBrunoTableGridAriaKeyShortcuts({
+          copyEnabled,
+          redoEnabled: availability.redo,
+          rowSelectionEnabled: rowSelection !== undefined,
+          undoEnabled: availability.undo,
+        }),
+      );
+    };
+    reconcile();
+    return editMemory.subscribeHotkeyAvailability(reconcile);
+  }, [copyEnabled, editMemory, rowSelection]);
+  useLayoutEffect(() => {
     if (cellEdit === undefined) return;
     const reconcileAndScheduleTraversal = () => {
       const buildVersion = traversalBuildVersionRef.current + 1;
@@ -3022,11 +3041,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           columnWindow.pinnedEnd.length +
           (rowSelection === undefined ? 0 : 1)
         }
-        aria-keyshortcuts={getBrunoTableGridAriaKeyShortcuts({
-          copyEnabled,
-          editMemoryEnabled: editMemory !== undefined,
-          rowSelectionEnabled: rowSelection !== undefined,
-        })}
+        aria-keyshortcuts={
+          editMemory === undefined
+            ? getBrunoTableGridAriaKeyShortcuts({
+                copyEnabled,
+                redoEnabled: false,
+                rowSelectionEnabled: rowSelection !== undefined,
+                undoEnabled: false,
+              })
+            : undefined
+        }
         onFocus={(event) => {
           if (event.target === event.currentTarget) {
             navigation.activateForFocus();
@@ -5398,9 +5422,13 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     getDraftReviewSnapshot,
   );
   const draftReviewKind =
-    presentationColumn?.kind === "field" && presentationColumn.field === "serverText"
+    draftReviewSource !== undefined &&
+    presentationColumn?.kind === "field" &&
+    presentationColumn.field === "serverText"
       ? "server"
-      : presentationColumn?.kind === "field" && presentationColumn.field === "mineText"
+      : draftReviewSource !== undefined &&
+          presentationColumn?.kind === "field" &&
+          presentationColumn.field === "mineText"
         ? "mine"
         : undefined;
   const draftReviewRow =
