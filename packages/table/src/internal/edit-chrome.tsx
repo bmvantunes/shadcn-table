@@ -19,6 +19,7 @@ import {
 } from "react";
 
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
+import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 type BrunoTableEditModeControlProps = Readonly<{
@@ -91,8 +92,10 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
 });
 
 const BrunoTableResetEditsButton = memo(function BrunoTableResetEditsButton({
+  dispatchGridCommand,
   runtime,
 }: {
+  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
   const canReset = useSyncExternalStore(
@@ -113,7 +116,7 @@ const BrunoTableResetEditsButton = memo(function BrunoTableResetEditsButton({
       ref={resetControlRef}
       variant="outline"
       disabled={!canReset}
-      onClick={runtime.openResetReview}
+      onClick={() => dispatchGridCommand({ type: "edits.reset" })}
     >
       Reset
     </Button>
@@ -234,12 +237,14 @@ const BrunoTableSaveEditsButton = memo(function BrunoTableSaveEditsButton({
 });
 
 type BrunoTableEditSafetyFooterProps = Readonly<{
+  readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
   readonly renderReview: (rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode;
 }>;
 
 export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafetyFooterProps> =
   memo(function BrunoTableEditSafetyFooter({
+    dispatchGridCommand,
     runtime,
     renderReview,
   }: BrunoTableEditSafetyFooterProps): ReactElement {
@@ -251,7 +256,7 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
       >
         <BrunoTablePendingEditStatus runtime={runtime} />
         <div className="flex items-center gap-2">
-          <BrunoTableResetEditsButton runtime={runtime} />
+          <BrunoTableResetEditsButton dispatchGridCommand={dispatchGridCommand} runtime={runtime} />
           <BrunoTableSaveEditsButton runtime={runtime} />
         </div>
         <BrunoTableResetReview runtime={runtime} renderReview={renderReview} />

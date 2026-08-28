@@ -306,15 +306,14 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
   );
 
   const massConvergenceSamples: number[] = [];
+  const massConvergenceTargets: BrunoTableCellEditRuntime[] = [];
   bench(
     "bulk-prunes 5,000 converged identities from 100 retained commands linearly",
     () => {
-      const target = new BrunoTableCellEditRuntime({
-        columns,
-        getRow: (rowId) => historySourceRows.get(rowId),
-      });
-      target.setBatchHistoryEnabled(true);
-      populateRetainedHistory(target);
+      const target = massConvergenceTargets.shift();
+      if (target === undefined) {
+        throw new Error("Mass convergence benchmark exhausted its prepared fixture.");
+      }
       const startedAt = performance.now();
       target.reconcileColumns(massConvergenceColumns);
       massConvergenceSamples.push(performance.now() - startedAt);
@@ -330,7 +329,27 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       expectCleanMassConvergence(target);
       target.dispose();
     },
-    { iterations: 1, time: 0, warmupIterations: 0, warmupTime: 0 },
+    {
+      setup: () => {
+        for (let index = 0; index < 2; index += 1) {
+          const target = new BrunoTableCellEditRuntime({
+            columns,
+            getRow: (rowId) => historySourceRows.get(rowId),
+          });
+          target.setBatchHistoryEnabled(true);
+          populateRetainedHistory(target);
+          massConvergenceTargets.push(target);
+        }
+      },
+      teardown: () => {
+        for (const target of massConvergenceTargets) target.dispose();
+        massConvergenceTargets.length = 0;
+      },
+      iterations: 1,
+      time: 0,
+      warmupIterations: 0,
+      warmupTime: 0,
+    },
   );
 });
 

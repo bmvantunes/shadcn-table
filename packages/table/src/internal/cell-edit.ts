@@ -99,7 +99,7 @@ type DraftEntry = BrunoTableCellEditDraftSnapshot &
   }>;
 
 type DraftPatch =
-  | Readonly<{ readonly kind: "remove"; readonly cellKey: string }>
+  | Readonly<{ readonly kind: "remove"; readonly cellKey: string; readonly value: unknown }>
   | Readonly<{
       readonly kind: "set";
       readonly cellKey: string;
@@ -121,6 +121,7 @@ type DraftHistoryCellPatch = Readonly<{
   readonly cellKey: string;
   readonly before: DraftEntry | undefined;
   readonly after: DraftEntry | undefined;
+  readonly authoredValue: unknown;
 }>;
 
 const BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT = 64;
@@ -771,7 +772,7 @@ function createAcceptedDraftPatch(context: CellEditContext): DraftPatch {
     throw new TypeError("BrunoTable Cell Edit accepted without session evidence.");
   }
   return evaluation.removeDraft
-    ? Object.freeze({ kind: "remove", cellKey: evaluation.cellKey })
+    ? Object.freeze({ kind: "remove", cellKey: evaluation.cellKey, value: evaluation.value })
     : Object.freeze({
         kind: "set",
         cellKey: evaluation.cellKey,
@@ -912,7 +913,7 @@ function transformDraftHistoryCell(
       key,
       before === undefined && after === undefined
         ? undefined
-        : Object.freeze({ cellKey: key, before, after }),
+        : Object.freeze({ ...patch, cellKey: key, before, after }),
     );
     if (patches.size > 0) {
       nextCommands.push(Object.freeze({ lineage: command.lineage, patches }));
@@ -1045,18 +1046,39 @@ function reconcileDraftHistoryForColumns(
         patch.after === undefined
           ? undefined
           : reconcileDraftEntryForColumns(key, patch.after, context, false);
+      const representative = patch.after ?? patch.before;
+      const plan =
+        representative === undefined ? undefined : context.plans.get(representative.columnId);
+      const authored =
+        after !== undefined
+          ? ({ _tag: "Success", value: after.mine } as const)
+          : plan?.kind === "retain" && plan.transformValues
+            ? reconcileDraftValueForColumns(
+                patch.authoredValue,
+                plan.previousColumn,
+                plan.nextColumn,
+              )
+            : ({ _tag: "Success", value: patch.authoredValue } as const);
       if (
         (patch.before !== undefined && before === undefined) ||
-        (patch.after !== undefined && after === undefined)
+        (patch.after !== undefined && after === undefined) ||
+        authored._tag === "Failure"
       ) {
         commandChanged = true;
         changedKeys.add(key);
         continue;
       }
-      if (before !== patch.before || after !== patch.after) {
+      if (
+        before !== patch.before ||
+        after !== patch.after ||
+        !Object.is(authored.value, patch.authoredValue)
+      ) {
         commandChanged = true;
         changedKeys.add(key);
-        nextPatches.set(key, Object.freeze({ cellKey: key, before, after }));
+        nextPatches.set(
+          key,
+          Object.freeze({ cellKey: key, before, after, authoredValue: authored.value }),
+        );
       } else {
         nextPatches.set(key, patch);
       }
@@ -1088,16 +1110,14 @@ function retainedHistoryMineConverged(
     if (command === undefined) continue;
     const patch = command.patches.get(key);
     if (patch === undefined) continue;
-    const authoredValue = patch.after === undefined ? patch.before?.base : patch.after.mine;
-    return safeEquivalentEditValue(column, authoredValue, sourceValue) === true;
+    return safeEquivalentEditValue(column, patch.authoredValue, sourceValue) === true;
   }
   for (let index = undoStack.length - 1; index >= 0; index -= 1) {
     const command = undoStack[index];
     if (command === undefined) continue;
     const patch = command.patches.get(key);
     if (patch === undefined) continue;
-    const authoredValue = patch.after === undefined ? patch.before?.base : patch.after.mine;
-    return safeEquivalentEditValue(column, authoredValue, sourceValue) === true;
+    return safeEquivalentEditValue(column, patch.authoredValue, sourceValue) === true;
   }
   return false;
 }
@@ -1510,7 +1530,9 @@ export class BrunoTableCellEditRuntime {
         after?.conflict !== undefined;
       historyPatchBuilder.set(
         key,
-        before === after ? undefined : Object.freeze({ cellKey: key, before, after }),
+        before === after
+          ? undefined
+          : Object.freeze({ cellKey: key, before, after, authoredValue: draft.mine }),
       );
       if (before === after) {
         unchangedGestureKeys ??= new Set();
@@ -2064,6 +2086,7 @@ export class BrunoTableCellEditRuntime {
               cellKey: draftPatch.cellKey,
               before: previousDrafts.get(draftPatch.cellKey),
               after: nextDrafts.get(draftPatch.cellKey),
+              authoredValue: draftPatch.value,
             }),
           )
         : undefined;

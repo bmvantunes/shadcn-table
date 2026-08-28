@@ -587,7 +587,11 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           cellRange={cellRange}
         />
         {editMemory === undefined || renderResetReview === undefined ? null : (
-          <BrunoTableEditSafetyFooter runtime={editMemory} renderReview={renderResetReview} />
+          <BrunoTableEditSafetyFooter
+            dispatchGridCommand={runtime.dispatchGridCommand}
+            runtime={editMemory}
+            renderReview={renderResetReview}
+          />
         )}
       </div>
     </section>
@@ -2886,15 +2890,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       }
     };
     reconcileAndScheduleTraversal();
-    cellEdit.reconcileSourceRows(undefined);
-    cellEdit.reconcileActiveRow();
     const unsubscribeTraversalInvalidation = cellEdit.subscribeTraversalInvalidation(
       reconcileAndScheduleTraversal,
     );
     const unsubscribe = runtime.subscribeRowChanges((changedRowIds) => {
       cellEdit.reconcileTraversalRows(changedRowIds);
-      cellEdit.reconcileSourceRows(changedRowIds);
-      cellEdit.reconcileActiveRow(changedRowIds);
     });
     return () => {
       unsubscribe();
@@ -3004,12 +3004,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       : {
           undo: (event: BrunoTableHotkeyGesture) => {
             if (!ownsGridSurface(event)) return;
-            if (!editMemory.undo()) return;
+            if (!runtime.dispatchGridCommand({ type: "edits.undo" })) return;
             event.preventDefault();
           },
           redo: (event: BrunoTableHotkeyGesture) => {
             if (!ownsGridSurface(event)) return;
-            if (!editMemory.redo()) return;
+            if (!runtime.dispatchGridCommand({ type: "edits.redo" })) return;
             event.preventDefault();
           },
         }),

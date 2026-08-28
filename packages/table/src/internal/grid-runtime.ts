@@ -65,6 +65,9 @@ type RowChangeListener = (changedRowIds: ReadonlySet<BrunoTableRowId> | undefine
  * future editor capabilities out of the filter controls and command implementations.
  */
 export type BrunoTableActiveEditorCommitGate = () => boolean;
+export type BrunoTableEditCommandHandler = (
+  command: Extract<BrunoTableGridCommand, { readonly type: `edits.${string}` }>,
+) => boolean;
 
 export type BrunoTableGridPreferencesRuntimeOptions = Readonly<{
   readonly initialPersistedState?: unknown;
@@ -101,6 +104,9 @@ function isBrunoTableFilterCommand(command: BrunoTableGridCommand): boolean {
     case "grouping.add":
     case "grouping.remove":
     case "grouping.move":
+    case "edits.reset":
+    case "edits.undo":
+    case "edits.redo":
       return false;
     default:
       return assertNeverBrunoTableGridCommand(command);
@@ -132,6 +138,9 @@ function isBrunoTableDurablePreferenceCommand(command: BrunoTableGridCommand): b
     case "grouping.move":
       return true;
     case "quick-filter.replace":
+    case "edits.reset":
+    case "edits.undo":
+    case "edits.redo":
       return false;
     default:
       return assertNeverBrunoTableGridCommand(command);
@@ -370,6 +379,7 @@ export type BrunoTableRuntimeView = {
   readonly subscribeColumnLayout: (listener: Listener) => () => void;
   readonly subscribeColumnStructure: (listener: Listener) => () => void;
   readonly registerActiveEditorCommitGate: (gate: BrunoTableActiveEditorCommitGate) => () => void;
+  readonly registerEditCommandHandler: (handler: BrunoTableEditCommandHandler) => () => void;
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly toggleColumnSort: (columnId: string, multi: boolean) => void;
   readonly clearColumnFilters: (columnId: string) => void;
@@ -728,6 +738,7 @@ export class BrunoTableGridRuntime<TRow> {
   private readonly installedGroupingStructureListeners = new Set<Listener>();
   private readonly installedRowsPresentationListeners = new Set<Listener>();
   private readonly activeEditorCommitGates = new Set<BrunoTableActiveEditorCommitGate>();
+  private editCommandHandler: BrunoTableEditCommandHandler | undefined;
   private readonly queuedPublications: (QueuedPublication<TRow> | undefined)[] = [];
   private publishing = false;
   private installedPublicationConfiguration: PublicationConfiguration;
@@ -933,6 +944,7 @@ export class BrunoTableGridRuntime<TRow> {
         subscribeColumnLayout: this.subscribeColumnLayout,
         subscribeColumnStructure: this.subscribeColumnStructure,
         registerActiveEditorCommitGate: this.registerActiveEditorCommitGate,
+        registerEditCommandHandler: this.registerEditCommandHandler,
         subscribeQuickFilterCommandEpoch: this.subscribeQuickFilterCommandEpoch,
         dispatchGridCommand: this.dispatchGridCommand,
         toggleColumnSort: this.toggleColumnSort,
@@ -1659,6 +1671,13 @@ export class BrunoTableGridRuntime<TRow> {
       recordBrunoTableGridCommand(this.tableId, command);
     }
     if (
+      command.type === "edits.reset" ||
+      command.type === "edits.undo" ||
+      command.type === "edits.redo"
+    ) {
+      return this.editCommandHandler?.(command) === true;
+    }
+    if (
       command.type === "grouping.add" ||
       command.type === "grouping.remove" ||
       command.type === "grouping.move"
@@ -1963,6 +1982,15 @@ export class BrunoTableGridRuntime<TRow> {
       if (!active) return;
       active = false;
       this.activeEditorCommitGates.delete(gate);
+    };
+  };
+
+  public readonly registerEditCommandHandler = (
+    handler: BrunoTableEditCommandHandler,
+  ): (() => void) => {
+    this.editCommandHandler = handler;
+    return () => {
+      if (this.editCommandHandler === handler) this.editCommandHandler = undefined;
     };
   };
 

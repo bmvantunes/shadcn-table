@@ -174,6 +174,25 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()).toMatchObject([{ mine: 8, blockedReason: undefined }]);
   });
 
+  it("retains the exact authored value for draft-removal history convergence", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    current = Object.freeze({ ...row, score: 6 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("6")).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBeUndefined();
+
+    current = row;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+  });
+
   it("prunes undo-only return-to-base history after authoritative convergence", () => {
     let current: Row = row;
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });

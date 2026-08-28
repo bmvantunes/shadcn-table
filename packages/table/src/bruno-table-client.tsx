@@ -251,6 +251,28 @@ function BrunoTableClientInstance<
     if (editMemory === undefined || cellEdit === undefined) return;
     return editMemory.connectCellEdit(cellEdit);
   }, [cellEdit, editMemory]);
+  useLayoutEffect(() => {
+    if (editMemory === undefined) return;
+    return runtime.registerEditCommandHandler((command) => {
+      switch (command.type) {
+        case "edits.reset":
+          return editMemory.openResetReview();
+        case "edits.undo":
+          return editMemory.undo();
+        case "edits.redo":
+          return editMemory.redo();
+      }
+    });
+  }, [editMemory, runtime]);
+  useLayoutEffect(() => {
+    if (cellEdit === undefined) return;
+    const reconcile = (changedRowIds?: ReadonlySet<string>): void => {
+      cellEdit.reconcileSourceRows(changedRowIds);
+      cellEdit.reconcileActiveRow(changedRowIds);
+    };
+    reconcile();
+    return runtime.subscribeRowChanges(reconcile);
+  }, [cellEdit, runtime]);
   useLayoutEffect(() => cellEdit?.reconcileColumns(compiledColumns), [cellEdit, compiledColumns]);
 
   useLayoutEffect(() => {

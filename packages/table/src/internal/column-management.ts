@@ -67,6 +67,7 @@ export type BrunoTableColumnLayoutCommand =
 export type BrunoTableGridCommand =
   | BrunoTableColumnLayoutCommand
   | BrunoTableSortingCommand
+  | Readonly<{ readonly type: "edits.reset" | "edits.undo" | "edits.redo" }>
   | Readonly<{ readonly type: "grouping.add"; readonly columnId: string }>
   | Readonly<{ readonly type: "grouping.remove"; readonly columnId: string }>
   | Readonly<{
@@ -124,6 +125,9 @@ export function isBrunoTableColumnLayoutCommand(
     case "column.filter.reset":
     case "column.filter.replace":
     case "quick-filter.replace":
+    case "edits.reset":
+    case "edits.undo":
+    case "edits.redo":
       return false;
     default:
       return assertNeverBrunoTableGridCommand(command);

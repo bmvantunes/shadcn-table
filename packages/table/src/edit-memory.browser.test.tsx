@@ -4,7 +4,9 @@ import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import { StrictMode } from "react";
 
-import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "./index";
+import { useBrunoTableClientFilterContext } from "./internal/client-filter-context";
+import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 
 type Row = Readonly<{
@@ -24,6 +26,20 @@ const columns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const rows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+
+function ResetCommandProbe({
+  onResult,
+}: Readonly<{ readonly onResult: (accepted: boolean) => void }>) {
+  const { runtime } = useBrunoTableClientFilterContext();
+  return (
+    <button
+      type="button"
+      onClick={() => onResult(runtime.dispatchGridCommand({ type: "edits.reset" }))}
+    >
+      Dispatch Reset Command
+    </button>
+  );
+}
 
 function makeCanonicalTextColumns(lowercase: boolean): BrunoTableColumns<Row> {
   const decodeRuntime = (input: unknown) =>
@@ -1087,6 +1103,101 @@ test("keeps bounded Batch undo and redo local to the current unsaved session", a
   confirmReset.element().scrollIntoView({ block: "center" });
   (confirmReset.element() as HTMLButtonElement).click();
   await expect.element(batchEditing).toBeEnabled();
+});
+
+test("dispatches Reset and Batch history hotkeys through typed Grid Commands", async () => {
+  const commandTypes: string[] = [];
+  const resetResults: boolean[] = [];
+  const removeListener = installBrunoTableGridCommandListener("TABLE_ID_EDIT_COMMANDS", (command) =>
+    commandTypes.push(command.type),
+  );
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_EDIT_COMMANDS"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <ResetCommandProbe onResult={(accepted) => resetResults.push(accepted)} />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Dispatch Reset Command" }));
+  expect(resetResults).toEqual([false]);
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+    .not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_EDIT_COMMANDS" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  grid.element().focus();
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+  );
+  await userEvent.keyboard(
+    detectPlatform() === "mac"
+      ? "{Meta>}{Shift>}z{/Shift}{/Meta}"
+      : "{Control>}{Shift>}z{/Shift}{/Control}",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Dispatch Reset Command" }));
+
+  expect(resetResults).toEqual([false, true]);
+  await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
+  expect(commandTypes).toEqual(expect.arrayContaining(["edits.undo", "edits.redo", "edits.reset"]));
+  removeListener();
+});
+
+test("reconciles hidden drafts while filtering leaves the row projection empty", async () => {
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_HIDDEN_EDIT_RECONCILIATION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      quickFilterFields={["name"]}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <BrunoTableQuickFilter />
+      </BrunoTableToolbar>
+    </BrunoTableClient>
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_HIDDEN_EDIT_RECONCILIATION" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "missing");
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .not.toBeInTheDocument();
+
+  const convergedRows = [{ id: "ada", name: "Augusta", revision: 2n }] as const;
+  await screen.rerender(renderTable(convergedRows, 2));
+
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .not.toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeDisabled();
+  expect(
+    screen
+      .getByRole("region", { name: "Edit safety" })
+      .element()
+      .querySelector('[aria-live="polite"]'),
+  ).toHaveTextContent("No unsaved changes");
 });
 
 test("leaves native undo and redo owned by interactive cell content", async () => {
