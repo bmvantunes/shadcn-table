@@ -7,6 +7,7 @@ import {
 } from "./cell-edit";
 import { assertBrunoTableBenchmarkBudget } from "./benchmark-budget";
 import { compileColumns } from "./compile-columns";
+import { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const referenceFrameBudgetMs = 8.33;
 const warmupSampleCount = 2;
@@ -171,6 +172,26 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     },
   });
   rejectedReconciliationRuntime.rejectSave("rejected-operation", saveChangeSet, false);
+  const rejectedFailureMemory = new BrunoTableEditMemoryRuntime();
+  rejectedFailureMemory.activate();
+  rejectedFailureMemory.recordSaveFailure(
+    "rejected-operation",
+    new Error("Benchmark rejection."),
+    saveChangeSet,
+  );
+  let lastRejectedUpdate =
+    rejectedReconciliationRuntime.getRejectedOperationUpdateSnapshot("rejected-operation");
+  const unsubscribeRejectedFailure = rejectedReconciliationRuntime.subscribeRejectedOperation(
+    "rejected-operation",
+    () => {
+      lastRejectedUpdate =
+        rejectedReconciliationRuntime.getRejectedOperationUpdateSnapshot("rejected-operation");
+      rejectedFailureMemory.removeSaveFailureCells(
+        "rejected-operation",
+        lastRejectedUpdate.removedCells,
+      );
+    },
+  );
   let rejectedReconciliationIndex = 100;
   const rejectedReconciliationSamples: number[] = [];
   bench(
@@ -197,6 +218,12 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       ) {
         throw new Error("One-row rejected Save reconciliation retained converged evidence.");
       }
+      if (lastRejectedUpdate.removedCells.length !== 1) {
+        throw new Error("Rejected Save reconciliation did not publish one Cell Identity delta.");
+      }
+      if (rejectedFailureMemory.getSaveFailureSummarySnapshot().count !== 1) {
+        throw new Error("Partial rejected reconciliation cleared its compact failure summary.");
+      }
     },
     {
       iterations: 100,
@@ -207,6 +234,8 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         if (mode !== "run") return;
         saveReconciliationRuntime.activate();
         rejectedReconciliationRuntime.activate();
+        unsubscribeRejectedFailure();
+        rejectedFailureMemory.dispose();
         saveReconciliationRuntime.dispose();
         rejectedReconciliationRuntime.dispose();
         saveRows.clear();

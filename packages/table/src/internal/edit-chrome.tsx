@@ -23,6 +23,7 @@ import {
   type NamedExoticComponent,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -330,10 +331,31 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
 }: {
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement | null {
+  const detailsContent = useRef<HTMLDivElement>(null);
+  const detailsOpenRef = useRef(false);
+  const [detailsOpen, setDetailsOpenState] = useState(false);
+  const setDetailsOpen = useCallback((open: boolean) => {
+    detailsOpenRef.current = open;
+    setDetailsOpenState(open);
+  }, []);
+  const subscribeFailureSummary = useCallback(
+    (listener: () => void) =>
+      runtime.subscribeSaveFailureSummary(() => {
+        if (runtime.getSaveFailureSummarySnapshot().count === 0 && detailsOpenRef.current) {
+          const content = detailsContent.current;
+          const restoreGridFocus =
+            content !== null && content.contains(content.ownerDocument.activeElement);
+          setDetailsOpen(false);
+          if (restoreGridFocus) runtime.requestGridFocus();
+        }
+        listener();
+      }),
+    [runtime, setDetailsOpen],
+  );
   const failure = useSyncExternalStore(
-    runtime.subscribeSaveFailure,
-    runtime.getSaveFailureSnapshot,
-    runtime.getSaveFailureSnapshot,
+    subscribeFailureSummary,
+    runtime.getSaveFailureSummarySnapshot,
+    runtime.getSaveFailureSummarySnapshot,
   );
   const [toasterOwnerToken] = useState<SaveFailureToasterOwner>(() => Object.freeze({}));
   const toasterAnchor = useRef<HTMLSpanElement>(null);
@@ -342,9 +364,6 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
     () => `bruno-table-save-failure-${String((saveFailureToastIdSequence += 1))}`,
   );
   const programmaticToastClose = useRef(false);
-  const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
-  const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
-  const detailsOpen = failure.count > 0 && detailsFailureSignature === failureSignature;
   useEffect(() => {
     const ownerDocument = toasterAnchor.current?.ownerDocument;
     if (ownerDocument === undefined) return;
@@ -372,18 +391,18 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
           : "Open Operation details for the complete explanations.",
       actionProps: {
         children: "Operation details",
-        onClick: () => setDetailsFailureSignature(failureSignature),
+        onClick: () => setDetailsOpen(true),
       },
       timeout: 0,
       priority: "high",
       type: "error",
       onClose: () => {
         if (programmaticToastClose.current) return;
-        setDetailsFailureSignature(undefined);
+        setDetailsOpen(false);
         runtime.dismissSaveFailures();
       },
     });
-  }, [failure, failureSignature, runtime, toastId, toasterEntry]);
+  }, [failure, runtime, setDetailsOpen, toastId, toasterEntry]);
   useEffect(
     () => () => {
       if (toasterEntry === undefined) return;
@@ -396,45 +415,62 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
   return (
     <>
       <span aria-hidden="true" className="hidden" ref={toasterAnchor} />
-      <AlertDialog
-        open={detailsOpen}
-        onOpenChange={(open) => setDetailsFailureSignature(open ? failureSignature : undefined)}
-      >
+      <AlertDialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         {detailsOpen ? (
-          <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
-            <AlertDialogHeader>
-              <AlertDialogTitle>Save operation details</AlertDialogTitle>
-              <AlertDialogDescription>
-                These saves were not confirmed. Live source convergence can still clear each result.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
-              <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
-                {failure.operations.map((operation, index) => (
-                  <li key={operation.operationId}>
-                    <p>
-                      Operation {String(index + 1)}: {operation.message}
-                    </p>
-                    <ul className="mt-1 flex list-[circle] flex-col gap-1 ps-5">
-                      {operation.rows.flatMap((row) =>
-                        row.cells.map((cell) => (
-                          <li key={`${row.rowId}\0${cell.columnId}`}>
-                            Row {row.rowId}, column {cell.columnId} (field {cell.field}).
-                          </li>
-                        )),
-                      )}
-                    </ul>
-                  </li>
-                ))}
-              </ul>
-            </ScrollArea>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Close details</AlertDialogCancel>
-            </AlertDialogFooter>
-          </AlertDialogContent>
+          <BrunoTableSaveFailureDetails contentRef={detailsContent} runtime={runtime} />
         ) : null}
       </AlertDialog>
     </>
+  );
+});
+
+const BrunoTableSaveFailureDetails = memo(function BrunoTableSaveFailureDetails({
+  contentRef,
+  runtime,
+}: {
+  readonly contentRef: RefObject<HTMLDivElement | null>;
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
+  const failure = useSyncExternalStore(
+    runtime.subscribeSaveFailure,
+    runtime.getSaveFailureSnapshot,
+    runtime.getSaveFailureSnapshot,
+  );
+  return (
+    <AlertDialogContent
+      ref={contentRef}
+      className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+    >
+      <AlertDialogHeader>
+        <AlertDialogTitle>Save operation details</AlertDialogTitle>
+        <AlertDialogDescription>
+          These saves were not confirmed. Live source convergence can still clear each result.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
+        <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
+          {failure.operations.map((operation, index) => (
+            <li key={operation.operationId}>
+              <p>
+                Operation {String(index + 1)}: {operation.message}
+              </p>
+              <ul className="mt-1 flex list-[circle] flex-col gap-1 ps-5">
+                {operation.rows.flatMap((row) =>
+                  row.cells.map((cell) => (
+                    <li key={`${row.rowId}\0${cell.columnId}`}>
+                      Row {row.rowId}, column {cell.columnId} (field {cell.field}).
+                    </li>
+                  )),
+                )}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Close details</AlertDialogCancel>
+      </AlertDialogFooter>
+    </AlertDialogContent>
   );
 });
 

@@ -53,7 +53,12 @@ function ToastViewport({ className, onBlur, onFocus, ...props }: ToastPrimitive.
 
   const handleFocus = (event: ToastViewportFocusEvent) => {
     onFocus?.(event);
-    if (event.target instanceof HTMLElement && event.target.matches(":focus-visible")) {
+    const OwnerHTMLElement = event.currentTarget.ownerDocument.defaultView?.HTMLElement;
+    if (
+      OwnerHTMLElement !== undefined &&
+      event.target instanceof OwnerHTMLElement &&
+      event.target.matches(":focus-visible")
+    ) {
       setIsViewportFocused(true);
     }
   };

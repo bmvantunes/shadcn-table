@@ -234,13 +234,11 @@ function BrunoTableClientInstance<
     editable
       ? new BrunoTableCellEditRuntime({
           columns: compiledColumns,
-          getRow: runtime.getRowSnapshot,
+          getRow: rowPipelineAdapter.getAuthoritativeEditRowSnapshot,
           getCanonicalValue: (rowId, columnId) => {
-            const rowSpace = runtime.getRowSpaceSnapshot();
-            const rowPresent = rowSpace?.getRow(rowId) !== undefined;
-            const value = rowPresent ? rowSpace?.getCellValue(rowId, columnId) : undefined;
-            return rowPresent && !isBrunoTableInvalidCellValue(value)
-              ? Object.freeze({ _tag: "Success" as const, value })
+            const snapshot = rowPipelineAdapter.getAuthoritativeEditCellSnapshot(rowId, columnId);
+            return snapshot.found && !isBrunoTableInvalidCellValue(snapshot.value)
+              ? Object.freeze({ _tag: "Success" as const, value: snapshot.value })
               : Object.freeze({ _tag: "Failure" as const });
           },
           ...(props.getRowVersion === undefined
@@ -314,15 +312,6 @@ function BrunoTableClientInstance<
     });
   }, [editMemory, runtime]);
   useLayoutEffect(() => {
-    if (cellEdit === undefined) return;
-    const reconcile = (changedRowIds?: ReadonlySet<string>): void => {
-      cellEdit.reconcileSourceRows(changedRowIds);
-      cellEdit.reconcileActiveRow(changedRowIds);
-    };
-    reconcile();
-    return runtime.subscribeRowChanges(reconcile);
-  }, [cellEdit, runtime]);
-  useLayoutEffect(() => {
     const previouslyEnabled = previousRowSelectionEnabled.current;
     previousRowSelectionEnabled.current = rowSelectionEnabled;
     if (previouslyEnabled && !rowSelectionEnabled) {
@@ -375,7 +364,11 @@ function BrunoTableClientInstance<
     editMemory?.setSavePreflightAvailable(
       hasAuthoritativeBrunoTableEditSource(rowPipelineAdapter.getProjectionInputSnapshot()),
     );
-    cellEdit?.reconcileColumns(compiledColumns, (rowId) => publication.rowSpace?.getRow(rowId));
+    cellEdit?.reconcileColumns(compiledColumns, (rowId) =>
+      rowPipelineAdapter.getAuthoritativeEditRowSnapshot(rowId),
+    );
+    cellEdit?.reconcileSourceRows(publication.changedRowIds);
+    cellEdit?.reconcileActiveRow(publication.changedRowIds);
     if (!groupingProjectionActive) {
       runtime.reconcile(publication, compiledColumns, queryConfiguration, groupRowsColumn.width);
     }

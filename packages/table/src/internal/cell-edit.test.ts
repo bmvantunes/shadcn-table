@@ -3498,6 +3498,127 @@ describe("BrunoTable Cell Edit Session", () => {
     });
   });
 
+  it("publishes only rejected Cell Identity deltas for precise source convergence", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const rowsById = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rowsById.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    const changeSet = [row, second].map((candidate) => ({
+      rowId: candidate.id,
+      baseRow: candidate,
+      expectedVersion: candidate.quantity,
+      changes: [
+        {
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          before: candidate.score,
+          after: 7,
+        },
+      ] as const,
+    })) as [
+      {
+        readonly rowId: string;
+        readonly baseRow: Row;
+        readonly expectedVersion: bigint;
+        readonly changes: readonly [
+          {
+            readonly columnId: "COL_ID_SCORE";
+            readonly field: "score";
+            readonly before: number;
+            readonly after: number;
+          },
+        ];
+      },
+      {
+        readonly rowId: string;
+        readonly baseRow: Row;
+        readonly expectedVersion: bigint;
+        readonly changes: readonly [
+          {
+            readonly columnId: "COL_ID_SCORE";
+            readonly field: "score";
+            readonly before: number;
+            readonly after: number;
+          },
+        ];
+      },
+    ];
+    expect(runtime.beginSaveOperation("operation-delta", changeSet, false)).toBe(true);
+    runtime.rejectSave("operation-delta", changeSet, true);
+    runtime.completeSaveOperation("operation-delta");
+    const listener = vi.fn();
+    const unsubscribe = runtime.subscribeRejectedOperation("operation-delta", listener);
+
+    rowsById.set(row.id, Object.freeze({ ...row, score: 7, quantity: 2n }));
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-delta")).toEqual({
+      remainingCount: 1,
+      removedCells: [{ rowId: row.id, columnId: "COL_ID_SCORE" }],
+    });
+    unsubscribe();
+  });
+
+  it("clears only stale Immediate failure presentation when the same cell is retried", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    const first = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+    expect(runtime.beginSaveOperation("immediate-first", first, false)).toBe(true);
+    runtime.rejectSave("immediate-first", first, true);
+    runtime.completeSaveOperation("immediate-first");
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+
+    const retry = [
+      {
+        ...first[0],
+        changes: [{ ...first[0].changes[0], after: 8 }] as const,
+      },
+    ] as const;
+    expect(runtime.beginSaveOperation("immediate-retry", retry, false)).toBe(true);
+    expect(runtime.hasRejectedOperation("immediate-first")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      savePending: true,
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+
+    const unsubscribe = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+    runtime.acceptSave("immediate-retry", retry, false);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      saveSucceeded: true,
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+    current = Object.freeze({ ...row, score: 8, quantity: 2n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.completeSaveOperation("immediate-retry");
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+    unsubscribe();
+  });
+
   it("retains an Accepted Overlay across a non-authoritative source gap", () => {
     let current: Row | undefined = row;
     let authoritative = true;
@@ -3570,6 +3691,53 @@ describe("BrunoTable Cell Edit Session", () => {
     current = Object.freeze({ ...row, quantity: 2n });
     runtime.reconcileSourceRows(new Set([row.id]));
     expect(runtime.getAcceptedOverlayCountForOperation("operation-version-domain")).toBe(0);
+  });
+
+  it("visits only pending operations indexed by a precisely changed Row Identity", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const rowsById = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => rowsById.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    for (const [operationId, candidate] of [
+      ["pending-first", row],
+      ["pending-second", second],
+    ] as const) {
+      expect(
+        runtime.beginSaveOperation(
+          operationId,
+          [
+            {
+              rowId: candidate.id,
+              baseRow: candidate,
+              expectedVersion: candidate.quantity,
+              changes: [
+                {
+                  columnId: "COL_ID_SCORE",
+                  field: "score",
+                  before: candidate.score,
+                  after: 7,
+                },
+              ],
+            },
+          ],
+          false,
+        ),
+      ).toBe(true);
+    }
+    rowsById.set(second.id, Object.freeze({ ...second, score: 7, quantity: 2n }));
+    getRow.mockClear();
+
+    runtime.reconcileSourceRows(new Set([second.id]));
+
+    expect(getRow).toHaveBeenCalledTimes(1);
+    expect(getRow).toHaveBeenCalledWith(second.id);
   });
 
   it("turns rejected Batch source divergence into reversible conflict evidence", () => {
@@ -4489,5 +4657,32 @@ describe("BrunoTable Cell Edit Session", () => {
         ],
       },
     ]);
+  });
+
+  it("does not materialize an Immediate operation for an accepted Batch gesture", () => {
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: 1n,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+    expect(runtime.createBatchSaveChangeSet()).toHaveLength(1);
   });
 });

@@ -153,6 +153,24 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly getProjectionInputSnapshot = (): BrunoTableClientProjectionInputSnapshot =>
     this.projectionInput;
 
+  public readonly getAuthoritativeEditRowSnapshot = (rowId: BrunoTableRowId): unknown =>
+    this.coherent?.admittedById.get(rowId)?.raw;
+
+  public readonly getAuthoritativeEditCellSnapshot = (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ):
+    | Readonly<{ readonly found: false }>
+    | Readonly<{ readonly found: true; readonly value: unknown }> => {
+    const admitted = this.coherent?.admittedById.get(rowId);
+    const column = this.coherent?.columnsById.get(columnId);
+    if (admitted === undefined || column === undefined) return Object.freeze({ found: false });
+    return Object.freeze({
+      found: true,
+      value: admitted.values.read(admitted.raw, admitted.rowId, admitted.rowIndex, column),
+    });
+  };
+
   public readonly subscribeProjectionInput = (listener: () => void): (() => void) => {
     this.projectionInputListeners.add(listener);
     return () => this.projectionInputListeners.delete(listener);

@@ -93,26 +93,48 @@ describe("persistent toast accessibility", () => {
   test("supports a portal container in another document", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
-    const ownerDocument = frame.contentDocument;
-    if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
-    const toastManager = createToastManager();
-    const screen = await render(
-      <Toaster
-        portalContainer={{ current: ownerDocument.body }}
-        toastManager={toastManager}
-        timeout={0}
-      />,
-    );
+    let screen: Awaited<ReturnType<typeof render>> | undefined;
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+      const toastManager = createToastManager();
+      screen = await render(
+        <Toaster
+          portalContainer={{ current: ownerDocument.body }}
+          toastManager={toastManager}
+          timeout={0}
+        />,
+      );
 
-    addPersistentToast(toastManager, "Secondary document failure");
+      toastManager.add({
+        title: "Secondary document failure",
+        description: "The save was not confirmed.",
+        timeout: 0,
+        type: "error",
+        priority: "high",
+      });
 
-    await expect
-      .poll(() => ownerDocument.body.textContent?.includes("Secondary document failure"))
-      .toBe(true);
-    expect(document.body.textContent).not.toContain("Secondary document failure");
-
-    await screen.unmount();
-    frame.remove();
+      await expect
+        .poll(() => ownerDocument.body.textContent?.includes("Secondary document failure"))
+        .toBe(true);
+      expect(document.body.textContent).not.toContain("Secondary document failure");
+      const close = ownerDocument.querySelector<HTMLButtonElement>(
+        'button[aria-label="Close toast"]',
+      );
+      if (close === null) throw new Error("Expected the secondary-document Close control.");
+      const toastRoot = close.closest<HTMLElement>('[data-slot="toast"]');
+      if (toastRoot === null) throw new Error("Expected the secondary-document toast root.");
+      close.focus({ focusVisible: true });
+      expect(close.matches(":focus-visible")).toBe(true);
+      await expect.poll(() => toastRoot.getAttribute("role")).toBe("alertdialog");
+      await expect.poll(() => ownerDocument.activeElement).toBe(close);
+      ownerDocument.body.tabIndex = -1;
+      ownerDocument.body.focus();
+      await expect.poll(() => toastRoot.getAttribute("role")).toBe("presentation");
+    } finally {
+      await screen?.unmount();
+      frame.remove();
+    }
   });
 
   test("keeps the public compound Close control accessible", async () => {

@@ -56,6 +56,11 @@ export type BrunoTableSaveFailureSnapshot = Readonly<{
   }>[];
 }>;
 
+export type BrunoTableSaveFailureSummarySnapshot = Readonly<{
+  readonly count: number;
+  readonly messages: readonly string[];
+}>;
+
 export type BrunoTableSaveWorkSnapshot = Readonly<{
   readonly pendingBatchCount: number;
   readonly awaitingBatchCount: number;
@@ -110,6 +115,10 @@ const NO_SAVE_FAILURES: BrunoTableSaveFailureSnapshot = Object.freeze({
   count: 0,
   messages: Object.freeze([]),
   operations: Object.freeze([]),
+});
+const NO_SAVE_FAILURE_SUMMARY: BrunoTableSaveFailureSummarySnapshot = Object.freeze({
+  count: 0,
+  messages: Object.freeze([]),
 });
 const NO_SAVE_WORK: BrunoTableSaveWorkSnapshot = Object.freeze({
   pendingBatchCount: 0,
@@ -224,13 +233,27 @@ export class BrunoTableEditMemoryRuntime {
   private readonly hotkeyAvailabilityStore = new Store<BrunoTableEditHotkeyAvailabilitySnapshot>(
     NO_EDIT_HOTKEYS,
   );
-  private readonly saveFailureStore = new Store<BrunoTableSaveFailureSnapshot>(NO_SAVE_FAILURES);
+  private readonly saveFailureSummaryStore = new Store<BrunoTableSaveFailureSummarySnapshot>(
+    NO_SAVE_FAILURE_SUMMARY,
+  );
+  private readonly saveFailureDetailVersionStore = new Store(0);
+  private saveFailureSnapshot: BrunoTableSaveFailureSnapshot = NO_SAVE_FAILURES;
+  private saveFailureSnapshotDirty = false;
   private readonly saveWorkStore = new Store<BrunoTableSaveWorkSnapshot>(NO_SAVE_WORK);
   private readonly saveFailures = new Map<
     string,
     Readonly<{
       readonly message: string;
-      readonly rows: BrunoTableSaveFailureSnapshot["operations"][number]["rows"];
+      readonly rowsById: Map<
+        string,
+        Readonly<{
+          readonly expectedVersion: unknown;
+          readonly cellsByColumnId: Map<
+            string,
+            BrunoTableSaveFailureSnapshot["operations"][number]["rows"][number]["cells"][number]
+          >;
+        }>
+      >;
     }>
   >();
   private readonly saveWorkByOperation = new Map<
@@ -290,7 +313,10 @@ export class BrunoTableEditMemoryRuntime {
     this.canResetStore.setState(() => false);
     this.canSaveStore.setState(() => false);
     this.hotkeyAvailabilityStore.setState(() => NO_EDIT_HOTKEYS);
-    this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+    this.saveFailureSummaryStore.setState(() => NO_SAVE_FAILURE_SUMMARY);
+    this.saveFailureDetailVersionStore.setState(() => 0);
+    this.saveFailureSnapshot = NO_SAVE_FAILURES;
+    this.saveFailureSnapshotDirty = false;
     this.saveWorkStore.setState(() => NO_SAVE_WORK);
     this.saveFailures.clear();
     this.saveWorkByOperation.clear();
@@ -381,8 +407,13 @@ export class BrunoTableEditMemoryRuntime {
   public readonly getHotkeyAvailabilitySnapshot = (): BrunoTableEditHotkeyAvailabilitySnapshot =>
     this.hotkeyAvailabilityStore.get();
 
-  public readonly getSaveFailureSnapshot = (): BrunoTableSaveFailureSnapshot =>
-    this.saveFailureStore.get();
+  public readonly getSaveFailureSummarySnapshot = (): BrunoTableSaveFailureSummarySnapshot =>
+    this.saveFailureSummaryStore.get();
+
+  public readonly getSaveFailureSnapshot = (): BrunoTableSaveFailureSnapshot => {
+    if (this.saveFailureSnapshotDirty) this.materializeSaveFailureSnapshot();
+    return this.saveFailureSnapshot;
+  };
 
   public readonly getSaveWorkSnapshot = (): BrunoTableSaveWorkSnapshot => this.saveWorkStore.get();
 
@@ -392,7 +423,12 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly subscribeSaveFailure = (listener: Listener): (() => void) => {
-    const subscription = this.saveFailureStore.subscribe(listener);
+    const subscription = this.saveFailureDetailVersionStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly subscribeSaveFailureSummary = (listener: Listener): (() => void) => {
+    const subscription = this.saveFailureSummaryStore.subscribe(listener);
     return () => subscription.unsubscribe();
   };
 
@@ -414,23 +450,24 @@ export class BrunoTableEditMemoryRuntime {
       operationId,
       Object.freeze({
         message: explanation,
-        rows: Object.freeze(
-          changeSet.map((row) =>
+        rowsById: new Map(
+          changeSet.map((row) => [
+            row.rowId,
             Object.freeze({
-              rowId: row.rowId,
               expectedVersion: row.expectedVersion,
-              cells: Object.freeze(
-                row.changes.map((change) =>
+              cellsByColumnId: new Map(
+                row.changes.map((change) => [
+                  change.columnId,
                   Object.freeze({
                     columnId: change.columnId,
                     field: change.field,
                     before: change.before,
                     after: change.after,
                   }),
-                ),
+                ]),
               ),
             }),
-          ),
+          ]),
         ),
       }),
     );
@@ -447,40 +484,25 @@ export class BrunoTableEditMemoryRuntime {
     this.publishSaveFailures();
   };
 
-  public readonly retainSaveFailureCells = (
+  public readonly removeSaveFailureCells = (
     operationId: string,
     cells: readonly Readonly<{ readonly rowId: string; readonly columnId: string }>[],
   ): void => {
     const failure = this.saveFailures.get(operationId);
-    if (failure === undefined) return;
-    const retainedByRow = new Map<string, Set<string>>();
+    if (failure === undefined || cells.length === 0) return;
+    let changed = false;
     for (const cell of cells) {
-      const columns = retainedByRow.get(cell.rowId) ?? new Set<string>();
-      columns.add(cell.columnId);
-      retainedByRow.set(cell.rowId, columns);
+      const row = failure.rowsById.get(cell.rowId);
+      if (row === undefined || !row.cellsByColumnId.delete(cell.columnId)) continue;
+      changed = true;
+      if (row.cellsByColumnId.size === 0) failure.rowsById.delete(cell.rowId);
     }
-    const rows = failure.rows.flatMap((row) => {
-      const columns = retainedByRow.get(row.rowId);
-      if (columns === undefined) return [];
-      const retainedCells = row.cells.filter((cell) => columns.has(cell.columnId));
-      return retainedCells.length === 0
-        ? []
-        : retainedCells.length === row.cells.length
-          ? [row]
-          : [Object.freeze({ ...row, cells: Object.freeze(retainedCells) })];
-    });
-    if (
-      rows.length === failure.rows.length &&
-      rows.every((row, index) => row === failure.rows[index])
-    ) {
-      return;
-    }
-    if (rows.length === 0) {
+    if (!changed) return;
+    if (failure.rowsById.size === 0) {
       this.clearSaveFailure(operationId);
       return;
     }
-    this.saveFailures.set(operationId, Object.freeze({ ...failure, rows: Object.freeze(rows) }));
-    this.publishSaveFailures();
+    this.publishSaveFailureDetails();
   };
 
   public readonly dismissSaveFailures = (): void => {
@@ -653,6 +675,10 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
+  public readonly requestGridFocus = (): void => {
+    this.scheduleGridFocus();
+  };
+
   public readonly getResetReviewSnapshot = (): BrunoTableResetReviewSnapshot =>
     this.resetReviewStore.get();
 
@@ -714,7 +740,7 @@ export class BrunoTableEditMemoryRuntime {
       if (context.saveFailureDismissalVersion !== this.publishedSaveFailureDismissalVersion) {
         this.publishedSaveFailureDismissalVersion = context.saveFailureDismissalVersion;
         this.saveFailures.clear();
-        this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+        this.publishSaveFailures();
       }
       const mode = context.mode;
       const previous = this.modeStore.get();
@@ -832,22 +858,51 @@ export class BrunoTableEditMemoryRuntime {
 
   private readonly publishSaveFailures = (): void => {
     if (this.saveFailures.size === 0) {
-      this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+      this.saveFailureSummaryStore.setState(() => NO_SAVE_FAILURE_SUMMARY);
+      this.saveFailureSnapshot = NO_SAVE_FAILURES;
+      this.saveFailureSnapshotDirty = false;
+      this.saveFailureDetailVersionStore.setState((version) => version + 1);
       return;
     }
-    this.saveFailureStore.setState(() =>
+    this.saveFailureSummaryStore.setState(() =>
       Object.freeze({
         count: this.saveFailures.size,
         messages: Object.freeze([
           ...new Set([...this.saveFailures.values()].map((failure) => failure.message)),
         ]),
-        operations: Object.freeze(
-          [...this.saveFailures].map(([operationId, failure]) =>
-            Object.freeze({ operationId, message: failure.message, rows: failure.rows }),
-          ),
-        ),
       }),
     );
+    this.publishSaveFailureDetails();
+  };
+
+  private readonly publishSaveFailureDetails = (): void => {
+    this.saveFailureSnapshotDirty = true;
+    this.saveFailureDetailVersionStore.setState((version) => version + 1);
+  };
+
+  private readonly materializeSaveFailureSnapshot = (): void => {
+    this.saveFailureSnapshot = Object.freeze({
+      count: this.saveFailures.size,
+      messages: this.saveFailureSummaryStore.get().messages,
+      operations: Object.freeze(
+        [...this.saveFailures].map(([operationId, failure]) =>
+          Object.freeze({
+            operationId,
+            message: failure.message,
+            rows: Object.freeze(
+              [...failure.rowsById].map(([rowId, row]) =>
+                Object.freeze({
+                  rowId,
+                  expectedVersion: row.expectedVersion,
+                  cells: Object.freeze([...row.cellsByColumnId.values()]),
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
+    });
+    this.saveFailureSnapshotDirty = false;
   };
 
   private readonly publishSaveWork = (): void => {

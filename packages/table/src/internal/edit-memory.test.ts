@@ -85,6 +85,76 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.getSaveFailureSnapshot()).toEqual({ count: 0, messages: [], operations: [] });
   });
 
+  it("prunes rejected details by Cell Identity without waking the compact summary", () => {
+    const memory = new BrunoTableEditMemoryRuntime();
+    disposers.push(() => memory.dispose());
+    memory.activate();
+    const summaryListener = vi.fn();
+    const detailListener = vi.fn();
+    disposers.push(
+      memory.subscribeSaveFailureSummary(summaryListener),
+      memory.subscribeSaveFailure(detailListener),
+    );
+    memory.recordSaveFailure("operation-1", new Error("Save failed."), [
+      {
+        rowId: "row-1",
+        baseRow: { id: "row-1", value: "before-1" },
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before-1",
+            after: "after-1",
+          },
+        ],
+      },
+      {
+        rowId: "row-2",
+        baseRow: { id: "row-2", value: "before-2" },
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before-2",
+            after: "after-2",
+          },
+        ],
+      },
+    ]);
+    const before = memory.getSaveFailureSnapshot();
+    expect(memory.getSaveFailureSnapshot()).toBe(before);
+    expect(Object.isFrozen(before)).toBe(true);
+    expect(Object.isFrozen(before.operations)).toBe(true);
+    expect(Object.isFrozen(before.operations[0]?.rows)).toBe(true);
+    expect(Object.isFrozen(before.operations[0]?.rows[0]?.cells)).toBe(true);
+    summaryListener.mockClear();
+    detailListener.mockClear();
+
+    memory.removeSaveFailureCells("operation-1", [{ rowId: "row-1", columnId: "COL_ID_VALUE" }]);
+
+    expect(summaryListener).not.toHaveBeenCalled();
+    expect(detailListener).toHaveBeenCalledTimes(1);
+    const after = memory.getSaveFailureSnapshot();
+    expect(after).not.toBe(before);
+    expect(before.operations[0]?.rows).toHaveLength(2);
+    expect(after.operations[0]?.rows).toEqual([
+      {
+        rowId: "row-2",
+        expectedVersion: 1n,
+        cells: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before-2",
+            after: "after-2",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("publishes only compact changed footer projections and keeps Save command-owned", () => {
     type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
     let row: Row = Object.freeze({ id: "row-1", value: "server", revision: 1n });

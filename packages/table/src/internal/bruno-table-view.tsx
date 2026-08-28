@@ -5400,10 +5400,9 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   } = props;
   const cellEdit = useContext(BrunoTableCellEditContext);
   const potentialCellEdit =
-    column.kind === "field" &&
-    (column.isEditable !== undefined && column.isEditable !== false
-      ? true
-      : cellEdit?.hasSaveCellProjection(rowId, column.columnId) === true)
+    cellEdit !== undefined &&
+    ((column.kind === "field" && column.isEditable !== undefined && column.isEditable !== false) ||
+      cellEdit.hasSaveCellProjection(rowId, column.columnId))
       ? cellEdit
       : undefined;
   const editSubscriptionActive = useRef(false);

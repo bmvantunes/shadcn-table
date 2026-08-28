@@ -271,14 +271,30 @@ export class BrunoTableSaveOperationRuntime {
     });
     if (operation.actor.getSnapshot().value !== "rejected") return;
     this.publishCapacityAvailability();
+    const remainingCells = this.cellEdit.getRejectedOperationCells(operation.operationId);
+    const remainingCellKeys = new Set(
+      remainingCells.map((cell) => `${cell.rowId}\0${cell.columnId}`),
+    );
+    this.editMemory.removeSaveFailureCells(
+      operation.operationId,
+      changeSet.flatMap((row) =>
+        row.changes.flatMap((change) =>
+          remainingCellKeys.has(`${row.rowId}\0${change.columnId}`)
+            ? []
+            : [Object.freeze({ rowId: row.rowId, columnId: change.columnId })],
+        ),
+      ),
+    );
     const reconcile = (): void => {
-      const remainingCells = this.cellEdit.getRejectedOperationCells(operation.operationId);
-      if (remainingCells.length > 0) {
-        this.editMemory.retainSaveFailureCells(operation.operationId, remainingCells);
-        return;
-      }
+      const update = this.cellEdit.getRejectedOperationUpdateSnapshot(operation.operationId);
+      this.editMemory.removeSaveFailureCells(operation.operationId, update.removedCells);
+      if (update.remainingCount > 0) return;
       this.reconcileOperation(operation, true);
     };
+    if (remainingCells.length === 0) {
+      this.reconcileOperation(operation, true);
+      return;
+    }
     operation.unsubscribeReconciliation = this.cellEdit.subscribeRejectedOperation(
       operation.operationId,
       reconcile,
