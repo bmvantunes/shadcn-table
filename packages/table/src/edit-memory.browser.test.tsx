@@ -1230,61 +1230,67 @@ test("keeps shared failure toasts distinct across separate React roots", async (
 test("hosts save failure notifications in the table's owner document", async () => {
   const frame = document.createElement("iframe");
   document.body.append(frame);
-  const ownerDocument = frame.contentDocument;
-  if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
-  const container = ownerDocument.createElement("div");
-  ownerDocument.body.append(container);
   const runtime = new BrunoTableEditMemoryRuntime();
-  runtime.activate();
-  const screen = await render(
-    <BrunoTableEditSafetyFooter
-      dispatchGridCommand={() => false}
-      runtime={runtime}
-      renderReview={() => null}
-    />,
-    { container, baseElement: ownerDocument.body },
-  );
-  await expect
-    .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
-    .not.toBeNull();
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-  runtime.recordSaveFailure("operation-secondary-document", new Error("Failure."), [
-    {
-      rowId: "ada",
-      baseRow: rows[0],
-      expectedVersion: 1n,
-      changes: [
-        {
-          columnId: "COL_ID_NAME",
-          field: "name",
-          before: "Ada",
-          after: "Augusta",
-        },
-      ],
-    },
-  ]);
+  let screen: Awaited<ReturnType<typeof render>> | undefined;
+  try {
+    const ownerDocument = frame.contentDocument;
+    if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+    const container = ownerDocument.createElement("div");
+    ownerDocument.body.append(container);
+    runtime.activate();
+    screen = await render(
+      <BrunoTableEditSafetyFooter
+        dispatchGridCommand={() => false}
+        runtime={runtime}
+        renderReview={() => null}
+      />,
+      { container, baseElement: ownerDocument.body },
+    );
+    await expect
+      .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
+      .not.toBeNull();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    runtime.recordSaveFailure("operation-secondary-document", new Error("Failure."), [
+      {
+        rowId: "ada",
+        baseRow: rows[0],
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_NAME",
+            field: "name",
+            before: "Ada",
+            after: "Augusta",
+          },
+        ],
+      },
+    ]);
 
-  await expect
-    .poll(() => {
-      const ownerAlerts = ownerDocument.querySelectorAll('[role="alert"]').length;
-      const mainAlerts = document.querySelectorAll('[role="alert"]').length;
-      if (ownerAlerts === 0 && mainAlerts > 0) {
-        throw new Error(`Toast rendered in the main document (${String(mainAlerts)} alerts).`);
-      }
-      return ownerAlerts;
-    })
-    .toBe(1);
-  expect(ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]")).not.toBeNull();
-  expect(document.querySelector("[data-bruno-table-save-failure-toaster]")).toBeNull();
+    await expect
+      .poll(() => {
+        const ownerAlerts = ownerDocument.querySelectorAll('[role="alert"]').length;
+        const mainAlerts = document.querySelectorAll('[role="alert"]').length;
+        if (ownerAlerts === 0 && mainAlerts > 0) {
+          throw new Error(`Toast rendered in the main document (${String(mainAlerts)} alerts).`);
+        }
+        return ownerAlerts;
+      })
+      .toBe(1);
+    expect(ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]")).not.toBeNull();
+    expect(document.querySelector("[data-bruno-table-save-failure-toaster]")).toBeNull();
 
-  await screen.unmount();
-  await expect
-    .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
-    .toBeNull();
-  runtime.dispose();
-  frame.remove();
+    await screen.unmount();
+    screen = undefined;
+    await expect
+      .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
+      .toBeNull();
+  } finally {
+    await screen?.unmount();
+    runtime.dispose();
+    frame.remove();
+  }
 });
 
 test("does not reopen stale failure details when a later save fails", async () => {
