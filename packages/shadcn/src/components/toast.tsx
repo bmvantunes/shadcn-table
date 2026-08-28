@@ -209,7 +209,7 @@ function ToastIcon({ type }: { type: string | undefined }) {
   }
 
   if (type === "loading") {
-    icon = <SpinnerIcon className="animate-spin" aria-hidden="true" />;
+    icon = <SpinnerIcon className="animate-spin motion-reduce:animate-none" aria-hidden="true" />;
   }
 
   if (!icon) {

@@ -7,7 +7,12 @@ import { flushSync } from "react-dom";
 
 import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
-import type { BrunoTableColumnId, BrunoTableColumns, BrunoTableValueType } from "./public-types";
+import type {
+  BrunoTableClientProps,
+  BrunoTableColumnId,
+  BrunoTableColumns,
+  BrunoTableValueType,
+} from "./public-types";
 
 type Row = Readonly<{
   readonly id: string;
@@ -72,6 +77,7 @@ async function renderEditableTable(strict = false) {
   );
   const screen = await render(strict ? <StrictMode>{table}</StrictMode> : table);
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT" });
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
   grid.element().focus();
   return { grid, onSaveEdits, screen };
 }
@@ -2135,6 +2141,7 @@ test("reveals an exact far predicate destination in both directions before nativ
     </>,
   );
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_TALL" });
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
   grid.element().focus();
 
   expect(predicateEvaluations.mock.calls.length).toBeLessThan(tallRows.length * 150);
@@ -2174,6 +2181,8 @@ test("reveals an exact far predicate destination in both directions before nativ
   await expect.element(screen.getByRole("textbox", { name: "Edit Destination" })).toHaveFocus();
   await userEvent.keyboard("{Tab}");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toHaveFocus();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(screen.getByRole("button", { name: "Save", exact: true })).toHaveFocus();
   await userEvent.keyboard("{Tab}");
   await expect.element(screen.getByRole("button", { name: "After tall grid" })).toHaveFocus();
 });
@@ -2921,6 +2930,7 @@ test("compiles exact nullable blank policies without treating zero as blank", as
       onSaveEdits={() => Promise.resolve()}
     />,
   );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
 
   for (const [sourceText, expectedText, expectedCount] of [
     ["7", "NULL", 1],
@@ -3091,6 +3101,7 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
       onSaveEdits={() => Promise.resolve()}
     />,
   );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
 
   await userEvent.click(screen.getByRole("gridcell", { name: "Flag blank", exact: true }));
   await userEvent.keyboard("{F2}");
@@ -3486,5 +3497,21 @@ test("rejects widened editable columns without a potential edit policy at runtim
     ),
   ).rejects.toThrow(
     "BrunoTable editable Client Tables require at least one potentially editable column.",
+  );
+});
+
+test("rejects a widened editable capability without onSaveEdits at runtime", async () => {
+  const invalidProps = {
+    tableId: "TABLE_ID_CELL_EDIT_MISSING_SAVE_HANDLER",
+    columns,
+    initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    clientSource: { rows, totalRows: rows.length, version: 1, status: "ready" },
+    getRowId: (row: Row) => row.id,
+    editable: true,
+    getRowVersion: (row: Row) => row.revision,
+  } as unknown as BrunoTableClientProps<Row, typeof columns, bigint>;
+
+  await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
+    "BrunoTable editable Client Tables require onSaveEdits.",
   );
 });

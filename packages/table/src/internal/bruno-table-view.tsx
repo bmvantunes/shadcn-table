@@ -199,6 +199,22 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
+const SAVE_SUCCESS_KEYFRAMES = `
+@keyframes bruno-table-save-success {
+  0%, 20% { opacity: 1; }
+  100% { opacity: 0; }
+}
+[data-bruno-save-success]::after {
+  animation: bruno-table-save-success 2s ease-out both;
+  background: color-mix(in oklab, var(--color-success) 28%, transparent);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-bruno-save-success]::after { animation: none; opacity: 1; }
+}`;
 
 type BrunoTableColumnWindow = Readonly<
   Pick<
@@ -562,6 +578,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       data-bruno-table={tableId}
       tabIndex={-1}
     >
+      <style>{SAVE_SUCCESS_KEYFRAMES}</style>
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableViewCommitDiagnosticProbe commitEvidence={compiledColumns} tableId={tableId} />
       ) : null}
@@ -5383,7 +5400,10 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   } = props;
   const cellEdit = useContext(BrunoTableCellEditContext);
   const potentialCellEdit =
-    column.kind === "field" && column.isEditable !== undefined && column.isEditable !== false
+    column.kind === "field" &&
+    (column.isEditable !== undefined && column.isEditable !== false
+      ? true
+      : cellEdit?.hasSaveCellProjection(rowId, column.columnId) === true)
       ? cellEdit
       : undefined;
   const subscribeEdit = useMemo(
@@ -5464,7 +5484,11 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     ? row === undefined
     : cellSnapshot?.kind === "available" && !cellSnapshot.rowPresent;
   const sourceValue = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
-  const value = edit.hasDraft ? edit.draft : sourceValue;
+  const value = edit.hasAcceptedOverlay
+    ? edit.acceptedOverlay
+    : edit.hasDraft
+      ? edit.draft
+      : sourceValue;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
   const className =
     draftReviewValueUnavailable || draftReviewCandidateText !== undefined
@@ -5490,7 +5514,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     maxHeight: ROW_HEIGHT,
     overflow: edit.active ? "visible" : "hidden",
     padding: 0,
-    position: edit.active ? "relative" : undefined,
+    position: edit.active || edit.saveSucceeded ? "relative" : undefined,
     textAlign:
       draftReviewKind === undefined
         ? presentationColumn?.semantics.cellAlign
@@ -5509,6 +5533,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       />
     ) : edit.active && cellEdit !== undefined ? null : (
       <div
+        className="relative"
         style={{
           boxSizing: "border-box",
           height: ROW_HEIGHT,
@@ -5522,6 +5547,18 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
         ) : (
           <NonTabbableCellContent>{content}</NonTabbableCellContent>
         )}
+        {edit.savePending ? (
+          <span aria-hidden="true" className="absolute inset-y-0 end-1 flex items-center">
+            <Spinner size={14} />
+          </span>
+        ) : edit.saveFailed ? (
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 end-1 flex items-center font-bold text-destructive"
+          >
+            !
+          </span>
+        ) : null}
       </div>
     );
   return (
@@ -5531,7 +5568,11 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       data-bruno-row-id={rowId}
       data-bruno-row-index={logicalRowIndex}
       aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
+      aria-busy={edit.savePending || undefined}
       className={className}
+      data-bruno-save-pending={edit.savePending ? "" : undefined}
+      data-bruno-save-failed={edit.saveFailed ? "" : undefined}
+      data-bruno-save-success={edit.saveSucceeded ? "" : undefined}
       role="gridcell"
       style={cellStyle}
     >

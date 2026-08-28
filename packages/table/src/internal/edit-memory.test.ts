@@ -5,6 +5,62 @@ import { compileColumns } from "./compile-columns";
 import { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 describe("BrunoTable Edit Memory", () => {
+  it("aggregates failures by operation and clears only the converged operation", () => {
+    const memory = new BrunoTableEditMemoryRuntime();
+    memory.activate();
+    const changeSet = [
+      {
+        rowId: "row-1",
+        baseRow: { id: "row-1", value: "before" },
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before",
+            after: "after",
+          },
+        ],
+      },
+    ] as const;
+    const rows = [
+      {
+        rowId: "row-1",
+        expectedVersion: 1n,
+        cells: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before",
+            after: "after",
+          },
+        ],
+      },
+    ];
+
+    memory.recordSaveFailure("operation-1", new Error("First failed."), changeSet);
+    memory.recordSaveFailure("operation-2", new Error("Second failed."), changeSet);
+    expect(memory.getSaveFailureSnapshot()).toEqual({
+      count: 2,
+      messages: ["First failed.", "Second failed."],
+      operations: [
+        { operationId: "operation-1", message: "First failed.", rows },
+        { operationId: "operation-2", message: "Second failed.", rows },
+      ],
+    });
+
+    memory.clearSaveFailure("operation-1");
+    expect(memory.getSaveFailureSnapshot()).toEqual({
+      count: 1,
+      messages: ["Second failed."],
+      operations: [{ operationId: "operation-2", message: "Second failed.", rows }],
+    });
+
+    memory.dismissSaveFailures();
+    expect(memory.getSaveFailureSnapshot()).toEqual({ count: 0, messages: [], operations: [] });
+    memory.dispose();
+  });
+
   it("publishes only compact changed footer projections and keeps Save command-owned", () => {
     type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
     let row: Row = Object.freeze({ id: "row-1", value: "server", revision: 1n });
@@ -54,7 +110,18 @@ describe("BrunoTable Edit Memory", () => {
     const save = vi.fn();
     const unregisterSave = memory.registerSaveCommand(save);
     expect(memory.getCanSaveSnapshot()).toBe(true);
-    memory.setSaveWorkActive(true);
+    memory.setSaveOperationCapacityAvailable(false);
+    expect(memory.getCanSaveSnapshot()).toBe(false);
+    expect(memory.requestSave()).toBe(false);
+    expect(cellEdit.getActivitySnapshot().draftCount).toBe(1);
+    expect(save).not.toHaveBeenCalled();
+    memory.setSaveOperationCapacityAvailable(true);
+    expect(memory.getCanSaveSnapshot()).toBe(true);
+    memory.setSavePreflightAvailable(false);
+    expect(memory.getCanSaveSnapshot()).toBe(false);
+    memory.setSavePreflightAvailable(true);
+    expect(memory.getCanSaveSnapshot()).toBe(true);
+    const releaseSaveWork = memory.beginSaveWork();
     expect(memory.getModeSnapshot().canChange).toBe(false);
     expect(memory.getCanResetSnapshot()).toBe(false);
     expect(memory.getCanSaveSnapshot()).toBe(false);
@@ -62,7 +129,7 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.undo()).toBe(false);
     expect(memory.redo()).toBe(false);
     expect(memory.openResetReview()).toBe(false);
-    memory.setSaveWorkActive(false);
+    releaseSaveWork();
     expect(memory.getCanResetSnapshot()).toBe(true);
     expect(memory.getCanSaveSnapshot()).toBe(true);
     expect(memory.requestSave()).toBe(true);

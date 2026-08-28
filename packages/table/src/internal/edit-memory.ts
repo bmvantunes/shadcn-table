@@ -2,9 +2,11 @@ import { batch, Store } from "@tanstack/store";
 import { assign, createActor, createMachine } from "xstate";
 
 import type {
+  BrunoTableCellEditChangeGesture,
   BrunoTableCellEditActivitySnapshot,
   BrunoTableCellEditDraftReviewSourceRow,
   BrunoTableCellEditRuntime,
+  BrunoTableCellEditSaveChangeSet,
 } from "./cell-edit";
 
 type Listener = () => void;
@@ -35,11 +37,36 @@ export type BrunoTableEditHotkeyAvailabilitySnapshot = Readonly<{
   readonly redo: boolean;
 }>;
 
+export type BrunoTableSaveFailureSnapshot = Readonly<{
+  readonly count: number;
+  readonly messages: readonly string[];
+  readonly operations: readonly Readonly<{
+    readonly operationId: string;
+    readonly message: string;
+    readonly rows: readonly Readonly<{
+      readonly rowId: string;
+      readonly expectedVersion: unknown;
+      readonly cells: readonly Readonly<{
+        readonly columnId: string;
+        readonly field: string;
+        readonly before: unknown;
+        readonly after: unknown;
+      }>[];
+    }>[];
+  }>[];
+}>;
+
+export type BrunoTableSaveWorkSnapshot = Readonly<{
+  readonly pendingBatchCount: number;
+  readonly awaitingBatchRowCount: number;
+}>;
+
 type EditWorkflowContext = Readonly<{
   readonly mode: BrunoTableEditMode;
   readonly activity: BrunoTableCellEditActivitySnapshot;
   readonly saveWorkActive: boolean;
   readonly resetReviewOpen: boolean;
+  readonly saveFailureDismissalVersion: number;
 }>;
 
 type EditWorkflowEvent =
@@ -51,7 +78,8 @@ type EditWorkflowEvent =
   | Readonly<{ readonly type: "SET_SAVE_WORK"; readonly active: boolean }>
   | Readonly<{ readonly type: "OPEN_RESET_REVIEW" }>
   | Readonly<{ readonly type: "CLOSE_RESET_REVIEW" }>
-  | Readonly<{ readonly type: "CONFIRM_RESET" }>;
+  | Readonly<{ readonly type: "CONFIRM_RESET" }>
+  | Readonly<{ readonly type: "DISMISS_SAVE_FAILURES" }>;
 
 const INITIAL_MODE_SNAPSHOT: BrunoTableEditModeSnapshot = Object.freeze({
   mode: "immediate",
@@ -72,6 +100,15 @@ const CLEAN_EDIT_SAFETY_STATUS: BrunoTableEditSafetyStatusSnapshot = Object.free
 const NO_EDIT_HOTKEYS: BrunoTableEditHotkeyAvailabilitySnapshot = Object.freeze({
   undo: false,
   redo: false,
+});
+const NO_SAVE_FAILURES: BrunoTableSaveFailureSnapshot = Object.freeze({
+  count: 0,
+  messages: Object.freeze([]),
+  operations: Object.freeze([]),
+});
+const NO_SAVE_WORK: BrunoTableSaveWorkSnapshot = Object.freeze({
+  pendingBatchCount: 0,
+  awaitingBatchRowCount: 0,
 });
 const CLEAN_CELL_EDIT_ACTIVITY: BrunoTableCellEditActivitySnapshot = Object.freeze({
   activeEditor: false,
@@ -114,6 +151,7 @@ const brunoTableEditWorkflowMachine = createMachine({
     activity: CLEAN_CELL_EDIT_ACTIVITY,
     saveWorkActive: false,
     resetReviewOpen: false,
+    saveFailureDismissalVersion: 0,
   },
   states: {
     ready: {
@@ -143,6 +181,11 @@ const brunoTableEditWorkflowMachine = createMachine({
           guard: ({ context }) => context.resetReviewOpen && canReset(context),
           actions: assign({ resetReviewOpen: false }),
         },
+        DISMISS_SAVE_FAILURES: {
+          actions: assign({
+            saveFailureDismissalVersion: ({ context }) => context.saveFailureDismissalVersion + 1,
+          }),
+        },
       },
     },
   },
@@ -151,6 +194,7 @@ const brunoTableEditWorkflowMachine = createMachine({
 export class BrunoTableEditMemoryRuntime {
   private actor = createActor(brunoTableEditWorkflowMachine);
   private actorActive = false;
+  private activeSaveWorkCount = 0;
   private readonly modeStore = new Store<BrunoTableEditModeSnapshot>(INITIAL_MODE_SNAPSHOT);
   private readonly safetyStatusStore = new Store<BrunoTableEditSafetyStatusSnapshot>(
     CLEAN_EDIT_SAFETY_STATUS,
@@ -160,12 +204,31 @@ export class BrunoTableEditMemoryRuntime {
   private readonly hotkeyAvailabilityStore = new Store<BrunoTableEditHotkeyAvailabilitySnapshot>(
     NO_EDIT_HOTKEYS,
   );
+  private readonly saveFailureStore = new Store<BrunoTableSaveFailureSnapshot>(NO_SAVE_FAILURES);
+  private readonly saveWorkStore = new Store<BrunoTableSaveWorkSnapshot>(NO_SAVE_WORK);
+  private readonly saveFailures = new Map<
+    string,
+    Readonly<{
+      readonly message: string;
+      readonly rows: BrunoTableSaveFailureSnapshot["operations"][number]["rows"];
+    }>
+  >();
+  private readonly saveWorkByOperation = new Map<
+    string,
+    Readonly<{
+      readonly kind: "batch";
+      readonly phase: "pending" | "awaiting-source";
+      readonly remainingRows: number;
+    }>
+  >();
+  private publishedSaveFailureDismissalVersion = 0;
   private readonly resetReviewStore = new Store<BrunoTableResetReviewSnapshot>(CLOSED_RESET_REVIEW);
   private readonly resetReviewRowsStore = new Store<
     readonly BrunoTableCellEditDraftReviewSourceRow[]
   >(Object.freeze([]));
   private cellEdit: BrunoTableCellEditRuntime | undefined;
   private saveCommand: (() => void) | undefined;
+  private immediateSaveCommand: ((changes: BrunoTableCellEditChangeGesture) => void) | undefined;
   private conflictReviewCommand: (() => void) | undefined;
   private gridFocusCommand: (() => void) | undefined;
   private resetFocusFrame: number | undefined;
@@ -173,6 +236,8 @@ export class BrunoTableEditMemoryRuntime {
   private readonly resetControls = new Set<Element>();
   private readonly unregisterResetControls = new Map<Element, () => void>();
   private cellEditActivity: BrunoTableCellEditActivitySnapshot = CLEAN_CELL_EDIT_ACTIVITY;
+  private saveOperationCapacityAvailable = true;
+  private savePreflightAvailable = true;
 
   public readonly activate = (): void => {
     if (this.actorActive) return;
@@ -189,7 +254,11 @@ export class BrunoTableEditMemoryRuntime {
     if (!this.actorActive) return;
     this.actor.stop();
     this.actorActive = false;
+    this.activeSaveWorkCount = 0;
+    this.saveOperationCapacityAvailable = true;
+    this.savePreflightAvailable = true;
     this.saveCommand = undefined;
+    this.immediateSaveCommand = undefined;
     this.conflictReviewCommand = undefined;
     this.gridFocusCommand = undefined;
     if (this.resetFocusFrame !== undefined) cancelAnimationFrame(this.resetFocusFrame);
@@ -199,6 +268,11 @@ export class BrunoTableEditMemoryRuntime {
     this.canResetStore.setState(() => false);
     this.canSaveStore.setState(() => false);
     this.hotkeyAvailabilityStore.setState(() => NO_EDIT_HOTKEYS);
+    this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+    this.saveWorkStore.setState(() => NO_SAVE_WORK);
+    this.saveFailures.clear();
+    this.saveWorkByOperation.clear();
+    this.publishedSaveFailureDismissalVersion = 0;
     this.resetReviewStore.setState(() => CLOSED_RESET_REVIEW);
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
@@ -281,6 +355,77 @@ export class BrunoTableEditMemoryRuntime {
   public readonly getHotkeyAvailabilitySnapshot = (): BrunoTableEditHotkeyAvailabilitySnapshot =>
     this.hotkeyAvailabilityStore.get();
 
+  public readonly getSaveFailureSnapshot = (): BrunoTableSaveFailureSnapshot =>
+    this.saveFailureStore.get();
+
+  public readonly getSaveWorkSnapshot = (): BrunoTableSaveWorkSnapshot => this.saveWorkStore.get();
+
+  public readonly subscribeSaveWork = (listener: Listener): (() => void) => {
+    const subscription = this.saveWorkStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly subscribeSaveFailure = (listener: Listener): (() => void) => {
+    const subscription = this.saveFailureStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly recordSaveFailure = (
+    operationId: string,
+    reason: unknown,
+    changeSet: BrunoTableCellEditSaveChangeSet,
+  ): void => {
+    let explanation = "The save could not be confirmed.";
+    try {
+      const message = reason instanceof Error ? reason.message : undefined;
+      if (typeof message === "string" && message.trim().length > 0) {
+        explanation = message.trim().slice(0, 500);
+      }
+    } catch {
+      explanation = "The save could not be confirmed.";
+    }
+    this.saveFailures.set(
+      operationId,
+      Object.freeze({
+        message: explanation,
+        rows: Object.freeze(
+          changeSet.map((row) =>
+            Object.freeze({
+              rowId: row.rowId,
+              expectedVersion: row.expectedVersion,
+              cells: Object.freeze(
+                row.changes.map((change) =>
+                  Object.freeze({
+                    columnId: change.columnId,
+                    field: change.field,
+                    before: change.before,
+                    after: change.after,
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    );
+    while (this.saveFailures.size > 128) {
+      const oldest = this.saveFailures.keys().next().value;
+      if (oldest === undefined) break;
+      this.saveFailures.delete(oldest);
+    }
+    this.publishSaveFailures();
+  };
+
+  public readonly clearSaveFailure = (operationId: string): void => {
+    if (!this.saveFailures.delete(operationId)) return;
+    this.publishSaveFailures();
+  };
+
+  public readonly dismissSaveFailures = (): void => {
+    if (this.saveFailures.size === 0) return;
+    this.actor.send({ type: "DISMISS_SAVE_FAILURES" });
+  };
+
   public readonly subscribeHotkeyAvailability = (listener: Listener): (() => void) => {
     const subscription = this.hotkeyAvailabilityStore.subscribe(listener);
     return () => subscription.unsubscribe();
@@ -302,6 +447,48 @@ export class BrunoTableEditMemoryRuntime {
         this.cellEditActivity.blockedCount,
       );
     };
+  };
+
+  public readonly registerImmediateSaveCommand = (
+    command: (changes: BrunoTableCellEditChangeGesture) => void,
+  ): (() => void) => {
+    this.immediateSaveCommand = command;
+    return () => {
+      if (this.immediateSaveCommand === command) this.immediateSaveCommand = undefined;
+    };
+  };
+
+  public readonly requestImmediateSave = (changes: BrunoTableCellEditChangeGesture): boolean => {
+    if (
+      !this.saveOperationCapacityAvailable ||
+      !this.savePreflightAvailable ||
+      this.modeStore.get().mode !== "immediate" ||
+      this.immediateSaveCommand === undefined
+    ) {
+      return false;
+    }
+    this.immediateSaveCommand(changes);
+    return true;
+  };
+
+  public readonly setSaveOperationCapacityAvailable = (available: boolean): void => {
+    if (this.saveOperationCapacityAvailable === available) return;
+    this.saveOperationCapacityAvailable = available;
+    this.publishCanSave(
+      this.modeStore.get().mode,
+      this.cellEditActivity.draftCount,
+      this.cellEditActivity.blockedCount,
+    );
+  };
+
+  public readonly setSavePreflightAvailable = (available: boolean): void => {
+    if (this.savePreflightAvailable === available) return;
+    this.savePreflightAvailable = available;
+    this.publishCanSave(
+      this.modeStore.get().mode,
+      this.cellEditActivity.draftCount,
+      this.cellEditActivity.blockedCount,
+    );
   };
 
   public readonly registerConflictReviewCommand = (command: () => void): (() => void) => {
@@ -334,8 +521,52 @@ export class BrunoTableEditMemoryRuntime {
     return true;
   };
 
-  public readonly setSaveWorkActive = (active: boolean): void => {
-    this.actor.send({ type: "SET_SAVE_WORK", active });
+  public readonly beginSaveWork = (
+    operationId?: string,
+    kind: "batch" | "immediate" = "immediate",
+  ): (() => void) => {
+    this.activeSaveWorkCount += 1;
+    if (operationId !== undefined && kind === "batch") {
+      this.saveWorkByOperation.set(
+        operationId,
+        Object.freeze({ kind, phase: "pending", remainingRows: 0 }),
+      );
+      this.publishSaveWork();
+    }
+    if (this.activeSaveWorkCount === 1) this.actor.send({ type: "SET_SAVE_WORK", active: true });
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.activeSaveWorkCount = Math.max(0, this.activeSaveWorkCount - 1);
+      if (
+        operationId !== undefined &&
+        kind === "batch" &&
+        this.saveWorkByOperation.delete(operationId)
+      ) {
+        this.publishSaveWork();
+      }
+      if (this.activeSaveWorkCount === 0 && this.actorActive) {
+        this.actor.send({ type: "SET_SAVE_WORK", active: false });
+      }
+    };
+  };
+
+  public readonly setSaveWorkAwaitingSource = (
+    operationId: string,
+    remainingRows: number,
+  ): void => {
+    const operation = this.saveWorkByOperation.get(operationId);
+    if (operation?.kind !== "batch") return;
+    this.saveWorkByOperation.set(
+      operationId,
+      Object.freeze({
+        kind: "batch",
+        phase: "awaiting-source",
+        remainingRows: Math.max(0, remainingRows),
+      }),
+    );
+    this.publishSaveWork();
   };
 
   public readonly registerGridFocusCommand = (command: () => void): (() => void) => {
@@ -403,6 +634,11 @@ export class BrunoTableEditMemoryRuntime {
   private readonly publishWorkflow = (): void => {
     batch(() => {
       const context = this.actor.getSnapshot().context;
+      if (context.saveFailureDismissalVersion !== this.publishedSaveFailureDismissalVersion) {
+        this.publishedSaveFailureDismissalVersion = context.saveFailureDismissalVersion;
+        this.saveFailures.clear();
+        this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+      }
       const mode = context.mode;
       const previous = this.modeStore.get();
       const canChange = canChangeMode(context);
@@ -489,6 +725,8 @@ export class BrunoTableEditMemoryRuntime {
         ? this.conflictReviewCommand !== undefined
         : this.saveCommand !== undefined) &&
       !this.actor.getSnapshot().context.saveWorkActive &&
+      this.saveOperationCapacityAvailable &&
+      this.savePreflightAvailable &&
       mode === "batch" &&
       draftCount > 0 &&
       !this.cellEditActivity.activeEditor &&
@@ -513,5 +751,42 @@ export class BrunoTableEditMemoryRuntime {
       this.resetFocusFrame = undefined;
       this.gridFocusCommand?.();
     });
+  };
+
+  private readonly publishSaveFailures = (): void => {
+    if (this.saveFailures.size === 0) {
+      this.saveFailureStore.setState(() => NO_SAVE_FAILURES);
+      return;
+    }
+    this.saveFailureStore.setState(() =>
+      Object.freeze({
+        count: this.saveFailures.size,
+        messages: Object.freeze([
+          ...new Set([...this.saveFailures.values()].map((failure) => failure.message)),
+        ]),
+        operations: Object.freeze(
+          [...this.saveFailures].map(([operationId, failure]) =>
+            Object.freeze({ operationId, message: failure.message, rows: failure.rows }),
+          ),
+        ),
+      }),
+    );
+  };
+
+  private readonly publishSaveWork = (): void => {
+    let pendingBatchCount = 0;
+    let awaitingBatchRowCount = 0;
+    for (const operation of this.saveWorkByOperation.values()) {
+      if (operation.phase === "pending") pendingBatchCount += 1;
+      else awaitingBatchRowCount += operation.remainingRows;
+    }
+    const previous = this.saveWorkStore.get();
+    if (
+      previous.pendingBatchCount === pendingBatchCount &&
+      previous.awaitingBatchRowCount === awaitingBatchRowCount
+    ) {
+      return;
+    }
+    this.saveWorkStore.setState(() => Object.freeze({ pendingBatchCount, awaitingBatchRowCount }));
   };
 }

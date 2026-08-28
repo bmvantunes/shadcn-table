@@ -1,6 +1,8 @@
 import { Button } from "@bruno/shadcn/button";
 import {
   AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -8,10 +10,14 @@ import {
   AlertDialogTitle,
 } from "@bruno/shadcn/alert-dialog";
 import { Switch } from "@bruno/shadcn/switch";
+import { ScrollArea } from "@bruno/shadcn/scroll-area";
+import { createToastManager, Toaster } from "@bruno/shadcn/toast";
 import {
   memo,
   useCallback,
+  useEffect,
   useId,
+  useState,
   useSyncExternalStore,
   type NamedExoticComponent,
   type ReactElement,
@@ -68,6 +74,11 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
     runtime.getSafetyStatusSnapshot,
     runtime.getSafetyStatusSnapshot,
   );
+  const saveWork = useSyncExternalStore(
+    runtime.subscribeSaveWork,
+    runtime.getSaveWorkSnapshot,
+    runtime.getSaveWorkSnapshot,
+  );
   const pendingCount = status.pendingCount;
   const statusParts: string[] = [];
   if (status.conflictCount > 0)
@@ -82,11 +93,17 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
   if (pendingCount > 0) statusParts.push(`${String(pendingCount)} unsaved`);
   return (
     <span aria-live="polite">
-      {statusParts.length === 0
-        ? "No unsaved changes"
-        : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
-          ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
-          : statusParts.join(" · ")}
+      {saveWork.awaitingBatchRowCount > 0
+        ? `Save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`
+        : saveWork.pendingBatchCount > 0
+          ? "Saving changes"
+          : statusParts.length === 0
+            ? "No unsaved changes"
+            : status.blockedCount === 0 &&
+                status.validationCount === 0 &&
+                status.conflictCount === 0
+              ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
+              : statusParts.join(" · ")}
     </span>
   );
 });
@@ -201,10 +218,8 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
       </AlertDialogHeader>
       {renderReview(rows)}
       <AlertDialogFooter>
-        <Button variant="outline" onClick={runtime.closeResetReview}>
-          Keep Editing
-        </Button>
-        <Button
+        <AlertDialogCancel onClick={runtime.closeResetReview}>Keep Editing</AlertDialogCancel>
+        <AlertDialogAction
           aria-describedby={descriptionId}
           disabled={!canResetAll}
           variant="destructive"
@@ -213,7 +228,7 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
           }}
         >
           Reset All Changes
-        </Button>
+        </AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   );
@@ -236,6 +251,87 @@ const BrunoTableSaveEditsButton = memo(function BrunoTableSaveEditsButton({
   );
 });
 
+const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement | null {
+  const failure = useSyncExternalStore(
+    runtime.subscribeSaveFailure,
+    runtime.getSaveFailureSnapshot,
+    runtime.getSaveFailureSnapshot,
+  );
+  const [toastManager] = useState(createToastManager);
+  const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
+  const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
+  useEffect(() => {
+    if (failure.count === 0) {
+      toastManager.close("bruno-table-save-failure");
+      return;
+    }
+    toastManager.add({
+      id: "bruno-table-save-failure",
+      title:
+        failure.count === 1
+          ? "A save operation failed."
+          : `${String(failure.count)} save operations failed.`,
+      description: failure.messages.join(" "),
+      actionProps: {
+        children: "Operation details",
+        onClick: () => setDetailsFailureSignature(failureSignature),
+      },
+      timeout: 0,
+      priority: "high",
+      type: "error",
+      onClose: () => {
+        setDetailsFailureSignature(undefined);
+        runtime.dismissSaveFailures();
+      },
+    });
+  }, [failure, failureSignature, runtime, toastManager]);
+  return (
+    <>
+      <Toaster toastManager={toastManager} timeout={0} />
+      <AlertDialog
+        open={failure.count > 0 && detailsFailureSignature === failureSignature}
+        onOpenChange={(open) => setDetailsFailureSignature(open ? failureSignature : undefined)}
+      >
+        <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save operation details</AlertDialogTitle>
+            <AlertDialogDescription>
+              These saves were not confirmed. Live source convergence can still clear each result.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
+            <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
+              {failure.operations.map((operation, index) => (
+                <li key={operation.operationId}>
+                  <p>
+                    Operation {String(index + 1)}: {operation.message}
+                  </p>
+                  <ul className="mt-1 list-[circle] space-y-1 ps-5">
+                    {operation.rows.flatMap((row) =>
+                      row.cells.map((cell) => (
+                        <li key={`${row.rowId}\0${cell.columnId}`}>
+                          Row {row.rowId}, column {cell.columnId} (field {cell.field}).
+                        </li>
+                      )),
+                    )}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Close details</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+});
+
 type BrunoTableEditSafetyFooterProps = Readonly<{
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
@@ -251,9 +347,10 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
     return (
       <footer
         aria-label="Edit safety"
-        className="flex min-w-0 items-center justify-between gap-3 border-t bg-background px-3.5 py-2 text-xs/relaxed"
+        className="relative flex min-w-0 items-center justify-between gap-3 border-t bg-background px-3.5 py-2 text-xs/relaxed"
         role="region"
       >
+        <BrunoTableSaveFailure runtime={runtime} />
         <BrunoTablePendingEditStatus runtime={runtime} />
         <div className="flex items-center gap-2">
           <BrunoTableResetEditsButton dispatchGridCommand={dispatchGridCommand} runtime={runtime} />
